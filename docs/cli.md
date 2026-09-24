@@ -19,12 +19,13 @@ codes).
 | `ods completions <shell>` | available |
 
 Planned commands already appear in `--help`. They accept any arguments and exit with
-status 3.
+status 3 (`ods state plan --select x` reports "not implemented", not a usage error).
 
 ## Global flags
 
-These work before or after the subcommand (`ods --json version` and
-`ods version --json` are the same).
+These work anywhere on the line: `ods --json version`, `ods version --json` and
+`ods state plan --json` all produce JSON. After a `--` separator, everything is taken
+literally.
 
 | Flag | Values | Default |
 |---|---|---|
@@ -34,7 +35,8 @@ These work before or after the subcommand (`ods --json version` and
 | `--width` | columns (≥ 20) | terminal width, or 100 when not a terminal |
 | `-v`, `--verbose` | repeatable: `-v` info, `-vv` debug, `-vvv` trace | warnings only |
 | `-q`, `--quiet` | errors only; conflicts with `-v` | |
-| `-h`, `--help` / `-V`, `--version` | | |
+| `-h`, `--help` | help for `ods` or any command | |
+| `-V`, `--version` | top level only (`ods -V`); `ods version` gives details | |
 
 ## Output and streams
 
@@ -62,9 +64,14 @@ These work before or after the subcommand (`ods --json version` and
 ```
 
 `result` is the command's result model on success and `null` on failure. `hint` is
-omitted when there is none. The one exception is usage errors (bad flags or an unknown
-command), which are detected before the output mode is known. They are always printed
-as text on stderr.
+omitted when there is none.
+
+Exceptions to the one-document rule:
+- **Usage errors** (bad flags or an unknown command) are detected before the output mode
+  is known. They are always printed as text on stderr, with exit status 2.
+- **Output failures**: if writing to stdout itself fails (for example a full disk), the
+  error is printed on stderr with exit status 1, because stdout can't carry it.
+- **`ods completions`** always prints its shell script as-is, whatever the output mode.
 
 ## Exit status
 
@@ -95,7 +102,7 @@ meanings get new numbers.
 |---|---|
 | `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q`. |
 | `NO_COLOR` | Any non-empty value disables colour when `--color auto`. `--color always` overrides it. |
-| `TERM` | `dumb` or `unknown` disables colour when `--color auto`. |
+| `TERM` | `dumb` or `unknown` disables colour (results and logs) when `--color auto`. |
 
 ## Shell completion
 

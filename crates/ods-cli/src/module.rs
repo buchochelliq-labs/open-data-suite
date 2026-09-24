@@ -1,6 +1,5 @@
 //! Command modules and the registry that assembles the `ods` command (ADR-0004 §1, §2).
 
-use std::fmt;
 use std::io::Write;
 
 use clap::{ArgMatches, Command};
@@ -17,6 +16,14 @@ use crate::present::{self, Present};
 pub trait Module {
     /// The subcommand definition. Its name is the command word.
     fn command(&self) -> Command;
+
+    /// Id of an argument that captures arbitrary trailing arguments, if any.
+    ///
+    /// Global flags found inside that tail (e.g. `ods state plan --json`) are hoisted
+    /// and parsed as globals, so they work anywhere on the line (ADR-0004 §1).
+    fn passthrough_arg(&self) -> Option<&'static str> {
+        None
+    }
 
     /// Runs the subcommand with its parsed arguments.
     ///
@@ -62,24 +69,15 @@ impl<'a> Context<'a> {
 }
 
 /// Why a module could not be registered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RegistryError {
     /// Another module already uses this name.
+    #[error("command `{0}` is already registered")]
     Duplicate(String),
     /// The name is reserved by clap or `ods` itself.
+    #[error("command name `{0}` is reserved")]
     Reserved(String),
 }
-
-impl fmt::Display for RegistryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RegistryError::Duplicate(name) => write!(f, "command `{name}` is already registered"),
-            RegistryError::Reserved(name) => write!(f, "command name `{name}` is reserved"),
-        }
-    }
-}
-
-impl std::error::Error for RegistryError {}
 
 const RESERVED: &[&str] = &["help"];
 

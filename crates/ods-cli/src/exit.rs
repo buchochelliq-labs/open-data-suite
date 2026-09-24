@@ -3,7 +3,6 @@
 //! Exit codes are a public contract: scripts and CI branch on them. Values never change
 //! meaning; new meanings get new numbers below 64.
 
-use std::fmt;
 use std::io;
 
 /// How `ods` exited.
@@ -74,7 +73,8 @@ pub mod codes {
 
 /// A failure returned by a command. Rendered once, by the framework, in the active
 /// output mode; commands never print errors or exit themselves.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("error[{code}]: {message}{}", hint_suffix(.hint.as_deref()))]
 pub struct CliError {
     /// Exit status to use.
     pub status: ExitStatus,
@@ -107,6 +107,11 @@ impl CliError {
         self
     }
 
+    /// Whether the failure came from writing output (so stdout cannot carry the report).
+    pub fn is_output_failure(&self) -> bool {
+        self.io_kind.is_some()
+    }
+
     /// Whether the failure was stdout closing early (e.g. `ods … | head`), which is not
     /// an error for the user.
     pub fn is_broken_pipe(&self) -> bool {
@@ -126,17 +131,10 @@ impl From<io::Error> for CliError {
     }
 }
 
-impl fmt::Display for CliError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error[{}]: {}", self.code, self.message)?;
-        if let Some(hint) = &self.hint {
-            write!(f, "\n  hint: {hint}")?;
-        }
-        Ok(())
-    }
+fn hint_suffix(hint: Option<&str>) -> String {
+    hint.map(|hint| format!("\n  hint: {hint}"))
+        .unwrap_or_default()
 }
-
-impl std::error::Error for CliError {}
 
 #[cfg(test)]
 mod tests {

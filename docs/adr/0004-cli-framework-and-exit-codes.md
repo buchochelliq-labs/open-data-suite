@@ -62,6 +62,12 @@ pub trait Module {
 - Modules on the roadmap but not implemented yet are registered as **planned**
   commands. They show in `--help` with their milestone, accept any arguments, and
   exit with status 3. So `ods state plan` reports "not implemented", not a usage error.
+- **Global flags work anywhere on the line.** A module may declare a passthrough
+  argument that captures an arbitrary tail, as planned commands do. The framework then
+  moves any global flags it finds in that tail (`--json`, `-o plain`, `-vv`, `--help`, …)
+  to just after the subcommand and parses the line once more. Clap still validates
+  them, so `-o yaml` remains a usage error. Flag spellings come from the clap
+  definitions, so the two cannot drift, and tokens after `--` stay literal.
 
 ### 2. Context
 `Context` is the single thing a command receives besides its arguments:
@@ -94,16 +100,21 @@ Commands return `CliError { status, code, message, hint }`:
 Rendering:
 - **human/plain:** `error[ODS-E0003]: message`, then `  hint: …`, on **stderr**.
 - **json:** the ADR-0003 envelope on **stdout**, with `"result": null` and the error as
-  a diagnostic. Machines always get exactly one JSON document, even on failure.
-- Usage errors come from clap before output settings are known. They are always
-  printed as human text on stderr, with exit 2.
+  a diagnostic (`hint` is its own optional field). Machines always get exactly one JSON
+  document, even on failure, with these exceptions:
+  - usage errors come from clap before output settings are known, so they are always
+    printed as human text on stderr, with exit 2;
+  - if writing to stdout itself failed, or writing the envelope fails, the error goes
+    to stderr, so there is never a second or partial document on stdout;
+  - `ods completions` prints its script as-is in every mode.
 
 ### 5. Logging
 - `tracing` events go to **stderr** only, so they never corrupt stdout or JSON.
 - The level defaults to `warn`: `-v` gives info, `-vv` debug and `-vvv` trace, and
   `-q` gives errors only. `ODS_LOG` (`off|error|warn|info|debug|trace`) overrides the
   flags for debugging in CI.
-- Log colour follows the stderr terminal and the `--color` / `NO_COLOR` rules.
+- Log colour follows the stderr terminal and the same `--color` / `NO_COLOR` /
+  `TERM=dumb` rules as results.
 
 ### 6. Shell completion and plugins
 - `ods completions <bash|zsh|fish|powershell|elvish>` prints a completion script

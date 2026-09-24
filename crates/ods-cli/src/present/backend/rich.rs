@@ -14,7 +14,7 @@ use rich::tree::Tree;
 use rich::{Console, Justify};
 
 use super::super::view::{Level, Span, Tone, TreeItem, ViewNode, sanitize};
-use crate::output::ColorChoice;
+use crate::output::{ColorChoice, term_is_dumb};
 
 /// Theme key for a tone. Keys are namespaced so they never collide with rich's own styles.
 fn theme_key(tone: Tone) -> &'static str {
@@ -50,16 +50,6 @@ fn ods_theme() -> Theme {
         .map(|&tone| (theme_key(tone), default_style(tone)));
     // The definitions above are constants covered by `theme_resolves_every_tone`.
     Theme::from_styles(styles, true).expect("built-in ODS theme styles must parse")
-}
-
-/// Whether `TERM` names a terminal that cannot render styles.
-///
-/// rs-rich 0.0.7 applies the same rule in its own colour detection. ODS keeps the check
-/// so the ADR-0003 §2 contract holds independently of upstream and stays unit-testable.
-fn term_is_dumb() -> bool {
-    std::env::var_os("TERM").is_some_and(|term| {
-        term.eq_ignore_ascii_case("dumb") || term.eq_ignore_ascii_case("unknown")
-    })
 }
 
 /// Renders view trees with `rs-rich`.

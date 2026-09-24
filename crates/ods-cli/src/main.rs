@@ -22,6 +22,7 @@ fn main() -> ExitCode {
             err: &mut stderr.lock(),
             ods_log: std::env::var("ODS_LOG").ok(),
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
+            dumb_terminal: ods_cli::output::term_is_dumb(),
         },
     );
     ExitCode::from(status.code())
