@@ -40,6 +40,9 @@ a reason (e.g. the user asked for it explicitly).
 8. **Clean-room.** Use only public dbt artifact schemas and OSS sources. Never copy,
    decompile, or depend on proprietary dbt Cloud/Fusion code or binaries (#10).
 9. **Secrets** are referenced, never persisted in config, state, events, or logs.
+   Configuration only accepts `{ secret = "<scheme>:<name>" }` references for credentials
+   ([ADR-0005](docs/adr/0005-configuration-and-profiles.md)); never add a code path that
+   writes a resolved secret into `Config`, state or output.
 
 Architectural changes (new crate, new contract, new persisted format, new dependency
 with a non-permissive licence) require an ADR in `docs/adr/` — use the `adr` skill.

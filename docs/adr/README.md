@@ -9,6 +9,7 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0002](0002-rust-first-backend-and-technology-stack.md) | Rust-first backend and technology stack | Proposed | #105 |
 | [0003](0003-cli-presentation-boundary.md) | CLI presentation boundary and rs-rich-cli | Proposed | #108 |
 | [0004](0004-cli-framework-and-exit-codes.md) | CLI framework, module registration and exit codes | Proposed | #6 |
+| [0005](0005-configuration-and-profiles.md) | Configuration and profiles | Proposed | #7 |
 
-Planned for M0: ADR-0005 plugin SDK versioning & capability model (#2, #3),
-ADR-0006 clean-room & licensing policy (#10).
+Planned for M0: ADR-0006 plugin SDK versioning & capability model (#2, #3),
+ADR-0007 clean-room & licensing policy (#10).

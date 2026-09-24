@@ -1,6 +1,7 @@
 //! Global output flags and how they resolve to concrete settings (ADR-0003 §2).
 
 use clap::{Args, ValueEnum};
+use ods_config::{ColorPreference, FlagValue, OutputConfig, OutputFormat};
 
 /// How results are written to stdout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -36,9 +37,9 @@ pub struct OutputArgs {
     #[arg(long, global = true, conflicts_with = "output")]
     json: bool,
 
-    /// When to use colour in human output
-    #[arg(long, global = true, value_enum, default_value_t = ColorChoice::Auto)]
-    color: ColorChoice,
+    /// When to use colour in human output [default: auto]
+    #[arg(long, global = true, value_enum)]
+    color: Option<ColorChoice>,
 
     /// Render width in columns [default: terminal width, or 100 when not a terminal]
     #[arg(long, global = true, value_parser = clap::value_parser!(u16).range(20..))]
@@ -70,27 +71,115 @@ pub struct OutputSettings {
 }
 
 impl OutputArgs {
-    /// The `--color` choice (also used for log colour).
-    pub fn color(&self) -> ColorChoice {
-        self.color
+    /// The explicitly given flags as configuration values, the highest layer (ADR-0005).
+    pub fn flag_values(&self) -> Vec<FlagValue> {
+        let flag = |key: &str, value: toml::Value, flag: &str| FlagValue {
+            key: vec!["output".to_owned(), key.to_owned()],
+            value,
+            flag: flag.to_owned(),
+        };
+        let mut values = Vec::new();
+        if self.json {
+            values.push(flag("format", "json".into(), "--json"));
+        } else if let Some(mode) = self.output {
+            values.push(flag("format", mode.name().into(), "--output"));
+        }
+        if let Some(color) = self.color {
+            values.push(flag("color", color.name().into(), "--color"));
+        }
+        if let Some(width) = self.width {
+            values.push(flag("width", i64::from(width).into(), "--width"));
+        }
+        values
     }
 
-    /// Resolves flags against whether stdout is a terminal.
+    /// Resolves the flags alone, for reporting errors raised before configuration loads.
     pub fn resolve(&self, stdout_is_terminal: bool) -> OutputSettings {
-        let mode = match (self.json, self.output) {
-            (true, _) => Mode::Json,
-            (false, Some(mode)) => mode,
-            (false, None) if stdout_is_terminal => Mode::Human,
-            (false, None) => Mode::Plain,
+        let mut config = OutputConfig::default();
+        config.format = if self.json {
+            Some(OutputFormat::Json)
+        } else {
+            self.output.map(Mode::to_config)
         };
-        let width = self
+        config.color = self.color.map(ColorChoice::to_config);
+        config.width = self.width;
+        OutputSettings::resolve(&config, stdout_is_terminal)
+    }
+}
+
+impl OutputSettings {
+    /// Resolves effective output configuration (flags already merged in) against
+    /// whether stdout is a terminal (ADR-0003 §2).
+    pub fn resolve(config: &OutputConfig, stdout_is_terminal: bool) -> Self {
+        let mode = match config.format {
+            Some(format) => Mode::from_config(format),
+            None if stdout_is_terminal => Mode::Human,
+            None => Mode::Plain,
+        };
+        let width = config
             .width
             .map(usize::from)
             .or((!stdout_is_terminal).then_some(NON_TERMINAL_WIDTH));
         OutputSettings {
             mode,
-            color: self.color,
+            color: config
+                .color
+                .map_or(ColorChoice::Auto, ColorChoice::from_config),
             width,
+        }
+    }
+}
+
+impl Mode {
+    /// The flag/config spelling.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Mode::Human => "human",
+            Mode::Plain => "plain",
+            Mode::Json => "json",
+        }
+    }
+
+    const fn to_config(self) -> OutputFormat {
+        match self {
+            Mode::Human => OutputFormat::Human,
+            Mode::Plain => OutputFormat::Plain,
+            Mode::Json => OutputFormat::Json,
+        }
+    }
+
+    const fn from_config(format: OutputFormat) -> Self {
+        match format {
+            OutputFormat::Human => Mode::Human,
+            OutputFormat::Plain => Mode::Plain,
+            OutputFormat::Json => Mode::Json,
+        }
+    }
+}
+
+impl ColorChoice {
+    /// The flag/config spelling.
+    pub const fn name(self) -> &'static str {
+        match self {
+            ColorChoice::Auto => "auto",
+            ColorChoice::Always => "always",
+            ColorChoice::Never => "never",
+        }
+    }
+
+    const fn to_config(self) -> ColorPreference {
+        match self {
+            ColorChoice::Auto => ColorPreference::Auto,
+            ColorChoice::Always => ColorPreference::Always,
+            ColorChoice::Never => ColorPreference::Never,
+        }
+    }
+
+    const fn from_config(color: ColorPreference) -> Self {
+        match color {
+            ColorPreference::Auto => ColorChoice::Auto,
+            ColorPreference::Always => ColorChoice::Always,
+            ColorPreference::Never => ColorChoice::Never,
         }
     }
 }

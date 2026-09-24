@@ -1,0 +1,25 @@
+---
+source: crates/ods-cli/tests/config.rs
+expression: text
+---
+Configuration
+
+profile: dev (from default_profile)
+user file: [dir]/home/ods/config.toml
+project file: [dir]/proj/ods.toml
+local file: [dir]/proj/.ods/local.toml
+
+key	value	source
+default_profile	"dev"	project file [dir]/proj/ods.toml
+output.color	"never"	user file [dir]/home/ods/config.toml
+output.format	"plain"	flag --output
+output.width	120	local file [dir]/proj/.ods/local.toml
+providers.warehouse.kind	"example"	project file [dir]/proj/ods.toml
+providers.warehouse.settings.host	"dev.example"	profile `dev` in project file [dir]/proj/ods.toml
+providers.warehouse.settings.token	secret(env:WH_TOKEN)	project file [dir]/proj/ods.toml
+
+overrides
+  output.width = 120
+    overrides 100 from project file [dir]/proj/ods.toml
+  providers.warehouse.settings.host = "dev.example"
+    overrides "prod.example" from project file [dir]/proj/ods.toml

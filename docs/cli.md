@@ -15,6 +15,7 @@ codes).
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
+| `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
 
@@ -35,6 +36,7 @@ literally.
 | `--width` | columns (≥ 20) | terminal width, or 100 when not a terminal |
 | `-v`, `--verbose` | repeatable: `-v` info, `-vv` debug, `-vvv` trace | warnings only |
 | `-q`, `--quiet` | errors only; conflicts with `-v` | |
+| `--profile` | configuration profile | `ODS_PROFILE`, then `default_profile` |
 | `-h`, `--help` | help for `ods` or any command | |
 | `-V`, `--version` | top level only (`ods -V`); `ods version` gives details | |
 
@@ -95,12 +97,18 @@ meanings get new numbers.
 | `ODS-E0002` | Unexpected internal error. Please report it. |
 | `ODS-E0003` | The command is planned but not implemented yet. |
 | `ODS-E0004` | `ODS_LOG` holds an unknown log level. |
+| `ODS-E0101` | A configuration file can't be read or isn't valid TOML. |
+| `ODS-E0102` | Configuration schema violation: unknown key, wrong type or value out of range. |
+| `ODS-E0103` | A credential is written as plaintext instead of a secret reference. |
+| `ODS-E0104` | The selected profile is not defined. |
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q`. |
+| `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`. |
+| `ODS_PROFILE` | Configuration profile to use; `--profile` overrides it. |
+| `ODS__SECTION__KEY` | Sets a configuration key, e.g. `ODS__OUTPUT__WIDTH=120`. |
 | `NO_COLOR` | Any non-empty value disables colour when `--color auto`. `--color always` overrides it. |
 | `TERM` | `dumb` or `unknown` disables colour (results and logs) when `--color auto`. |
 
@@ -123,6 +131,66 @@ ods completions powershell | Out-String | Invoke-Expression
 
 ## Configuration
 
-Project, user and profile configuration is tracked in #7. When it lands, it will be
-loaded once and given to every command in the same way. Configuration errors will use
-exit status 4.
+`ods` reads TOML configuration from up to three files, plus profiles, environment
+variables and flags. The design is in [ADR-0005](adr/0005-configuration-and-profiles.md).
+
+| Layer (lowest → highest precedence) | Where |
+|---|---|
+| user file | `$XDG_CONFIG_HOME/ods/config.toml` (or `~/.config/ods/config.toml`, or `%APPDATA%\ods\config.toml`) |
+| project file | nearest `ods.toml` in the current directory or a parent; commit it |
+| local file | `.ods/local.toml` next to `ods.toml`; add `.ods/` to `.gitignore` |
+| active profile | `[profiles.<name>]` sections from the files above |
+| environment | `ODS__<SECTION>__<KEY>=value`, e.g. `ODS__OUTPUT__WIDTH=120` |
+| flags | `--output`, `--json`, `--color`, `--width` |
+
+Example `ods.toml`:
+
+```toml
+version = 1
+default_profile = "dev"
+
+[project]
+name = "jaffle_shop"
+
+[output]
+width = 100
+
+[providers.warehouse]
+kind = "databricks"
+settings = { host = "prod.cloud.databricks.com", token = { secret = "env:DATABRICKS_TOKEN" } }
+
+[profiles.dev.providers.warehouse.settings]
+host = "dev.cloud.databricks.com"
+
+[profiles.ci.output]
+format = "json"
+```
+
+- **Profiles:** select one with `--profile NAME`, `ODS_PROFILE=NAME` or
+  `default_profile`, in that order of precedence. Selecting an undefined profile is an
+  error.
+- **Keys:**
+  - `version`
+  - `default_profile`
+  - `project.name`
+  - `output.format` (`human`, `plain` or `json`), `output.color` (`auto`, `always` or
+    `never`) and `output.width` (at least 20)
+  - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
+  - `providers.<name>.kind` and `providers.<name>.settings`
+  - `policy.rules`
+
+  Unknown keys are errors.
+- **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`. A
+  plaintext value under a credential-like key (`token`, `password`, `api_key`,
+  `access_token`, …) is rejected. The configuration never holds a secret's value.
+- **Explain:** `ods config explain [KEY]` shows each effective value, where it came
+  from and what it overrode (`--json` for machines):
+
+```text
+key                                 value                         source
+output.width                        120                           local file ./.ods/local.toml
+providers.warehouse.settings.host   "dev.cloud.databricks.com"    profile `dev` in project file ./ods.toml
+providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file ./ods.toml
+```
+
+Configuration errors exit with status 4.

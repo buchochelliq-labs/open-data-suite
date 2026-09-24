@@ -23,6 +23,11 @@ fn main() -> ExitCode {
             ods_log: std::env::var("ODS_LOG").ok(),
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
             dumb_terminal: ods_cli::output::term_is_dumb(),
+            cwd: std::env::current_dir().ok(),
+            // `vars()` would panic on a non-UTF-8 variable; configuration never needs one.
+            env: std::env::vars_os()
+                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                .collect(),
         },
     );
     ExitCode::from(status.code())

@@ -6,6 +6,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Write;
+use std::path::PathBuf;
 
 use clap::error::ErrorKind;
 use clap::{ArgMatches, Args, Command, FromArgMatches};
@@ -15,6 +16,7 @@ use crate::logging::{self, LogArgs};
 use crate::module::{Context, Registry};
 use crate::output::{ColorChoice, Mode, OutputArgs, OutputSettings};
 use crate::present;
+use ods_config::Inputs;
 
 /// Flags accepted by every command.
 #[derive(Debug, Clone, Args)]
@@ -23,6 +25,9 @@ struct GlobalArgs {
     output: OutputArgs,
     #[command(flatten)]
     log: LogArgs,
+    /// Configuration profile to use [env: `ODS_PROFILE`]
+    #[arg(long, global = true, value_name = "NAME")]
+    profile: Option<String>,
 }
 
 /// Where an invocation reads its environment and writes its output.
@@ -44,6 +49,10 @@ pub struct Io<'a> {
     pub no_color: bool,
     /// Whether `TERM` names a terminal without styles (`dumb`, `unknown`).
     pub dumb_terminal: bool,
+    /// Working directory, where configuration discovery starts. `None` loads no files.
+    pub cwd: Option<PathBuf>,
+    /// Process environment, for configuration (`ODS__*`, `ODS_PROFILE`, config dirs).
+    pub env: Vec<(String, String)>,
 }
 
 /// The root `ods` command with global flags and every registered module.
@@ -98,13 +107,34 @@ where
             return ExitStatus::Usage;
         }
     };
-    let settings = globals.output.resolve(io.stdout_is_terminal);
     let Some((name, sub_matches)) = matches.subcommand() else {
         // `subcommand_required` makes clap reject this before we get here.
         return ExitStatus::Usage;
     };
 
-    let level = match globals.log.level(io.ods_log.as_deref()) {
+    // Configuration (ADR-0005). Errors are reported using the flags alone.
+    let mut inputs = match &io.cwd {
+        Some(cwd) => Inputs::discover(cwd, &io.env),
+        None => Inputs {
+            env: io.env.clone(),
+            ..Inputs::default()
+        },
+    };
+    inputs.profile_flag.clone_from(&globals.profile);
+    inputs.flags = globals.output.flag_values();
+    let loaded = match ods_config::load(&inputs) {
+        Ok(loaded) => loaded,
+        Err(err) => {
+            let settings = globals.output.resolve(io.stdout_is_terminal);
+            let err = CliError::new(ExitStatus::Config, err.code(), err.to_string())
+                .with_hint("fix the value named above; see docs/cli.md#configuration");
+            return report(&err, name, &settings, io.out, io.err);
+        }
+    };
+    let settings = OutputSettings::resolve(&loaded.config.output, io.stdout_is_terminal);
+
+    let configured_level = loaded.config.log.level.map(logging::from_config);
+    let level = match globals.log.level(io.ods_log.as_deref(), configured_level) {
         Ok(level) => level,
         Err(value) => {
             let err = CliError::new(
@@ -116,7 +146,7 @@ where
             return report(&err, name, &settings, io.out, io.err);
         }
     };
-    let log_ansi = match globals.output.color() {
+    let log_ansi = match settings.color {
         ColorChoice::Always => true,
         ColorChoice::Never => false,
         ColorChoice::Auto => io.stderr_is_terminal && !io.no_color && !io.dumb_terminal,
@@ -127,7 +157,7 @@ where
     let Some(module) = registry.get(name) else {
         return ExitStatus::Usage;
     };
-    let mut ctx = Context::new(settings, io.out, &root);
+    let mut ctx = Context::new(settings, &loaded, io.out, &root);
     let result = module.run(sub_matches, &mut ctx).and_then(|()| {
         io.out.flush()?;
         Ok(())
@@ -336,6 +366,8 @@ mod tests {
                 ods_log: ods_log.map(str::to_owned),
                 no_color: false,
                 dumb_terminal: false,
+                cwd: None,
+                env: Vec::new(),
             },
         );
         Outcome {
@@ -497,6 +529,8 @@ mod tests {
                     ods_log: None,
                     no_color: false,
                     dumb_terminal: false,
+                    cwd: None,
+                    env: Vec::new(),
                 },
             );
             assert_eq!(status, ExitStatus::Failure, "{mode}");

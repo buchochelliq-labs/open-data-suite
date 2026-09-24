@@ -4,6 +4,8 @@ use std::io::Write;
 
 use clap::{ArgMatches, Command};
 
+use ods_config::Loaded;
+
 use crate::exit::CliError;
 use crate::output::OutputSettings;
 use crate::present::{self, Present};
@@ -34,19 +36,30 @@ pub trait Module {
 
 /// Everything a command receives besides its own arguments.
 ///
-/// Configuration (#7) and policy (#9) will be added here so every command gets them the
-/// same way.
+/// Policy (#9) will be added here so every command gets it the same way.
 pub struct Context<'a> {
     /// Resolved output settings (ADR-0003 §2).
     pub output: OutputSettings,
+    /// Loaded configuration and its provenance (ADR-0005).
+    pub config: &'a Loaded,
     out: &'a mut dyn Write,
     root: &'a Command,
 }
 
 impl<'a> Context<'a> {
     /// Creates a context writing results to `out`.
-    pub fn new(output: OutputSettings, out: &'a mut dyn Write, root: &'a Command) -> Self {
-        Self { output, out, root }
+    pub fn new(
+        output: OutputSettings,
+        config: &'a Loaded,
+        out: &'a mut dyn Write,
+        root: &'a Command,
+    ) -> Self {
+        Self {
+            output,
+            config,
+            out,
+            root,
+        }
     }
 
     /// Writes a command result in the active output mode.

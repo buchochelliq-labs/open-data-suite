@@ -15,12 +15,14 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 clap_complete.workspace = true
+ods-config.workspace = true
 ods-core.workspace = true
 ods-sdk.workspace = true
 rs-rich.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
