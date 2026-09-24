@@ -1,0 +1,23 @@
+[package]
+name = "ods-provider-fake"
+description = "Reference in-memory providers for OpenDataSuite contract tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+ods-core.workspace = true
+ods-sdk.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+ods-config.workspace = true
+ods-sdk = { workspace = true, features = ["conformance"] }
+tokio.workspace = true
+
+[lints]
+workspace = true

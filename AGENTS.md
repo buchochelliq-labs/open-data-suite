@@ -18,8 +18,9 @@ a reason (e.g. the user asked for it explicitly).
 
 1. **No vendor logic in core.** `ods-core`, `ods-sdk` and module crates (`ods-state`,
    `ods-erd`, …) must never branch on provider names or import provider crates.
-   Behaviour differences are expressed as **capabilities** (#3). Vendor code lives in
-   `providers/*`.
+   Behaviour differences are expressed as **capabilities** (#3, [ADR-0006](docs/adr/0006-plugin-sdk-and-capabilities.md)):
+   planners pick strategies with `ods_core::choose`, always ending in a conservative
+   fallback. Vendor code lives in `providers/*`; CI rejects vendor names in core code.
 2. **Dependency direction** ([ADR-0001](docs/adr/0001-monorepo-architecture-and-module-boundaries.md)):
    `ods-core` ← foundation ← `ods-sdk` ← {modules, providers} ← `ods-cli`. Modules and
    providers never depend on each other; only the CLI (or a server binary) wires concrete
@@ -77,6 +78,7 @@ cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo deny check            # licences/advisories (install: cargo install cargo-deny --locked)
 python3 scripts/check-layering.py   # enforces ADR-0001 dependency direction
+python3 scripts/check-vendor-neutral.py   # rule 1: no vendor names in core code (ADR-0006)
 cargo run -p ods-cli -- --help    # binary is named `ods`
 ```
 
