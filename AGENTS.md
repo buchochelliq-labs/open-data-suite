@@ -33,7 +33,7 @@ a reason (e.g. the user asked for it explicitly).
    overwrite the last successful state.
 6. **ERD ≠ lineage.** Separate domain types; a DAG edge is not a PK/FK relationship.
 7. **Presentation is separate from logic.** Commands produce view models; rendering
-   (rs-rich-cli, `--json`, `--plain`) happens at the CLI edge (#108).
+   (rs-rich, `--output plain|json`) happens at the CLI edge (#108, ADR-0003).
 8. **Clean-room.** Use only public dbt artifact schemas and OSS sources. Never copy,
    decompile, or depend on proprietary dbt Cloud/Fusion code or binaries (#10).
 9. **Secrets** are referenced, never persisted in config, state, events, or logs.
@@ -45,7 +45,8 @@ with a non-permissive licence) require an ADR in `docs/adr/` — use the `adr` s
 
 Rust (stable, edition 2024) · Tokio · Clap · Serde · SQLx (SQLite/PostgreSQL) · Axum ·
 tracing/OpenTelemetry · thiserror (libraries) / anyhow (binaries only) ·
-rs-rich-cli for terminal rendering (ADR-0003, pending). LSP library and SQL parser are
+rs-rich for terminal rendering, confined to `ods-cli`
+([ADR-0003](docs/adr/0003-cli-presentation-boundary.md), proposed). LSP library and SQL parser are
 decided in their own ADRs (#67, #73). Python/TypeScript/Go are thin consumers only.
 
 ## Repository layout (target — see ROADMAP §7)
