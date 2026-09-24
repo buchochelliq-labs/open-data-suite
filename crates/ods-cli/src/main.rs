@@ -12,6 +12,16 @@ use ods_cli::commands::default_registry;
 fn main() -> ExitCode {
     let registry = default_registry();
     let (stdout, stderr) = (io::stdout(), io::stderr());
+    // `vars()` would panic on a non-UTF-8 variable. Configuration only needs UTF-8 ones;
+    // an `ODS…` variable that is not UTF-8 is reported instead of silently dropped.
+    let (mut env, mut invalid_env) = (Vec::new(), Vec::new());
+    for (key, value) in std::env::vars_os() {
+        match (key.into_string(), value.into_string()) {
+            (Ok(key), Ok(value)) => env.push((key, value)),
+            (Ok(key), Err(_)) if key.starts_with("ODS") => invalid_env.push(key),
+            _ => {}
+        }
+    }
     let status = app::run(
         &registry,
         std::env::args_os(),
@@ -24,10 +34,8 @@ fn main() -> ExitCode {
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
             dumb_terminal: ods_cli::output::term_is_dumb(),
             cwd: std::env::current_dir().ok(),
-            // `vars()` would panic on a non-UTF-8 variable; configuration never needs one.
-            env: std::env::vars_os()
-                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
-                .collect(),
+            env,
+            invalid_env,
         },
     );
     ExitCode::from(status.code())

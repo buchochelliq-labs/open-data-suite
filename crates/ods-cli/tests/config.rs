@@ -186,3 +186,49 @@ fn explain_filters_by_key_prefix() {
     );
     assert!(stdout(&out).contains("no configuration value is set at or under `log`"));
 }
+
+#[test]
+fn explain_reports_a_table_replaced_by_a_scalar() {
+    let dir = Dir::new();
+    dir.write("ods.toml", "[policy.rules]\nmax = { warn = 1 }\n");
+    dir.write(".ods/local.toml", "[policy.rules]\nmax = 5\n");
+    let out = ods(
+        &dir,
+        &dir.0,
+        &["config", "explain", "policy", "-o", "plain"],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = stdout(&out);
+    assert!(text.contains("policy.rules.max\t5\t"), "{text}");
+    assert!(
+        !text.contains("policy.rules.max.warn\t"),
+        "replaced key is not listed as effective: {text}"
+    );
+    assert!(
+        text.contains("replaces policy.rules.max.warn = 1"),
+        "{text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_ods_variables_are_config_errors() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = Dir::new();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .arg("version")
+        .current_dir(&dir.0)
+        .env_clear()
+        .env("ODS_PROFILE", OsStr::from_bytes(b"dev\xff"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("ODS_PROFILE is not valid UTF-8"));
+}

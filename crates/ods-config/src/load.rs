@@ -1,16 +1,19 @@
 //! Loading, layering and validating configuration (ADR-0005 §1, §2).
 //!
-//! Every layer is flattened to `key path -> value`, so precedence is a simple ordered
-//! overwrite and every effective value keeps its full history for `ods config explain`.
+//! Every layer is flattened to `key path -> value` and recorded with a sequence number
+//! in precedence order. A key's latest setting is effective unless an ancestor or
+//! descendant key was set later: a higher layer may replace a table with a scalar, or a
+//! scalar with a table, and the replaced keys drop out. Every value keeps its full
+//! history for `ods config explain`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::error::ConfigError;
+use crate::error::{ConfigError, display_key};
 use crate::model::{CONFIG_VERSION, Config};
-use crate::secret::{is_secret_key, is_secret_ref_value};
+use crate::secret::{SecretViolation, check_secrets, is_secret_ref_value};
 use crate::source::{FileKind, Source};
 
 /// Project configuration file name.
@@ -43,6 +46,8 @@ pub struct Inputs {
     pub project_file: Option<PathBuf>,
     /// Local overrides next to the project file (read if it exists).
     pub local_file: Option<PathBuf>,
+    /// Where the project-file search started, reported when no `ods.toml` was found.
+    pub search_root: Option<PathBuf>,
     /// Environment variables (only `ODS__*` and `ODS_PROFILE` are used).
     pub env: Vec<(String, String)>,
     /// Profile chosen with `--profile`.
@@ -55,7 +60,8 @@ impl Inputs {
     /// Finds the configuration files for a process running in `cwd` with `env`.
     ///
     /// The project file is the nearest `ods.toml` in `cwd` or an ancestor. The user file
-    /// is `$XDG_CONFIG_HOME/ods/config.toml`, else `$HOME/.config/ods/config.toml`, else
+    /// is `$XDG_CONFIG_HOME/ods/config.toml` (only if that is an absolute path, as the
+    /// XDG spec requires), else `$HOME/.config/ods/config.toml`, else
     /// `%APPDATA%\ods\config.toml`.
     pub fn discover(cwd: &Path, env: &[(String, String)]) -> Self {
         let var = |name: &str| {
@@ -64,6 +70,7 @@ impl Inputs {
                 .map(|(_, value)| PathBuf::from(value))
         };
         let user_dir = var("XDG_CONFIG_HOME")
+            .filter(|dir| dir.is_absolute())
             .or_else(|| var("HOME").map(|home| home.join(".config")))
             .or_else(|| var("APPDATA"));
         let project_file = cwd
@@ -78,6 +85,7 @@ impl Inputs {
             user_file: user_dir.map(|dir| dir.join("ods").join("config.toml")),
             project_file,
             local_file,
+            search_root: Some(cwd.to_owned()),
             env: env.to_vec(),
             profile_flag: None,
             flags: Vec::new(),
@@ -92,6 +100,9 @@ pub struct Setting {
     pub value: toml::Value,
     /// Where it was set.
     pub source: Source,
+    /// Position in precedence order; higher wins.
+    #[serde(skip)]
+    pub seq: usize,
 }
 
 /// A configuration file that was considered.
@@ -99,10 +110,20 @@ pub struct Setting {
 pub struct FileStatus {
     /// Which layer.
     pub kind: FileKind,
-    /// Path.
+    /// Path (for a project file that was not found: where the upward search started).
     pub path: PathBuf,
     /// Whether it existed and was read.
     pub loaded: bool,
+}
+
+/// A setting that an effective value replaced: an earlier value of the same key, or a
+/// value of an ancestor or descendant key that a later layer replaced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Replaced<'a> {
+    /// The replaced key (equal to the effective key unless a table or scalar was replaced).
+    pub key: &'a [String],
+    /// The replaced setting.
+    pub setting: &'a Setting,
 }
 
 /// The result of loading: the validated config plus the provenance behind it.
@@ -114,15 +135,57 @@ pub struct Loaded {
     pub profile: Option<(String, String)>,
     /// Files that were considered, in precedence order.
     pub files: Vec<FileStatus>,
-    /// Every key's settings, lowest precedence first; the last one is effective.
+    /// Every key's settings from every layer, lowest precedence first.
     pub history: BTreeMap<Vec<String>, Vec<Setting>>,
+    /// Keys whose latest setting is in effect (not replaced by a related key).
+    live: BTreeSet<Vec<String>>,
 }
 
 impl Loaded {
-    /// The effective setting for `key`.
+    /// The effective setting for `key`, if it is in effect.
     pub fn effective(&self, key: &[String]) -> Option<&Setting> {
+        if !self.live.contains(key) {
+            return None;
+        }
         self.history.get(key).and_then(|settings| settings.last())
     }
+
+    /// Every effective key and setting, sorted by key.
+    pub fn effective_settings(&self) -> impl Iterator<Item = (&Vec<String>, &Setting)> {
+        self.live
+            .iter()
+            .filter_map(|key| Some((key, self.history.get(key)?.last()?)))
+    }
+
+    /// What the effective setting at `key` replaced, most recent first.
+    pub fn replaced(&self, key: &[String]) -> Vec<Replaced<'_>> {
+        let Some(effective) = self.effective(key) else {
+            return Vec::new();
+        };
+        let mut replaced: Vec<Replaced<'_>> = self
+            .history
+            .iter()
+            .filter(|(other, _)| {
+                other.as_slice() == key || (related(other, key) && !self.live.contains(*other))
+            })
+            .flat_map(|(other, settings)| {
+                settings
+                    .iter()
+                    .filter(|s| s.seq < effective.seq)
+                    .map(move |setting| Replaced {
+                        key: other,
+                        setting,
+                    })
+            })
+            .collect();
+        replaced.sort_by(|a, b| b.setting.seq.cmp(&a.setting.seq));
+        replaced
+    }
+}
+
+/// Whether one key is a strict ancestor of the other.
+fn related(a: &[String], b: &[String]) -> bool {
+    a != b && (a.starts_with(b) || b.starts_with(a))
 }
 
 /// A configuration file that was read: its tables, with `profiles` split out.
@@ -135,14 +198,33 @@ struct ParsedFile {
 
 type History = BTreeMap<Vec<String>, Vec<Setting>>;
 
+/// Accumulates settings in precedence order.
+#[derive(Default)]
+struct Layers {
+    history: History,
+    next_seq: usize,
+}
+
+impl Layers {
+    fn record(&mut self, key: Vec<String>, value: toml::Value, source: Source) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.history
+            .entry(key)
+            .or_default()
+            .push(Setting { value, source, seq });
+    }
+}
+
 /// Loads, merges and validates configuration.
 ///
 /// # Errors
 /// Returns [`ConfigError`] for unreadable or malformed files, schema violations,
-/// plaintext credentials and unknown profiles.
+/// plaintext credentials, malformed secret references and unknown profiles. No error
+/// message contains a configuration value that could be a secret.
 pub fn load(inputs: &Inputs) -> Result<Loaded, ConfigError> {
     let (files, parsed) = read_files(inputs)?;
-    let mut history = History::new();
+    let mut layers = Layers::default();
 
     // Base layers, in file order: user < project < local.
     for file in &parsed {
@@ -151,32 +233,46 @@ pub fn load(inputs: &Inputs) -> Result<Loaded, ConfigError> {
                 kind: file.kind,
                 path: file.path.clone(),
             };
-            record(&mut history, key, value, source);
+            layers.record(key, value, source);
         }
     }
-    let profile = select_profile(inputs, &history);
+    let profile = select_profile(inputs, &layers.history);
     if let Some((name, selected_by)) = &profile {
-        apply_profile(&mut history, &parsed, name, selected_by)?;
+        apply_profile(&mut layers, &parsed, name, selected_by)?;
     }
-    apply_env(&mut history, &inputs.env)?;
+    apply_env(&mut layers, &inputs.env)?;
     for flag in &inputs.flags {
         let source = Source::Flag {
             flag: flag.flag.clone(),
         };
-        record(&mut history, flag.key.clone(), flag.value.clone(), source);
+        layers.record(flag.key.clone(), flag.value.clone(), source);
     }
 
-    let config = validate(&history)?;
+    let history = layers.history;
+    check_all_secrets(&history)?;
+    let live = live_keys(&history);
+    let config = validate(&history, &live)?;
     Ok(Loaded {
         config,
         profile,
         files,
         history,
+        live,
     })
 }
 
 fn read_files(inputs: &Inputs) -> Result<(Vec<FileStatus>, Vec<ParsedFile>), ConfigError> {
     let (mut files, mut parsed) = (Vec::new(), Vec::new());
+    // Report where we looked, so `explain` shows that no project file was found.
+    if inputs.project_file.is_none()
+        && let Some(root) = &inputs.search_root
+    {
+        files.push(FileStatus {
+            kind: FileKind::Project,
+            path: root.join(PROJECT_FILE),
+            loaded: false,
+        });
+    }
     for (kind, path) in [
         (FileKind::User, &inputs.user_file),
         (FileKind::Project, &inputs.project_file),
@@ -217,6 +313,7 @@ fn read_files(inputs: &Inputs) -> Result<(Vec<FileStatus>, Vec<ParsedFile>), Con
             profiles,
         });
     }
+    files.sort_by_key(|f| f.kind);
     Ok((files, parsed))
 }
 
@@ -240,9 +337,23 @@ fn select_profile(inputs: &Inputs, history: &History) -> Option<(String, String)
         .or_else(|| default_profile.map(|name| (name, "default_profile".to_owned())))
 }
 
+/// `default_profile` chooses the profile, so it may only come from a file's top level;
+/// setting it in a profile or the environment could never take effect.
+fn reject_default_profile(key: &[String], source: Source) -> Result<(), ConfigError> {
+    if key.first().is_some_and(|k| k == "default_profile") {
+        return Err(schema_error(
+            key,
+            source,
+            "default_profile can only be set at the top level of a configuration file; \
+             use --profile or ODS_PROFILE to choose a profile instead",
+        ));
+    }
+    Ok(())
+}
+
 /// Applies `[profiles.<name>]` from every file, in file order.
 fn apply_profile(
-    history: &mut History,
+    layers: &mut Layers,
     parsed: &[ParsedFile],
     name: &str,
     selected_by: &str,
@@ -258,7 +369,8 @@ fn apply_profile(
                         kind: file.kind,
                         path: file.path.clone(),
                     };
-                    record(history, key, value, source);
+                    reject_default_profile(&key, source.clone())?;
+                    layers.record(key, value, source);
                 }
             }
             Some(_) => {
@@ -291,40 +403,46 @@ fn apply_profile(
 }
 
 /// Applies `ODS__SECTION__KEY=value` variables, in sorted order so the result never
-/// depends on environment order.
-fn apply_env(history: &mut History, env: &[(String, String)]) -> Result<(), ConfigError> {
+/// depends on environment order. Each segment matches an existing key
+/// case-insensitively (so `ODS__PROVIDERS__MYWH__KIND` reaches `[providers.MyWh]`);
+/// otherwise it is lowercased.
+fn apply_env(layers: &mut Layers, env: &[(String, String)]) -> Result<(), ConfigError> {
     let mut vars: Vec<&(String, String)> = env
         .iter()
         .filter(|(key, _)| key.starts_with(ENV_PREFIX))
         .collect();
     vars.sort();
     for (var, raw) in vars {
-        let key: Vec<String> = var[ENV_PREFIX.len()..]
-            .split("__")
-            .map(str::to_ascii_lowercase)
-            .collect();
-        if key.iter().any(String::is_empty) {
-            return Err(schema_error(
-                &key,
-                Source::Env { var: var.clone() },
-                "empty key segment",
-            ));
+        let source = Source::Env { var: var.clone() };
+        let segments: Vec<&str> = var[ENV_PREFIX.len()..].split("__").collect();
+        if segments.iter().any(|s| s.is_empty()) {
+            let key: Vec<String> = segments.iter().map(|s| s.to_ascii_lowercase()).collect();
+            return Err(schema_error(&key, source, "empty key segment"));
         }
-        record(
-            history,
-            key,
-            parse_env_value(raw),
-            Source::Env { var: var.clone() },
-        );
+        let key = resolve_env_key(&layers.history, &segments);
+        reject_default_profile(&key, source.clone())?;
+        layers.record(key, parse_env_value(raw), source);
     }
     Ok(())
 }
 
-fn record(history: &mut History, key: Vec<String>, value: toml::Value, source: Source) {
-    history
-        .entry(key)
-        .or_default()
-        .push(Setting { value, source });
+/// Spells each segment like an existing key with the same prefix, ignoring case.
+fn resolve_env_key(history: &History, segments: &[&str]) -> Vec<String> {
+    let mut resolved: Vec<String> = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let depth = resolved.len();
+        let existing = history
+            .keys()
+            .filter(|key| key.len() > depth && key[..depth] == resolved[..])
+            .map(|key| &key[depth])
+            .find(|name| name.eq_ignore_ascii_case(segment));
+        resolved.push(
+            existing
+                .cloned()
+                .unwrap_or_else(|| segment.to_ascii_lowercase()),
+        );
+    }
+    resolved
 }
 
 /// Reads a TOML file; `Ok(None)` if it does not exist.
@@ -343,8 +461,22 @@ fn read_table(path: &Path) -> Result<Option<toml::Table>, ConfigError> {
         .map(Some)
         .map_err(|err| ConfigError::Parse {
             path: path.to_owned(),
-            message: err.to_string(),
+            message: parse_error_message(&text, &err),
         })
+}
+
+/// Line, column and the parser's short message. The source snippet that `toml`'s own
+/// `Display` includes is left out, because the offending line may hold a secret.
+fn parse_error_message(text: &str, err: &toml::de::Error) -> String {
+    match err.span() {
+        Some(span) => {
+            let before = &text[..span.start.min(text.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+            format!("line {line}, column {column}: {}", err.message())
+        }
+        None => err.message().to_owned(),
+    }
 }
 
 /// Flattens a table into leaf key paths. Arrays and secret references are leaves.
@@ -370,7 +502,25 @@ pub(crate) fn flatten(table: &toml::Table) -> Vec<(Vec<String>, toml::Value)> {
     out
 }
 
-/// Rebuilds a nested table from leaf key paths.
+/// Keys whose latest setting is not replaced by a later setting of a related key.
+fn live_keys(history: &History) -> BTreeSet<Vec<String>> {
+    let latest: Vec<(&Vec<String>, usize)> = history
+        .iter()
+        .filter_map(|(key, settings)| Some((key, settings.last()?.seq)))
+        .collect();
+    latest
+        .iter()
+        .filter(|(key, seq)| {
+            !latest
+                .iter()
+                .any(|(other, other_seq)| other_seq > seq && related(other, key))
+        })
+        .map(|(key, _)| (*key).clone())
+        .collect()
+}
+
+/// Rebuilds a nested table from effective leaves. Live keys never conflict (no live key
+/// is an ancestor of another), so every intermediate entry is a table.
 fn unflatten<'a>(leaves: impl Iterator<Item = (&'a Vec<String>, &'a toml::Value)>) -> toml::Table {
     let mut root = toml::Table::new();
     for (key, value) in leaves {
@@ -382,13 +532,8 @@ fn unflatten<'a>(leaves: impl Iterator<Item = (&'a Vec<String>, &'a toml::Value)
             let entry = table
                 .entry(part.clone())
                 .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-            // A later layer may have replaced a table with a scalar (or vice versa);
-            // the schema check reports it, so the deeper key simply wins here.
-            if !entry.is_table() {
-                *entry = toml::Value::Table(toml::Table::new());
-            }
             let toml::Value::Table(next) = entry else {
-                unreachable!("just ensured a table")
+                unreachable!("live keys are never ancestors of each other")
             };
             table = next;
         }
@@ -408,41 +553,61 @@ fn parse_env_value(raw: &str) -> toml::Value {
 
 fn schema_error(key: &[String], source: Source, message: impl Into<String>) -> ConfigError {
     ConfigError::Schema {
-        key: key.join("."),
+        key: display_key(key),
         origin: Box::new(source),
         message: message.into(),
     }
 }
 
-/// Checks credentials and the schema, then builds the typed [`Config`].
-fn validate(history: &History) -> Result<Config, ConfigError> {
-    let effective = || {
-        history
-            .iter()
-            .filter_map(|(key, settings)| settings.last().map(|s| (key, s)))
-    };
-
-    for (key, setting) in effective() {
-        let under_providers = key.first().is_some_and(|k| k == "providers");
-        let named_like_secret = key.last().is_some_and(|k| is_secret_key(k));
-        if under_providers && named_like_secret && !is_secret_ref_value(&setting.value) {
-            return Err(ConfigError::PlaintextSecret {
-                key: key.join("."),
-                origin: Box::new(setting.source.clone()),
-            });
+/// Applies the secret rules to every value from every layer, including values a later
+/// layer overrides: a plaintext credential in any file is an error (ADR-0005 §4).
+fn check_all_secrets(history: &History) -> Result<(), ConfigError> {
+    for (key, settings) in history {
+        for setting in settings {
+            match check_secrets(key, &setting.value) {
+                Ok(()) => {}
+                Err(SecretViolation::Plaintext { path }) => {
+                    return Err(ConfigError::PlaintextSecret {
+                        key: display_key(&path),
+                        origin: Box::new(setting.source.clone()),
+                    });
+                }
+                Err(SecretViolation::InvalidReference { path, reason }) => {
+                    return Err(ConfigError::InvalidSecretRef {
+                        key: display_key(&path),
+                        origin: Box::new(setting.source.clone()),
+                        reason,
+                    });
+                }
+            }
         }
     }
+    Ok(())
+}
 
-    let table = unflatten(effective().map(|(key, setting)| (key, &setting.value)));
+/// Checks the schema on the effective keys and builds the typed [`Config`].
+fn validate(history: &History, live: &BTreeSet<Vec<String>>) -> Result<Config, ConfigError> {
+    let leaves = live
+        .iter()
+        .filter_map(|key| Some((key, &history.get(key)?.last()?.value)));
+    let table = unflatten(leaves);
     let config: Config =
         serde_path_to_error::deserialize(toml::Value::Table(table)).map_err(|err| {
-            let path = err.path().to_string();
-            let key: Vec<String> = path.split('.').map(str::to_owned).collect();
-            let source = source_for(history, &key);
+            let key: Vec<String> = err
+                .path()
+                .iter()
+                .map(|segment| match segment {
+                    serde_path_to_error::Segment::Seq { index } => format!("[{index}]"),
+                    serde_path_to_error::Segment::Map { key } => key.clone(),
+                    serde_path_to_error::Segment::Enum { variant } => variant.clone(),
+                    serde_path_to_error::Segment::Unknown => "?".to_owned(),
+                })
+                .collect();
+            let source = source_for(history, live, &key);
             ConfigError::Schema {
-                key: path,
+                key: display_key(&key),
                 origin: Box::new(source),
-                message: err.into_inner().to_string(),
+                message: redact_literals(&err.into_inner().to_string()),
             }
         })?;
 
@@ -450,7 +615,7 @@ fn validate(history: &History) -> Result<Config, ConfigError> {
         let key = vec!["version".to_owned()];
         return Err(schema_error(
             &key,
-            source_for(history, &key),
+            source_for(history, live, &key),
             format!(
                 "unsupported configuration version {version}; this build reads version {CONFIG_VERSION}"
             ),
@@ -460,24 +625,74 @@ fn validate(history: &History) -> Result<Config, ConfigError> {
         let key = vec!["output".to_owned(), "width".to_owned()];
         return Err(schema_error(
             &key,
-            source_for(history, &key),
+            source_for(history, live, &key),
             format!("width {width} is below the minimum of 20"),
         ));
     }
     Ok(config)
 }
 
-/// The layer that set `key`, or the nearest ancestor key that was set.
-fn source_for(history: &History, key: &[String]) -> Source {
+/// Replaces quoted string literals in a deserializer message with `<value>`, so a
+/// schema error never echoes a configured value (`invalid type: string "…"`).
+fn redact_literals(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut in_literal = false;
+    let mut escaped = false;
+    for c in message.chars() {
+        if in_literal {
+            match (escaped, c) {
+                (false, '\\') => escaped = true,
+                (false, '"') => in_literal = false,
+                _ => escaped = false,
+            }
+        } else if c == '"' {
+            in_literal = true;
+            out.push_str("<value>");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The layer that set `key`: the effective setting of `key`, or of the nearest ancestor
+/// or first descendant that is in effect.
+fn source_for(history: &History, live: &BTreeSet<Vec<String>>, key: &[String]) -> Source {
     (0..=key.len())
         .rev()
         .find_map(|len| {
             let prefix = &key[..len];
-            history
-                .iter()
-                .filter(|(k, _)| k.starts_with(prefix))
-                .find_map(|(_, settings)| settings.last())
+            live.iter()
+                .find(|k| k.starts_with(prefix))
+                .and_then(|k| history.get(k)?.last())
                 .map(|s| s.source.clone())
         })
         .unwrap_or(Source::Default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_quoted_literals_only() {
+        assert_eq!(
+            redact_literals(r#"invalid type: string "s3cr3t", expected a map"#),
+            "invalid type: string <value>, expected a map"
+        );
+        assert_eq!(
+            redact_literals("unknown field `fromat`, expected one of `format`"),
+            "unknown field `fromat`, expected one of `format`"
+        );
+        assert_eq!(redact_literals(r#"a "x\"y" b"#), "a <value> b");
+    }
+
+    #[test]
+    fn parse_errors_omit_the_source_line() {
+        let text = "[output]\ntoken = hunter5\n";
+        let err = text.parse::<toml::Table>().unwrap_err();
+        let message = parse_error_message(text, &err);
+        assert!(message.starts_with("line 2, column"), "{message}");
+        assert!(!message.contains("hunter5"), "{message}");
+    }
 }

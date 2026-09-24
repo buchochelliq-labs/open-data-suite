@@ -340,3 +340,188 @@ fn discovery_finds_the_nearest_project_file_and_user_dir() {
         Some(Path::new("/home/u/.config/ods/config.toml").to_path_buf())
     );
 }
+
+// Regression tests for the architecture review of #7.
+
+#[test]
+fn plaintext_in_an_overridden_layer_is_still_rejected() {
+    let dir = Dir::new();
+    let project = dir.write(
+        "ods.toml",
+        "[providers.w]\nkind = \"x\"\nsettings = { token = \"hunter2-plain\" }\n",
+    );
+    let local = dir.write(
+        ".ods/local.toml",
+        "[providers.w.settings]\ntoken = { secret = \"env:T\" }\n",
+    );
+    let err = load(&inputs(None, Some(project.clone()), Some(local))).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0103");
+    let text = err.to_string();
+    assert!(text.contains(&project.display().to_string()), "{text}");
+    assert!(!text.contains("hunter2"), "{text}");
+}
+
+#[test]
+fn nested_and_array_credentials_are_rejected() {
+    let dir = Dir::new();
+    for (i, settings) in [
+        "token = { value = \"hunter2\" }",
+        "conn = [{ password = \"hunter3\" }]",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let project = dir.write(
+            &format!("{i}/ods.toml"),
+            &format!("[providers.w]\nkind = \"x\"\n[providers.w.settings]\n{settings}\n"),
+        );
+        let err = load(&inputs(None, Some(project), None)).unwrap_err();
+        assert_eq!(err.code(), "ODS-E0103", "{settings}");
+        assert!(!err.to_string().contains("hunter"), "{err}");
+    }
+}
+
+#[test]
+fn malformed_secret_references_are_rejected_without_echo() {
+    let dir = Dir::new();
+    let project = dir.write(
+        "ods.toml",
+        "[providers.w]\nkind = \"x\"\nsettings = { api_key = { secret = \"hunter4\" } }\n",
+    );
+    let err = load(&inputs(None, Some(project), None)).unwrap_err();
+    assert!(matches!(err, ConfigError::InvalidSecretRef { .. }), "{err}");
+    assert!(!err.to_string().contains("hunter4"), "{err}");
+
+    let mut i = inputs(None, None, None);
+    i.env = env(&[
+        ("ODS__PROVIDERS__W__KIND", "x"),
+        (
+            "ODS__PROVIDERS__W__SETTINGS__TOKEN",
+            "{ secret = \"hunter8\" }",
+        ),
+    ]);
+    let err = load(&i).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0103");
+    assert!(!err.to_string().contains("hunter8"), "{err}");
+}
+
+#[test]
+fn errors_never_echo_configured_values() {
+    let dir = Dir::new();
+    let unparsable = dir.write("a/ods.toml", "[project]\nname = hunter5\n");
+    let err = load(&inputs(None, Some(unparsable), None)).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0101");
+    assert!(err.to_string().contains("line 2"), "{err}");
+    assert!(!err.to_string().contains("hunter5"), "{err}");
+
+    let wrong_type = dir.write(
+        "b/ods.toml",
+        "[providers.w]\nkind = \"x\"\nsettings = \"s3cr3t\"\n",
+    );
+    let err = load(&inputs(None, Some(wrong_type), None)).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0102");
+    assert!(!err.to_string().contains("s3cr3t"), "{err}");
+}
+
+#[test]
+fn a_higher_scalar_replaces_a_lower_table_and_vice_versa() {
+    let dir = Dir::new();
+    let project = dir.write(
+        "ods.toml",
+        "[policy.rules]\nmax = { warn = 1 }\nother = 2\n",
+    );
+    let local = dir.write(".ods/local.toml", "[policy.rules]\nmax = 5\n");
+    let loaded = load(&inputs(None, Some(project.clone()), Some(local.clone()))).unwrap();
+    assert_eq!(loaded.config.policy.rules["max"].as_integer(), Some(5));
+    assert_eq!(loaded.config.policy.rules["other"].as_integer(), Some(2));
+    assert!(
+        loaded.effective(&key("policy.rules.max.warn")).is_none(),
+        "replaced key is not effective"
+    );
+    let replaced = loaded.replaced(&key("policy.rules.max"));
+    assert_eq!(replaced.len(), 1);
+    assert_eq!(replaced[0].key, key("policy.rules.max.warn").as_slice());
+
+    // The reverse: a higher table replaces a lower scalar.
+    let project = dir.write("b/ods.toml", "[policy.rules]\nmax = 5\n");
+    let local = dir.write("b/.ods/local.toml", "[policy.rules.max]\nwarn = 1\n");
+    let loaded = load(&inputs(None, Some(project), Some(local))).unwrap();
+    assert_eq!(
+        loaded.config.policy.rules["max"]["warn"].as_integer(),
+        Some(1)
+    );
+    assert!(loaded.effective(&key("policy.rules.max")).is_none());
+
+    // A scalar over a schema table is a schema error, not silently ignored.
+    let project = dir.write("c/ods.toml", "[output]\nformat = \"json\"\n");
+    let local = dir.write("c/.ods/local.toml", "output = \"x\"\n");
+    let err = load(&inputs(None, Some(project), Some(local))).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0102");
+}
+
+#[test]
+fn default_profile_can_only_be_set_at_a_files_top_level() {
+    let dir = Dir::new();
+    let project = dir.write(
+        "ods.toml",
+        "default_profile = \"a\"\n[profiles.a]\ndefault_profile = \"b\"\n[profiles.b]\n",
+    );
+    let err = load(&inputs(None, Some(project.clone()), None)).unwrap_err();
+    assert!(
+        err.to_string().contains("default_profile can only be set"),
+        "{err}"
+    );
+
+    let project = dir.write(
+        "b/ods.toml",
+        "default_profile = \"a\"\n[profiles.a]\n[profiles.b]\n",
+    );
+    let mut i = inputs(None, Some(project), None);
+    i.env = env(&[("ODS__DEFAULT_PROFILE", "b")]);
+    assert!(
+        load(&i)
+            .unwrap_err()
+            .to_string()
+            .contains("default_profile can only be set")
+    );
+}
+
+#[test]
+fn env_segments_match_existing_keys_case_insensitively() {
+    let dir = Dir::new();
+    let project = dir.write("ods.toml", "[providers.MyWh]\nkind = \"x\"\n");
+    let mut i = inputs(None, Some(project), None);
+    i.env = env(&[("ODS__PROVIDERS__MYWH__KIND", "y")]);
+    let config = load(&i).unwrap().config;
+    assert_eq!(config.providers.len(), 1, "no second provider is created");
+    assert_eq!(config.providers["MyWh"].kind, "y");
+}
+
+#[test]
+fn explain_inputs_report_a_missing_project_file_and_ignore_relative_xdg() {
+    let dir = Dir::new();
+    let found = Inputs::discover(
+        &dir.0,
+        &env(&[("XDG_CONFIG_HOME", "relative/cfg"), ("HOME", "/home/u")]),
+    );
+    assert_eq!(
+        found.user_file,
+        Some(Path::new("/home/u/.config/ods/config.toml").to_path_buf())
+    );
+    let loaded = load(&found).unwrap();
+    let project = loaded
+        .files
+        .iter()
+        .find(|f| f.kind == FileKind::Project)
+        .expect("listed");
+    assert!(!project.loaded);
+    assert_eq!(project.path, dir.0.join("ods.toml"));
+}
+
+#[test]
+fn keys_containing_dots_are_quoted_in_errors() {
+    let dir = Dir::new();
+    let project = dir.write("ods.toml", "[providers.\"a.b\"]\nkind = 1\n");
+    let err = load(&inputs(None, Some(project), None)).unwrap_err();
+    assert!(err.to_string().contains("providers.\"a.b\".kind"), "{err}");
+}

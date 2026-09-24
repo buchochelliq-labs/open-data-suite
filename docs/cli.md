@@ -168,7 +168,14 @@ format = "json"
 
 - **Profiles:** select one with `--profile NAME`, `ODS_PROFILE=NAME` or
   `default_profile`, in that order of precedence. Selecting an undefined profile is an
-  error.
+  error. `default_profile` can only be set at a file's top level.
+- **Environment variables:**
+  - `ODS__A__B=value` sets key `a.b`. Values are read as TOML when possible (`120`,
+    `true`), so quote a string that looks like a number: `ODS__PROJECT__NAME='"1.0"'`.
+  - Segments match existing keys case-insensitively. Keys whose names contain `__` or
+    `.` can't be set this way.
+- **Replacing tables:** a higher layer can replace a whole table with a single value,
+  or a value with a table. `explain` shows what was replaced.
 - **Keys:**
   - `version`
   - `default_profile`
@@ -180,9 +187,13 @@ format = "json"
   - `policy.rules`
 
   Unknown keys are errors.
-- **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`. A
-  plaintext value under a credential-like key (`token`, `password`, `api_key`,
-  `access_token`, …) is rejected. The configuration never holds a secret's value.
+- **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`.
+  - A plaintext value at or under a credential-like key (`token`, `password`,
+    `api_key`, `access_token`, `dsn`, …) is rejected. This applies anywhere in any file,
+    including values that a higher layer overrides.
+  - Malformed references are rejected too.
+  - Error messages never repeat configured values, and the configuration never holds
+    a secret's value.
 - **Explain:** `ods config explain [KEY]` shows each effective value, where it came
   from and what it overrode (`--json` for machines):
 

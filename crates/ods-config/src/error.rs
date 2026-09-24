@@ -46,6 +46,16 @@ pub enum ConfigError {
         /// The layer that set it.
         origin: Box<Source>,
     },
+    /// A `{ secret = … }` reference is malformed. The reference text is never shown.
+    #[error("invalid secret reference at `{key}` (from {origin}): {reason}")]
+    InvalidSecretRef {
+        /// Dotted key path.
+        key: String,
+        /// The layer that set it.
+        origin: Box<Source>,
+        /// What is wrong, without the reference text.
+        reason: String,
+    },
     /// The selected profile is not defined in any configuration file.
     #[error("profile `{name}` (selected by {selected_by}) is not defined{}", available_suffix(.available))]
     UnknownProfile {
@@ -72,8 +82,29 @@ impl ConfigError {
         match self {
             ConfigError::Read { .. } | ConfigError::Parse { .. } => "ODS-E0101",
             ConfigError::Schema { .. } => "ODS-E0102",
-            ConfigError::PlaintextSecret { .. } => "ODS-E0103",
+            ConfigError::PlaintextSecret { .. } | ConfigError::InvalidSecretRef { .. } => {
+                "ODS-E0103"
+            }
             ConfigError::UnknownProfile { .. } => "ODS-E0104",
         }
     }
+}
+
+/// Joins a key path for display. Segments that are empty or contain `.`, spaces or
+/// quotes are quoted, so `providers."a.b".kind` is never confused with a nested key.
+pub fn display_key(key: &[String]) -> String {
+    key.iter()
+        .map(|segment| {
+            let bare = !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '[' | ']'));
+            if bare {
+                segment.clone()
+            } else {
+                format!("{segment:?}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }

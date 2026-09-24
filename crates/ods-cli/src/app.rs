@@ -53,6 +53,9 @@ pub struct Io<'a> {
     pub cwd: Option<PathBuf>,
     /// Process environment, for configuration (`ODS__*`, `ODS_PROFILE`, config dirs).
     pub env: Vec<(String, String)>,
+    /// Names of `ODS…` variables whose value is not valid UTF-8. Reported as a
+    /// configuration error rather than silently ignored.
+    pub invalid_env: Vec<String>,
 }
 
 /// The root `ods` command with global flags and every registered module.
@@ -113,6 +116,15 @@ where
     };
 
     // Configuration (ADR-0005). Errors are reported using the flags alone.
+    if let Some(var) = io.invalid_env.first() {
+        let settings = globals.output.resolve(io.stdout_is_terminal);
+        let err = CliError::new(
+            ExitStatus::Config,
+            "ODS-E0102",
+            format!("environment variable {var} is not valid UTF-8"),
+        );
+        return report(&err, name, &settings, io.out, io.err);
+    }
     let mut inputs = match &io.cwd {
         Some(cwd) => Inputs::discover(cwd, &io.env),
         None => Inputs {
@@ -368,6 +380,7 @@ mod tests {
                 dumb_terminal: false,
                 cwd: None,
                 env: Vec::new(),
+                invalid_env: Vec::new(),
             },
         );
         Outcome {
@@ -531,6 +544,7 @@ mod tests {
                     dumb_terminal: false,
                     cwd: None,
                     env: Vec::new(),
+                    invalid_env: Vec::new(),
                 },
             );
             assert_eq!(status, ExitStatus::Failure, "{mode}");

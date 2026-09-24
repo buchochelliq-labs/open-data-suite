@@ -2,7 +2,7 @@
 //! (ADR-0005 §5).
 
 use clap::{Arg, ArgMatches, Command};
-use ods_config::{FileStatus, Loaded, SecretRef, Source};
+use ods_config::{FileStatus, Loaded, SecretRef, Source, display_key};
 use serde::Serialize;
 
 use crate::exit::CliError;
@@ -74,6 +74,9 @@ struct Entry {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct Overridden {
+    /// Set when a different key was replaced (a table replaced by a scalar or vice versa).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
     value: toml::Value,
     source: Source,
 }
@@ -82,26 +85,23 @@ impl Explanation {
     fn build(loaded: &Loaded, filter: Option<&str>) -> Self {
         let prefix: Vec<&str> = filter.map(|f| f.split('.').collect()).unwrap_or_default();
         let keys = loaded
-            .history
-            .iter()
+            .effective_settings()
             .filter(|(key, _)| {
                 key.len() >= prefix.len() && key.iter().zip(&prefix).all(|(a, b)| a == b)
             })
-            .filter_map(|(key, settings)| {
-                let (effective, earlier) = settings.split_last()?;
-                Some(Entry {
-                    key: key.join("."),
-                    value: effective.value.clone(),
-                    source: effective.source.clone(),
-                    overridden: earlier
-                        .iter()
-                        .rev()
-                        .map(|s| Overridden {
-                            value: s.value.clone(),
-                            source: s.source.clone(),
-                        })
-                        .collect(),
-                })
+            .map(|(key, effective)| Entry {
+                key: display_key(key),
+                value: effective.value.clone(),
+                source: effective.source.clone(),
+                overridden: loaded
+                    .replaced(key)
+                    .into_iter()
+                    .map(|replaced| Overridden {
+                        key: (replaced.key != key.as_slice()).then(|| display_key(replaced.key)),
+                        value: replaced.setting.value.clone(),
+                        source: replaced.setting.source.clone(),
+                    })
+                    .collect(),
             })
             .collect();
         Self {
@@ -198,7 +198,13 @@ impl Present for Explanation {
                     .iter()
                     .map(|o| {
                         TreeItem::leaf(vec![
-                            Span::toned(format!("overrides {}", display(&o.value)), Tone::Muted),
+                            Span::toned(
+                                match &o.key {
+                                    Some(key) => format!("replaces {key} = {}", display(&o.value)),
+                                    None => format!("overrides {}", display(&o.value)),
+                                },
+                                Tone::Muted,
+                            ),
                             Span::plain(format!(" from {}", o.source)),
                         ])
                     })

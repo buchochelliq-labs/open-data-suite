@@ -14,10 +14,10 @@ mod model;
 mod secret;
 mod source;
 
-pub use error::ConfigError;
+pub use error::{ConfigError, display_key};
 pub use load::{
     ENV_PREFIX, FileStatus, FlagValue, Inputs, LOCAL_FILE, Loaded, PROFILE_ENV, PROJECT_FILE,
-    Setting, load,
+    Replaced, Setting, load,
 };
 pub use model::{
     CONFIG_VERSION, ColorPreference, Config, LogConfig, LogLevel, OutputConfig, OutputFormat,
