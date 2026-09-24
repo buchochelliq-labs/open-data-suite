@@ -13,7 +13,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo deny check 2>/dev/null || echo "cargo-deny not installed (install: cargo install cargo-deny --locked)"
-cargo doc --workspace --no-deps  # with RUSTDOCFLAGS="-D warnings"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+python3 scripts/check-layering.py
 ```
 
 Additional checks when relevant:

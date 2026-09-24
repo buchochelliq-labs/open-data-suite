@@ -20,8 +20,10 @@ a reason (e.g. the user asked for it explicitly).
    `ods-erd`, …) must never branch on provider names or import provider crates.
    Behaviour differences are expressed as **capabilities** (#3). Vendor code lives in
    `providers/*`.
-2. **Dependency direction:** `ods-core` ← `ods-sdk` ← modules ← providers ← `ods-cli`.
-   Only the CLI (or a server binary) wires concrete providers together.
+2. **Dependency direction** ([ADR-0001](docs/adr/0001-monorepo-architecture-and-module-boundaries.md)):
+   `ods-core` ← foundation ← `ods-sdk` ← modules ← providers ← `ods-cli`. Only the CLI (or a
+   server binary) wires concrete providers together. New crates must be registered in
+   `scripts/check-layering.py`; CI fails otherwise.
 3. **Conservative defaults.** Missing/uncertain evidence ⇒ BUILD, deny, or mark as
    *inferred*. Never silently REUSE, allow a destructive action, or present inference as fact.
 4. **Explainability.** Planner decisions and findings carry a reason chain and evidence
@@ -38,7 +40,7 @@ a reason (e.g. the user asked for it explicitly).
 Architectural changes (new crate, new contract, new persisted format, new dependency
 with a non-permissive licence) require an ADR in `docs/adr/` — use the `adr` skill.
 
-## Tech stack (pending ADR-0002, #105)
+## Tech stack ([ADR-0002](docs/adr/0002-rust-first-backend-and-technology-stack.md), #105)
 
 Rust (stable, edition 2024) · Tokio · Clap · Serde · SQLx (SQLite/PostgreSQL) · Axum ·
 tracing/OpenTelemetry · tower-lsp · thiserror (libraries) / anyhow (binaries only) ·
@@ -57,14 +59,15 @@ scripts/      repo automation (e.g. sync-milestones.sh)
 
 ## Commands
 
-Run from the repo root once the Cargo workspace exists (M0):
+Run from the repo root:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo deny check            # licences/advisories (install: cargo install cargo-deny)
-cargo run -p ods-cli -- --help
+python3 scripts/check-layering.py   # enforces ADR-0001 dependency direction
+cargo run -p ods-cli -- --help    # binary is named `ods`
 ```
 
 The `verify` skill runs all of these and reports results. Do not claim work is done

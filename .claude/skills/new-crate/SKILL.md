@@ -19,7 +19,7 @@ contract in `ods-sdk` instead.
 
 ## First-time workspace scaffold
 If no root `Cargo.toml` exists, create it with:
-- `[workspace] resolver = "3"`, `members = ["crates/*", "providers/*"]`
+- `[workspace] resolver = "3"`, `members = ["crates/*"]` — add `"providers/*"` with the first provider crate (Cargo rejects a glob that matches nothing)
 - `[workspace.package]` edition = "2024", license = (per #10/#101, default `Apache-2.0`), repository, rust-version
 - `[workspace.dependencies]` pinning shared deps (serde, thiserror, tokio, clap, tracing)
 - `[workspace.lints.rust] unsafe_code = "forbid"`; `[workspace.lints.clippy] all = "warn", pedantic = "warn"` (allow noisy ones explicitly)
@@ -31,5 +31,6 @@ If no root `Cargo.toml` exists, create it with:
    `license.workspace = true`, `[lints] workspace = true`; use `dep.workspace = true` for shared deps.
 3. `src/lib.rs` starts with a crate-level doc comment stating purpose and allowed dependencies.
 4. Add at least one unit test and, for providers, wire the SDK conformance tests.
-5. Update the layout in `docs/ROADMAP.md` §7 / AGENTS.md if the crate is new to the plan.
-6. Run the `verify` skill.
+5. Register the crate's layer in `scripts/check-layering.py` (unknown crates fail CI).
+6. Update the layout in `docs/ROADMAP.md` §7 / AGENTS.md if the crate is new to the plan.
+7. Run the `verify` skill.

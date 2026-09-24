@@ -1,0 +1,21 @@
+[package]
+name = "ods-cli"
+description = "The `ods` command-line interface for OpenDataSuite."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ods"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+ods-sdk.workspace = true
+
+[lints]
+workspace = true

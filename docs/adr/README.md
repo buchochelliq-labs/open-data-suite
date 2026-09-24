@@ -5,9 +5,9 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | ADR | Title | Status | Issues |
 |---|---|---|---|
 | 0000 | Template | — | — |
+| [0001](0001-monorepo-architecture-and-module-boundaries.md) | Monorepo architecture and module boundaries | Proposed | #1 |
+| [0002](0002-rust-first-backend-and-technology-stack.md) | Rust-first backend and technology stack | Proposed | #105 |
 
-Planned for M0: ADR-0001 monorepo architecture & module boundaries (#1),
-ADR-0002 Rust-first backend & technology stack (#105),
-ADR-0003 CLI presentation boundary / rs-rich-cli (#108),
+Planned for M0: ADR-0003 CLI presentation boundary / rs-rich-cli (#108),
 ADR-0004 plugin SDK versioning & capability model (#2, #3),
 ADR-0005 clean-room & licensing policy (#10).
