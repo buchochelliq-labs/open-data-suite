@@ -51,10 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.90
       - uses: Swatinem/rust-cache@v2
-      # `+1.85` overrides rust-toolchain.toml, which would otherwise select stable.
-      - run: cargo +1.85 check --workspace --all-features
+      # `+1.90` overrides rust-toolchain.toml, which would otherwise select stable.
+      - run: cargo +1.90 check --workspace --all-features
 
   deny:
     runs-on: ubuntu-latest

@@ -1,0 +1,19 @@
+---
+source: crates/ods-cli/src/sample.rs
+expression: "render(Mode::Human, ColorChoice::Never)"
+---
+Execution plan for jaffle_shop
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ node                         ┃ action ┃ reason                                                ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ model.jaffle_shop.stg_orders │ BUILD  │ code fingerprint changed: rendered SQL differs        │
+│ model.jaffle_shop.orders     │ BUILD  │ upstream model.jaffle_shop.stg_orders will be rebuilt │
+│ model.jaffle_shop.customers  │ REUSE  │ code and inputs unchanged since last successful run   │
+└──────────────────────────────┴────────┴───────────────────────────────────────────────────────┘
+
+why model.jaffle_shop.orders builds
+└── upstream model.jaffle_shop.stg_orders will be rebuilt
+    └── code fingerprint changed: rendered SQL differs
+
+info: 2 of 3 nodes will run; state is committed only if dbt succeeds

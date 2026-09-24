@@ -5,6 +5,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # Both are "unmaintained" notices (no known vulnerability), pulled in only by
+  # syntect via rs-rich 0.0.6. Accepted in ADR-0003; remove once rs-rich makes syntect
+  # optional or narrows its features (ADR-0003 section 6, gap 1).
+  { id = "RUSTSEC-2025-0141", reason = "bincode 1.x unmaintained; via rs-rich -> syntect (ADR-0003)" },
+  { id = "RUSTSEC-2024-0320", reason = "yaml-rust unmaintained; via rs-rich -> syntect (ADR-0003)" },
+]
 
 [licenses]
 version = 2

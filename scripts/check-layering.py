@@ -9,6 +9,9 @@ lower layer, with two refinements:
   * providers may not depend on modules (they implement SDK contracts only).
 Dev-dependencies are exempt so tests can use fakes/fixtures from any layer.
 Unknown crate names fail the check so every new crate is placed deliberately.
+
+It also confines selected third-party crates to the crates allowed to use them, e.g.
+terminal rendering (rs-rich) stays in ods-cli (ADR-0003).
 """
 import json
 import subprocess
@@ -29,6 +32,11 @@ PROVIDER_PREFIXES = ("ods-provider-", "ods-store-")
 
 # Module -> module edges approved by an ADR, e.g. ("ods-ci", "ods-state").
 ALLOWED_MODULE_EDGES: set[tuple[str, str]] = set()
+
+# Third-party crate-name prefix -> workspace crates allowed to depend on it (any kind).
+CONFINED_EXTERNAL = {
+    "rs-rich": {"ods-cli"},  # ADR-0003: presentation stays at the CLI edge
+}
 
 
 def layer(name: str) -> int | None:
@@ -53,6 +61,9 @@ def main() -> int:
             continue
         for dep in pkg["dependencies"]:
             target = dep["name"]
+            for prefix, allowed in CONFINED_EXTERNAL.items():
+                if target.startswith(prefix) and name not in allowed:
+                    errors.append(f"{name} -> {target}: only {sorted(allowed)} may depend on {prefix}*")
             if target not in members or dep.get("kind") == "dev":
                 continue
             dst = layer(target)

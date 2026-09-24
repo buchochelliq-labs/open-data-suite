@@ -1,12 +1,15 @@
 //! The `ods` command-line interface.
 //!
 //! This binary is the composition root (ADR-0001): it is the only place that wires
-//! concrete providers into modules. Module subcommands are registered here; their
-//! implementations live in the module crates. The full framework is #6.
+//! concrete providers into modules, and it owns presentation (ADR-0003). Module
+//! subcommands are registered here; their implementations live in the module crates.
+//! The full framework is #6.
 
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use ods_cli::{output, present, version};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -15,6 +18,9 @@ use clap::{Parser, Subcommand};
     about = "OpenDataSuite: explainable control plane for analytics engineering"
 )]
 struct Cli {
+    #[command(flatten)]
+    output: output::OutputArgs,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -33,7 +39,7 @@ enum Command {
     Lsp,
     /// Analytics-engineering agent and skills (M6).
     Agent,
-    /// Print build and SDK version information.
+    /// Print build and compatibility version information.
     Version,
 }
 
@@ -44,23 +50,28 @@ const EXIT_NOT_IMPLEMENTED: u8 = 3;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
-        Command::Version => {
-            let sdk = ods_sdk::SDK_VERSION;
-            println!(
-                "ods {} (sdk {}.{})",
-                env!("CARGO_PKG_VERSION"),
-                sdk.major,
-                sdk.minor
-            );
-            ExitCode::SUCCESS
-        }
+    let stdout = io::stdout();
+    let settings = cli.output.resolve(stdout.is_terminal());
+    let mut out = stdout.lock();
+
+    let result = match cli.command {
+        Command::Version => present::emit(&version::VersionInfo::current(), &settings, &mut out),
         other => {
             eprintln!(
                 "`ods {}` is not implemented yet; see docs/ROADMAP.md",
                 name(&other)
             );
-            ExitCode::from(EXIT_NOT_IMPLEMENTED)
+            return ExitCode::from(EXIT_NOT_IMPLEMENTED);
+        }
+    };
+
+    match result.and_then(|()| out.flush()) {
+        Ok(()) => ExitCode::SUCCESS,
+        // A closed pipe (e.g. `ods version | head -1`) is not an error for the user.
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: failed to write output: {err}");
+            ExitCode::FAILURE
         }
     }
 }

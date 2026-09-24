@@ -107,8 +107,9 @@ graph LR
   conventions: `#[non_exhaustive]`, snake_case, deterministic ordering. It carries reasons
   and evidence as data, never as formatted strings.
 - **View tree.** `ods-cli` defines a small `ViewNode` enum in `ods-cli::present`:
-  `Heading`, `Paragraph`, `KeyValue`, `Table`, `Tree`, `List`, `Diff`, `Notice { level }`,
-  `Group`, `Section`. Views carry **semantic styles** (`Emphasis`, `Muted`, `Added`,
+  `Heading`, `Paragraph`, `KeyValue`, `Table`, `Tree`, `Notice { level }` and `Group`.
+  Further nodes, such as `List` and `Diff`, are added when a command first needs them.
+  Views carry **semantic styles** (`Emphasis`, `Muted`, `Added`,
   `Removed`, `Warning`, `Error`, `Success`, `Code`) and never raw colours or markup.
   The mapping from result to view is a pure function and is unit-tested.
 - **Backends** implement `trait Renderer { fn render(&mut self, view: &ViewNode) -> io::Result<()>; }`:
@@ -185,10 +186,19 @@ once each is confirmed against the API:
 1. **Optional heavy dependencies.** Put `syntect` (`Syntax`) and `pulldown-cmark`
    (`Markdown`) behind default-on cargo features. That would cut roughly 3 MB from
    consumers that don't need them.
+   It would also remove two crates that RustSec flags as unmaintained, which `syntect`
+   pulls in through `rs-rich` 0.0.6: `bincode` 1.x (RUSTSEC-2025-0141) and `yaml-rust`
+   (RUSTSEC-2024-0320). Neither has a known vulnerability. ODS ignores exactly these two
+   advisory IDs in `deny.toml` and will remove the ignores when this is fixed.
 2. **A lower MSRV, or a documented MSRV policy** for the library crate, separate from the
    CLI's image and network features. The 1.90 floor is driven by the CLI tree.
-3. **macOS in CI**, so downstream consumers get a support guarantee on that platform.
-4. **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
+3. **Publish styled table cells and tree labels.** In 0.0.6, `Table::add_row` takes plain
+   `&str` cells, and only the title and caption are parsed as markup. `Tree` labels are
+   plain `String`s. The rich backend therefore drops tones in cells and tree labels. The
+   unreleased 0.0.7 adds `add_row_text`/`Cell`; publishing it fixes this. (Found during
+   the proof of concept.)
+4. **macOS in CI**, so downstream consumers get a support guarantee on that platform.
+5. **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
 
 Named semantic styles are *not* a gap: `rich::theme::Theme` already maps style names to
 styles.
