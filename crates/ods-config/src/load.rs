@@ -18,7 +18,7 @@ use crate::source::{FileKind, Source};
 
 /// Project configuration file name.
 pub const PROJECT_FILE: &str = "ods.toml";
-/// Local overrides, relative to the project root.
+/// Local overrides, relative to the project root (as displayed; joined per component).
 pub const LOCAL_FILE: &str = ".ods/local.toml";
 /// Prefix of environment variables that set configuration keys (`ODS__OUTPUT__FORMAT`).
 pub const ENV_PREFIX: &str = "ODS__";
@@ -80,7 +80,7 @@ impl Inputs {
         let local_file = project_file
             .as_ref()
             .and_then(|file| file.parent())
-            .map(|root| root.join(LOCAL_FILE));
+            .map(|root| root.join(".ods").join("local.toml"));
         Self {
             user_file: user_dir.map(|dir| dir.join("ods").join("config.toml")),
             project_file,
@@ -178,7 +178,7 @@ impl Loaded {
                     })
             })
             .collect();
-        replaced.sort_by(|a, b| b.setting.seq.cmp(&a.setting.seq));
+        replaced.sort_by_key(|r| std::cmp::Reverse(r.setting.seq));
         replaced
     }
 }

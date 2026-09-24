@@ -24,6 +24,18 @@ impl Dir {
     }
 }
 
+/// Replaces the temp directory with `[dir]` and uses `/` separators, so snapshots are
+/// the same on every OS. The binary may report the canonical path (macOS resolves
+/// `/var` to `/private/var`), so that form is replaced first.
+fn redact_dir(text: &str, dir: &Dir) -> String {
+    let mut text = text.to_owned();
+    if let Ok(canonical) = dir.0.canonicalize() {
+        text = text.replace(&canonical.display().to_string(), "[dir]");
+    }
+    text.replace(&dir.0.display().to_string(), "[dir]")
+        .replace('\\', "/")
+}
+
 impl Drop for Dir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -144,7 +156,7 @@ fn explain_shows_values_sources_and_overrides() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let text = stdout(&out).replace(&dir.0.display().to_string(), "[dir]");
+    let text = redact_dir(&stdout(&out), &dir);
     assert!(
         !text.contains("s3cret-value"),
         "secret values must never be shown"
