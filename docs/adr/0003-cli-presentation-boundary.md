@@ -40,9 +40,9 @@ of rs-rich-cli ("dogfood" it) and to report the primitives it is missing.
   exercised manually. macOS is untested, and the legacy Windows `cmd.exe` console is not
   supported.
 - It has 6 direct dependencies (`syntect`, `fancy-regex`, `pulldown-cmark`, `serde_json`,
-  `terminal_size`, `anstyle-query`), and none of them is optional. 0.0.6 pulled in 76
-  crates in total; 0.0.7 loads only syntect's bundled dumps, which removes 11 of them,
-  including `yaml-rust` and `plist`.
+  `terminal_size`, `anstyle-query`), and none of them is optional. 0.0.6 pulled in 60
+  unique crates in total; 0.0.7 loads only syntect's bundled dumps, which removes 11 of
+  them (49 remain), including `yaml-rust` and `plist`.
 
 ### Spike (scratch crate, not committed)
 A release binary that renders one `Table` through `export_text` with `no_color`
@@ -52,6 +52,7 @@ produced output that is correct and can be pinned exactly (fixed width).
 |---|---|---|
 | Empty Rust binary | 0.44 MB | 0.35 MB |
 | Plus `rs-rich` 0.0.6, one table | 4.25 MB | 3.41 MB |
+| Plus `rs-rich` 0.0.7, one table | 4.30 MB | 3.45 MB |
 
 Most of the growth comes from `syntect` and its bundled syntax and theme definitions.
 `cargo deny check licenses` with ODS's `deny.toml` accepted every crate in the
