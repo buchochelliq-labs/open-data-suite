@@ -5,15 +5,15 @@
 //! bytes go to. All displayed text is [`sanitize`]d, and it is never passed through
 //! rs-rich's markup parser: styled text is built from spans directly.
 
-use rich::Console;
 use rich::cells::cell_len;
 use rich::color::ColorSystem;
 use rich::table::Table;
 use rich::text::Text;
 use rich::theme::Theme;
 use rich::tree::Tree;
+use rich::{Console, Justify};
 
-use super::super::view::{Level, Span, Tone, TreeItem, ViewNode, plain_text, sanitize};
+use super::super::view::{Level, Span, Tone, TreeItem, ViewNode, sanitize};
 use crate::output::ColorChoice;
 
 /// Theme key for a tone. Keys are namespaced so they never collide with rich's own styles.
@@ -54,10 +54,12 @@ fn ods_theme() -> Theme {
 
 /// Whether `TERM` names a terminal that cannot render styles.
 ///
-/// rs-rich 0.0.6 only consults `TERM=dumb` for its pager, not for colour detection, so
-/// ODS applies the rule itself (ADR-0003 §2, §6).
+/// rs-rich 0.0.7 applies the same rule in its own colour detection. ODS keeps the check
+/// so the ADR-0003 §2 contract holds independently of upstream and stays unit-testable.
 fn term_is_dumb() -> bool {
-    std::env::var_os("TERM").is_some_and(|term| term == "dumb")
+    std::env::var_os("TERM").is_some_and(|term| {
+        term.eq_ignore_ascii_case("dumb") || term.eq_ignore_ascii_case("unknown")
+    })
 }
 
 /// Renders view trees with `rs-rich`.
@@ -129,25 +131,20 @@ fn render_node(console: &Console, node: &ViewNode) {
             if let Some(title) = title {
                 console.print(&Text::styled(sanitize(title), theme_key(Tone::Emphasis)));
             }
-            // rs-rich 0.0.6 takes headers and cells as plain strings, so cell tones are
-            // dropped until styled cells are published (0.0.7 `add_row_text`;
-            // see ADR-0003 §6).
+            // Headers, cells and tree labels are passed as `Text`, never as strings:
+            // since rs-rich 0.0.7 a plain string there is parsed as markup, which would
+            // let data such as `[bold]` or `[/]` in a node name be interpreted.
             let mut table = Table::new();
             for column in columns {
-                table.add_column(sanitize(column));
+                table.add_column_text(Text::new(sanitize(column)), Justify::Default);
             }
             for row in rows {
-                let cells: Vec<String> =
-                    row.iter().map(|cell| sanitize(&plain_text(cell))).collect();
-                let refs: Vec<&str> = cells.iter().map(String::as_str).collect();
-                table.add_row(&refs);
+                table.add_row_text(row.iter().map(|cell| text(cell)).collect());
             }
             console.print(&table);
         }
         ViewNode::Tree(root) => {
-            // rs-rich 0.0.6 tree labels are plain text, so tones are dropped here
-            // (see ADR-0003 §6).
-            let mut tree = Tree::new(sanitize(&plain_text(&root.label)));
+            let mut tree = Tree::new(text(&root.label));
             add_children(&mut tree, &root.children);
             console.print(&tree);
         }
@@ -176,7 +173,7 @@ fn render_node(console: &Console, node: &ViewNode) {
 
 fn add_children(tree: &mut Tree, items: &[TreeItem]) {
     for item in items {
-        let child = tree.add(sanitize(&plain_text(&item.label)));
+        let child = tree.add(text(&item.label));
         add_children(child, &item.children);
     }
 }
@@ -239,6 +236,29 @@ mod tests {
         assert!(out.contains("[h]"), "{out}");
         assert!(out.contains("[bold]x[/]"), "{out}");
         assert!(!out.contains('\\'), "no escape characters may leak: {out}");
+    }
+
+    #[test]
+    fn tree_labels_render_brackets_literally() {
+        let renderer = RichRenderer::with_environment(ColorChoice::Never, Some(40), false);
+        let out = renderer.render(&ViewNode::Tree(TreeItem {
+            label: vec![Span::plain("[bold]root[/]")],
+            children: vec![TreeItem::leaf(vec![Span::toned("[red]leaf", Tone::Code)])],
+        }));
+        assert!(out.contains("[bold]root[/]"), "{out}");
+        assert!(out.contains("[red]leaf"), "{out}");
+    }
+
+    #[test]
+    fn table_cell_tones_are_styled() {
+        let renderer = RichRenderer::with_environment(ColorChoice::Always, Some(40), false);
+        let out = renderer.render(&ViewNode::Table {
+            title: None,
+            columns: vec!["c".into()],
+            rows: vec![vec![vec![Span::toned("added", Tone::Added)]]],
+        });
+        // `ods.added` is green (SGR 32) in the default theme.
+        assert!(out.contains("\x1b[32madded"), "{out:?}");
     }
 
     #[test]

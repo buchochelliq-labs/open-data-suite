@@ -5,20 +5,20 @@ expression: output
 [1;4mExecution plan for jaffle_shop[0m
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
-┃[1m [0m[1mnode                        [0m[1m [0m┃[1m [0m[1maction[0m[1m [0m┃[1m [0m[1mreasons[0m[1m [0m┃
+┃[1m [0m[1mnode[0m[1m                        [0m[1m [0m┃[1m [0m[1maction[0m[1m [0m┃[1m [0m[1mreasons[0m[1m [0m┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━┩
-│ model.jaffle_shop.stg_orders │ BUILD  │ 2       │
-│ model.jaffle_shop.orders     │ BUILD  │ 1       │
-│ model.jaffle_shop.customers  │ REUSE  │ 1       │
+│ [36mmodel.jaffle_shop.stg_orders[0m │ [32mBUILD[0m  │ 2       │
+│ [36mmodel.jaffle_shop.orders[0m     │ [32mBUILD[0m  │ 1       │
+│ [36mmodel.jaffle_shop.customers[0m  │ [2mREUSE[0m  │ 1       │
 └──────────────────────────────┴────────┴─────────┘
 
-reasons
-├── model.jaffle_shop.stg_orders BUILD
+[1mreasons[0m
+├── [36mmodel.jaffle_shop.stg_orders[0m [32mBUILD[0m
 │   ├── code fingerprint changed: rendered SQL differs
 │   └── config unchanged
-├── model.jaffle_shop.orders BUILD
+├── [36mmodel.jaffle_shop.orders[0m [32mBUILD[0m
 │   └── upstream model.jaffle_shop.stg_orders will be rebuilt
-└── model.jaffle_shop.customers REUSE
+└── [36mmodel.jaffle_shop.customers[0m [2mREUSE[0m
     └── code and inputs unchanged since last successful run
 
 [2minfo:[0m 2 of 3 nodes will run; state is committed only if dbt succeeds

@@ -21,16 +21,18 @@ must be explainable in both human and JSON form. Issue #108 asks us to standardi
 rather than build our own terminal renderer. It also asks us to use ODS as a real consumer
 of rs-rich-cli ("dogfood" it) and to report the primitives it is missing.
 
-### What rs-rich-cli offers today (surveyed 2026-09-24)
+### What rs-rich-cli offers (surveyed 2026-09-24, updated for the 0.0.11 release)
 - A Rust port of Python `rich`. The library is the `rs-rich` package, imported as `rich`;
   its extensions are `rs-rich-ext`. It is MIT-licensed.
-- It is published on crates.io: `rs-rich` 0.0.6 is the latest published version, and the
-  checkout is at 0.0.7. Pre-1.0 `0.0.x` versions may break the API in every release, and
-  Cargo's `^0.0.x` requirement pins the exact patch version.
+- It is published on crates.io. The survey started on `rs-rich` 0.0.6. The proof of
+  concept moved to **0.0.7**, the core library of the 0.0.11 release cohort, once it was
+  published. Pre-1.0 `0.0.x` versions may break the API in every release, and Cargo's
+  `^0.0.x` requirement pins the exact patch version.
 - It has `Console` with a builder that sets `width`, `force_terminal`, `color_system`
   and `no_color`. It honours `NO_COLOR` and detects whether output goes to a terminal.
-  (`TERM=dumb` only affects its pager, not colour detection; ODS handles it, see §2.) It can capture output (`capture`) and export it (`export_text`, `export_svg`),
-  which lets tests pin their output exactly.
+  From 0.0.7 its colour detection also honours `TERM=dumb`/`unknown` (in 0.0.6 that only
+  affected the pager). It can capture output (`capture`) and export it (`export_text`,
+  `export_svg`), which lets tests pin their output exactly.
 - Renderables: `Table`, `Tree`, `Panel`, `Rule`, `Columns`, `Text`, markup, `Syntax`,
   `Markdown`, JSON/pretty printing, `Progress`, `Status` and `Live`. `rs-rich-ext` adds
   diff, badges, diagnostics, a hyperlink helper and a clap help adapter.
@@ -38,8 +40,9 @@ of rs-rich-cli ("dogfood" it) and to report the primitives it is missing.
   exercised manually. macOS is untested, and the legacy Windows `cmd.exe` console is not
   supported.
 - It has 6 direct dependencies (`syntect`, `fancy-regex`, `pulldown-cmark`, `serde_json`,
-  `terminal_size`, `anstyle-query`) and 76 crates in the full tree. None of them is
-  optional.
+  `terminal_size`, `anstyle-query`), and none of them is optional. 0.0.6 pulled in 76
+  crates in total; 0.0.7 loads only syntect's bundled dumps, which removes 11 of them,
+  including `yaml-rust` and `plist`.
 
 ### Spike (scratch crate, not committed)
 A release binary that renders one `Table` through `export_text` with `no_color`
@@ -167,8 +170,8 @@ Every `--json` response is a single envelope object:
 ### 4. How rs-rich is consumed
 - The dependency is `rs-rich` from **crates.io**, at a published version only. Git
   dependencies and other registries are rejected by `deny.toml` `[sources]`; a path
-  dependency would be caught in review, because cargo-deny allows workspace paths. It is declared once in
-  `[workspace.dependencies]` and used only by `ods-cli`. `rs-rich-ext` is added only when
+  dependency would be caught in review, because cargo-deny allows workspace paths. It is
+  declared once in `[workspace.dependencies]` and used only by `ods-cli`. `rs-rich-ext` is added only when
   we need a specific feature (for example `diff`).
 - **ODS's MSRV rises from 1.85 to 1.90.** This lands in the PR that adds the dependency;
   `Cargo.toml` and the CI `msrv` job must change together.
@@ -176,6 +179,10 @@ Every `--json` response is a single envelope object:
   PR, and it must update the `rich` backend snapshots.
 - `scripts/check-layering.py` gains a check that no crate other than `ods-cli` depends on
   `rs-rich*`.
+- **Data never reaches rs-rich as a string.** From 0.0.7, a plain string passed as a table
+  header, cell or tree label is parsed as markup. The rich backend therefore passes
+  `Text` values everywhere and prints table titles as their own line. A regression test
+  pins this behaviour.
 
 ### 5. Testing
 - `insta` snapshots for every command in **`json` and `plain`** modes, which are the
@@ -189,29 +196,46 @@ Every `--json` response is a single envelope object:
 - The CI matrix already covers macOS and Windows, which also covers rs-rich on the
   platforms its own CI does not test.
 
-### 6. Missing features to report to rs-rich-cli
-To be filed as issues in `buchochelliq-labs/rs-rich-cli` during the proof of concept,
-once each is confirmed against the API:
+### 6. Missing features and issues to report to rs-rich-cli
+To be filed as issues in `buchochelliq-labs/rs-rich-cli`. Status is as of `rs-rich` 0.0.7.
 
+**Open**
 1. **Optional heavy dependencies.** Put `syntect` (`Syntax`) and `pulldown-cmark`
    (`Markdown`) behind default-on cargo features. That would cut roughly 3 MB from
-   consumers that don't need them.
-   It would also remove two crates that RustSec flags as unmaintained, which `syntect`
-   pulls in through `rs-rich` 0.0.6: `bincode` 1.x (RUSTSEC-2025-0141) and `yaml-rust`
-   (RUSTSEC-2024-0320). Neither has a known vulnerability. ODS ignores exactly these two
-   advisory IDs in `deny.toml` and will remove the ignores when this is fixed.
+   consumers that don't need them. It would also remove `bincode` 1.x
+   (RUSTSEC-2025-0141, flagged as unmaintained, no known vulnerability), which `syntect`
+   still pulls in. ODS ignores exactly that advisory ID in `deny.toml` and will remove
+   the ignore when this is fixed. The same change would drop a duplicate `fancy-regex`:
+   `rs-rich` uses 0.19 while `syntect` brings 0.16, so two regex engines are compiled in.
 2. **A lower MSRV, or a documented MSRV policy** for the library crate, separate from the
    CLI's image and network features. The 1.90 floor is driven by the CLI tree.
-3. **Publish styled table cells and tree labels.** In 0.0.6, `Table::add_row` takes plain
-   `&str` cells, and only the title and caption are parsed as markup. `Tree` labels are
-   plain `String`s. The rich backend therefore drops tones in cells and tree labels. The
-   unreleased 0.0.7 adds `add_row_text`/`Cell`; publishing it fixes this. (Found during
-   the proof of concept.)
-4. **macOS in CI**, so downstream consumers get a support guarantee on that platform.
-5. **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
-6. **Honour `TERM=dumb` in colour detection**, as Python `rich` does. Today it only affects
-   the pager, so ODS checks it itself in the rich backend. (Found during the proof of
-   concept.)
+3. **macOS in CI**, so downstream consumers get a support guarantee on that platform.
+4. **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
+5. **The strings-as-markup change in 0.0.7 compiles silently.** Plain strings passed as
+   table headers, cells or tree labels changed from literal text to markup, but code
+   written for 0.0.6 still compiles. Any caller passing data is now open to markup
+   injection, and only a behavioural test catches it (ODS's did). Suggest making the
+   change visible at compile time, for example by removing the implicit
+   `From<&str>/From<String> for Cell` conversions or adding explicit
+   `Cell::markup`/`Cell::plain` constructors, or at least flagging it as a security note
+   in the migration guide. (Found while reviewing the 0.0.11 release.)
+6. **`markup::escape` is not round-trip safe for a trailing backslash.** Escaping `a\`
+   and then parsing it renders `a\\`. The 0.0.11 migration note recommends `escape` for
+   literal data, so either this should be fixed or the note should recommend `Text`.
+   It may be deliberate parity with Python `rich`; not yet checked. (Found while
+   reviewing the 0.0.11 release.)
+7. **No literal-text table title.** `Table::title` takes only a markup string, so a title
+   built from data needs escaping, which runs into item 6. ODS prints the title as its
+   own line instead. (Found while reviewing the 0.0.11 release.)
+
+**Resolved in 0.0.7**
+- *Styled table cells and tree labels* (reported during the proof of concept):
+  `add_row_text`, `add_column_text` and `Tree::new`/`add` taking `impl Into<Cell>` now
+  carry `Text`, so the rich backend keeps tones in cells and tree labels.
+- *`TERM=dumb` in colour detection* (reported during the proof of concept): now
+  honoured, as is `TERM=unknown`. ODS keeps its own check so the §2 contract holds
+  independently of upstream and stays unit-testable.
+- *`yaml-rust` (RUSTSEC-2024-0320)* is no longer in the tree, and its ignore was removed.
 
 Named semantic styles are *not* a gap: `rich::theme::Theme` already maps style names to
 styles.
