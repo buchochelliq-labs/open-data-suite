@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+*.pending-snap
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.env
+*.sqlite
+*.db
+fixtures/**/target/
+fixtures/**/logs/

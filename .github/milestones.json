@@ -1,0 +1,69 @@
+{
+  "$comment": "Source of truth for GitHub milestones. Apply with scripts/sync-milestones.sh. Keep in sync with docs/ROADMAP.md.",
+  "milestones": [
+    {
+      "title": "M0 Foundations (v0.0.x)",
+      "due_on": "2026-10-30T00:00:00Z",
+      "description": "Rust workspace, architecture ADRs, plugin SDK, capability model, semantic core, CLI skeleton, fixtures, policies.",
+      "issues": [1, 105, 2, 3, 4, 5, 6, 7, 8, 108, 100, 10, 101, 103, 104]
+    },
+    {
+      "title": "M1 State MVP (v0.1.0)",
+      "due_on": "2026-12-18T00:00:00Z",
+      "description": "First public release: local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor.",
+      "issues": [11, 12, 13, 14, 18, 20, 22, 21, 23, 25, 24, 26, 16, 99]
+    },
+    {
+      "title": "M2 Databricks & data-aware State (v0.2.0)",
+      "due_on": "2027-02-26T00:00:00Z",
+      "description": "Unity Catalog/Delta providers, freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets.",
+      "issues": [15, 17, 19, 29, 30, 27, 28, 126, 31]
+    },
+    {
+      "title": "M3 ERD & Usage (v0.3.0)",
+      "due_on": "2027-04-30T00:00:00Z",
+      "description": "Provider-neutral ERD with dbt provider and renderers; usage intelligence with Unity Catalog provider.",
+      "issues": [60, 61, 62, 63, 65, 55, 56, 59, 66, 64]
+    },
+    {
+      "title": "M4 ODS CI (v0.4.0)",
+      "due_on": "2027-06-30T00:00:00Z",
+      "description": "SQL parser, column lineage, change-impact engine, selective CI, PR reports, data diff.",
+      "issues": [73, 74, 75, 84, 85, 58, 109, 110]
+    },
+    {
+      "title": "M5 LSP & VS Code (v0.5.0)",
+      "due_on": "2027-08-31T00:00:00Z",
+      "description": "Clean-room LSP and VS Code extension.",
+      "issues": [67, 68, 69, 70, 71, 72, 107, 116]
+    },
+    {
+      "title": "M6 ODS Agent (v0.6.0)",
+      "due_on": "2027-10-29T00:00:00Z",
+      "description": "Agent runtime, BYOK LLM providers, policy/approval, patch engine, validation, first skills.",
+      "issues": [32, 33, 34, 9, 50, 51, 52, 53, 36, 37, 38, 57, 39, 40, 41, 35, 42, 43, 44, 45, 46, 47, 48, 49, 54, 123]
+    },
+    {
+      "title": "M7 Platform: Mesh & Server",
+      "description": "Unscheduled. Mesh, server mode, REST API, RBAC, audit, language bindings, docs site, multi-repo.",
+      "issues": [86, 89, 90, 91, 95, 96, 97, 98, 106, 102, 124]
+    },
+    {
+      "title": "M8 Integrations & Operations",
+      "description": "Unscheduled. OpenMetadata/Elementary/MetricFlow, cost, observability, alerting, governance, dev environments.",
+      "issues": [92, 93, 94, 111, 112, 113, 117, 118, 119, 120, 121, 122, 125, 114, 115]
+    },
+    {
+      "title": "M9 ods-synthetic",
+      "description": "Unscheduled. Synthetic data module (depends on M1 + M3).",
+      "issues": [127, 147, 129, 130, 131, 132, 133, 134, 135, 136, 137, 148, 139, 141, 142, 143, 144, 146, 150, 151, 152, 153, 154, 155, 156, 149, 157]
+    }
+  ],
+  "duplicates": {
+    "$comment": "duplicate -> canonical. Closed with state_reason=duplicate by the sync script when --close-duplicates is passed.",
+    "128": 147,
+    "138": 148,
+    "140": 149,
+    "145": 150
+  }
+}
