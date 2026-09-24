@@ -44,7 +44,7 @@ Baseline stack (all permissively licensed, actively maintained):
 
 | Concern | Choice | Licence | Notes / exit strategy |
 |---|---|---|---|
-| Language/toolchain | Rust stable, edition 2024, MSRV 1.85 | MIT/Apache-2.0 | MSRV bumps are minor-version changes. |
+| Language/toolchain | Rust stable, edition 2024, MSRV 1.85 (raised to 1.90 by ADR-0003) | MIT/Apache-2.0 | MSRV bumps are minor-version changes. |
 | CLI | `clap` 4 (derive) | MIT/Apache-2.0 | De facto standard. |
 | Serialization | `serde`, `serde_json` | MIT/Apache-2.0 | All persisted types carry `SchemaVersion`. |
 | Errors | `thiserror` in libraries, `anyhow` in binaries only | MIT/Apache-2.0 | Typed errors keep contracts explicit. |

@@ -1,0 +1,40 @@
+---
+source: crates/ods-cli/src/sample.rs
+expression: "render(Mode::Json, ColorChoice::Never)"
+---
+{
+  "schema_version": {
+    "major": 0,
+    "minor": 1
+  },
+  "command": "state.plan",
+  "ods_version": "[ods-version]",
+  "result": {
+    "project": "jaffle_shop",
+    "decisions": [
+      {
+        "node": "model.jaffle_shop.stg_orders",
+        "action": "build",
+        "reasons": [
+          "code fingerprint changed: rendered SQL differs",
+          "config unchanged"
+        ]
+      },
+      {
+        "node": "model.jaffle_shop.orders",
+        "action": "build",
+        "reasons": [
+          "upstream model.jaffle_shop.stg_orders will be rebuilt"
+        ]
+      },
+      {
+        "node": "model.jaffle_shop.customers",
+        "action": "reuse",
+        "reasons": [
+          "code and inputs unchanged since last successful run"
+        ]
+      }
+    ]
+  },
+  "diagnostics": []
+}

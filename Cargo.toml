@@ -6,7 +6,8 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+# Raised from 1.85 by ADR-0003: rs-rich requires 1.90.
+rust-version = "1.90"
 license = "Apache-2.0"
 repository = "https://github.com/buchochelliq-labs/open-data-suite"
 publish = false
@@ -19,6 +20,10 @@ ods-sdk = { path = "crates/ods-sdk" }
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+insta = "1"
+# Terminal rendering; only ods-cli may depend on it (ADR-0003, enforced by check-layering.py).
+# `^0.0.x` pins the patch version, so every upgrade is a deliberate PR.
+rs-rich = "0.0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

@@ -14,7 +14,15 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+ods-core.workspace = true
 ods-sdk.workspace = true
+rs-rich.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
