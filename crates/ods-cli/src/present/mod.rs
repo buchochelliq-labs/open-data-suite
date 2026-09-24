@@ -27,11 +27,26 @@ pub trait Present: Serialize {
     fn view(&self) -> ViewNode;
 }
 
+/// Severity of a [`Diagnostic`]. Part of the JSON contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Severity {
+    /// Informational.
+    Info,
+    /// Needs attention but did not fail.
+    Warning,
+    /// A failure.
+    Error,
+}
+
 /// A non-fatal message attached to a JSON response.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub struct Diagnostic {
-    /// Severity: `info`, `warning` or `error`.
-    pub level: &'static str,
+    /// How severe the message is.
+    pub level: Severity,
     /// Stable machine-readable code.
     pub code: &'static str,
     /// Human-readable explanation.
@@ -40,6 +55,7 @@ pub struct Diagnostic {
 
 /// The single object written to stdout in JSON mode.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 struct Envelope<'a, T: Serialize> {
     schema_version: SchemaVersion,
     command: &'static str,
@@ -49,6 +65,10 @@ struct Envelope<'a, T: Serialize> {
 }
 
 /// Renders `result` according to `settings` and writes it to `out`.
+///
+/// Human and plain backends render the whole view to a string first: rs-rich can only
+/// be pointed at our stream through capture, and command results are small. JSON
+/// serialises the result model directly, never the view (ADR-0003 §1).
 ///
 /// # Errors
 /// Returns any error from writing to `out` or serialising the result.

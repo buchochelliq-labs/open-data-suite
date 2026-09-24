@@ -1,14 +1,16 @@
-//! A stand-in execution plan used to exercise the presentation pipeline (ADR-0003 proof of concept).
+//! A stand-in execution plan used to exercise the presentation pipeline (ADR-0003 proof
+//! of concept).
 //!
 //! The real `ExecutionPlan` arrives with #11/#20; until then this fixture has the same
 //! shape of information (actions, reasons, evidence) so every backend is covered. It is
-//! compiled only for tests.
+//! compiled only for tests. Its view is derived entirely from the model, which is the
+//! pattern real presenters must follow: every reason in the JSON is visible to people.
 
 use serde::Serialize;
 
 use crate::present::{Level, Present, Span, Tone, TreeItem, ViewNode};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Action {
     Build,
@@ -16,6 +18,7 @@ enum Action {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 struct Decision {
     node: &'static str,
     action: Action,
@@ -23,6 +26,7 @@ struct Decision {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct SamplePlan {
     project: &'static str,
     decisions: Vec<Decision>,
@@ -56,35 +60,46 @@ impl SamplePlan {
     }
 }
 
+fn action_span(action: Action) -> Span {
+    match action {
+        Action::Build => Span::toned("BUILD", Tone::Added),
+        Action::Reuse => Span::toned("REUSE", Tone::Muted),
+    }
+}
+
 impl Present for SamplePlan {
     const COMMAND: &'static str = "state.plan";
 
     fn view(&self) -> ViewNode {
-        let action = |a: &Action| match a {
-            Action::Build => Span::toned("BUILD", Tone::Added),
-            Action::Reuse => Span::toned("REUSE", Tone::Muted),
-        };
         let rows = self
             .decisions
             .iter()
             .map(|d| {
                 vec![
                     vec![Span::toned(d.node, Tone::Code)],
-                    vec![action(&d.action)],
-                    vec![Span::plain(d.reasons[0])],
+                    vec![action_span(d.action)],
+                    vec![Span::plain(d.reasons.len().to_string())],
                 ]
             })
             .collect();
-        let why = TreeItem {
-            label: vec![Span::plain("why model.jaffle_shop.orders builds")],
-            children: vec![TreeItem {
-                label: vec![Span::plain(
-                    "upstream model.jaffle_shop.stg_orders will be rebuilt",
-                )],
-                children: vec![TreeItem::leaf(vec![Span::plain(
-                    "code fingerprint changed: rendered SQL differs",
-                )])],
-            }],
+        let reasons = TreeItem {
+            label: vec![Span::toned("reasons", Tone::Emphasis)],
+            children: self
+                .decisions
+                .iter()
+                .map(|d| TreeItem {
+                    label: vec![
+                        Span::toned(d.node, Tone::Code),
+                        Span::plain(" "),
+                        action_span(d.action),
+                    ],
+                    children: d
+                        .reasons
+                        .iter()
+                        .map(|r| TreeItem::leaf(vec![Span::plain(*r)]))
+                        .collect(),
+                })
+                .collect(),
         };
         let builds = self
             .decisions
@@ -95,10 +110,10 @@ impl Present for SamplePlan {
             ViewNode::Heading(format!("Execution plan for {}", self.project)),
             ViewNode::Table {
                 title: None,
-                columns: vec!["node".into(), "action".into(), "reason".into()],
+                columns: vec!["node".into(), "action".into(), "reasons".into()],
                 rows,
             },
-            ViewNode::Tree(why),
+            ViewNode::Tree(reasons),
             ViewNode::Notice {
                 level: Level::Info,
                 message: vec![Span::plain(format!(
@@ -115,6 +130,7 @@ mod tests {
     use super::*;
     use crate::output::{ColorChoice, Mode, OutputSettings};
     use crate::present::emit;
+    use crate::present::view::plain_text;
 
     fn render(mode: Mode, color: ColorChoice) -> String {
         let settings = OutputSettings {
@@ -124,26 +140,73 @@ mod tests {
         };
         let mut out = Vec::new();
         emit(&SamplePlan::fixture(), &settings, &mut out).unwrap();
-        String::from_utf8(out).unwrap()
+        String::from_utf8(out)
+            .unwrap()
+            .replace(env!("CARGO_PKG_VERSION"), "[ods-version]")
+    }
+
+    fn collect_text(node: &ViewNode, out: &mut String) {
+        fn tree(item: &TreeItem, out: &mut String) {
+            out.push_str(&plain_text(&item.label));
+            item.children.iter().for_each(|c| tree(c, out));
+        }
+        match node {
+            ViewNode::Group(children) => children.iter().for_each(|c| collect_text(c, out)),
+            ViewNode::Tree(root) => tree(root, out),
+            _ => {}
+        }
     }
 
     #[test]
-    fn plan_json() {
-        insta::assert_snapshot!(render(Mode::Json, ColorChoice::Never));
+    fn every_reason_is_visible_in_the_view() {
+        let plan = SamplePlan::fixture();
+        let mut text = String::new();
+        collect_text(&plan.view(), &mut text);
+        for reason in plan.decisions.iter().flat_map(|d| &d.reasons) {
+            assert!(text.contains(reason), "reason missing from view: {reason}");
+        }
     }
 
-    #[test]
-    fn plan_plain() {
-        insta::assert_snapshot!(render(Mode::Plain, ColorChoice::Never));
+    /// Contract snapshots (ADR-0003 §5): JSON and plain output are public interfaces.
+    mod contract {
+        use super::*;
+
+        #[test]
+        fn plan_json() {
+            insta::assert_snapshot!(render(Mode::Json, ColorChoice::Never));
+        }
+
+        #[test]
+        fn plan_plain() {
+            insta::assert_snapshot!(render(Mode::Plain, ColorChoice::Never));
+        }
     }
 
-    #[test]
-    fn plan_human_no_color() {
-        insta::assert_snapshot!(render(Mode::Human, ColorChoice::Never));
-    }
+    /// Presentation snapshots: may change legitimately with rs-rich upgrades, so they
+    /// live apart from the contract snapshots.
+    mod rich {
+        use super::*;
 
-    #[test]
-    fn plan_human_color() {
-        insta::assert_snapshot!(render(Mode::Human, ColorChoice::Always));
+        fn snapshot(name: &str, output: &str) {
+            insta::with_settings!({ snapshot_path => "snapshots/rich", prepend_module_to_snapshot => false }, {
+                insta::assert_snapshot!(name, output);
+            });
+        }
+
+        #[test]
+        fn plan_human_no_color() {
+            snapshot(
+                "plan_human_no_color",
+                &render(Mode::Human, ColorChoice::Never),
+            );
+        }
+
+        #[test]
+        fn plan_human_color() {
+            snapshot(
+                "plan_human_color",
+                &render(Mode::Human, ColorChoice::Always),
+            );
+        }
     }
 }

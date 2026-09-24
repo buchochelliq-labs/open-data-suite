@@ -6,6 +6,7 @@
 
 /// Meaning-level style for a span of text. Backends decide how (or whether) to show it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Tone {
     /// Draws attention to the text.
     Emphasis,
@@ -74,8 +75,27 @@ pub fn plain_text(line: &[Span]) -> String {
     line.iter().map(|span| span.text.as_str()).collect()
 }
 
+/// Replaces control characters that could drive the terminal.
+///
+/// Result text often carries data we do not control (node names, SQL, warehouse error
+/// messages). ESC and other C0/C1 controls in it could emit arbitrary terminal
+/// sequences, even in plain mode. Every backend passes displayed text through here.
+/// Tabs, newlines and carriage returns are kept; backends decide how to lay them out.
+pub fn sanitize(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && !matches!(c, '\n' | '\r' | '\t') {
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// Severity of a [`ViewNode::Notice`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Level {
     /// Informational.
     Info,
@@ -106,6 +126,7 @@ impl TreeItem {
 
 /// A renderable block.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ViewNode {
     /// A section title.
     Heading(String),
@@ -133,4 +154,18 @@ pub enum ViewNode {
     },
     /// Blocks rendered in order, separated by a blank line.
     Group(Vec<ViewNode>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_neutralises_escape_sequences() {
+        assert_eq!(
+            sanitize("a\x1b[31mb\x07\u{9b}c"),
+            "a\u{FFFD}[31mb\u{FFFD}\u{FFFD}c"
+        );
+        assert_eq!(sanitize("tab\tnew\nline"), "tab\tnew\nline");
+    }
 }

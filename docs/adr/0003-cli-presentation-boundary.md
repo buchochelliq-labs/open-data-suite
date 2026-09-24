@@ -28,8 +28,8 @@ of rs-rich-cli ("dogfood" it) and to report the primitives it is missing.
   checkout is at 0.0.7. Pre-1.0 `0.0.x` versions may break the API in every release, and
   Cargo's `^0.0.x` requirement pins the exact patch version.
 - It has `Console` with a builder that sets `width`, `force_terminal`, `color_system`
-  and `no_color`. It honours `NO_COLOR`/`TERM=dumb` and detects whether output goes to a
-  terminal. It can capture output (`capture`) and export it (`export_text`, `export_svg`),
+  and `no_color`. It honours `NO_COLOR` and detects whether output goes to a terminal.
+  (`TERM=dumb` only affects its pager, not colour detection; ODS handles it, see §2.) It can capture output (`capture`) and export it (`export_text`, `export_svg`),
   which lets tests pin their output exactly.
 - Renderables: `Table`, `Tree`, `Panel`, `Rule`, `Columns`, `Text`, markup, `Syntax`,
   `Markdown`, JSON/pretty printing, `Progress`, `Status` and `Live`. `rs-rich-ext` adds
@@ -95,7 +95,7 @@ graph LR
     present["present::command<br/>result → ViewNode tree"]
     rich["backend::rich<br/>(rs-rich)"]
     plain["backend::plain"]
-    json["backend::json<br/>(serde_json)"]
+    json["emit: JSON envelope<br/>(serde_json)"]
   end
   present --> rich
   present --> plain
@@ -112,15 +112,22 @@ graph LR
   Views carry **semantic styles** (`Emphasis`, `Muted`, `Added`,
   `Removed`, `Warning`, `Error`, `Success`, `Code`) and never raw colours or markup.
   The mapping from result to view is a pure function and is unit-tested.
-- **Backends** implement `trait Renderer { fn render(&mut self, view: &ViewNode) -> io::Result<()>; }`:
-  - `rich`: maps `ViewNode` to `rs-rich` renderables. Semantic styles resolve through a
-    `rich::theme::Theme` of named styles (`ods.added`, `ods.warning`, …), so colours live in
-    one place and can be overridden later.
+- **Backends** render a whole view to a `String`, which `present::emit` writes to stdout.
+  Command results are small, and rs-rich can only be pointed at an ODS-chosen stream by
+  capturing its output. There is no `Renderer` trait yet; one is introduced if a streaming
+  backend (for example live progress) needs it.
+  - `rich`: maps `ViewNode` to `rs-rich` renderables. Styled text is built from spans with
+    `Text::append`, so **user data is never parsed as rich markup**. Semantic styles
+    resolve through a `rich::theme::Theme` of named styles (`ods.added`, `ods.warning`,
+    …), so colours live in one place and can be overridden later.
     **This is the only module that imports `rich`/`rich_ext`.**
   - `plain`: ODS's own implementation, with no ANSI escapes, no box drawing and ASCII
     only. It prints `key: value` lines, tab-separated tables with a header row, and
     indented trees. Its output is stable across terminals and platforms.
-  - `json`: serialises the result model, not the view.
+  - JSON (in `present::emit`): serialises the result model inside the envelope, not the
+    view.
+  - Both text backends replace terminal control characters (ESC and other C0/C1 controls)
+    in displayed text, because node names, SQL and warehouse errors are untrusted data.
 
 The view tree stays inside `ods-cli` until a second consumer needs it, such as
 `ods-server` rendering HTML. At that point it is extracted to a foundation-layer
@@ -131,7 +138,7 @@ The view tree stays inside `ods-cli` until a second consumer needs it, such as
 |---|---|---|
 | `--output` / `-o` | `human`, `plain`, `json` | `human` when stdout is a terminal, otherwise `plain` |
 | `--json` | shorthand for `--output json` | |
-| `--color` | `auto`, `always`, `never` | `auto` (honours `NO_COLOR`, `TERM=dumb` and redirection) |
+| `--color` | `auto`, `always`, `never` | `auto` (honours `NO_COLOR`, `TERM=dumb` and redirection); `always` overrides `NO_COLOR` |
 | `--width` | integer | detected; `100` when not a terminal |
 
 - **Streams.** Results go to **stdout**. Logs, progress, spinners and warnings go to
@@ -158,8 +165,9 @@ Every `--json` response is a single envelope object:
   hand-written schema in #6.
 
 ### 4. How rs-rich is consumed
-- The dependency is `rs-rich` from **crates.io**, at a published version only, with no git
-  or path dependencies (enforced by `deny.toml` `[sources]`). It is declared once in
+- The dependency is `rs-rich` from **crates.io**, at a published version only. Git
+  dependencies and other registries are rejected by `deny.toml` `[sources]`; a path
+  dependency would be caught in review, because cargo-deny allows workspace paths. It is declared once in
   `[workspace.dependencies]` and used only by `ods-cli`. `rs-rich-ext` is added only when
   we need a specific feature (for example `diff`).
 - **ODS's MSRV rises from 1.85 to 1.90.** This lands in the PR that adds the dependency;
@@ -171,10 +179,12 @@ Every `--json` response is a single envelope object:
 
 ### 5. Testing
 - `insta` snapshots for every command in **`json` and `plain`** modes, which are the
-  contracts.
+  contracts. They live in `crates/ods-cli/src/snapshots/`. The build's own `ods_version`
+  is replaced with `[ods-version]`, so releases don't churn contract snapshots.
 - `rich` mode snapshots use a pinned `Console` (`width(100)`, `force_terminal(true)`,
-  `ColorSystem::Standard`) captured via `capture`. There are fewer of them and they sit
-  apart from the contract snapshots, because rs-rich upgrades may legitimately change them.
+  `ColorSystem::Standard`) captured via `capture`. There are fewer of them, and they live
+  in `crates/ods-cli/src/snapshots/rich/`, apart from the contract snapshots, because
+  rs-rich upgrades may legitimately change them.
 - The result-to-view mapping gets unit tests. The backends get tests with fixture view trees.
 - The CI matrix already covers macOS and Windows, which also covers rs-rich on the
   platforms its own CI does not test.
@@ -199,6 +209,9 @@ once each is confirmed against the API:
    the proof of concept.)
 4. **macOS in CI**, so downstream consumers get a support guarantee on that platform.
 5. **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
+6. **Honour `TERM=dumb` in colour detection**, as Python `rich` does. Today it only affects
+   the pager, so ODS checks it itself in the rich backend. (Found during the proof of
+   concept.)
 
 Named semantic styles are *not* a gap: `rich::theme::Theme` already maps style names to
 styles.

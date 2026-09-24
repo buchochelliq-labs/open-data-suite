@@ -1,0 +1,24 @@
+---
+source: crates/ods-cli/src/sample.rs
+expression: output
+---
+[1;4mExecution plan for jaffle_shop[0m
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
+┃[1m [0m[1mnode                        [0m[1m [0m┃[1m [0m[1maction[0m[1m [0m┃[1m [0m[1mreasons[0m[1m [0m┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━┩
+│ model.jaffle_shop.stg_orders │ BUILD  │ 2       │
+│ model.jaffle_shop.orders     │ BUILD  │ 1       │
+│ model.jaffle_shop.customers  │ REUSE  │ 1       │
+└──────────────────────────────┴────────┴─────────┘
+
+reasons
+├── model.jaffle_shop.stg_orders BUILD
+│   ├── code fingerprint changed: rendered SQL differs
+│   └── config unchanged
+├── model.jaffle_shop.orders BUILD
+│   └── upstream model.jaffle_shop.stg_orders will be rebuilt
+└── model.jaffle_shop.customers REUSE
+    └── code and inputs unchanged since last successful run
+
+[2minfo:[0m 2 of 3 nodes will run; state is committed only if dbt succeeds

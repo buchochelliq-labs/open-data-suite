@@ -1,0 +1,7 @@
+---
+source: crates/ods-cli/src/version.rs
+expression: "render(Mode::Plain)"
+---
+ods: 1.2.3
+sdk: 0.1
+output schema: 0.1

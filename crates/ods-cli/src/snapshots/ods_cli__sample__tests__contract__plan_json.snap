@@ -8,7 +8,7 @@ expression: "render(Mode::Json, ColorChoice::Never)"
     "minor": 1
   },
   "command": "state.plan",
-  "ods_version": "0.0.0",
+  "ods_version": "[ods-version]",
   "result": {
     "project": "jaffle_shop",
     "decisions": [

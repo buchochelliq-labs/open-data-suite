@@ -57,7 +57,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Version => present::emit(&version::VersionInfo::current(), &settings, &mut out),
         other => {
-            eprintln!(
+            let _ = writeln!(
+                io::stderr(),
                 "`ods {}` is not implemented yet; see docs/ROADMAP.md",
                 name(&other)
             );
@@ -70,7 +71,8 @@ fn main() -> ExitCode {
         // A closed pipe (e.g. `ods version | head -1`) is not an error for the user.
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: failed to write output: {err}");
+            // Ignore failures here: stderr may be closed too, and we are exiting anyway.
+            let _ = writeln!(io::stderr(), "error: failed to write output: {err}");
             ExitCode::FAILURE
         }
     }

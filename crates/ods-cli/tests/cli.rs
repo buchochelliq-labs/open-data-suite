@@ -59,6 +59,29 @@ fn human_output_honours_color_flag() {
 }
 
 #[test]
+fn color_always_overrides_no_color() {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["version", "-o", "human", "--color", "always"])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("failed to spawn ods");
+    assert!(
+        stdout(&out).contains('\x1b'),
+        "--color always must win over NO_COLOR"
+    );
+}
+
+#[test]
+fn no_color_env_disables_auto_colour() {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["version", "-o", "human"])
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("failed to spawn ods");
+    assert!(!stdout(&out).contains('\x1b'));
+}
+
+#[test]
 fn json_and_output_flags_conflict() {
     let out = ods(&["version", "--json", "-o", "plain"]);
     assert_eq!(out.status.code(), Some(2));
