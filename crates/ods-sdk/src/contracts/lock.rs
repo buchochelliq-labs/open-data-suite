@@ -5,15 +5,22 @@
 //! - [`acquire`](LockProvider::acquire) grants a lease on a free (or expired) key and
 //!   returns `None` if the key is held, even by the same owner; use
 //!   [`renew`](LockProvider::renew) to extend a lease you hold.
-//! - With [`Capability::LeaseExpiry`], a lease expires `ttl` after it was granted or
-//!   renewed, and the key is free again. Without it, `ttl` is ignored and leases last
-//!   until released.
-//! - With [`Capability::FencingTokens`], every grant on a key carries a token strictly
-//!   greater than any earlier grant on that key, so storage can reject writes from a
-//!   holder whose lease was lost.
-//! - [`renew`](LockProvider::renew) and [`release`](LockProvider::release) fail with
-//!   [`ProviderError::Conflict`] when the lease is no longer the one holding the key.
-//!   Releasing a key that is already free succeeds (idempotent).
+//! - Every grant on a key has a [`token`](Lease::token) that no other grant on that key
+//!   has had, even for the same owner. It identifies the grant: a lease from an earlier
+//!   grant never matches a later one, so a retried run that reuses its ID cannot renew
+//!   or release its successor's lock.
+//! - With [`Capability::FencingTokens`], tokens are also strictly increasing per key, so
+//!   storage can reject writes from a holder whose lease was lost.
+//! - With [`Capability::LeaseExpiry`], a lease granted or renewed at `t` holds the key
+//!   until just before `t + ttl`: at `t + ttl` (inclusive) it has expired and the key is
+//!   free. Without it, `ttl` is ignored, `expires_at` is `None`, and leases last until
+//!   released.
+//! - [`renew`](LockProvider::renew) fails with [`ProviderError::Conflict`] unless the
+//!   lease still holds the key; an expired lease cannot be revived, even if nobody took
+//!   the key over (the holder must acquire again and get a new token).
+//! - [`release`](LockProvider::release) fails with [`ProviderError::Conflict`] if a
+//!   different grant holds the key. Releasing a key that is free, including because the
+//!   lease expired, succeeds (idempotent).
 
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -73,18 +80,76 @@ impl fmt::Display for LockKey {
     }
 }
 
+/// How long a lease lasts without renewal: from [`LeaseTtl::MIN`] to [`LeaseTtl::MAX`].
+///
+/// Bounded so providers never overflow a timestamp or grant an already expired lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LeaseTtl(Duration);
+
+impl LeaseTtl {
+    /// The shortest lease: one second, the coarsest precision a lock store may have.
+    pub const MIN: Duration = Duration::from_secs(1);
+    /// The longest lease: one day. Longer runs renew.
+    pub const MAX: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Validates a TTL.
+    ///
+    /// # Errors
+    /// Returns a reason if `ttl` is outside [`Self::MIN`]..=[`Self::MAX`].
+    pub fn new(ttl: Duration) -> Result<Self, String> {
+        if (Self::MIN..=Self::MAX).contains(&ttl) {
+            Ok(Self(ttl))
+        } else {
+            Err(format!(
+                "lease ttl must be between {}s and {}s",
+                Self::MIN.as_secs(),
+                Self::MAX.as_secs()
+            ))
+        }
+    }
+
+    /// The duration.
+    pub fn get(self) -> Duration {
+        self.0
+    }
+}
+
 /// A granted lock.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub struct Lease {
     /// The locked key.
     pub key: LockKey,
     /// Who holds it, e.g. a run ID.
     pub owner: String,
-    /// Fencing token; strictly increasing per key with [`Capability::FencingTokens`].
+    /// Identifies this grant: unique per key. Strictly increasing per key (a fencing
+    /// token) with [`Capability::FencingTokens`].
     pub token: u64,
     /// When the lease expires, with [`Capability::LeaseExpiry`]; `None` otherwise.
     pub expires_at: Option<SystemTime>,
+}
+
+impl Lease {
+    /// A lease, for providers to return.
+    pub fn new(
+        key: LockKey,
+        owner: impl Into<String>,
+        token: u64,
+        expires_at: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            key,
+            owner: owner.into(),
+            token,
+            expires_at,
+        }
+    }
+
+    /// Whether `other` is the same grant: same key and token.
+    pub fn same_grant(&self, other: &Lease) -> bool {
+        self.key == other.key && self.token == other.token
+    }
 }
 
 /// Mutual exclusion between concurrent runs (contract [`LOCK_PROVIDER`]).
@@ -99,16 +164,18 @@ pub trait LockProvider: Provider {
         &self,
         key: &LockKey,
         owner: &str,
-        ttl: Duration,
+        ttl: LeaseTtl,
     ) -> Result<Option<Lease>, ProviderError>;
 
-    /// Extends a held lease by `ttl` from now, keeping its token.
+    /// Extends a held lease to `ttl` from now, keeping its token.
     ///
     /// # Errors
-    /// Returns [`ProviderError::Conflict`] if `lease` no longer holds the key.
-    async fn renew(&self, lease: &Lease, ttl: Duration) -> Result<Lease, ProviderError>;
+    /// Returns [`ProviderError::Conflict`] if `lease` no longer holds the key, including
+    /// when it expired.
+    async fn renew(&self, lease: &Lease, ttl: LeaseTtl) -> Result<Lease, ProviderError>;
 
-    /// Releases a held lease. Releasing an already free key succeeds.
+    /// Releases a held lease. Releasing a free key (never held, released or expired)
+    /// succeeds.
     ///
     /// # Errors
     /// Returns [`ProviderError::Conflict`] if a different lease holds the key.
@@ -125,5 +192,13 @@ mod tests {
         assert!(LockKey::new("").is_err());
         assert!(LockKey::new("a\nb").is_err());
         assert!(LockKey::new("x".repeat(LockKey::MAX_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn lease_ttls_are_bounded() {
+        assert!(LeaseTtl::new(Duration::ZERO).is_err());
+        assert!(LeaseTtl::new(Duration::MAX).is_err());
+        assert!(LeaseTtl::new(LeaseTtl::MIN).is_ok());
+        assert!(LeaseTtl::new(LeaseTtl::MAX).is_ok());
     }
 }

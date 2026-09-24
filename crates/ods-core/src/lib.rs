@@ -8,7 +8,7 @@
 pub mod capability;
 pub mod strategy;
 
-pub use capability::{Capability, CapabilitySet, UnknownCapability};
+pub use capability::{Capability, CapabilitySet, CustomCapability, UnknownCapability};
 pub use strategy::{Choice, ChoiceError, Skipped, Strategy, choose};
 
 use serde::{Deserialize, Serialize};

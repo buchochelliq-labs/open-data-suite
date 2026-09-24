@@ -2,11 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use ods_core::{Capability, CapabilitySet, SchemaVersion};
-use ods_sdk::contracts::lock::{LOCK_CAPABILITIES, LOCK_PROVIDER, Lease, LockKey, LockProvider};
+use ods_sdk::contracts::lock::{
+    LOCK_CAPABILITIES, LOCK_PROVIDER, Lease, LeaseTtl, LockKey, LockProvider,
+};
 use ods_sdk::{Provider, ProviderError, ProviderFactory, ProviderInfo};
 
 use crate::KIND;
@@ -15,7 +16,8 @@ use crate::clock::FakeClock;
 #[derive(Debug, Default)]
 struct State {
     held: BTreeMap<LockKey, Lease>,
-    /// Last token granted per key; never reset, so tokens only increase.
+    /// Last token granted per key; never reset, so every grant gets a new, larger token
+    /// (unique per grant as the contract requires, increasing with fencing tokens).
     last_token: BTreeMap<LockKey, u64>,
 }
 
@@ -50,13 +52,14 @@ impl FakeLockProvider {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn expires_at(&self, ttl: Duration) -> Option<std::time::SystemTime> {
+    fn expires_at(&self, ttl: LeaseTtl) -> Option<std::time::SystemTime> {
         self.capabilities
             .contains(&Capability::LeaseExpiry)
-            .then(|| self.clock.now() + ttl)
+            .then(|| self.clock.now() + ttl.get())
     }
 
-    /// The lease currently holding `key`, dropping it if it has expired.
+    /// The lease currently holding `key`, dropping it if it has expired (expiry is
+    /// inclusive: at `expires_at` the key is free).
     fn current(&self, state: &mut State, key: &LockKey) -> Option<Lease> {
         let now = self.clock.now();
         let expired = state
@@ -68,10 +71,6 @@ impl FakeLockProvider {
             state.held.remove(key);
         }
         state.held.get(key).cloned()
-    }
-
-    fn same_grant(a: &Lease, b: &Lease) -> bool {
-        a.key == b.key && a.owner == b.owner && a.token == b.token
     }
 }
 
@@ -92,37 +91,24 @@ impl LockProvider for FakeLockProvider {
         &self,
         key: &LockKey,
         owner: &str,
-        ttl: Duration,
+        ttl: LeaseTtl,
     ) -> Result<Option<Lease>, ProviderError> {
         let mut state = self.state();
         if self.current(&mut state, key).is_some() {
             return Ok(None);
         }
-        let token = if self.capabilities.contains(&Capability::FencingTokens) {
-            let next = state.last_token.get(key).copied().unwrap_or(0) + 1;
-            state.last_token.insert(key.clone(), next);
-            next
-        } else {
-            0
-        };
-        let lease = Lease {
-            key: key.clone(),
-            owner: owner.to_owned(),
-            token,
-            expires_at: self.expires_at(ttl),
-        };
+        let token = state.last_token.get(key).copied().unwrap_or(0) + 1;
+        state.last_token.insert(key.clone(), token);
+        let lease = Lease::new(key.clone(), owner, token, self.expires_at(ttl));
         state.held.insert(key.clone(), lease.clone());
         Ok(Some(lease))
     }
 
-    async fn renew(&self, lease: &Lease, ttl: Duration) -> Result<Lease, ProviderError> {
+    async fn renew(&self, lease: &Lease, ttl: LeaseTtl) -> Result<Lease, ProviderError> {
         let mut state = self.state();
         match self.current(&mut state, &lease.key) {
-            Some(current) if Self::same_grant(&current, lease) => {
-                let renewed = Lease {
-                    expires_at: self.expires_at(ttl),
-                    ..current
-                };
+            Some(mut renewed) if renewed.same_grant(lease) => {
+                renewed.expires_at = self.expires_at(ttl);
                 state.held.insert(lease.key.clone(), renewed.clone());
                 Ok(renewed)
             }
@@ -137,7 +123,7 @@ impl LockProvider for FakeLockProvider {
         let mut state = self.state();
         match self.current(&mut state, &lease.key) {
             None => Ok(()),
-            Some(current) if Self::same_grant(&current, lease) => {
+            Some(current) if current.same_grant(lease) => {
                 state.held.remove(&lease.key);
                 Ok(())
             }

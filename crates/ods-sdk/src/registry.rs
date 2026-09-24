@@ -10,7 +10,7 @@ use ods_config::ProviderConfig;
 use ods_core::SchemaVersion;
 
 use crate::error::ProviderError;
-use crate::provider::Contract;
+use crate::provider::{Contract, Provider};
 
 /// Creates providers of one kind for one contract (`P` is the contract trait object,
 /// e.g. `dyn LockProvider`).
@@ -68,7 +68,16 @@ pub struct Registry<P: ?Sized> {
     factories: BTreeMap<&'static str, Box<dyn ProviderFactory<P>>>,
 }
 
-impl<P: ?Sized> Registry<P> {
+impl<P: ?Sized> std::fmt::Debug for Registry<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Registry")
+            .field("contract", &self.contract)
+            .field("kinds", &self.factories.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl<P: ?Sized + Provider> Registry<P> {
     /// An empty registry for `contract`.
     pub fn new(contract: Contract) -> Self {
         Self {
@@ -113,8 +122,9 @@ impl<P: ?Sized> Registry<P> {
     /// Creates the provider configured as `[providers.<instance>]`.
     ///
     /// # Errors
-    /// Returns [`ProviderError::UnknownKind`] if no factory serves `config.kind`, or the
-    /// factory's error.
+    /// Returns [`ProviderError::UnknownKind`] if no factory serves `config.kind`, the
+    /// factory's error, or [`ProviderError::Other`] if the created provider describes
+    /// itself with a different kind or instance (diagnostics would then be misleading).
     pub fn create(&self, instance: &str, config: &ProviderConfig) -> Result<Box<P>, ProviderError> {
         let factory =
             self.factories
@@ -124,6 +134,15 @@ impl<P: ?Sized> Registry<P> {
                     kind: config.kind.clone(),
                     available: self.kinds().into_iter().map(str::to_owned).collect(),
                 })?;
-        factory.create(instance, &config.settings)
+        let provider = factory.create(instance, &config.settings)?;
+        let info = provider.info();
+        if info.kind != config.kind || info.instance != instance {
+            return Err(ProviderError::Other(format!(
+                "the `{}` factory created a provider that reports kind `{}` and instance `{}`, \
+                 not kind `{}` and instance `{instance}`",
+                config.kind, info.kind, info.instance, config.kind
+            )));
+        }
+        Ok(provider)
     }
 }

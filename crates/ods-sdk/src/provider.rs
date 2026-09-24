@@ -14,9 +14,17 @@ pub struct Contract {
 
 impl Contract {
     /// Whether a provider built against `built_against` works with this contract
-    /// version: same major, and no newer minor than this SDK knows about.
+    /// version (ADR-0006 §6):
+    /// - before 1.0, any minor bump may break providers, so the versions must match
+    ///   exactly;
+    /// - from 1.0, the major must match and the provider's minor must not be newer
+    ///   than this SDK's.
     pub const fn accepts(&self, built_against: SchemaVersion) -> bool {
-        self.version.can_read(built_against)
+        if self.version.major == 0 {
+            built_against.major == 0 && built_against.minor == self.version.minor
+        } else {
+            self.version.can_read(built_against)
+        }
     }
 }
 
@@ -56,4 +64,35 @@ impl ProviderInfo {
 pub trait Provider: Send + Sync {
     /// Describes this provider instance.
     fn info(&self) -> ProviderInfo;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contract(major: u32, minor: u32) -> Contract {
+        Contract {
+            name: "test",
+            version: SchemaVersion::new(major, minor),
+        }
+    }
+
+    #[test]
+    fn pre_1_0_contracts_need_an_exact_minor() {
+        let host = contract(0, 2);
+        assert!(host.accepts(SchemaVersion::new(0, 2)));
+        assert!(!host.accepts(SchemaVersion::new(0, 1)));
+        assert!(!host.accepts(SchemaVersion::new(0, 3)));
+        assert!(!host.accepts(SchemaVersion::new(1, 2)));
+    }
+
+    #[test]
+    fn stable_contracts_accept_older_minors_of_the_same_major() {
+        let host = contract(1, 2);
+        assert!(host.accepts(SchemaVersion::new(1, 0)));
+        assert!(host.accepts(SchemaVersion::new(1, 2)));
+        assert!(!host.accepts(SchemaVersion::new(1, 3)));
+        assert!(!host.accepts(SchemaVersion::new(2, 0)));
+        assert!(!host.accepts(SchemaVersion::new(0, 2)));
+    }
 }

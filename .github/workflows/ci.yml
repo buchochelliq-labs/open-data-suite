@@ -30,6 +30,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo doc --workspace --no-deps
       - run: python3 scripts/check-layering.py
+      - run: python3 scripts/check-vendor-neutral.py --self-test
       - run: python3 scripts/check-vendor-neutral.py
       - name: Validate repo metadata
         run: |

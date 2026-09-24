@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Well-known capabilities have variants; anything else is [`Capability::Custom`], a
 /// namespaced name such as `x-acme.bulk_load`, so third-party providers can extend the
-/// vocabulary without changing core. Serialized as its `snake_case` name.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// vocabulary without changing core. Serialized as its `snake_case` name, and ordered
+/// by that name, so sorted sets and hashes don't change when variants are added.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Capability {
     /// Relations carry a monotonic content version (e.g. a table version number).
@@ -41,7 +42,43 @@ pub enum Capability {
     /// Each lock grant carries a strictly increasing fencing token.
     FencingTokens,
     /// A capability outside the well-known set, as `x-<namespace>.<name>`.
-    Custom(String),
+    Custom(CustomCapability),
+}
+
+/// A validated third-party capability name, `x-<namespace>.<name>`.
+///
+/// Only constructed by parsing, so it can never spell a well-known capability or a name
+/// that would fail to deserialize.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CustomCapability(String);
+
+impl CustomCapability {
+    /// The full name, e.g. `x-acme.bulk_load`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for CustomCapability {
+    type Err = UnknownCapability;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let valid = |part: &str| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        };
+        match name
+            .strip_prefix("x-")
+            .and_then(|rest| rest.split_once('.'))
+        {
+            Some((namespace, local)) if valid(namespace) && valid(local) => {
+                Ok(Self(name.to_owned()))
+            }
+            _ => Err(UnknownCapability(name.to_owned())),
+        }
+    }
 }
 
 impl Capability {
@@ -74,8 +111,22 @@ impl Capability {
             Capability::ConstraintMetadata => "constraint_metadata",
             Capability::LeaseExpiry => "lease_expiry",
             Capability::FencingTokens => "fencing_tokens",
-            Capability::Custom(name) => name,
+            Capability::Custom(custom) => custom.as_str(),
         }
+    }
+}
+
+impl PartialOrd for Capability {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Capability {
+    /// By name. Names are unique (custom names can't spell well-known ones), so this
+    /// agrees with `Eq`.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name().cmp(other.name())
     }
 }
 
@@ -100,21 +151,7 @@ impl FromStr for Capability {
         if let Some(known) = Capability::WELL_KNOWN.iter().find(|c| c.name() == name) {
             return Ok(known.clone());
         }
-        let custom = name
-            .strip_prefix("x-")
-            .and_then(|rest| rest.split_once('.'));
-        let valid = |part: &str| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-        };
-        match custom {
-            Some((namespace, local)) if valid(namespace) && valid(local) => {
-                Ok(Capability::Custom(name.to_owned()))
-            }
-            _ => Err(UnknownCapability(name.to_owned())),
-        }
+        name.parse().map(Capability::Custom)
     }
 }
 
@@ -204,22 +241,30 @@ mod tests {
         }
         assert_eq!(
             "x-acme.bulk_load".parse::<Capability>(),
-            Ok(Capability::Custom("x-acme.bulk_load".into()))
+            Ok(Capability::Custom("x-acme.bulk_load".parse().unwrap()))
         );
     }
 
     #[test]
     fn rejects_unknown_and_malformed_names() {
-        for bad in ["teleport", "x-acme", "x-.name", "x-Acme.name", "acme.name"] {
+        for bad in [
+            "teleport",
+            "x-acme",
+            "x-.name",
+            "x-Acme.name",
+            "acme.name",
+            "Not Valid",
+        ] {
             assert!(bad.parse::<Capability>().is_err(), "{bad}");
         }
+        assert!("lease_expiry".parse::<CustomCapability>().is_err());
     }
 
     #[test]
     fn serializes_as_sorted_names() {
         let set = CapabilitySet::from([Capability::ZeroCopyClone, Capability::AtomicReplace]);
         let json = serde_json::to_string(&set).unwrap();
-        assert_eq!(json, r#"["zero_copy_clone","atomic_replace"]"#);
+        assert_eq!(json, r#"["atomic_replace","zero_copy_clone"]"#);
         assert_eq!(serde_json::from_str::<CapabilitySet>(&json).unwrap(), set);
     }
 
@@ -230,5 +275,20 @@ mod tests {
             CapabilitySet::from([Capability::RelationVersions, Capability::ZeroCopyClone]);
         assert_eq!(offered.missing(&required), [&Capability::ZeroCopyClone]);
         assert!(!offered.satisfies(&required));
+    }
+
+    #[test]
+    fn order_is_by_name_including_custom_capabilities() {
+        let custom: Capability = "x-acme.bulk_load".parse().unwrap();
+        let set = CapabilitySet::from([
+            Capability::ZeroCopyClone,
+            custom.clone(),
+            Capability::AtomicReplace,
+        ]);
+        let names: Vec<_> = set.iter().map(Capability::name).collect();
+        assert_eq!(
+            names,
+            ["atomic_replace", "x-acme.bulk_load", "zero_copy_clone"]
+        );
     }
 }

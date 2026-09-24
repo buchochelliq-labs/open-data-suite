@@ -19,6 +19,9 @@ description: Implement an OpenDataSuite SDK contract (ArtifactProvider, Metadata
    planner falls back to BUILD; never fabricate values (e.g. cost estimates, versions).
 5. **No leakage.** Vendor types stay inside the provider crate; map to `ods-core` types at the boundary.
 6. **Secrets** come from the config/secret-reference layer; redact in `Debug`, errors and events.
+   `ProviderError::{Conflict, Unavailable, Other}` take free-form strings, so nothing
+   enforces this for you: never format connection strings, tokens, request bodies or raw
+   driver errors that may embed them into those messages.
 7. **Tests:**
    - Run the SDK conformance suite for the contract (`ods-sdk` feature `conformance`);
      assert which cases were skipped, so a lost capability is noticed.

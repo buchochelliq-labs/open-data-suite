@@ -49,32 +49,99 @@ impl LockHarness for Harness {
     }
 }
 
+fn skipped(report: &ods_sdk::conformance::Report) -> Vec<(&str, &str)> {
+    report
+        .skipped
+        .iter()
+        .map(|(case, reason)| (*case, reason.as_str()))
+        .collect()
+}
+
 #[tokio::test]
-async fn full_capabilities_pass_every_case() {
+async fn full_capabilities_pass_every_case_that_applies() {
     let report = run(&Harness::new(&[])).await;
-    assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 7);
+    assert_eq!(
+        skipped(&report),
+        [(
+            "leases_without_expiry_never_expire",
+            "provider has lease_expiry"
+        )]
+    );
+    assert_eq!(report.passed.len(), 10, "{report:?}");
 }
 
 #[tokio::test]
 async fn cases_for_missing_capabilities_are_skipped_not_failed() {
     let report = run(&Harness::new(&[Capability::FencingTokens])).await;
-    assert_eq!(report.skipped.len(), 1);
-    assert_eq!(report.skipped[0].0, "fencing_tokens_increase");
+    assert_eq!(
+        skipped(&report),
+        [
+            ("fencing_tokens_increase", "provider lacks fencing_tokens"),
+            (
+                "leases_without_expiry_never_expire",
+                "provider has lease_expiry"
+            ),
+        ]
+    );
 
     let report = run(&Harness::new(&[Capability::LeaseExpiry])).await;
-    assert_eq!(report.skipped[0].0, "expired_leases_can_be_taken_over");
+    let lacks = "provider lacks lease_expiry";
+    assert_eq!(
+        skipped(&report),
+        [
+            ("leases_hold_until_ttl_and_renewal_extends", lacks),
+            ("expired_leases_cannot_be_renewed", lacks),
+            ("expired_leases_can_be_taken_over", lacks),
+        ]
+    );
+    assert!(
+        report
+            .passed
+            .contains(&"leases_without_expiry_never_expire")
+    );
 
     let mut fixed_clock = Harness::new(&[]);
     fixed_clock.controllable_time = false;
     let report = run(&fixed_clock).await;
+    let no_time = "harness cannot advance time";
     assert_eq!(
-        report.skipped,
-        [(
-            "expired_leases_can_be_taken_over",
-            "harness cannot advance time".into()
-        )]
+        skipped(&report),
+        [
+            ("leases_hold_until_ttl_and_renewal_extends", no_time),
+            ("expired_leases_cannot_be_renewed", no_time),
+            ("expired_leases_can_be_taken_over", no_time),
+            (
+                "leases_without_expiry_never_expire",
+                "provider has lease_expiry"
+            ),
+        ]
     );
+}
+
+/// A harness whose providers don't all advertise the same capabilities.
+struct Inconsistent(std::sync::atomic::AtomicBool);
+
+#[async_trait]
+impl LockHarness for Inconsistent {
+    async fn provider(&self) -> Arc<dyn LockProvider> {
+        let first = self.0.swap(false, std::sync::atomic::Ordering::SeqCst);
+        let provider = FakeLockProvider::new(FakeClock::new());
+        Arc::new(if first {
+            provider
+        } else {
+            provider.without(&Capability::FencingTokens)
+        })
+    }
+
+    fn advance_time(&self, _: Duration) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "different capabilities")]
+async fn the_suite_checks_every_provider_advertises_the_same_capabilities() {
+    run(&Inconsistent(true.into())).await;
 }
 
 fn provider_config(toml_text: &str) -> ProviderConfig {
@@ -157,6 +224,55 @@ impl ProviderFactory<dyn LockProvider> for FromTheFuture {
     }
 }
 
+/// Built against an older minor, which a pre-1.0 host must reject.
+struct FromThePast;
+
+impl ProviderFactory<dyn LockProvider> for FromThePast {
+    fn kind(&self) -> &'static str {
+        "past"
+    }
+
+    fn contract_version(&self) -> SchemaVersion {
+        SchemaVersion::new(0, LOCK_PROVIDER.version.minor - 1)
+    }
+
+    fn create(&self, _: &str, _: &toml::Table) -> Result<Box<dyn LockProvider>, ProviderError> {
+        unreachable!("never registered")
+    }
+}
+
+/// Creates providers that misreport their instance name.
+struct Misnamed;
+
+impl ProviderFactory<dyn LockProvider> for Misnamed {
+    fn kind(&self) -> &'static str {
+        "fake"
+    }
+
+    fn contract_version(&self) -> SchemaVersion {
+        LOCK_PROVIDER.version
+    }
+
+    fn create(&self, _: &str, _: &toml::Table) -> Result<Box<dyn LockProvider>, ProviderError> {
+        Ok(Box::new(FakeLockProvider::new(FakeClock::new())))
+    }
+}
+
+#[test]
+fn created_providers_must_report_the_configured_kind_and_instance() {
+    let mut registry = Registry::new(LOCK_PROVIDER);
+    registry.register(Box::new(Misnamed)).unwrap();
+    let err = registry
+        .create("locks", &provider_config("kind = \"fake\""))
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("instance `fake`"), "{err}");
+    assert_eq!(
+        format!("{:?}", self::registry()),
+        r#"Registry { contract: Contract { name: "lock_provider", version: SchemaVersion { major: 0, minor: 1 } }, kinds: ["fake"] }"#
+    );
+}
+
 #[test]
 fn registration_checks_kinds_and_contract_versions() {
     let mut registry = registry();
@@ -167,6 +283,10 @@ fn registration_checks_kinds_and_contract_versions() {
     assert!(matches!(
         registry.register(Box::new(FromTheFuture)),
         Err(RegistryError::Incompatible { kind: "future", .. })
+    ));
+    assert!(matches!(
+        registry.register(Box::new(FromThePast)),
+        Err(RegistryError::Incompatible { kind: "past", .. })
     ));
 }
 
@@ -180,21 +300,17 @@ enum Coordination {
 
 fn coordination_strategies() -> Vec<Strategy<Coordination>> {
     vec![
-        Strategy {
-            id: "fenced_lease",
-            requires: [Capability::LeaseExpiry, Capability::FencingTokens].into(),
-            value: Coordination::FencedLease,
-        },
-        Strategy {
-            id: "expiring_lease",
-            requires: [Capability::LeaseExpiry].into(),
-            value: Coordination::ExpiringLease,
-        },
-        Strategy {
-            id: "single_writer",
-            requires: CapabilitySet::new(),
-            value: Coordination::SingleWriter,
-        },
+        Strategy::new(
+            "fenced_lease",
+            [Capability::LeaseExpiry, Capability::FencingTokens],
+            Coordination::FencedLease,
+        ),
+        Strategy::new(
+            "expiring_lease",
+            [Capability::LeaseExpiry],
+            Coordination::ExpiringLease,
+        ),
+        Strategy::fallback("single_writer", Coordination::SingleWriter),
     ]
 }
 

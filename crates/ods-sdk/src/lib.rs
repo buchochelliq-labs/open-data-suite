@@ -13,8 +13,9 @@
 //! - adding a method with a default implementation, or a new contract, is a minor bump;
 //! - documentation and fixes are patch releases.
 //!
-//! A provider built against contract version `M.p` works with a host at `M.m` when
-//! `p <= m` (see [`Contract::accepts`]).
+//! Before 1.0, a provider must be built against exactly the host's contract version.
+//! From 1.0, a provider built against `M.p` works with a host at `M.m` when `p <= m`
+//! (see [`Contract::accepts`]).
 
 pub mod contracts;
 mod error;

@@ -10,7 +10,9 @@ use serde::Serialize;
 use crate::capability::{Capability, CapabilitySet};
 
 /// A way of doing something, and what it needs from the provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub struct Strategy<T> {
     /// Stable identifier, e.g. `clone`.
     pub id: &'static str,
@@ -20,9 +22,26 @@ pub struct Strategy<T> {
     pub value: T,
 }
 
+impl<T> Strategy<T> {
+    /// A strategy `id` that needs `requires` and does `value`.
+    pub fn new(id: &'static str, requires: impl Into<CapabilitySet>, value: T) -> Self {
+        Self {
+            id,
+            requires: requires.into(),
+            value,
+        }
+    }
+
+    /// An unconditional fallback: requires nothing.
+    pub fn fallback(id: &'static str, value: T) -> Self {
+        Self::new(id, CapabilitySet::new(), value)
+    }
+}
+
 /// A strategy that was passed over, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub struct Skipped {
     /// The strategy's identifier.
     pub id: &'static str,
@@ -30,8 +49,11 @@ pub struct Skipped {
     pub missing: Vec<Capability>,
 }
 
-/// The outcome of [`choose`].
-#[derive(Debug, PartialEq, Eq)]
+/// The outcome of [`choose`]. Serializes with the chosen strategy and the reasons the
+/// preferred ones were skipped, for plan explanations.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub struct Choice<'a, T> {
     /// The chosen strategy.
     pub chosen: &'a Strategy<T>,
@@ -41,6 +63,7 @@ pub struct Choice<'a, T> {
 
 /// Why no strategy could be chosen.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ChoiceError {
     /// The list was empty.
     #[error("no strategies were offered")]
@@ -86,7 +109,8 @@ pub fn choose<'a, T>(
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "snake_case")]
     enum Reuse {
         Clone,
         Defer,
@@ -157,6 +181,31 @@ mod tests {
         assert_eq!(
             choose::<Reuse>(&CapabilitySet::new(), &[]),
             Err(ChoiceError::Empty)
+        );
+    }
+
+    #[test]
+    fn choices_serialize_with_their_reasons() {
+        let all = strategies();
+        let choice = choose(&CapabilitySet::from([Capability::RelationVersions]), &all).unwrap();
+        assert_eq!(
+            serde_json::to_value(&choice).unwrap(),
+            serde_json::json!({
+                "chosen": {"id": "defer", "requires": ["relation_versions"], "value": "defer"},
+                "skipped": [{"id": "clone", "missing": ["zero_copy_clone"]}],
+            })
+        );
+    }
+
+    #[test]
+    fn constructors_build_strategies() {
+        assert_eq!(
+            Strategy::fallback("build", ()).requires,
+            CapabilitySet::new()
+        );
+        assert_eq!(
+            Strategy::new("clone", [Capability::ZeroCopyClone], ()).requires,
+            CapabilitySet::from([Capability::ZeroCopyClone])
         );
     }
 }
