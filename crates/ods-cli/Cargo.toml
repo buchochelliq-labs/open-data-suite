@@ -13,7 +13,6 @@ name = "ods"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
 ods-sdk.workspace = true
 

@@ -162,7 +162,7 @@ Note: several closed copies (#76–#88) look like they were closed as duplicates
 
 These are defined in [`.github/labels.json`](../.github/labels.json) and created by the sync script.
 
-## 7. Target crate layout (to be ratified by ADR-0001, #1)
+## 7. Target crate layout (see [ADR-0001](adr/0001-monorepo-architecture-and-module-boundaries.md), #1)
 
 ```
 crates/
@@ -183,8 +183,8 @@ fixtures/
   dbt/jaffle-ods/            # #100 demo project + artifacts for multiple dbt versions
 ```
 
-Dependency direction: `ods-core` ← `ods-sdk` ← modules ← providers/CLI. Modules never
-depend on providers; the CLI wires concrete providers in at the edge.
+Dependency direction: `ods-core` ← foundation ← `ods-sdk` ← {modules, providers} ← `ods-cli`.
+Modules and providers never depend on each other; the CLI wires concrete providers in at the edge.
 
 ## 8. Immediate next steps (first two weeks)
 

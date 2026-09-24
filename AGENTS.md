@@ -21,8 +21,9 @@ a reason (e.g. the user asked for it explicitly).
    Behaviour differences are expressed as **capabilities** (#3). Vendor code lives in
    `providers/*`.
 2. **Dependency direction** ([ADR-0001](docs/adr/0001-monorepo-architecture-and-module-boundaries.md)):
-   `ods-core` ← foundation ← `ods-sdk` ← modules ← providers ← `ods-cli`. Only the CLI (or a
-   server binary) wires concrete providers together. New crates must be registered in
+   `ods-core` ← foundation ← `ods-sdk` ← {modules, providers} ← `ods-cli`. Modules and
+   providers never depend on each other; only the CLI (or a server binary) wires concrete
+   providers into modules. New crates must be registered in
    `scripts/check-layering.py`; CI fails otherwise.
 3. **Conservative defaults.** Missing/uncertain evidence ⇒ BUILD, deny, or mark as
    *inferred*. Never silently REUSE, allow a destructive action, or present inference as fact.
@@ -43,8 +44,9 @@ with a non-permissive licence) require an ADR in `docs/adr/` — use the `adr` s
 ## Tech stack ([ADR-0002](docs/adr/0002-rust-first-backend-and-technology-stack.md), #105)
 
 Rust (stable, edition 2024) · Tokio · Clap · Serde · SQLx (SQLite/PostgreSQL) · Axum ·
-tracing/OpenTelemetry · tower-lsp · thiserror (libraries) / anyhow (binaries only) ·
-rs-rich-cli for terminal rendering. Python/TypeScript/Go are thin consumers only.
+tracing/OpenTelemetry · thiserror (libraries) / anyhow (binaries only) ·
+rs-rich-cli for terminal rendering (ADR-0003, pending). LSP library and SQL parser are
+decided in their own ADRs (#67, #73). Python/TypeScript/Go are thin consumers only.
 
 ## Repository layout (target — see ROADMAP §7)
 
@@ -65,7 +67,8 @@ Run from the repo root:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-cargo deny check            # licences/advisories (install: cargo install cargo-deny)
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+cargo deny check            # licences/advisories (install: cargo install cargo-deny --locked)
 python3 scripts/check-layering.py   # enforces ADR-0001 dependency direction
 cargo run -p ods-cli -- --help    # binary is named `ods`
 ```

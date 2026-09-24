@@ -9,9 +9,9 @@ description: Add a new crate to the OpenDataSuite Cargo workspace with correct l
 | Kind | Path | May depend on |
 |---|---|---|
 | Core/domain (`ods-core`, `ods-events`, `ods-config`, `ods-policy`) | `crates/` | std, serde, small utility crates; `ods-core` depends on nothing internal |
-| Contracts (`ods-sdk`) | `crates/` | `ods-core`, `ods-events` |
+| Contracts (`ods-sdk`) | `crates/` | `ods-core`, foundation crates |
 | Module (`ods-state`, `ods-erd`, …) | `crates/` | core, sdk, other modules only if ADR-approved |
-| Provider/store (`ods-provider-*`, `ods-store-*`) | `providers/` | core, sdk, vendor client libs |
+| Provider/store (`ods-provider-*`, `ods-store-*`) | `providers/` | core, foundation, sdk, vendor client libs — never modules |
 | Binary (`ods-cli`) | `crates/` | anything |
 
 A module crate must **never** depend on a provider crate. If you need one, you need a new

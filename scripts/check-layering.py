@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Enforce the ODS crate dependency direction (ADR-0001).
 
-    ods-core  <-  ods-sdk / foundation  <-  modules  <-  providers  <-  ods-cli
+    ods-core  <-  foundation  <-  ods-sdk  <-  {modules, providers}  <-  ods-cli
 
 Each workspace crate gets a layer; a crate may depend only on crates in a strictly
-lower layer (or, for modules, other modules when listed in ALLOWED_MODULE_EDGES).
+lower layer, with two refinements:
+  * modules may depend on other modules only when listed in ALLOWED_MODULE_EDGES;
+  * providers may not depend on modules (they implement SDK contracts only).
+Dev-dependencies are exempt so tests can use fakes/fixtures from any layer.
 Unknown crate names fail the check so every new crate is placed deliberately.
 """
 import json
@@ -55,7 +58,12 @@ def main() -> int:
             dst = layer(target)
             if dst is None:
                 continue  # reported on its own entry
-            ok = dst < src or (src == dst == MODULE and (name, target) in ALLOWED_MODULE_EDGES)
+            if src == PROVIDER:
+                ok = dst <= SDK
+            elif src == dst == MODULE:
+                ok = (name, target) in ALLOWED_MODULE_EDGES
+            else:
+                ok = dst < src
             if not ok:
                 errors.append(f"{name} -> {target}: violates dependency direction")
     for e in errors:

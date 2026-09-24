@@ -44,8 +44,10 @@ one-way dependency direction enforced in CI.
 
 ## Decision
 Use **one Cargo workspace (Option A)** with the following layers. A crate may depend only on
-crates in a **strictly lower** layer; module-to-module edges need an ADR and are listed in
-`scripts/check-layering.py`. CI enforces this.
+crates in a **strictly lower** layer, except that providers (layer 4) may depend only on
+layers 0–2, never on modules; module-to-module edges need an ADR and are listed in
+`scripts/check-layering.py`. Dev-dependencies are exempt so tests can use fakes and fixtures.
+CI enforces this.
 
 | Layer | Crates | Contains |
 |---|---|---|
