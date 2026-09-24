@@ -13,6 +13,7 @@ use serde::Serialize;
 
 pub use view::{Level, Line, Span, Tone, TreeItem, ViewNode};
 
+use crate::exit::CliError;
 use crate::output::{Mode, OutputSettings};
 
 /// Version of the JSON envelope and every command's `result` shape (ADR-0003 §3).
@@ -51,6 +52,9 @@ pub struct Diagnostic {
     pub code: &'static str,
     /// Human-readable explanation.
     pub message: String,
+    /// Optional next step for the user; omitted from JSON when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// The single object written to stdout in JSON mode.
@@ -58,10 +62,28 @@ pub struct Diagnostic {
 #[serde(rename_all = "snake_case")]
 struct Envelope<'a, T: Serialize> {
     schema_version: SchemaVersion,
-    command: &'static str,
+    command: &'a str,
     ods_version: &'static str,
-    result: &'a T,
+    /// `null` when the command failed; the failure is then in `diagnostics`.
+    result: Option<&'a T>,
     diagnostics: &'a [Diagnostic],
+}
+
+fn write_envelope<T: Serialize>(
+    out: &mut dyn Write,
+    command: &str,
+    result: Option<&T>,
+    diagnostics: &[Diagnostic],
+) -> io::Result<()> {
+    let envelope = Envelope {
+        schema_version: OUTPUT_SCHEMA_VERSION,
+        command,
+        ods_version: env!("CARGO_PKG_VERSION"),
+        result,
+        diagnostics,
+    };
+    serde_json::to_writer_pretty(&mut *out, &envelope)?;
+    writeln!(out)
 }
 
 /// Renders `result` according to `settings` and writes it to `out`.
@@ -78,21 +100,27 @@ pub fn emit<T: Present>(
     out: &mut dyn Write,
 ) -> io::Result<()> {
     match settings.mode {
-        Mode::Json => {
-            let envelope = Envelope {
-                schema_version: OUTPUT_SCHEMA_VERSION,
-                command: T::COMMAND,
-                ods_version: env!("CARGO_PKG_VERSION"),
-                result,
-                diagnostics: &[],
-            };
-            serde_json::to_writer_pretty(&mut *out, &envelope)?;
-            writeln!(out)
-        }
+        Mode::Json => write_envelope(out, T::COMMAND, Some(result), &[]),
         Mode::Plain => out.write_all(backend::plain::render(&result.view()).as_bytes()),
         Mode::Human => {
             let renderer = backend::rich::RichRenderer::new(settings.color, settings.width);
             out.write_all(renderer.render(&result.view()).as_bytes())
         }
     }
+}
+
+/// Writes a failed command's JSON envelope: `result` is `null` and the error is the
+/// only diagnostic (ADR-0004 §4). Only used in JSON mode; other modes report errors
+/// as text on stderr.
+///
+/// # Errors
+/// Returns any error from writing to `out`.
+pub fn emit_failure(out: &mut dyn Write, command: &str, error: &CliError) -> io::Result<()> {
+    let diagnostic = Diagnostic {
+        level: Severity::Error,
+        code: error.code,
+        message: error.message.clone(),
+        hint: error.hint.clone(),
+    };
+    write_envelope::<()>(out, command, None, &[diagnostic])
 }

@@ -14,11 +14,14 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+clap_complete.workspace = true
 ods-core.workspace = true
 ods-sdk.workspace = true
 rs-rich.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

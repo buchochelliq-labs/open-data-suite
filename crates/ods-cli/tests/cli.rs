@@ -6,6 +6,7 @@ fn ods(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(args)
         .env_remove("NO_COLOR")
+        .env_remove("ODS_LOG")
         .output()
         .expect("failed to spawn ods")
 }
@@ -92,4 +93,49 @@ fn unimplemented_module_exits_with_code_3() {
     let out = ods(&["state"]);
     assert_eq!(out.status.code(), Some(3));
     assert!(out.stdout.is_empty(), "diagnostics belong on stderr");
+}
+
+#[test]
+fn logs_go_to_stderr_and_never_corrupt_json() {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["-vv", "--json", "version"])
+        .env_remove("ODS_LOG")
+        .output()
+        .expect("failed to spawn ods");
+    assert!(out.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout is exactly one JSON document");
+    assert_eq!(value["command"], "version");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("dispatching"),
+        "expected a debug log on stderr: {stderr}"
+    );
+}
+
+#[test]
+fn ods_log_env_overrides_verbosity_flags() {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["-q", "version"])
+        .env("ODS_LOG", "debug")
+        .output()
+        .expect("failed to spawn ods");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("dispatching"));
+}
+
+#[test]
+fn not_implemented_in_json_mode_is_one_document_on_stdout() {
+    let out = ods(&["--json", "erd", "generate"]);
+    assert_eq!(out.status.code(), Some(3));
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert!(value["result"].is_null());
+    assert_eq!(value["diagnostics"][0]["code"], "ODS-E0003");
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn completions_script_is_printed() {
+    let out = ods(&["completions", "zsh"]);
+    assert!(out.status.success());
+    assert!(stdout(&out).contains("#compdef ods"));
 }

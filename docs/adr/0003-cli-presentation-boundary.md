@@ -148,7 +148,7 @@ The view tree stays inside `ods-cli` until a second consumer needs it, such as
 - **Streams.** Results go to **stdout**. Logs, progress, spinners and warnings go to
   **stderr**. Progress and spinners appear only in `human` mode when stderr is a
   terminal. JSON mode never writes anything else to stdout.
-- **Exit codes** are unaffected by the output mode. #6 defines them.
+- **Exit codes** are unaffected by the output mode. ADR-0004 defines them (#6).
 
 ### 3. JSON contract
 Every `--json` response is a single envelope object:
@@ -163,6 +163,8 @@ Every `--json` response is a single envelope object:
 ```
 - `schema_version` versions the envelope and the result models together, with the same
   compatibility rules as `ods_core::SchemaVersion`.
+- On failure, `result` is `null` and the error is a diagnostic, which may include an
+  optional `hint`. The envelope is still the only thing on stdout (ADR-0004 §4).
 - A command's `result` shape is a public contract. Breaking changes need a major version
   bump and a CHANGELOG entry (#101).
 - A JSON Schema is generated for each command. We will evaluate `schemars` against a

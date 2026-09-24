@@ -20,6 +20,7 @@ ods-sdk = { path = "crates/ods-sdk" }
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 insta = "1"
 # Terminal rendering; only ods-cli may depend on it (ADR-0003, enforced by check-layering.py).
 # `^0.0.x` pins the patch version, so every upgrade is a deliberate PR.
@@ -27,6 +28,8 @@ rs-rich = "0.0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

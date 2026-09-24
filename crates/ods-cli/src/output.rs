@@ -60,6 +60,11 @@ pub struct OutputSettings {
 }
 
 impl OutputArgs {
+    /// The `--color` choice (also used for log colour).
+    pub fn color(&self) -> ColorChoice {
+        self.color
+    }
+
     /// Resolves flags against whether stdout is a terminal.
     pub fn resolve(&self, stdout_is_terminal: bool) -> OutputSettings {
         let mode = match (self.json, self.output) {
