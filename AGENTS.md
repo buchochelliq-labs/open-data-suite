@@ -33,7 +33,10 @@ a reason (e.g. the user asked for it explicitly).
    overwrite the last successful state.
 6. **ERD ≠ lineage.** Separate domain types; a DAG edge is not a PK/FK relationship.
 7. **Presentation is separate from logic.** Commands produce view models; rendering
-   (rs-rich, `--output plain|json`) happens at the CLI edge (#108, ADR-0003).
+   (rs-rich, `--output plain|json`) happens at the CLI edge (#108, ADR-0003). Commands
+   are `Module`s in `ods-cli/src/commands/`; they return `CliError` rather than printing
+   errors or exiting, and use the exit codes in [ADR-0004](docs/adr/0004-cli-framework-and-exit-codes.md)
+   (see `docs/cli.md`).
 8. **Clean-room.** Use only public dbt artifact schemas and OSS sources. Never copy,
    decompile, or depend on proprietary dbt Cloud/Fusion code or binaries (#10).
 9. **Secrets** are referenced, never persisted in config, state, events, or logs.

@@ -45,6 +45,16 @@ pub struct OutputArgs {
     width: Option<u16>,
 }
 
+/// Whether `TERM` names a terminal that cannot render styles (`dumb` or `unknown`).
+///
+/// rs-rich 0.0.7 applies the same rule to its own colour detection. ODS checks it too, so
+/// the ADR-0003 §2 contract holds independently of upstream and also covers log colour.
+pub fn term_is_dumb() -> bool {
+    std::env::var_os("TERM").is_some_and(|term| {
+        term.eq_ignore_ascii_case("dumb") || term.eq_ignore_ascii_case("unknown")
+    })
+}
+
 /// Width used for human output when stdout is not a terminal.
 const NON_TERMINAL_WIDTH: usize = 100;
 
@@ -60,6 +70,11 @@ pub struct OutputSettings {
 }
 
 impl OutputArgs {
+    /// The `--color` choice (also used for log colour).
+    pub fn color(&self) -> ColorChoice {
+        self.color
+    }
+
     /// Resolves flags against whether stdout is a terminal.
     pub fn resolve(&self, stdout_is_terminal: bool) -> OutputSettings {
         let mode = match (self.json, self.output) {

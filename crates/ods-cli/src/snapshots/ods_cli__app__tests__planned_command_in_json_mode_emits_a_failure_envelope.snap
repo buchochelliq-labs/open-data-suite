@@ -1,0 +1,21 @@
+---
+source: crates/ods-cli/src/app.rs
+expression: "o.out.replace(env!(\"CARGO_PKG_VERSION\"), \"[ods-version]\")"
+---
+{
+  "schema_version": {
+    "major": 0,
+    "minor": 1
+  },
+  "command": "state",
+  "ods_version": "[ods-version]",
+  "result": null,
+  "diagnostics": [
+    {
+      "level": "error",
+      "code": "ODS-E0003",
+      "message": "`ods state` is not implemented yet",
+      "hint": "planned for M1 State MVP (v0.1.0); see docs/ROADMAP.md"
+    }
+  ]
+}
