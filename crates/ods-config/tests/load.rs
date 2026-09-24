@@ -323,21 +323,22 @@ fn discovery_finds_the_nearest_project_file_and_user_dir() {
     let project = dir.write("repo/ods.toml", "");
     let nested = dir.0.join("repo/models/staging");
     fs::create_dir_all(&nested).unwrap();
+    // Built from the temp dir so they are absolute on every OS (`/cfg` is not
+    // absolute on Windows, and relative XDG paths are ignored).
+    let (cfg, home) = (dir.0.join("cfg"), dir.0.join("home"));
+    let (cfg_str, home_str) = (cfg.display().to_string(), home.display().to_string());
     let found = Inputs::discover(
         &nested,
-        &env(&[("XDG_CONFIG_HOME", "/cfg"), ("HOME", "/home/u")]),
+        &env(&[("XDG_CONFIG_HOME", &cfg_str), ("HOME", &home_str)]),
     );
     assert_eq!(found.project_file.as_deref(), Some(project.as_path()));
     assert_eq!(found.local_file, Some(dir.0.join("repo/.ods/local.toml")));
-    assert_eq!(
-        found.user_file,
-        Some(Path::new("/cfg/ods/config.toml").to_path_buf())
-    );
+    assert_eq!(found.user_file, Some(cfg.join("ods/config.toml")));
 
-    let home_only = Inputs::discover(&nested, &env(&[("HOME", "/home/u")]));
+    let home_only = Inputs::discover(&nested, &env(&[("HOME", &home_str)]));
     assert_eq!(
         home_only.user_file,
-        Some(Path::new("/home/u/.config/ods/config.toml").to_path_buf())
+        Some(home.join(".config/ods/config.toml"))
     );
 }
 
