@@ -326,7 +326,7 @@ fn record(
                 n.completed_at,
             );
             // Built with its tests, and they passed.
-            if tested && n.status == ExecutionStatus::Success {
+            if tested && n.fully_checked() {
                 result.tested()
             } else {
                 result

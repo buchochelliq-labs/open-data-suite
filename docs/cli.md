@@ -455,7 +455,7 @@ stdout carries only the report (one JSON document with `--json`).
 | `--exclude SPEC` | leave these nodes out (same syntax as `--select`); they keep their last state and stay to build; repeatable |
 | `--resource-type model\|seed\|snapshot` | only build nodes of these types; the others stay to build; repeatable |
 | `--full-refresh` | dbt's `--full-refresh` for the nodes being built |
-| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Options ODS sets itself (`--select`, `--exclude`, `--selector`, `--resource-type`, `--target-path`, `--state`, `--defer`, `--full-refresh`, …) are refused |
+| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Options that change which nodes run, which project or warehouse is used, where results go, or build partial data are refused: selection (`--select`/`-s`, `--exclude`, `--selector`, `--resource-type`, `--indirect-selection`, `--state`, `--defer`), `--target`/`-t`, `--project-dir`, `--profiles-dir`, `--profile`, `--vars`, `--target-path`, `--no-write-json`, `--full-refresh`/`-f`, `--empty`, `--sample` and `--event-time-*`. Use the ODS option where there is one |
 | `--dry-run` | prepare and plan, but build and record nothing |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |

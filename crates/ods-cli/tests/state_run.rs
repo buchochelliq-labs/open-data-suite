@@ -281,6 +281,34 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
     assert!(names(&again["result"]["execution"]["nodes"]).contains(&"orders".to_owned()));
 }
 
+/// A test dbt skipped (e.g. after `--fail-fast` stopped) tested nothing: the node is
+/// built but stays untested, and a test run doesn't mark it tested either.
+#[test]
+fn a_skipped_test_leaves_its_node_untested() {
+    let project = Project::new("skipped-test").with("FAKE_DBT_SKIP_TEST", "unique_orders_order_id");
+    let result = project.run_ok(&["--test"]);
+    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 13);
+    let orders = result["execution"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node"] == "model.jaffle_ods.orders")
+        .unwrap();
+    assert_eq!(
+        orders["checks_skipped"][0],
+        "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
+    );
+
+    let (code, tested) = project.test(&["--all"]);
+    assert_eq!(code, 1, "{tested:#}");
+    assert_eq!(names(&tested["result"]["record"]["failed"]), ["orders"]);
+
+    let project = project.with("FAKE_DBT_SKIP_TEST", "");
+    let again = project.test_ok(&[]);
+    assert_eq!(again["tested"], 1, "only orders was left untested");
+    assert_eq!(names(&again["record"]["passed"]), ["orders"]);
+}
+
 /// #220: a plain run builds without tests; `--test` builds and tests.
 #[test]
 fn a_plain_run_builds_without_tests() {

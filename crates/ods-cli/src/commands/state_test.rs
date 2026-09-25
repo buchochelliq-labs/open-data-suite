@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::SnapshotId;
 use ods_sdk::contracts::executor::{
-    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, PrepareRequest,
+    ExecutionMode, ExecutionReport, ExecutionRequest, Executor, NodeExecution, PrepareRequest,
 };
 use ods_sdk::contracts::state_store::StateStore;
 use ods_state::{RecordedTests, TestResult};
@@ -171,13 +171,7 @@ impl TestReport {
         let results: Vec<TestResult> = execution
             .nodes
             .iter()
-            .map(|n| {
-                TestResult::new(
-                    n.node.clone(),
-                    n.status == ExecutionStatus::Success && n.checks_failed.is_empty(),
-                    n.completed_at,
-                )
-            })
+            .map(|n| TestResult::new(n.node.clone(), n.fully_checked(), n.completed_at))
             .collect();
         let recorded = ods_state::record_tests(
             (latest.id, &latest.snapshot),
@@ -228,7 +222,7 @@ impl Present for TestReport {
                 TestOutcome::Passed => {
                     Span::toned(format!("{} tested, all passed", self.tested), Tone::Success)
                 }
-                TestOutcome::Failed => Span::toned("tests failed", Tone::Error),
+                TestOutcome::Failed => Span::toned("tests failed or didn't run", Tone::Error),
             }],
         ));
         let mut blocks = vec![
@@ -245,21 +239,7 @@ impl Present for TestReport {
                     .map(|n| {
                         vec![
                             vec![Span::toned(display_name(&n.node), Tone::Code)],
-                            vec![if n.checks_failed.is_empty() {
-                                Span::toned("passed", Tone::Success)
-                            } else {
-                                Span::toned(
-                                    format!(
-                                        "failed: {}",
-                                        n.checks_failed
-                                            .iter()
-                                            .map(|c| display_name(c))
-                                            .collect::<Vec<_>>()
-                                            .join(", ")
-                                    ),
-                                    Tone::Error,
-                                )
-                            }],
+                            vec![test_cell(n)],
                         ]
                     })
                     .collect(),
@@ -279,5 +259,28 @@ impl Present for TestReport {
             });
         }
         ViewNode::Group(blocks)
+    }
+}
+
+/// One node's test outcome, for people.
+fn test_cell(n: &NodeExecution) -> Span {
+    let names = |checks: &[String]| {
+        checks
+            .iter()
+            .map(|c| display_name(c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if n.fully_checked() {
+        Span::toned("passed", Tone::Success)
+    } else if !n.checks_failed.is_empty() {
+        Span::toned(format!("failed: {}", names(&n.checks_failed)), Tone::Error)
+    } else if !n.checks_skipped.is_empty() {
+        Span::toned(
+            format!("didn't run: {}", names(&n.checks_skipped)),
+            Tone::Warning,
+        )
+    } else {
+        Span::toned("not tested", Tone::Warning)
     }
 }

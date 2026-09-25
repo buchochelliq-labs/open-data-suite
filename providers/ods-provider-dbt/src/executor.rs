@@ -216,39 +216,69 @@ fn is_check(id: &str) -> bool {
 
 /// dbt options ODS sets itself: passed through, they would change which nodes run, or
 /// where the results ODS reads are written.
-const RESERVED_ARGS: [&str; 16] = [
+const RESERVED_ARGS: [&str; 30] = [
+    // Which nodes run: ODS's plan decides.
     "--select",
-    "-s",
     "--models",
-    "-m",
     "--exclude",
     "--selector",
     "--resource-type",
     "--resource-types",
     "--exclude-resource-type",
     "--exclude-resource-types",
-    "--target-path",
+    "--indirect-selection",
     "--state",
     "--defer",
+    "--no-defer",
+    "--defer-state",
     "--favor-state",
+    "--no-favor-state",
+    // Where results are written and read from.
+    "--target-path",
+    "--write-json",
+    "--no-write-json",
+    // Which project and warehouse: ODS's own options, so state matches what ran.
+    "--project-dir",
+    "--profiles-dir",
+    "--profile",
+    "--target",
+    "--vars",
+    // Builds that aren't the real thing, but would be recorded as if they were.
     "--full-refresh",
+    "--no-full-refresh",
     "--empty",
+    "--no-empty",
+    "--sample",
+    "--event-time-start",
+    "--event-time-end",
 ];
 
+/// Short forms of reserved options: `--select`, `--models`, `--target`, `--full-refresh`.
+const RESERVED_SHORT: [char; 4] = ['s', 'm', 't', 'f'];
+
+/// The reserved option `arg` spells, if any. dbt's CLI (click) takes `--opt=value`, a
+/// short option with its value glued on (`-smodel_a`), and short flags bundled
+/// (`-xf`), so any short cluster that contains a reserved letter counts.
+fn reserved(arg: &str) -> Option<&'static str> {
+    if let Some(long) = arg.strip_prefix("--") {
+        let flag = long.split('=').next().unwrap_or(long);
+        return RESERVED_ARGS.iter().find(|r| r[2..] == *flag).copied();
+    }
+    let cluster = arg.strip_prefix('-')?;
+    cluster
+        .chars()
+        .any(|c| RESERVED_SHORT.contains(&c))
+        .then_some("its short options -s, -m, -t and -f")
+}
+
 fn refuse_engine_args(args: &[String]) -> Result<(), ProviderError> {
-    let reserved: Vec<&str> = args
-        .iter()
-        .filter_map(|a| {
-            let flag = a.split('=').next().unwrap_or(a);
-            RESERVED_ARGS.iter().find(|r| **r == flag).copied()
-        })
-        .collect();
+    let reserved: BTreeSet<&str> = args.iter().filter_map(|a| reserved(a)).collect();
     if reserved.is_empty() {
         Ok(())
     } else {
         Err(ProviderError::Other(format!(
-            "ODS sets {} itself; pass the matching ODS option instead (e.g. --select, --exclude, --resource-type, --full-refresh, --target-dir)",
-            reserved.join(", ")
+            "ODS sets {} itself or can't record what it would do; use the matching ODS option instead (e.g. --select, --exclude, --resource-type, --full-refresh, --target, --project-dir) or leave it out",
+            reserved.into_iter().collect::<Vec<_>>().join(", ")
         )))
     }
 }
@@ -273,6 +303,21 @@ fn checked_nodes(manifest: &Path, checks: &[String]) -> Option<BTreeMap<String, 
     )
 }
 
+/// The checks in `run` (not requested nodes) whose status matches.
+fn checks_where(
+    run: &RunResults,
+    requested: &BTreeSet<&str>,
+    status: impl Fn(RunStatus) -> bool,
+) -> Vec<String> {
+    run.results
+        .iter()
+        .filter(|r| {
+            is_check(&r.unique_id) && !requested.contains(r.unique_id.as_str()) && status(r.status)
+        })
+        .map(|r| r.unique_id.clone())
+        .collect()
+}
+
 /// Each requested node's outcome, the failed checks, and the nodes built unrequested.
 fn outcomes(
     request: &ExecutionRequest,
@@ -285,24 +330,22 @@ fn outcomes(
         .map(|r| (r.unique_id.as_str(), r))
         .collect();
     let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
-    let checks_failed: Vec<String> = run
-        .results
+    let checks_failed = checks_where(run, &requested, |s| {
+        s != RunStatus::Success && s != RunStatus::Skipped
+    });
+    let checks_skipped = checks_where(run, &requested, |s| s == RunStatus::Skipped);
+    let all_checks: Vec<String> = checks_failed
         .iter()
-        .filter(|r| {
-            is_check(&r.unique_id)
-                && !requested.contains(r.unique_id.as_str())
-                && r.status != RunStatus::Success
-                && r.status != RunStatus::Skipped
-        })
-        .map(|r| r.unique_id.clone())
+        .chain(&checks_skipped)
+        .cloned()
         .collect();
-    let covers = if checks_failed.is_empty() {
+    let covers = if all_checks.is_empty() {
         Some(BTreeMap::new())
     } else {
-        checked_nodes(manifest, &checks_failed)
+        checked_nodes(manifest, &all_checks)
     };
-    let failed_on = |node: &str| -> Vec<String> {
-        checks_failed
+    let on = |checks: &[String], node: &str| -> Vec<String> {
+        checks
             .iter()
             .filter(|c| {
                 covers.as_ref().is_none_or(|covers| {
@@ -315,6 +358,8 @@ fn outcomes(
             .cloned()
             .collect()
     };
+    let failed_on = |node: &str| on(&checks_failed, node);
+    let skipped_on = |node: &str| on(&checks_skipped, node);
     // A test run builds nothing: each node's outcome is its checks'.
     if request.mode == ExecutionMode::Test {
         let finished = run
@@ -326,12 +371,18 @@ fn outcomes(
             .iter()
             .map(|n| {
                 let failed = failed_on(&n.id);
-                let status = if failed.is_empty() {
-                    ExecutionStatus::Success
-                } else {
+                let skipped = skipped_on(&n.id);
+                // A check that didn't run tested nothing.
+                let status = if !failed.is_empty() {
                     ExecutionStatus::Failed
+                } else if !skipped.is_empty() {
+                    ExecutionStatus::Skipped
+                } else {
+                    ExecutionStatus::Success
                 };
-                NodeExecution::new(n.id.clone(), status, finished, None).with_checks_failed(failed)
+                NodeExecution::new(n.id.clone(), status, finished, None)
+                    .with_checks_failed(failed)
+                    .with_checks_skipped(skipped)
             })
             .collect();
         return (nodes, checks_failed, Vec::new());
@@ -352,7 +403,8 @@ fn outcomes(
                     .and_then(|t| Timestamp::parse(t).ok()),
                 Some(r.raw_status.clone()),
             )
-            .with_checks_failed(failed_on(&n.id)),
+            .with_checks_failed(failed_on(&n.id))
+            .with_checks_skipped(skipped_on(&n.id)),
             None => NodeExecution::new(
                 n.id.clone(),
                 ExecutionStatus::Skipped,
@@ -493,5 +545,47 @@ impl Executor for DbtExecutor {
         .with_unrequested(unrequested)
         .with_command(command);
         Ok(if ok { report } else { report.failed() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(args: &[&str]) -> bool {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        refuse_engine_args(&args).is_err()
+    }
+
+    #[test]
+    fn engine_args_that_change_what_runs_or_what_is_recorded_are_refused() {
+        for args in [
+            &["--select", "x"][..],
+            &["--select=x"],
+            &["-s", "x"],
+            &["-sx"],
+            &["-m", "x"],
+            &["--target", "prod"],
+            &["-tprod"],
+            &["-f"],
+            &["-xf"],
+            &["--vars", "{a: 1}"],
+            &["--no-write-json"],
+            &["--sample=3 days"],
+            &["--event-time-start", "2024-01-01"],
+            &["--indirect-selection=empty"],
+            &["--project-dir", "elsewhere"],
+        ] {
+            assert!(refused(args), "{args:?}");
+        }
+        for args in [
+            &["--threads", "4"][..],
+            &["-x"],
+            &["--fail-fast"],
+            &["--debug"],
+            &["--store-failures"],
+        ] {
+            assert!(!refused(args), "{args:?}");
+        }
     }
 }

@@ -191,6 +191,11 @@ pub struct NodeExecution {
     /// built, but its result isn't validated: consumers must not treat it as a
     /// success. A check on several nodes is listed on each.
     pub checks_failed: Vec<String>,
+    /// Checks on this node the engine skipped (e.g. it stopped at a first failure).
+    /// In [`ExecutionMode::Build`] the node was built but isn't fully checked; in
+    /// [`ExecutionMode::Test`] it isn't tested, and its status isn't `success`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks_skipped: Vec<String>,
 }
 
 impl NodeExecution {
@@ -207,6 +212,7 @@ impl NodeExecution {
             completed_at,
             message,
             checks_failed: Vec::new(),
+            checks_skipped: Vec::new(),
         }
     }
 
@@ -215,6 +221,22 @@ impl NodeExecution {
     pub fn with_checks_failed(mut self, checks: Vec<String>) -> Self {
         self.checks_failed = checks;
         self
+    }
+
+    /// Lists checks on this node that the engine skipped.
+    #[must_use]
+    pub fn with_checks_skipped(mut self, checks: Vec<String>) -> Self {
+        self.checks_skipped = checks;
+        self
+    }
+
+    /// Whether the node was built (or, in a test run, tested) and every check on it
+    /// ran and passed.
+    #[must_use]
+    pub fn fully_checked(&self) -> bool {
+        self.status == ExecutionStatus::Success
+            && self.checks_failed.is_empty()
+            && self.checks_skipped.is_empty()
     }
 }
 

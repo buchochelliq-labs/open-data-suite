@@ -128,11 +128,25 @@ is what the caller needs to see which nodes failed.
 ### Run and test modes (#220), contract 0.2
 - `ExecutionMode::Test` runs only the requested nodes' checks and builds nothing. A
   node's outcome is its checks': it succeeds when they all pass (or it has none).
+- `NodeExecution::checks_skipped` lists checks on a node the engine skipped (dbt's
+  `--fail-fast`, or a test whose other parent failed). A skipped check tested nothing:
+  in a test run the node is `skipped`, and after `--test` the built node is recorded
+  as built but untested, so `ods state test` picks it up.
 - `ExecutionRequest::full_refresh` and `engine_args` pass options through. An executor
   refuses engine arguments that would change which nodes run, or where results are
-  written. For dbt that means `--select`/`-s`, `--models`, `--exclude`, `--selector`,
-  `--resource-type(s)`, `--exclude-resource-type(s)`, `--target-path`, `--state`,
-  `--defer`, `--favor-state`, `--full-refresh` (use the ODS flag) and `--empty`.
+  written. It also refuses arguments that would make what ran differ from what gets
+  recorded. For dbt that means:
+  - selection: `--select`/`-s`, `--models`/`-m`, `--exclude`, `--selector`,
+    `--resource-type(s)`, `--exclude-resource-type(s)`, `--indirect-selection`,
+    `--state`, `--defer`, `--favor-state`;
+  - project and warehouse: `--project-dir`, `--profiles-dir`, `--profile`,
+    `--target`/`-t`, `--vars`. The plan was made from the ODS options;
+  - results: `--target-path`, `--(no-)write-json`;
+  - partial builds recorded as full ones: `--full-refresh`/`-f` (use the ODS flag),
+    `--empty`, `--sample`, `--event-time-start/end`.
+
+  Short options can be bundled (`-xf`), so any short cluster containing a reserved
+  letter is refused.
 - `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
   snapshots the plan needs. `--test` builds and tests, like `dbt build`.
 - `ods state test` tests what was built but not yet tested (`--all`: everything), with
