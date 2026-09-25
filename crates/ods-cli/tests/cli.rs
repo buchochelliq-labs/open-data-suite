@@ -125,7 +125,7 @@ fn ods_log_env_overrides_verbosity_flags() {
 
 #[test]
 fn not_implemented_in_json_mode_is_one_document_on_stdout() {
-    let out = ods(&["--json", "erd", "generate"]);
+    let out = ods(&["--json", "usage", "report"]);
     assert_eq!(out.status.code(), Some(3));
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     assert!(value["result"].is_null());

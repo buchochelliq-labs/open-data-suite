@@ -106,6 +106,56 @@ pub struct QueryLineage {
     pub opaque: bool,
     /// Human-readable notes on anything not fully resolved. Never contains data values.
     pub diagnostics: Vec<String>,
+    /// Column equalities the query joins on (`JOIN … ON a.x = b.y`, `USING (x)`),
+    /// traced to physical columns. Evidence for how relations relate; empty when
+    /// unknown.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub join_keys: BTreeSet<JoinKey>,
+}
+
+/// One join between two relations: `left[i] = right[i]` for every `i`. Composite
+/// joins have several columns. `left` is the relation that sorts first, so equal joins
+/// compare equal whichever way they were written.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct JoinKey {
+    /// Columns of one relation.
+    pub left: Vec<ColumnRef>,
+    /// The matching columns of the other.
+    pub right: Vec<ColumnRef>,
+}
+
+impl JoinKey {
+    /// A join from column pairs between two relations, put in canonical order. Returns
+    /// `None` if the pairs don't all join the same two distinct relations.
+    pub fn new(mut pairs: Vec<(ColumnRef, ColumnRef)>) -> Option<Self> {
+        let (first_left, first_right) = pairs.first()?.clone();
+        if first_left.relation == first_right.relation {
+            return None;
+        }
+        let swap = first_left.relation > first_right.relation;
+        for pair in &mut pairs {
+            if swap {
+                std::mem::swap(&mut pair.0, &mut pair.1);
+            }
+        }
+        let (a, b) = if swap {
+            (first_right.relation, first_left.relation)
+        } else {
+            (first_left.relation, first_right.relation)
+        };
+        if pairs
+            .iter()
+            .any(|(l, r)| l.relation != a || r.relation != b)
+        {
+            return None;
+        }
+        pairs.sort();
+        pairs.dedup();
+        let (left, right) = pairs.into_iter().unzip();
+        Some(Self { left, right })
+    }
 }
 
 impl QueryLineage {
@@ -120,6 +170,7 @@ impl QueryLineage {
             confidence: Confidence::Unknown,
             opaque: true,
             diagnostics: vec![reason.into()],
+            join_keys: BTreeSet::new(),
         }
     }
 
@@ -145,7 +196,15 @@ impl QueryLineage {
             confidence,
             opaque: false,
             diagnostics,
+            join_keys: BTreeSet::new(),
         }
+    }
+
+    /// Records the joins the query makes.
+    #[must_use]
+    pub fn with_join_keys(mut self, join_keys: BTreeSet<JoinKey>) -> Self {
+        self.join_keys = join_keys;
+        self
     }
 
     /// Records relations expanded through `*`.
@@ -226,6 +285,21 @@ mod tests {
         assert_eq!(lineage.confidence, Confidence::Inferred);
         assert!(lineage.output("id").is_some());
         assert!(!lineage.opaque);
+    }
+
+    #[test]
+    fn join_keys_are_canonical_whichever_way_round() {
+        let a = |c: &str| ColumnRef::new(rel("db.main.a"), c);
+        let b = |c: &str| ColumnRef::new(rel("db.main.b"), c);
+        let forward = JoinKey::new(vec![(a("id"), b("a_id")), (a("k"), b("k"))]).unwrap();
+        let backward = JoinKey::new(vec![(b("k"), a("k")), (b("a_id"), a("id"))]).unwrap();
+        assert_eq!(forward, backward);
+        assert_eq!(forward.left, [a("id"), a("k")]);
+        assert!(
+            JoinKey::new(vec![(a("id"), a("id"))]).is_none(),
+            "self joins say nothing"
+        );
+        assert!(JoinKey::new(vec![]).is_none());
     }
 
     #[test]

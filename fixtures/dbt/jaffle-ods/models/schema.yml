@@ -9,6 +9,65 @@ models:
       - name: lifetime_value
         description: Sum of non-returned order amounts, in dollars.
   - name: orders
+    # A contract with a column-level primary key constraint (#61, ADR-0012).
+    config:
+      contract: {enforced: true}
+    columns:
+      - name: order_id
+        data_type: integer
+        constraints:
+          - type: primary_key
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_type: integer
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('customers')
+                field: customer_id
+      - {name: order_date, data_type: date}
+      - {name: status, data_type: varchar}
+      - {name: credit_card_amount, data_type: double}
+      - {name: coupon_amount, data_type: double}
+      - {name: bank_transfer_amount, data_type: double}
+      - {name: gift_card_amount, data_type: double}
+      - {name: amount, data_type: double}
+  - name: customer_order_rank
+    # Model-level constraints: a composite primary key, and a foreign key in the
+    # `expression` syntax. (DuckDB rejects the database-qualified name dbt renders for
+    # the newer `to: ref(...)` syntax; tests cover that one on a patched manifest.)
+    config:
+      contract: {enforced: true}
+    constraints:
+      - type: primary_key
+        columns: [customer_id, order_seq]
+      - type: foreign_key
+        columns: [order_id]
+        expression: "main.orders (order_id)"
+    columns:
+      - name: order_id
+        data_type: integer
+        data_tests:
+          - unique
+          - relationships:
+              arguments:
+                to: ref('orders')
+                field: order_id
+      - {name: customer_id, data_type: integer}
+      - {name: amount, data_type: double}
+      - {name: order_seq, data_type: bigint}
+      - {name: running_amount, data_type: double}
+  - name: stg_orders
     columns:
       - name: order_id
         data_tests: [unique, not_null]
+  - name: stg_payments
+    columns:
+      - name: payment_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id

@@ -916,7 +916,9 @@ dependencies = [
  "insta",
  "ods-config",
  "ods-core",
+ "ods-erd",
  "ods-lineage",
+ "ods-mcp",
  "ods-provider-databricks",
  "ods-provider-dbt",
  "ods-provider-sqlparser",
@@ -952,6 +954,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ods-erd"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ods-lineage"
 version = "0.0.0"
 dependencies = [
@@ -963,6 +973,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "ods-mcp"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

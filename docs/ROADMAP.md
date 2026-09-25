@@ -2,11 +2,14 @@
 
 Status: **proposed** · Last updated: 2026-09-25
 
+> **Plans, not promises.** Target dates are proposals for a small team and are revisited
+> at the end of each milestone. Scope, order and dates will change.
+
 This document turns the initial backlog (issues #1–#157) into an ordered set of
 milestones and releases. It is the planning source of truth until the vision
 document (#103) lands; milestone membership is mirrored in
-[`.github/milestones.json`](../.github/milestones.json) and applied to GitHub with
-[`scripts/sync-milestones.sh`](../scripts/sync-milestones.sh).
+[`.github/milestones.json`](https://github.com/buchochelliq-labs/open-data-suite/blob/main/.github/milestones.json) and applied to GitHub with
+[`scripts/sync-milestones.sh`](https://github.com/buchochelliq-labs/open-data-suite/blob/main/scripts/sync-milestones.sh).
 
 ## 1. Product thesis (one paragraph)
 
@@ -29,7 +32,7 @@ Every milestone must preserve these; reviewers reject PRs that break them.
 4. **Explainability** — every plan/finding carries a reason chain and evidence (#21, #43).
 5. **Failed runs never replace canonical state** (#11, #24).
 6. **Machine-readable output everywhere** — human, `--json`, `--plain` (#6, #108).
-7. **Clean-room** — only public/OSS dbt contracts; no proprietary binaries (#10, #67).
+7. **Public formats only** — interoperate through public/OSS dbt contracts; no proprietary code or binaries (#10, #67).
 8. **ERD ≠ lineage** — separate domain types (#5).
 
 ## 3. Release train
@@ -102,10 +105,9 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 | **#168** | Read dbt State configs (`state:`, `freshness.build_after`, `loaded_at_*`) so existing dbt State projects work unchanged; dbt defaults (45m/`any`) only when the project already uses State, otherwise tolerance 0 |
 | #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
 
-**Why data awareness moved into M1:** dbt State (launched 2026-06-01, paid service) already
-skips models whose code and upstream data are unchanged. A v0.1.0 that only skips on
-code changes would launch behind it. See
-[`docs/research/dbt-state-comparison.md`](research/dbt-state-comparison.md).
+**Why data awareness moved into M1:** skipping only on code changes still rebuilds
+models whose upstream data hasn't changed. Skipping on unchanged code *and* data is the
+minimum useful behaviour for the State MVP.
 
 **What the #17 slice pulls in:** a Databricks SQL connection to read table history (a
 thin subset of #15) and an `env:` secret resolver for its token (a subset of #126). The
@@ -135,8 +137,8 @@ Core: #32 architecture & tool runtime · #33 LLMProvider/BYOK · #34 context pla
 First skills: #36 missing tests · #37 test review · #38 test priority · #57 usage-driven tests · #39/#40 docs · #41 contracts · #35 investigate.
 Stretch: #42–#49 review skills, #54 explore mode, #123 diagnostics.
 
-**Direction (see [`research/agent-strategy.md`](research/agent-strategy.md)):** ODS doesn't
-build another chat harness to rival dbt Wizard. The engines answer and the model proposes:
+**Direction:** ODS won't build its own chat interface. The engines answer and the model
+proposes:
 - M2 makes ODS agent-ready in the agents teams already use (#169, #173).
 - M6 adds a headless agent for CI and review whose output is a proof-carrying evidence
   bundle (#50–#52), governed by declarative policy (#9, #98).
@@ -186,7 +188,7 @@ Note: several closed copies (#76–#88) look like they were closed as duplicates
 `provider:postgres` · `type:adr` `type:feature` `type:research` `type:docs`
 `type:chore` · `priority:critical-path` · `good-first-issue`.
 
-These are defined in [`.github/labels.json`](../.github/labels.json) and created by the sync script.
+These are defined in [`.github/labels.json`](https://github.com/buchochelliq-labs/open-data-suite/blob/main/.github/labels.json) and created by the sync script.
 
 ## 7. Target crate layout (see [ADR-0001](adr/0001-monorepo-architecture-and-module-boundaries.md), #1)
 

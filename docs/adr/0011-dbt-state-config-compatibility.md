@@ -80,5 +80,5 @@ The two versions resolve the block differently:
   - file-level provenance, if users ask for it.
 
 ## References
-- dbt State configuration reference: `docs/research/sources/dbt-state-public-docs.md` §3.
+- dbt's public documentation of State configuration.
 - Fixture: `fixtures/dbt/jaffle-ods-state/README.md`.

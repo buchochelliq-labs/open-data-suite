@@ -1,0 +1,16 @@
+[package]
+name = "ods-erd"
+description = "Entity-relationship models for OpenDataSuite: keys and relationships with evidence (#60, #62, #63)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -11,13 +11,15 @@ codes).
 |---|---|
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
 | `ods state plan\|run\|explain\|…` | planned: M1 State MVP (v0.1.0) |
-| `ods erd` | planned: M3 ERD & Usage (v0.3.0) |
+| `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
+| `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
+| `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -164,10 +166,10 @@ width = 100
 
 [providers.warehouse]
 kind = "databricks"
-settings = { host = "prod.cloud.databricks.com", token = { secret = "env:DATABRICKS_TOKEN" } }
+settings = { host = "dbc-prod-example.cloud.databricks.com", token = { secret = "env:DATABRICKS_TOKEN" } }
 
 [profiles.dev.providers.warehouse.settings]
-host = "dev.cloud.databricks.com"
+host = "dbc-dev-example.cloud.databricks.com"
 
 [profiles.ci.output]
 format = "json"
@@ -207,7 +209,7 @@ format = "json"
 ```text
 key                                 value                         source
 output.width                        120                           local file ./.ods/local.toml
-providers.warehouse.settings.host   "dev.cloud.databricks.com"    profile `dev` in project file ./ods.toml
+providers.warehouse.settings.host   "dbc-dev-example.cloud.databricks.com"    profile `dev` in project file ./ods.toml
 providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file ./ods.toml
 ```
 
@@ -343,7 +345,7 @@ open pages reload. If a reload fails, the last good graph stays up and the error
 in `/api/version`.
 
 It listens on loopback by default and then only answers requests for `localhost`,
-`127.0.0.1` or `[::1]`, which stops DNS-rebinding attacks from web pages. There is no
+`127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
 authentication yet (#97): with `--host` anything other than loopback, put it behind a
 proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
 `/api/version` hides local paths and error text (they go to the server log). Responses
@@ -392,3 +394,104 @@ ods state policies --model orders --json
 Defaults: if any model configures `state:` or `build_after`, the project relies on dbt
 State, so models without settings get dbt State's defaults (`45m`, `any`). Otherwise
 ODS rebuilds on any new upstream data (tolerance `0`).
+
+## Entity-relationship diagrams
+
+`ods erd generate` draws the keys and relationships your project already asserts
+([ADR-0012](adr/0012-erd-from-tests-and-constraints.md)):
+- a model's `unique_key` config (incremental models, snapshots), including a list of
+  columns, is a declared primary key;
+- `unique` + `not_null` tests make a primary key (`unique` alone is a nullable unique key);
+- `dbt_utils.unique_combination_of_columns` makes a composite key. When nothing else
+  identifies the rows, the smallest such combination is the primary key, even without
+  `not_null` tests (most composite grains are never tested that way);
+- `relationships` tests make references;
+- contract constraints are declared keys and references: `primary_key` and `unique`
+  (column-level, or model-level over several columns), `not_null`, and `foreign_key`
+  in either syntax, `to: ref('orders')` + `to_columns`, or
+  `expression: "schema.orders (order_id)"` (matched against the warehouse relation;
+  an unknown or ambiguous table is a diagnostic);
+- **joins in the project's own SQL** make references too, so projects without
+  `relationships` tests still get a diagram. `a.x = b.y and a.z = b.w` becomes one
+  composite relationship. Its direction and cardinality come from tested or declared
+  keys; when neither side is one, the cardinality is *unknown* (`}o--o{`), never guessed.
+
+dbt 2.0's Parquet Information Schema doesn't record column-level constraints (model-level
+ones are there). If your keys are column-level constraints, read dbt 2.0's
+`manifest.json` instead (`--artifacts json`).
+
+Tests with a `where` filter say nothing about the whole table, so they are skipped with a
+diagnostic. Every key and relationship says whether it is **declared**, **tested**,
+**joined** or **inferred**.
+
+```sh
+dbt parse && dbt docs generate            # docs generate adds column types
+ods erd generate                          # Mermaid erDiagram on stdout
+ods erd generate --select orders --depth 2 --output-file erd.mmd
+ods erd generate --format dot | dot -Tsvg > erd.svg
+ods erd generate --infer --format json    # also guess from naming, labelled inferred
+```
+
+| Flag | Meaning |
+|---|---|
+| `--format` | `mermaid` (default), `dot` or `json` |
+| `--select MODEL` | only this model and entities within `--depth` relationships (default 1); repeatable |
+| `--dialect` | SQL dialect used to read joins (default: the project's adapter) |
+| `--infer` | also propose keys (`id`, `<entity>_id`) and references (`<x>_id`) from naming; ambiguous names are reported, not guessed |
+| `--all` | include entities without relationships (hidden by default) |
+| `--output-file PATH` | write the diagram and print a summary instead |
+
+## MCP server for AI agents
+
+`ods mcp` serves the ODS engines to AI agents over the Model Context Protocol, on stdio
+([ADR-0010](adr/0010-mcp-server.md)). The server is read-only and local:
+- it needs no login, makes no outbound network connections and collects no telemetry;
+- no tool writes files, runs dbt or queries a warehouse;
+- every tool is annotated read-only; whether to auto-approve it is up to you and your
+  client.
+
+```sh
+claude mcp add ods -- ods mcp --target-dir target          # Claude Code
+```
+
+```json
+{ "mcpServers": { "ods": { "command": "ods", "args": ["mcp", "--target-dir", "target"] } } }
+```
+
+The JSON form works for Cursor (`.cursor/mcp.json`), VS Code (`.vscode/mcp.json`, under
+`servers`) and other MCP clients.
+
+| Tool | Answers |
+|---|---|
+| `ods_project_summary` | dbt version, counts, lineage coverage, whether dbt State is used |
+| `ods_search` | models and columns by name |
+| `ods_get_node` | where each column of a model comes from |
+| `ods_lineage` | the column-level graph around models or columns (JSON or Mermaid) |
+| `ods_impact` | which models must run for column changes or against another build, and which can be skipped |
+| `ods_erd` | keys and relationships (Mermaid, JSON or DOT) |
+| `ods_test_gaps` | tests worth adding, with evidence and YAML to paste |
+| `ods_list_opaque` | models whose lineage is unknown, and why |
+| `ods_state_policies` | freshness policies from dbt State configs |
+| `ods_compare_observed` | static lineage against Unity Catalog's recorded lineage |
+| `ods_find_data` | for data users: tables and columns by meaning (names and descriptions), with each table's grain |
+| `ods_describe_entity` | a table explained: what one row is, columns, what it joins to and how |
+| `ods_plan_query` | a join path and starting SQL for a question over several tables, with warnings where a join repeats rows |
+
+The last three are for people who use the data but don't know the dbt project. Ask
+"which customers spent the most last month?" and the agent finds the tables, explains
+their grain, and writes SQL from a join plan built only from known keys and
+relationships (all columns of a composite key, never invented columns). Trusted joins
+(tests, constraints) are preferred over joins the project merely makes; guessed joins are
+used only with `infer: true`.
+
+It also serves:
+- resources `ods://project/summary`, `ods://erd`, `ods://lineage/graph` and
+  `ods://node/{id}`;
+- prompts `assess_change_impact`, `review_breaking_changes`, `add_missing_tests` and
+  `answer_data_question`.
+
+Artifacts are re-read on every call, and a cache means only changed models are
+re-analyzed. So run `dbt compile` after editing, and the next answer is current. The
+server takes `ods lineage`'s options: `--artifacts`, `--dialect`, `--observed`,
+`--trust-observed`. A tool's result is the same JSON as the matching command's `--json`
+output.

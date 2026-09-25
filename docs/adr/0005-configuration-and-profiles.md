@@ -157,8 +157,8 @@ immediately rather than when a feature first reads it.
 - **Positive:**
   - Precedence is one ordered overwrite with tests for every layer.
   - `explain` is exact, because provenance is recorded, not reconstructed.
-  - Plaintext secrets are impossible to configure, which removes a whole class of
-    leaks from state, logs and CI output.
+  - Plaintext values under credential-like keys are rejected, which reduces the risk
+    of leaking secrets into state, logs and CI output.
 - **Negative / trade-offs:**
   - Arrays are replaced, never merged: a local file can't append to a project-level list.
   - The credential-name heuristic can reject an unusual non-secret key such as

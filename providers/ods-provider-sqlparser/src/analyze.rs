@@ -12,14 +12,14 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, RelationName};
-use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage, SchemaLookup};
+use ods_sdk::contracts::sql_lineage::{JoinKey, OutputColumn, QueryLineage, SchemaLookup};
 use sha2::{Digest, Sha256};
 use sqlparser::ast::{
-    Distinct, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentClause, FunctionArguments,
-    GroupByExpr, Ident, JoinConstraint, JoinOperator, NamedWindowExpr, OrderByKind, Query, Select,
-    SelectItem, SelectItemQualifiedWildcardKind, SetExpr, SetQuantifier, Statement, TableFactor,
-    TableWithJoins, WildcardAdditionalOptions, WindowSpec, WindowType, visit_expressions,
-    visit_expressions_mut,
+    BinaryOperator, Distinct, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentClause,
+    FunctionArguments, GroupByExpr, Ident, JoinConstraint, JoinOperator, NamedWindowExpr,
+    OrderByKind, Query, Select, SelectItem, SelectItemQualifiedWildcardKind, SetExpr,
+    SetQuantifier, Statement, TableFactor, TableWithJoins, WildcardAdditionalOptions, WindowSpec,
+    WindowType, visit_expressions, visit_expressions_mut,
 };
 
 use crate::dialect::SqlDialect;
@@ -166,6 +166,8 @@ impl Acc {
 struct Analyzer<'s> {
     dialect: SqlDialect,
     schema: &'s dyn SchemaLookup,
+    /// Joins found at any query level (CTEs and subqueries included).
+    joins: std::cell::RefCell<BTreeSet<JoinKey>>,
 }
 
 /// Niladic keywords some dialects parse as identifiers.
@@ -259,7 +261,11 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
             return QueryLineage::opaque(BTreeSet::new(), "expected exactly one SQL statement");
         }
     };
-    let analyzer = Analyzer { dialect, schema };
+    let analyzer = Analyzer {
+        dialect,
+        schema,
+        joins: std::cell::RefCell::default(),
+    };
     match analyzer.query(query, &BTreeMap::new(), None) {
         Ok(out) => {
             let outputs = out
@@ -275,6 +281,7 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
                 out.diagnostics,
             )
             .with_wildcards(out.wildcards)
+            .with_join_keys(analyzer.joins.take())
         }
         Err(Opaque(reason)) => {
             let reads = analyzer.relations_in(query);
@@ -716,6 +723,7 @@ impl Analyzer<'_> {
                 Some(JoinConstraint::On(expr)) => {
                     self.rows_from(expr, IndirectKind::Join, scope, out, rows)?;
                     row_parts.push(format!("on {}", self.canon(expr, scope)));
+                    self.record_join_keys(expr, scope);
                 }
                 Some(JoinConstraint::Using(names)) => {
                     for name in names {
@@ -734,6 +742,7 @@ impl Analyzer<'_> {
                         }
                         row_parts.push(format!("using {column}"));
                     }
+                    self.record_using_keys(names, scope);
                 }
                 Some(JoinConstraint::Natural) => {
                     return Err(Opaque("NATURAL joins are not supported".into()));
@@ -742,6 +751,112 @@ impl Analyzer<'_> {
             }
         }
         Ok(())
+    }
+
+    /// The physical column an expression is, if it is one: a column reference (possibly
+    /// parenthesised or cast) that traces, unchanged, to exactly one physical column.
+    fn key_column(&self, expr: &Expr, scope: &Scope<'_>) -> Option<ColumnRef> {
+        let resolved = match expr {
+            Expr::Nested(inner) | Expr::Cast { expr: inner, .. } => {
+                return self.key_column(inner, scope);
+            }
+            Expr::Identifier(ident) => self.resolve(std::slice::from_ref(ident), scope)?,
+            Expr::CompoundIdentifier(parts) => self.resolve(parts, scope)?,
+            _ => return None,
+        };
+        Self::identity_column(resolved)
+    }
+
+    fn identity_column(resolved: Resolved) -> Option<ColumnRef> {
+        let mut edges = resolved.edges.into_iter();
+        match (edges.next(), edges.next()) {
+            (Some((column, EdgeKind::Direct(DirectKind::Identity))), None) => Some(column),
+            _ => None,
+        }
+    }
+
+    /// Records `a.x = b.y [AND …]` equalities between two relations as join keys.
+    /// Anything else in the condition (other operators, expressions, `OR`) is ignored:
+    /// the join still shapes rows, but those parts say nothing about keys.
+    fn record_join_keys(&self, expr: &Expr, scope: &Scope<'_>) {
+        fn conjuncts<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match expr {
+                Expr::Nested(inner) => conjuncts(inner, out),
+                Expr::BinaryOp {
+                    left,
+                    op: BinaryOperator::And,
+                    right,
+                } => {
+                    conjuncts(left, out);
+                    conjuncts(right, out);
+                }
+                other => out.push(other),
+            }
+        }
+        let mut parts = Vec::new();
+        conjuncts(expr, &mut parts);
+        let mut pairs: BTreeMap<(RelationName, RelationName), Vec<(ColumnRef, ColumnRef)>> =
+            BTreeMap::new();
+        for part in parts {
+            let Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right,
+            } = part
+            else {
+                continue;
+            };
+            let (Some(a), Some(b)) = (self.key_column(left, scope), self.key_column(right, scope))
+            else {
+                continue;
+            };
+            if a.relation == b.relation {
+                continue;
+            }
+            let key = if a.relation < b.relation {
+                (a.relation.clone(), b.relation.clone())
+            } else {
+                (b.relation.clone(), a.relation.clone())
+            };
+            pairs.entry(key).or_default().push((a, b));
+        }
+        let mut joins = self.joins.borrow_mut();
+        joins.extend(pairs.into_values().filter_map(JoinKey::new));
+    }
+
+    /// `USING (x, …)` joins the newest source to the one earlier source that has `x`.
+    fn record_using_keys(&self, names: &[sqlparser::ast::ObjectName], scope: &Scope<'_>) {
+        let Some((joined, earlier)) = scope.sources.split_last() else {
+            return;
+        };
+        let mut pairs: BTreeMap<(RelationName, RelationName), Vec<(ColumnRef, ColumnRef)>> =
+            BTreeMap::new();
+        for name in names {
+            let column = self
+                .dialect
+                .object_name(name)
+                .last()
+                .cloned()
+                .unwrap_or_default();
+            let Some(right) = Self::source_column(joined, &column).and_then(Self::identity_column)
+            else {
+                continue;
+            };
+            let lefts: Vec<ColumnRef> = earlier
+                .iter()
+                .filter_map(|s| Self::source_column(s, &column).and_then(Self::identity_column))
+                .collect();
+            if let [left] = lefts.as_slice()
+                && left.relation != right.relation
+            {
+                pairs
+                    .entry((left.relation.clone(), right.relation.clone()))
+                    .or_default()
+                    .push((left.clone(), right.clone()));
+            }
+        }
+        let mut joins = self.joins.borrow_mut();
+        joins.extend(pairs.into_values().filter_map(JoinKey::new));
     }
 
     fn table_factor(
