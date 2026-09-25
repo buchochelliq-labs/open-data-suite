@@ -51,6 +51,8 @@ fn serve(target: &Path, extra: &[&str]) -> Server {
         .current_dir(&home)
         .env_clear()
         .env("XDG_CONFIG_HOME", &home)
+        // Windows sockets need `SystemRoot`; without it, binding fails.
+        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -63,7 +65,10 @@ fn serve(target: &Path, extra: &[&str]) -> Server {
         .expect("ods serve printed nothing")
         .unwrap();
     assert_eq!(envelope["command"], "serve", "{envelope}");
-    let url = envelope["result"]["url"].as_str().unwrap().to_owned();
+    let url = envelope["result"]["url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ods serve didn't start: {envelope}"))
+        .to_owned();
     Server { child, url, home }
 }
 
