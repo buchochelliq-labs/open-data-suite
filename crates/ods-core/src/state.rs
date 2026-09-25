@@ -507,6 +507,34 @@ pub struct PlanEntry {
     pub depth: u32,
 }
 
+impl PlanEntry {
+    /// An entry; the evidence, dependency and fingerprint fields start empty.
+    pub fn new(
+        node: impl Into<String>,
+        name: impl Into<String>,
+        kind: impl Into<String>,
+        action: PlanAction,
+        reasons: Vec<Reason>,
+        policy: FreshnessPolicy,
+        depth: u32,
+    ) -> Self {
+        Self {
+            node: node.into(),
+            name: name.into(),
+            kind: kind.into(),
+            action,
+            reasons,
+            evidence: Vec::new(),
+            depends_on: Vec::new(),
+            before: None,
+            after: None,
+            changed_components: Vec::new(),
+            policy,
+            depth,
+        }
+    }
+}
+
 /// What to build and what to reuse (#20).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

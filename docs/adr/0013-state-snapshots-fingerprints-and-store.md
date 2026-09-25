@@ -132,15 +132,18 @@ graph LR
 4. Fingerprint differs: BUILD, naming the changed components.
 5. A parent will be built **because its code changed**: BUILD. Its output schema may have
    changed, so lag tolerance does not apply.
-6. The node's policy can't be honoured (`FreshnessPolicy::allows_reuse` is false):
+6. A parent ODS doesn't know (neither a node nor a source): BUILD.
+7. The node's policy can't be honoured (`FreshnessPolicy::allows_reuse` is false):
    BUILD.
-7. New upstream data, either a source whose version moved or a parent built for data:
+8. Missing data evidence for any source it reads, now or when it was last built
+   (anything below `semantic`): BUILD.
+9. New upstream data: a source whose version moved, a parent being built for data,
+   or a parent rebuilt after this node was (e.g. this node failed in that run).
    - `require_fresh_data_from: all` with some parents unchanged: REUSE, stating the
      quorum;
    - within `lag_tolerance` of the node's last build: REUSE, stating when it becomes due;
    - otherwise: BUILD.
-8. Missing data evidence for any source it reads: BUILD.
-9. Otherwise: REUSE, "code and inputs unchanged since run R".
+10. Otherwise: REUSE, "code and inputs unchanged since run R".
 
 - Entries are ordered by DAG depth, then by id.
 - A cycle is an error, not a plan.
