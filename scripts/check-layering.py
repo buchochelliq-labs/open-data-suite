@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Enforce the ODS crate dependency direction (ADR-0001).
 
-    ods-core  <-  foundation  <-  ods-sdk  <-  {modules, providers}  <-  ods-cli
+    ods-core  <-  foundation  <-  ods-sdk  <-  {modules, providers}  <-  edge  <-  ods-cli
 
 Each workspace crate gets a layer; a crate may depend only on crates in a strictly
 lower layer, with two refinements:
   * modules may depend on other modules only when listed in ALLOWED_MODULE_EDGES;
-  * providers may not depend on modules (they implement SDK contracts only).
+  * providers may not depend on modules (they implement SDK contracts only);
+  * edge crates (presentation/servers such as ods-web, ADR-0009) may use modules but not
+    providers: only binaries wire concrete providers in.
 Dev-dependencies are exempt so tests can use fakes/fixtures from any layer.
 Unknown crate names fail the check so every new crate is placed deliberately.
 
@@ -17,7 +19,7 @@ import json
 import subprocess
 import sys
 
-CORE, FOUNDATION, SDK, MODULE, PROVIDER, BINARY = range(6)
+CORE, FOUNDATION, SDK, MODULE, PROVIDER, EDGE, BINARY = range(7)
 
 EXACT = {
     "ods-core": CORE,
@@ -25,6 +27,7 @@ EXACT = {
     "ods-config": FOUNDATION,
     "ods-policy": FOUNDATION,
     "ods-sdk": SDK,
+    "ods-web": EDGE,
     "ods-cli": BINARY,
 }
 MODULES = {"ods-lineage", "ods-state", "ods-erd", "ods-usage", "ods-ci", "ods-lsp", "ods-agent", "ods-mesh", "ods-synthetic"}
@@ -36,6 +39,7 @@ ALLOWED_MODULE_EDGES: set[tuple[str, str]] = set()
 # Third-party crate-name prefix -> workspace crates allowed to depend on it (any kind).
 CONFINED_EXTERNAL = {
     "rs-rich": {"ods-cli"},  # ADR-0003: presentation stays at the CLI edge
+    "axum": {"ods-web"},  # ADR-0009: the HTTP server lives in one crate
 }
 
 
@@ -71,6 +75,8 @@ def main() -> int:
                 continue  # reported on its own entry
             if src == PROVIDER:
                 ok = dst <= SDK
+            elif src == EDGE:
+                ok = dst <= MODULE
             elif src == dst == MODULE:
                 ok = (name, target) in ALLOWED_MODULE_EDGES
             else:

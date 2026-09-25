@@ -10,26 +10,26 @@
     {
       "title": "M1 State MVP (v0.1.0)",
       "due_on": "2026-12-18T00:00:00Z",
-      "description": "First public release: local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor.",
-      "issues": [11, 12, 13, 14, 18, 20, 22, 21, 23, 25, 24, 26, 16, 99]
+      "description": "First public release: local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor; code- and data-aware (dbt source freshness, Delta table versions, staleness policies).",
+      "issues": [11, 12, 13, 14, 18, 20, 22, 21, 23, 25, 24, 26, 16, 19, 17, 99, 168, 73, 74]
     },
     {
       "title": "M2 Databricks & data-aware State (v0.2.0)",
       "due_on": "2027-02-26T00:00:00Z",
-      "description": "Unity Catalog/Delta providers, freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets.",
-      "issues": [15, 17, 19, 29, 30, 27, 28, 126, 31]
+      "description": "Unity Catalog metadata, full Delta change providers, remaining freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets.",
+      "issues": [15, 29, 30, 27, 28, 126, 31, 169, 173, 170]
     },
     {
       "title": "M3 ERD & Usage (v0.3.0)",
       "due_on": "2027-04-30T00:00:00Z",
       "description": "Provider-neutral ERD with dbt provider and renderers; usage intelligence with Unity Catalog provider.",
-      "issues": [60, 61, 62, 63, 65, 55, 56, 59, 66, 64]
+      "issues": [172, 60, 61, 62, 63, 65, 55, 56, 59, 66, 64]
     },
     {
       "title": "M4 ODS CI (v0.4.0)",
       "due_on": "2027-06-30T00:00:00Z",
       "description": "SQL parser, column lineage, change-impact engine, selective CI, PR reports, data diff.",
-      "issues": [73, 74, 75, 84, 85, 58, 109, 110]
+      "issues": [75, 84, 85, 58, 109, 110, 171]
     },
     {
       "title": "M5 LSP & VS Code (v0.5.0)",

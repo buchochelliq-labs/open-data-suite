@@ -1,6 +1,6 @@
 # OpenDataSuite (ODS) — Roadmap, Milestones & Release Plan
 
-Status: **proposed** · Last updated: 2026-09-24
+Status: **proposed** · Last updated: 2026-09-25
 
 This document turns the initial backlog (issues #1–#157) into an ordered set of
 milestones and releases. It is the planning source of truth until the vision
@@ -37,8 +37,8 @@ Every milestone must preserve these; reviewers reject PRs that break them.
 | Release | Theme | Milestone(s) | Target | Exit criteria (summary) |
 |---|---|---|---|---|
 | **v0.0.x** (internal) | Foundations | M0 | 2026-10-30 | Workspace builds in CI; ADRs for architecture, Rust stack, CLI presentation; plugin SDK + semantic core compile with fake providers; demo dbt fixture project. |
-| **v0.1.0** — *first public release* | **ODS State MVP (local)** | M1 | **2026-12-18** | `ods state plan / run / explain / diff / history` on a dbt project using `manifest.json`, SQLite state, exact-selection dbt executor; failed runs leave prior state authoritative; JSON output; installable binary for Linux/macOS/Windows. |
-| v0.2.0 | Databricks & data-aware State | M2 | 2027-02-26 | Unity Catalog metadata + Delta change providers; freshness/trigger policies; REUSE/DEFER/CLONE strategies; PostgreSQL store with locking; secrets providers. |
+| **v0.1.0** — *first public release* | **ODS State MVP (code- and data-aware)** | M1 | **2026-12-18** | `ods state plan / run / explain / diff / history` on a dbt project using `manifest.json`, SQLite state, exact-selection dbt executor; skips models whose code **and upstream data** are unchanged (dbt source freshness + Delta table versions), with per-node staleness tolerance; failed runs leave prior state authoritative; JSON output; installable binary for Linux/macOS/Windows. |
+| v0.2.0 | Databricks depth & reuse strategies | M2 | 2027-02-26 | Unity Catalog metadata; full Delta change providers (CDF, watermarks, partitions); remaining freshness/trigger policies incl. WAIT; REUSE/DEFER/CLONE strategies; PostgreSQL store with locking; secrets providers. |
 | v0.3.0 | Schema intelligence: ERD + Usage | M3 | 2027-04-30 | `ods erd generate/inspect/validate` (dbt provider, Mermaid/DOT/PlantUML); `ods usage …` backed by Unity Catalog. |
 | v0.4.0 | ODS CI | M4 | 2027-06-30 | Change-impact engine, selective CI planner, PR report (Markdown + JSON), usage-aware risk; SQL parser + column lineage. |
 | v0.5.0 | Developer experience | M5 | 2027-08-31 | Clean-room LSP (index, completion, diagnostics, navigation, rename) + VS Code extension. |
@@ -95,19 +95,37 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 | **#25** | SQLite StateStore |
 | **#24** | `ods state run` end-to-end MVP flow |
 | #26 | Filesystem JSON StateStore (debugging) |
-| #16 | Source/upstream change detection contract (conservative, no warehouse yet) |
+| **#16** | Source/upstream change detection contract; includes dbt `sources.json` freshness (`max_loaded_at`) as change evidence for any warehouse |
+| **#19** *(M1 slice)* | Freshness policies, minimal: `AnyDependencyChanged` (default), `MaxStaleness` (per-node/group tolerance, **default 0**: rebuild on any new data) and forced rebuild; the policy used appears in `explain` |
+| **#17** *(M1 slice)* | Delta change detection, minimal: latest table version + commit timestamp for sources, behind the `relation_versions` capability |
 | #99 | Plugin conformance test suite (State-related contracts) |
+| **#168** | Read dbt State configs (`state:`, `freshness.build_after`, `loaded_at_*`) so existing dbt State projects work unchanged; dbt defaults (45m/`any`) only when the project already uses State, otherwise tolerance 0 |
+| #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
 
-Out of scope for v0.1.0: warehouse metadata, clone/defer, distributed locking, server mode.
+**Why data awareness moved into M1:** dbt State (launched 2026-06-01, paid service) already
+skips models whose code and upstream data are unchanged. A v0.1.0 that only skips on
+code changes would launch behind it. See
+[`docs/research/dbt-state-comparison.md`](research/dbt-state-comparison.md).
+
+**What the #17 slice pulls in:** a Databricks SQL connection to read table history (a
+thin subset of #15) and an `env:` secret resolver for its token (a subset of #126). The
+full #15/#126 stay in M2.
+
+**Staleness is propagated through views:** a view is only as fresh as its inputs, so
+#18 carries upstream freshness through view-materialised models.
+
+Out of scope for v0.1.0: Unity Catalog metadata beyond table history, Change Data Feed,
+watermark/partition triggers, WAIT decisions, clone/defer, distributed locking, server mode.
+The M1 slices keep #17 and #19 open; their remainder ships in M2.
 
 ### M2 — Databricks & data-aware State (→ v0.2.0)
-| #15 Databricks/UC metadata provider · #17 Delta change providers · #19 freshness & trigger policies · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) |
+| #15 Databricks/UC metadata provider · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) |
 
 ### M3 — ERD & Usage (→ v0.3.0)
-| #60 ERD domain model · #61 dbt ERD provider · #62 relationship inference · #63 render/export · #65 `ods erd` CLI · #55 Usage domain & UsageProvider · #56 Unity Catalog usage provider · #59 `ods usage` CLI · #66 warehouse-native ERD providers (stretch) · #64 interactive ERD web view (stretch) |
+| #172 ODS metadata index (queryable lineage/State/ERD/usage) · #60 ERD domain model · #61 dbt ERD provider · #62 relationship inference · #63 render/export · #65 `ods erd` CLI · #55 Usage domain & UsageProvider · #56 Unity Catalog usage provider · #59 `ods usage` CLI · #66 warehouse-native ERD providers (stretch) · #64 interactive ERD web view (stretch) |
 
 ### M4 — ODS CI (→ v0.4.0)
-| #73 dialect-aware SQL parser/AST · #74 column lineage · #75 change-impact engine · #84 selective CI planner · #85 PR report/check output · #58 usage in CI risk · #109 data diff · #110 data diff in CI |
+| #75 change-impact engine (on the column lineage delivered in M1 preview) · #171 column lineage for Python models · #84 selective CI planner · #85 PR report/check output · #58 usage in CI risk · #109 data diff · #110 data diff in CI |
 
 ### M5 — LSP & VS Code (→ v0.5.0)
 | #67 clean-room LSP architecture · #68 indexing · #69 completion · #70 diagnostics · #71 navigation/hover · #72 semantic rename · #107 VS Code extension · #116 SQL scratch/REPL |
@@ -116,6 +134,14 @@ Out of scope for v0.1.0: warehouse metadata, clone/defer, distributed locking, s
 Core: #32 architecture & tool runtime · #33 LLMProvider/BYOK · #34 context planner · #9 policy & approval (pulled forward if State needs it) · #50 patch engine · #51 self-validation · #52 Git-aware review · #53 skills SDK.
 First skills: #36 missing tests · #37 test review · #38 test priority · #57 usage-driven tests · #39/#40 docs · #41 contracts · #35 investigate.
 Stretch: #42–#49 review skills, #54 explore mode, #123 diagnostics.
+
+**Direction (see [`research/agent-strategy.md`](research/agent-strategy.md)):** ODS doesn't
+build another chat harness to rival dbt Wizard. The engines answer and the model proposes:
+- M2 makes ODS agent-ready in the agents teams already use (#169, #173).
+- M6 adds a headless agent for CI and review whose output is a proof-carrying evidence
+  bundle (#50–#52), governed by declarative policy (#9, #98).
+- The working product name is **ODS Steward** (`ods steward` as an alias of `ods agent`),
+  pending the #104 name check.
 
 ### M7 — Platform: Mesh & Server (unscheduled)
 #86 Mesh resolver · #89 registry/contracts · #90 change propagation · #91 cross-platform mapping · #95 server mode · #96 REST API · #97 RBAC/OIDC · #98 audit log · #106 language bindings · #102 docs site · #124 multi-repo discovery.

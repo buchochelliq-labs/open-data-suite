@@ -7,10 +7,12 @@
 
 mod clock;
 mod lock;
+mod observed_lineage;
 mod sql_lineage;
 
 pub use clock::FakeClock;
 pub use lock::{FakeLockFactory, FakeLockProvider};
+pub use observed_lineage::FakeObservedLineageSource;
 pub use sql_lineage::FakeSqlLineageAnalyzer;
 
 /// The `kind` fakes are registered under in configuration.

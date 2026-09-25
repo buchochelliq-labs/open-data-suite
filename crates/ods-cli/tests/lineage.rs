@@ -334,17 +334,51 @@ fn view_writes_a_self_contained_offline_page() {
     let page = fs::read_to_string(&file).unwrap();
     assert!(!page.contains("/*__ODS_GRAPH__*/"), "graph embedded");
     assert!(page.contains("\"schema_version\":1"));
+    assert!(
+        page.contains(r#"<meta name="ods-source" content="embedded">"#),
+        "the page uses its embedded graph and never fetches"
+    );
     // Offline: no external scripts, styles, fonts or requests.
     for external in [
         "<script src",
         "<link",
         "@import",
-        "fetch(",
         "XMLHttpRequest",
         "url(http",
     ] {
         assert!(!page.contains(external), "page references `{external}`");
     }
+    let urls: Vec<&str> = page
+        .match_indices("http")
+        .map(|(i, _)| &page[i..(i + 30).min(page.len())])
+        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        .collect();
+    assert!(
+        urls.iter()
+            .all(|u| u.starts_with("http://www.w3.org/2000/svg")),
+        "only the SVG namespace, no remote URLs: {urls:?}"
+    );
+}
+
+#[test]
+fn view_can_write_a_static_site_to_host() {
+    let out_dir = Temp::new();
+    let site = out_dir.0.join("site");
+    let target = fixture();
+    let result = json(&[
+        "lineage",
+        "view",
+        "--target-dir",
+        target.to_str().unwrap(),
+        "--site",
+        site.to_str().unwrap(),
+    ]);
+    assert_eq!(result["format"], "site");
+    let index = fs::read_to_string(site.join("index.html")).unwrap();
+    assert!(index.contains(r#"<meta name="ods-source" content="graph.json">"#));
+    let graph: Value = serde_json::from_slice(&fs::read(site.join("graph.json")).unwrap()).unwrap();
+    assert_eq!(graph["schema_version"], 1);
+    assert_eq!(graph["nodes"].as_array().unwrap().len(), result["nodes"]);
 }
 
 #[test]

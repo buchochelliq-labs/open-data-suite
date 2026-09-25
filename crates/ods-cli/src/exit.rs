@@ -75,6 +75,8 @@ pub mod codes {
     pub const LINEAGE_BUILD: &str = "ODS-E0202";
     /// A model, column, dialect or change named on the command line doesn't exist.
     pub const LINEAGE_TARGET: &str = "ODS-E0203";
+    /// `ods serve` can't bind its address or stopped with an I/O error.
+    pub const SERVE: &str = "ODS-E0301";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

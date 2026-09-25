@@ -17,15 +17,21 @@ ods-core = { path = "crates/ods-core" }
 ods-config = { path = "crates/ods-config" }
 ods-sdk = { path = "crates/ods-sdk" }
 ods-lineage = { path = "crates/ods-lineage" }
+ods-web = { path = "crates/ods-web" }
+ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
+# HTTP server for the hostable explorer; confined to ods-web (ADR-0009).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+# Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
+csv = "1"
 insta = "1"
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
 # compression codecs dbt may use.
