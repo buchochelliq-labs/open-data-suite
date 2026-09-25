@@ -31,26 +31,42 @@ fn type_name(t: ResourceType) -> Option<&'static str> {
     }
 }
 
-/// dbt's `is_selected_node` (without wildcards, which are never emitted): whether
-/// `fqn:<selector>` selects a node with this fqn.
-fn fqn_selects(fqn: &[String], versioned: bool, selector: &str) -> bool {
+/// dbt's `is_selected_node` (without wildcards, which are never emitted).
+fn is_selected_node(fqn: &[String], versioned: bool, selector: &str) -> bool {
     let parts: Vec<&str> = selector.split('.').collect();
     if versioned {
-        if fqn.len() >= 2 && fqn[fqn.len() - 2] == selector {
+        // A versioned node's fqn ends in its name and version; anything shorter is
+        // evidence ODS can't reason about, so it counts as reached.
+        if fqn.len() < 2 || fqn[fqn.len() - 2] == selector {
             return true;
         }
-        if fqn.len() >= 2 && parts.len() >= 2 {
-            let node_tail = fqn[fqn.len() - 2..].join("_");
-            let sel_tail = parts[parts.len() - 2..].join("_");
-            if node_tail == sel_tail {
-                return true;
-            }
+        let node_tail = fqn[fqn.len() - 2..].join("_");
+        let sel_tail = parts[parts.len().saturating_sub(2)..].join("_");
+        if node_tail == sel_tail {
+            return true;
         }
     } else if fqn.last().is_some_and(|leaf| leaf == selector) {
         return true;
     }
     let flat: Vec<&str> = fqn.iter().flat_map(|s| s.split('.')).collect();
     flat.len() >= parts.len() && flat.iter().zip(&parts).all(|(a, b)| a == b)
+}
+
+/// Whether `fqn:<selector>` selects a node with this fqn. Like dbt's
+/// `QualifiedNameSelectorMethod`, it also matches the fqn without its package ("across
+/// packages"): `fqn:stripe` reaches the root project's `models/stripe/` folder. A node
+/// without an fqn counts as reached (AGENTS rule 3).
+fn fqn_selects(fqn: &[String], versioned: bool, selector: &str) -> bool {
+    fqn.is_empty()
+        || is_selected_node(fqn, versioned, selector)
+        || (fqn.len() > 1 && is_selected_node(&fqn[1..], versioned, selector))
+}
+
+/// Whether a selector value is taken literally by dbt: no wildcards, no `.` inside a
+/// segment, and nothing its selector syntax splits on or reads as an operator
+/// (` ` separates selectors, `,` intersects, `+`/`@` select relatives, `:` a method).
+fn is_literal(value: &str) -> bool {
+    !value.contains(WILDCARDS) && !value.contains([' ', ',', '+', '@', ':', '\t', '\n'])
 }
 
 /// A node a selector could reach: its id, type and fqn.
@@ -112,12 +128,7 @@ pub fn exact_selectors(manifest: &Manifest, requested: &[String]) -> Result<Vec<
             problems.push(format!("{id} isn't a model, seed or snapshot"));
             continue;
         };
-        if node.fqn.is_empty()
-            || node
-                .fqn
-                .iter()
-                .any(|p| p.contains(WILDCARDS) || p.contains('.'))
-        {
+        if node.fqn.is_empty() || node.fqn.iter().any(|p| p.contains('.') || !is_literal(p)) {
             problems.push(format!("{id} has no fqn that can be selected safely"));
             continue;
         }
@@ -137,10 +148,7 @@ pub fn exact_selectors(manifest: &Manifest, requested: &[String]) -> Result<Vec<
         }
         // The full fqn also reaches other nodes (e.g. a folder named like the node):
         // narrow it to the node's own file.
-        let own_file = node
-            .original_file_path
-            .as_deref()
-            .filter(|p| !p.contains(WILDCARDS) && !p.contains(',') && !p.contains(' '));
+        let own_file = node.original_file_path.as_deref().filter(|p| is_literal(p));
         let package = id.split('.').nth(1);
         match own_file {
             Some(path) if package.is_some() && package == root_package => {
@@ -190,5 +198,15 @@ mod tests {
         assert!(fqn_selects(&v2, true, "orders"));
         assert!(fqn_selects(&v2, true, "other.place.orders.v2"));
         assert!(!fqn_selects(&v2, true, "shop.marts.orders.v1"));
+        // Across packages: the fqn without its package also counts.
+        let revenue = fqn(&["jaffle", "stripe", "fct_revenue"]);
+        assert!(fqn_selects(&revenue, false, "stripe"));
+        let extra = fqn(&["jaffle", "jaffle", "marts", "orders", "extra"]);
+        assert!(fqn_selects(&extra, false, "jaffle.marts.orders"));
+        // Missing evidence counts as reached.
+        assert!(fqn_selects(&[], false, "anything"));
+        assert!(!is_literal("old marts"));
+        assert!(!is_literal("a,b"));
+        assert!(!is_literal("x+"));
     }
 }

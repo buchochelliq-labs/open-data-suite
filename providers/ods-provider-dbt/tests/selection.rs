@@ -137,3 +137,101 @@ fn a_thousand_nodes_make_a_short_command() {
     let selectors = exact_selectors(&m, &wanted).unwrap();
     assert_eq!(selectors, ["fqn:jaffle_ods.generated,resource_type:model"]);
 }
+
+/// Architecture review of #211: dbt also matches the fqn without its package.
+#[test]
+fn a_folder_named_like_a_package_is_not_selected_with_it() {
+    let mut m = manifest();
+    // A package `stripe`, and the root project's `models/stripe/` folder.
+    add(
+        &mut m,
+        "model.jaffle_ods.orders",
+        "model.stripe.stripe_charges",
+        &["stripe", "stripe_charges"],
+        "models/stripe_charges.sql",
+    );
+    add(
+        &mut m,
+        "model.jaffle_ods.orders",
+        "model.jaffle_ods.fct_revenue",
+        &["jaffle_ods", "stripe", "fct_revenue"],
+        "models/stripe/fct_revenue.sql",
+    );
+    // `fqn:stripe` would reach `fct_revenue` too; the full fqn doesn't.
+    assert_eq!(
+        exact_selectors(&m, &ids(&["model.stripe.stripe_charges"])).unwrap(),
+        ["fqn:stripe.stripe_charges,resource_type:model"]
+    );
+    // Asked for both, `fqn:stripe` is fine.
+    assert_eq!(
+        exact_selectors(
+            &m,
+            &ids(&[
+                "model.stripe.stripe_charges",
+                "model.jaffle_ods.fct_revenue"
+            ])
+        )
+        .unwrap(),
+        ["fqn:stripe,resource_type:model"]
+    );
+
+    // The root project's `models/jaffle_ods/marts/orders/extra.sql`.
+    let mut m = manifest();
+    add(
+        &mut m,
+        "model.jaffle_ods.orders",
+        "model.jaffle_ods.extra",
+        &["jaffle_ods", "jaffle_ods", "marts", "orders", "extra"],
+        "models/jaffle_ods/marts/orders/extra.sql",
+    );
+    assert_eq!(
+        exact_selectors(&m, &ids(&["model.jaffle_ods.orders"])).unwrap(),
+        ["path:models/marts/orders.sql,fqn:jaffle_ods.marts.orders,resource_type:model"]
+    );
+}
+
+/// dbt splits `--select` on spaces and intersects on commas.
+#[test]
+fn folder_names_dbt_would_split_are_never_used_in_selectors() {
+    let mut m = manifest();
+    add(
+        &mut m,
+        "model.jaffle_ods.orders",
+        "model.jaffle_ods.legacy_orders",
+        &["jaffle_ods", "old marts", "legacy_orders"],
+        "models/old marts/legacy_orders.sql",
+    );
+    add(
+        &mut m,
+        "model.jaffle_ods.orders",
+        "model.jaffle_ods.ab",
+        &["jaffle_ods", "a,b", "ab"],
+        "models/a,b/ab.sql",
+    );
+    for id in ["model.jaffle_ods.legacy_orders", "model.jaffle_ods.ab"] {
+        let err = exact_selectors(&m, &ids(&[id])).unwrap_err();
+        assert!(err.contains("can be selected safely"), "{err}");
+    }
+    // Others are unaffected, and never compressed into a split-prone selector.
+    assert_eq!(
+        exact_selectors(&m, &ids(&["model.jaffle_ods.orders"])).unwrap(),
+        ["fqn:jaffle_ods.marts.orders,resource_type:model"]
+    );
+}
+
+#[test]
+fn a_node_without_an_fqn_blocks_selections_that_could_reach_it() {
+    let mut m = manifest();
+    add(
+        &mut m,
+        "model.jaffle_ods.orders",
+        "model.jaffle_ods.unknown",
+        &[],
+        "models/unknown.sql",
+    );
+    // It could be anywhere: the root project's nodes fall back to their file.
+    assert_eq!(
+        exact_selectors(&m, &ids(&["model.jaffle_ods.orders"])).unwrap(),
+        ["path:models/marts/orders.sql,fqn:jaffle_ods.marts.orders,resource_type:model"]
+    );
+}

@@ -75,6 +75,13 @@ doesn't have that API. The CLI is the stable interface.
     narrows it: `path:<file>,fqn:<fqn>,resource_type:<type>`;
   - a package node that can't be selected exactly is an error: nothing runs.
 
+  The check follows dbt's `fqn:` matching:
+  - a selector also matches a node's fqn without its package, so `fqn:stripe` reaches
+    the root project's `models/stripe/` folder;
+  - a folder or file name dbt's selector syntax would split or reinterpret (a space,
+    `,`, `+`, `@`, `:`, a wildcard) is never put in a selector;
+  - a node without an fqn counts as reachable by every selector.
+
   Tests still come in through dbt's indirect selection, as for any selection.
   `run_results.json` is still checked, and anything built unrequested is still
   reported. `run` mode adds
@@ -130,6 +137,9 @@ is what the caller needs to see which nodes failed.
     selector semantics. ODS mirrors them, and the real-dbt test checks them.
   - A BUILD set scattered across many partly-built folders still lists one selector
     per node.
+  - The check uses the manifest from `prepare`, but `dbt build` parses the project
+    again. A file added in between could be reached by a folder selector. That is only
+    caught afterwards: it is reported as `unrequested` and not recorded.
   - The JSON envelope can now carry a result *and* an error. This extends ADR-0004 §4
     for commands whose partial result matters.
 - Follow-up issues:
