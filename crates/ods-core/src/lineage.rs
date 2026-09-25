@@ -97,6 +97,17 @@ pub enum DirectKind {
     Aggregation,
 }
 
+impl DirectKind {
+    /// The `OpenLineage` transformation subtype, e.g. `IDENTITY`.
+    pub fn openlineage_subtype(self) -> &'static str {
+        match self {
+            DirectKind::Identity => "IDENTITY",
+            DirectKind::Transformation => "TRANSFORMATION",
+            DirectKind::Aggregation => "AGGREGATION",
+        }
+    }
+}
+
 /// How an input column affects the output's rows (`OpenLineage` `INDIRECT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,6 +125,20 @@ pub enum IndirectKind {
     Window,
     /// Used in a condition of a `CASE`/`IF` that selects between values.
     Conditional,
+}
+
+impl IndirectKind {
+    /// The `OpenLineage` transformation subtype, e.g. `GROUP_BY`.
+    pub fn openlineage_subtype(self) -> &'static str {
+        match self {
+            IndirectKind::Join => "JOIN",
+            IndirectKind::Filter => "FILTER",
+            IndirectKind::GroupBy => "GROUP_BY",
+            IndirectKind::Sort => "SORT",
+            IndirectKind::Window => "WINDOW",
+            IndirectKind::Conditional => "CONDITIONAL",
+        }
+    }
 }
 
 /// How an input column relates to an output.

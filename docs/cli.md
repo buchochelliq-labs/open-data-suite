@@ -15,6 +15,7 @@ codes).
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
+| `ods lineage columns\|impact\|export` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -101,6 +102,9 @@ meanings get new numbers.
 | `ODS-E0102` | Configuration schema violation: unknown key, wrong type or value out of range. |
 | `ODS-E0103` | A credential is written as plaintext instead of a secret reference. |
 | `ODS-E0104` | The selected profile is not defined. |
+| `ODS-E0201` | dbt artifacts are missing, unreadable or an unsupported version, or lineage output can't be written. |
+| `ODS-E0202` | The project graph is inconsistent (duplicate ids or relations, or a dependency cycle). |
+| `ODS-E0203` | A model, column, change kind or dialect named on the command line doesn't exist. |
 
 ## Environment variables
 
@@ -205,3 +209,40 @@ providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file .
 ```
 
 Configuration errors exit with status 4.
+
+## Column-level lineage
+
+`ods lineage` reads a dbt target directory (`manifest.json`, plus `catalog.json` when
+`dbt docs generate` has run), parses every model's compiled SQL, and builds column-level
+lineage ([ADR-0008](adr/0008-column-level-lineage.md)). It needs no dbt login, no
+warehouse connection and no network.
+
+```sh
+dbt compile                      # or run/build: compiled SQL must be in the manifest
+dbt docs generate                # optional: warehouse column lists for sources and seeds
+
+ods lineage columns --model customers
+ods lineage impact --column stg_orders.status            # which models must run, and why
+ods lineage impact --column orders.amount=removed
+ods lineage impact --base ../prod-target                 # diff two builds, impact of every change
+ods lineage export --namespace unitycatalog://adb-123.azuredatabricks.net \
+                   --output-file lineage.ndjson          # OpenLineage JobEvents
+```
+
+| Flag | Meaning |
+|---|---|
+| `--target-dir DIR` | dbt target directory; default `target` |
+| `--dialect NAME` | `databricks`, `spark`, `duckdb`, `snowflake`, `bigquery`, `postgres`, `redshift` or `generic`; default: the manifest's adapter type |
+| `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable |
+| `--base DIR` | (`impact`) another build to compare with; every difference in compiled SQL becomes column changes |
+| `--run-events` | (`export`) write `COMPLETE` RunEvents instead of JobEvents, for sinks that only accept runs |
+| `--indirect-in-fields` | (`export`) also copy row-shaping inputs into every field, for consumers that ignore the facet's `dataset` array |
+
+How impact is decided, most conservative first:
+- a model whose SQL can't be analyzed (a Python model, `select *` over a relation with
+  unknown columns, unsupported syntax) is **opaque**: any change to what it reads makes it run;
+- a change to which rows exist (filters, joins, grouping) makes every reader run;
+- a modified or removed column makes a reader run only if it uses that column; added columns
+  only reach readers that `select *`;
+- every reader that is *not* affected is listed as skipped, with the changed columns it doesn't use.
+

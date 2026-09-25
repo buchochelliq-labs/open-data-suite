@@ -14,7 +14,7 @@
 //! It is conservative (AGENTS.md rule 3): a model whose SQL can't be analyzed is
 //! *opaque*, and every change to anything it reads impacts it.
 //!
-//! It is open: every type serializes, and the graph is exported as `OpenLineage`
+//! It is open: every type serializes, and [`openlineage`] exports the graph as `OpenLineage`
 //! column-lineage facets, which catalogs such as `OpenMetadata`, `DataHub` and `Marquez`
 //! read (ADR-0008).
 
@@ -23,6 +23,7 @@ mod cache;
 mod diff;
 mod graph;
 mod impact;
+pub mod openlineage;
 mod project;
 
 pub use build::{BuildError, BuildStats, build};
