@@ -239,3 +239,80 @@ fn a_materialization_or_naming_macro_change_changes_the_fingerprint() {
         ["relation"]
     );
 }
+
+/// `orders` with these post-hooks.
+fn hooked(m: &Manifest, hooks: &[&str]) -> ods_provider_dbt::ManifestNode {
+    let mut node = node(m, "model.jaffle_ods.orders").clone();
+    node.config.raw["post-hook"] = serde_json::Value::Array(
+        hooks
+            .iter()
+            .map(|sql| serde_json::json!({"sql": sql, "transaction": true, "index": null}))
+            .collect(),
+    );
+    node
+}
+
+#[test]
+fn hooks_that_read_environment_variables_fingerprint_their_values() {
+    use ods_provider_dbt::fingerprint::fingerprint_with_env;
+    let m = manifest();
+    let env = |role: &'static str| move |name: &str| (name == "HOOK_ROLE").then(|| role.to_owned());
+
+    // `this` alone: no values to track.
+    let plain = fingerprint_with_env(
+        &m,
+        &hooked(&m, &["grant select on {{ this }} to x"]),
+        &env("a"),
+    )
+    .unwrap();
+    assert!(!plain.components.contains_key("hook_env"));
+
+    let grant = hooked(
+        &m,
+        &["grant select on {{ this }} to {{ env_var('HOOK_ROLE') }}"],
+    );
+    let a = fingerprint_with_env(&m, &grant, &env("analyst")).unwrap();
+    let b = fingerprint_with_env(&m, &grant, &env("admin")).unwrap();
+    assert!(a.components.contains_key("hook_env"));
+    assert_eq!(b.diff(&a).changed, ["hook_env"]);
+    // Only a digest of the value is kept.
+    assert!(!serde_json::to_string(&a).unwrap().contains("analyst"));
+}
+
+#[test]
+fn hooks_calling_a_macro_that_reads_the_environment_are_tracked_too() {
+    use ods_provider_dbt::fingerprint::fingerprint_with_env;
+    let mut m = manifest();
+    let mut grant = m.macros.values().next().unwrap().clone();
+    grant.sql = "{% macro grant_to_role(rel) %}grant select on {{ rel }} to {{ env_var(\"HOOK_ROLE\", \"x\") }}{% endmacro %}".to_owned();
+    grant.depends_on = Vec::new();
+    m.macros
+        .insert("macro.jaffle_ods.grant_to_role".to_owned(), grant);
+    let node = hooked(&m, &["{{ grant_to_role(this) }}"]);
+    let a = fingerprint_with_env(&m, &node, &|_| Some("a".to_owned())).unwrap();
+    let b = fingerprint_with_env(&m, &node, &|_| None).unwrap();
+    assert_eq!(b.diff(&a).changed, ["hook_env"]);
+}
+
+#[test]
+fn hooks_whose_values_ods_cant_see_always_build() {
+    use ods_provider_dbt::fingerprint::fingerprint_with_env;
+    let m = manifest();
+    let env = |_: &str| Some("v".to_owned());
+    for (hook, expect) in [
+        (
+            "grant select on {{ this }} to {{ var('reporting_role') }}",
+            "var(reporting_role)",
+        ),
+        ("select '{{ env_var('DBT_ENV_SECRET_TOKEN') }}'", "secret"),
+        ("select '{{ env_var(name) }}'", "can't name"),
+    ] {
+        let why = fingerprint_with_env(&m, &hooked(&m, &[hook]), &env).unwrap_err();
+        assert!(why.contains(expect), "{hook}: {why}");
+    }
+    // `env_var` isn't mistaken for `var`, and `var` in the model's SQL is fine: it is
+    // rendered into the compiled SQL.
+    let mut in_sql = node(&m, "model.jaffle_ods.orders").clone();
+    in_sql.raw_code = Some("select {{ var('x', 1) }} as x".to_owned());
+    assert!(fingerprint_with_env(&m, &in_sql, &env).is_ok());
+}
