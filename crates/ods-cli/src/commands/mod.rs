@@ -1,10 +1,12 @@
 //! Command adapters: one [`Module`](crate::module::Module) per command group (ADR-0004 §1).
 
 mod completions;
+mod config;
 mod planned;
 mod version;
 
 pub use completions::Completions;
+pub use config::Config;
 pub use planned::Planned;
 pub use version::Version;
 
@@ -57,6 +59,9 @@ pub fn default_registry() -> Registry {
             .expect("built-in command names are unique and not reserved");
     }
     registry
+        .register(Box::new(Config))
+        .expect("built-in command names are unique and not reserved");
+    registry
         .register(Box::new(Version))
         .expect("built-in command names are unique and not reserved");
     registry
@@ -80,6 +85,7 @@ mod tests {
                 "ci",
                 "lsp",
                 "agent",
+                "config",
                 "version",
                 "completions"
             ]

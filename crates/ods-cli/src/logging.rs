@@ -18,11 +18,16 @@ pub struct LogArgs {
 }
 
 impl LogArgs {
-    /// Resolves the log level. `env` is the value of `ODS_LOG`, which overrides the flags.
+    /// Resolves the log level: `ODS_LOG` (`env`) beats `-v`/`-q`, which beat the
+    /// configured `log.level` (`config`), which beats the `warn` default (ADR-0005 §2).
     ///
     /// # Errors
     /// Returns the offending value if `ODS_LOG` is not a known level.
-    pub fn level(&self, env: Option<&str>) -> Result<LevelFilter, String> {
+    pub fn level(
+        &self,
+        env: Option<&str>,
+        config: Option<LevelFilter>,
+    ) -> Result<LevelFilter, String> {
         if let Some(value) = env.map(str::trim).filter(|v| !v.is_empty()) {
             return match value.to_ascii_lowercase().as_str() {
                 "off" => Ok(LevelFilter::OFF),
@@ -36,7 +41,7 @@ impl LogArgs {
         }
         Ok(match (self.quiet, self.verbose) {
             (true, _) => LevelFilter::ERROR,
-            (false, 0) => LevelFilter::WARN,
+            (false, 0) => config.unwrap_or(LevelFilter::WARN),
             (false, 1) => LevelFilter::INFO,
             (false, 2) => LevelFilter::DEBUG,
             (false, _) => LevelFilter::TRACE,
@@ -55,6 +60,19 @@ pub fn init(level: LevelFilter, ansi: bool) {
         .try_init();
 }
 
+/// Converts a configured level to a filter.
+pub fn from_config(level: ods_config::LogLevel) -> LevelFilter {
+    use ods_config::LogLevel;
+    match level {
+        LogLevel::Off => LevelFilter::OFF,
+        LogLevel::Error => LevelFilter::ERROR,
+        LogLevel::Warn => LevelFilter::WARN,
+        LogLevel::Info => LevelFilter::INFO,
+        LogLevel::Debug => LevelFilter::DEBUG,
+        LogLevel::Trace => LevelFilter::TRACE,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,7 +87,7 @@ mod tests {
     fn level(args: &[&str], env: Option<&str>) -> Result<LevelFilter, String> {
         let cli =
             TestCli::try_parse_from(std::iter::once("ods").chain(args.iter().copied())).unwrap();
-        cli.log.level(env)
+        cli.log.level(env, None)
     }
 
     #[test]
@@ -90,6 +108,20 @@ mod tests {
             "empty value is ignored"
         );
         assert_eq!(level(&[], Some("loud")), Err("loud".to_owned()));
+    }
+
+    #[test]
+    fn configured_level_applies_only_without_flags_or_env() {
+        let cli = |args: &[&str]| {
+            TestCli::try_parse_from(std::iter::once("ods").chain(args.iter().copied())).unwrap()
+        };
+        let debug = Some(LevelFilter::DEBUG);
+        assert_eq!(cli(&[]).log.level(None, debug), Ok(LevelFilter::DEBUG));
+        assert_eq!(cli(&["-q"]).log.level(None, debug), Ok(LevelFilter::ERROR));
+        assert_eq!(
+            cli(&[]).log.level(Some("info"), debug),
+            Ok(LevelFilter::INFO)
+        );
     }
 
     #[test]
