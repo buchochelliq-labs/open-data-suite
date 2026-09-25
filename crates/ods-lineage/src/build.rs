@@ -204,6 +204,12 @@ fn analyze_node(
     cache: &dyn LineageCache,
 ) -> Result<Analyzed, BuildError> {
     let declared = node.columns.clone().unwrap_or_default();
+    let depends_on: Vec<RelationName> = node
+        .depends_on
+        .iter()
+        .filter_map(|d| by_id.get(d.as_str()))
+        .map(|dep| dep.relation.clone())
+        .collect();
     let Some(sql) = &node.sql else {
         return Ok(Analyzed(
             NodeLineage {
@@ -213,6 +219,7 @@ fn analyze_node(
                 columns: declared,
                 lineage: None,
                 cache_key: None,
+                depends_on,
             },
             false,
         ));
@@ -261,6 +268,7 @@ fn analyze_node(
             columns,
             lineage: Some(lineage),
             cache_key: Some(key),
+            depends_on,
         },
         hit,
     ))

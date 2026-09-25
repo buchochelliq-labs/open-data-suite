@@ -240,6 +240,8 @@ struct Loaded {
     analyzer: SqlparserAnalyzer,
     /// dbt `unique_id` → node name, for friendly lookups.
     names: BTreeMap<String, String>,
+    /// dbt `unique_id` → source file checksum, to detect changes to nodes without lineage.
+    checksums: BTreeMap<String, Option<String>>,
     graph: ColumnGraph,
     stats: BuildStats,
     elapsed_ms: u128,
@@ -287,12 +289,19 @@ impl Loaded {
         })?;
         let analyzer = SqlparserAnalyzer::new(dialect);
         let (project, names) = project(&artifacts, &analyzer)?;
+        let checksums = artifacts
+            .manifest
+            .nodes
+            .iter()
+            .map(|n| (n.unique_id.clone(), n.checksum.clone()))
+            .collect();
         let (graph, stats) = build(&project, &analyzer, cache)
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
         Ok(Self {
             target_dir: target_dir.to_owned(),
             analyzer,
             names,
+            checksums,
             graph,
             stats,
             elapsed_ms: started.elapsed().as_millis(),
@@ -354,15 +363,17 @@ fn project(
     analyzer: &SqlparserAnalyzer,
 ) -> Result<(LineageProject, BTreeMap<String, String>), CliError> {
     let catalog = artifacts.catalog.as_ref();
-    let mut nodes = Vec::new();
-    let mut names = BTreeMap::new();
-    let included: BTreeSet<&str> = artifacts
+    let by_id: BTreeMap<&str, &ods_provider_dbt::ManifestNode> = artifacts
         .manifest
         .nodes
         .iter()
-        .filter(|n| kind(n.resource_type).is_some() && n.relation_name.is_some())
-        .map(|n| n.unique_id.as_str())
+        .map(|n| (n.unique_id.as_str(), n))
         .collect();
+    let included = |n: &ods_provider_dbt::ManifestNode| {
+        kind(n.resource_type).is_some() && n.relation_name.is_some()
+    };
+    let mut nodes = Vec::new();
+    let mut names = BTreeMap::new();
     for node in &artifacts.manifest.nodes {
         let (Some(kind), Some(relation_name)) = (kind(node.resource_type), &node.relation_name)
         else {
@@ -375,22 +386,34 @@ fn project(
                 format!("{}: {e}", node.unique_id),
             )
         })?;
-        let mut lineage_node = LineageNode::new(&node.unique_id, relation, kind).with_depends_on(
-            node.depends_on
-                .iter()
-                .filter(|d| included.contains(d.as_str()))
-                .cloned(),
-        );
+        // Ephemeral models have no relation: their SQL is inlined into consumers as a
+        // CTE, so a consumer really depends on the ephemeral model's own upstreams.
+        let mut depends_on = BTreeSet::new();
+        let mut pending: Vec<&str> = node.depends_on.iter().map(String::as_str).collect();
+        let mut seen = BTreeSet::new();
+        while let Some(dep) = pending.pop() {
+            if !seen.insert(dep) {
+                continue;
+            }
+            match by_id.get(dep) {
+                Some(upstream) if included(upstream) => {
+                    depends_on.insert(dep.to_owned());
+                }
+                Some(upstream) => pending.extend(upstream.depends_on.iter().map(String::as_str)),
+                None => {}
+            }
+        }
+        let mut lineage_node =
+            LineageNode::new(&node.unique_id, relation, kind).with_depends_on(depends_on);
         let sql_model =
             kind == NodeKind::Model && node.language.as_deref().unwrap_or("sql") == "sql";
         if sql_model && let Some(sql) = &node.compiled_code {
             lineage_node = lineage_node.with_sql(sql);
         }
-        let columns = catalog
-            .and_then(|c| c.columns.get(&node.unique_id))
-            .cloned()
-            .or_else(|| (!node.declared_columns.is_empty()).then(|| node.declared_columns.clone()));
-        if let Some(columns) = columns {
+        // Only warehouse catalog columns are a table's real, ordered schema. Columns
+        // documented in YAML are often incomplete, so they are not used: an unknown schema
+        // is handled conservatively rather than a partial one presented as complete.
+        if let Some(columns) = catalog.and_then(|c| c.columns.get(&node.unique_id)) {
             lineage_node =
                 lineage_node.with_columns(columns.iter().map(|c| analyzer.column_name(c)));
         }
@@ -682,8 +705,20 @@ impl ImpactReport {
         let mut changes = Vec::new();
         let mut changed_models = Vec::new();
         for node in head.graph.nodes() {
-            let Some(after) = &node.lineage else { continue };
             let before_node = base.graph.node(&node.id);
+            let Some(after) = &node.lineage else {
+                // No SQL lineage (seeds, snapshots, Python models): compare dbt's file
+                // checksum; any difference, or a new node, may change every row.
+                let same = before_node.is_some()
+                    && base.checksums.get(&node.id) == head.checksums.get(&node.id);
+                if !same {
+                    changed_models.push(node.id.clone());
+                    changes.push(Change::Rows {
+                        relation: node.relation.clone(),
+                    });
+                }
+                continue;
+            };
             if before_node.and_then(|b| b.cache_key.as_ref()) == node.cache_key.as_ref() {
                 continue;
             }
@@ -856,6 +891,11 @@ fn reason_line(reason: &ImpactReason) -> Vec<Span> {
         ImpactReason::Wildcard { upstream } => vec![
             Span::plain("selects * and gains "),
             Span::toned(upstream.to_string(), Tone::Code),
+        ],
+        ImpactReason::NameCapture { upstream } => vec![
+            Span::plain("uses a column named like new "),
+            Span::toned(upstream.to_string(), Tone::Code),
+            Span::plain("; an unqualified reference may now bind to it"),
         ],
         ImpactReason::Opaque { upstream } => vec![
             Span::toned("lineage unknown", Tone::Warning),

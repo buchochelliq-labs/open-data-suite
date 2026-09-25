@@ -26,15 +26,19 @@ pub struct NodeLineage {
     pub lineage: Option<QueryLineage>,
     /// The content-addressed key the result is cached under.
     pub cache_key: Option<String>,
+    /// Relations of the nodes it declares as dependencies. Used as what it reads when
+    /// its SQL can't tell (no SQL, or SQL that couldn't be analyzed).
+    pub depends_on: Vec<RelationName>,
 }
 
 impl NodeLineage {
     /// Whether nothing is known about how this node uses its inputs: it has SQL that
-    /// couldn't be analyzed, or is a model with no SQL.
+    /// couldn't be analyzed, is a model without (SQL) lineage, or has upstreams but no
+    /// lineage at all (e.g. a snapshot).
     pub fn is_opaque(&self) -> bool {
         match &self.lineage {
             Some(lineage) => lineage.opaque,
-            None => self.kind == NodeKind::Model,
+            None => self.kind == NodeKind::Model || !self.depends_on.is_empty(),
         }
     }
 }
@@ -73,15 +77,18 @@ impl ColumnGraph {
         let mut consumers: BTreeMap<ColumnRef, BTreeSet<ColumnUse>> = BTreeMap::new();
         let mut readers: BTreeMap<RelationName, BTreeSet<String>> = BTreeMap::new();
         for node in nodes.values() {
-            let Some(lineage) = &node.lineage else {
-                continue;
-            };
-            for relation in &lineage.relations_read {
+            // A node reads what its SQL reads and, conservatively, everything it declares:
+            // an opaque or SQL-less node must still be found as a reader.
+            let sql_reads = node.lineage.iter().flat_map(|l| &l.relations_read);
+            for relation in sql_reads.chain(&node.depends_on) {
                 readers
                     .entry(relation.clone())
                     .or_default()
                     .insert(node.id.clone());
             }
+            let Some(lineage) = &node.lineage else {
+                continue;
+            };
             for output in &lineage.outputs {
                 for (column, edge) in &output.inputs {
                     consumers

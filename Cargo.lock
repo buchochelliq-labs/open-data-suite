@@ -557,7 +557,6 @@ name = "ods-provider-sqlparser"
 version = "0.0.0"
 dependencies = [
  "ods-core",
- "ods-lineage",
  "ods-sdk",
  "serde_json",
  "sha2",

@@ -16,8 +16,6 @@ sqlparser.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-# The benchmark example wires the analyzer into the lineage module (dev-only edge).
-ods-lineage.workspace = true
 serde_json.workspace = true
 
 [lints]

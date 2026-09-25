@@ -370,3 +370,109 @@ fn value_sources_trace_through_models() {
         BTreeSet::from([col("stg_payments", "amount")])
     );
 }
+
+// Regression tests for the architecture review: readers that must run were pruned.
+
+#[test]
+fn review_readers_without_lineage_are_impacted_through_their_declared_dependencies() {
+    let (mut project, analyzer) = project_and_analyzer();
+    // A Python model (no SQL) and a snapshot reading `orders`, and a model whose SQL
+    // failed to parse (opaque, with no relations recovered).
+    project.nodes.push(
+        LineageNode::new("py_model", rel("py_model"), NodeKind::Model).with_depends_on(["orders"]),
+    );
+    project.nodes.push(
+        LineageNode::new("snap", rel("snap"), NodeKind::Snapshot).with_depends_on(["orders"]),
+    );
+    project.nodes.push(
+        LineageNode::new("broken", rel("broken"), NodeKind::Model)
+            .with_sql("select ((( from")
+            .with_depends_on(["orders"]),
+    );
+    let analyzer = opaque_reads_orders(analyzer);
+    let graph = build(&project, &analyzer, &MemoryCache::default())
+        .unwrap()
+        .0;
+    for change in [
+        modified("orders", "status"),
+        Change::Rows {
+            relation: rel("orders"),
+        },
+    ] {
+        let impact = graph.impact(&[change]);
+        for node in ["py_model", "snap", "broken"] {
+            assert!(impact.nodes.contains_key(node), "{node} must run");
+        }
+    }
+}
+
+#[test]
+fn review_declared_but_unread_dependencies_are_treated_as_opaque() {
+    let (mut project, analyzer) = project_and_analyzer();
+    // `events` declares `customers` (e.g. a `-- depends_on:` hint) but its SQL never
+    // reads it.
+    for node in &mut project.nodes {
+        if node.id == "events" {
+            node.depends_on.push("customers".into());
+        }
+    }
+    let analyzer = opaque_reads_orders(analyzer);
+    let graph = build(&project, &analyzer, &MemoryCache::default())
+        .unwrap()
+        .0;
+    let impact = graph.impact(&[modified("customers", "lifetime_value")]);
+    assert!(impact.nodes["events"].rows_changed);
+}
+
+#[test]
+fn review_added_columns_reach_row_shaping_wildcards_and_same_named_uses() {
+    let graph = graph();
+    // `rank` uses `orders.order_id`; a new `order_id` on `stg_payments`… is not read by
+    // rank. But `orders` itself reads `stg_payments` and uses `stg_orders.order_id`:
+    // an unqualified `order_id` in its SQL could now bind to the new column.
+    let impact = graph.impact(&[Change::Column {
+        column: col("stg_payments", "customer_id"),
+        kind: ColumnChangeKind::Added,
+    }]);
+    assert!(
+        impact.nodes["orders"]
+            .reasons
+            .contains(&ImpactReason::NameCapture {
+                upstream: col("stg_payments", "customer_id")
+            }),
+        "{impact:?}"
+    );
+}
+
+#[test]
+fn review_moved_and_duplicated_columns_are_changes() {
+    let before = query(
+        vec![
+            out("a", &[(col("t", "a"), ID)]),
+            out("b", &[(col("t", "b"), ID)]),
+        ],
+        &[],
+        &["t"],
+    );
+    let moved = query(
+        vec![
+            out("b", &[(col("t", "b"), ID)]),
+            out("a", &[(col("t", "a"), ID)]),
+        ],
+        &[],
+        &["t"],
+    );
+    assert_eq!(diff(&rel("m"), Some(&before), &moved).len(), 2);
+    let duplicated = query(
+        vec![
+            out("a", &[(col("t", "a"), ID)]),
+            out("a", &[(col("t", "b"), ID)]),
+        ],
+        &[],
+        &["t"],
+    );
+    assert_eq!(
+        diff(&rel("m"), Some(&before), &duplicated),
+        [Change::Rows { relation: rel("m") }]
+    );
+}

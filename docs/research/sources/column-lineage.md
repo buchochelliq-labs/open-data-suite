@@ -5,7 +5,7 @@
 Date: 2026-09-25. Scope: Rust SQL parser choice, CLL algorithm, OpenLineage format, catalog sinks,
 dbt's own CLL, performance/incremental design. All sources are public specs, docs, or OSS code
 (clean-room). Local clones of the public repositories cited below were used.
-The benchmark was a throwaway crate; ODS's reproducible benchmark is `providers/ods-provider-sqlparser/examples/lineage_bench.rs`.
+The benchmark was a throwaway crate; ODS's reproducible benchmark is `crates/ods-cli/examples/lineage_bench.rs`.
 
 ---
 

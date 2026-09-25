@@ -34,6 +34,12 @@ pub enum ImpactReason {
         /// The new upstream column.
         upstream: ColumnRef,
     },
+    /// A column was added to a relation it reads, with the same name as a column it
+    /// uses from elsewhere: an unqualified reference may now bind to the new column.
+    NameCapture {
+        /// The new upstream column.
+        upstream: ColumnRef,
+    },
     /// Its lineage is unknown, so any change to what it reads impacts it.
     Opaque {
         /// The upstream relation that changed.
@@ -117,7 +123,14 @@ impl ColumnGraph {
                 let Some(node) = self.nodes.get(reader) else {
                     continue;
                 };
-                if node.is_opaque() {
+                // Declared but not read by its SQL (e.g. a `-- depends_on:` hint for a macro
+                // that queries the table at run time): nothing says how it's used, so it's
+                // treated as opaque for this relation.
+                let declared_only = node
+                    .lineage
+                    .as_ref()
+                    .is_some_and(|l| !l.relations_read.contains(&relation));
+                if node.is_opaque() || declared_only {
                     let target = impact.nodes.entry(reader.to_owned()).or_default();
                     target.reasons.insert(ImpactReason::Opaque {
                         upstream: relation.clone(),
@@ -137,15 +150,24 @@ impl ColumnGraph {
                         column,
                         kind: ColumnChangeKind::Added,
                     } => {
-                        let wildcard = node
-                            .lineage
-                            .as_ref()
-                            .is_some_and(|l| l.wildcard_relations.contains(&relation));
-                        if wildcard {
+                        let Some(lineage) = node.lineage.as_ref() else {
+                            continue;
+                        };
+                        if lineage.wildcard_relations.contains(&relation) {
                             let target = impact.nodes.entry(reader.to_owned()).or_default();
                             target.reasons.insert(ImpactReason::Wildcard {
                                 upstream: column.clone(),
                             });
+                            // If the reader also shapes rows with that relation's columns
+                            // (DISTINCT *, UNION, GROUP BY over *), the new column can
+                            // change which rows exist.
+                            if lineage
+                                .row_inputs
+                                .iter()
+                                .any(|(c, _)| c.relation == relation)
+                            {
+                                rows_changed(target, &node.relation, &mut queue);
+                            }
                             if target.changed_columns.insert(column.column.clone()) {
                                 queue.push_back(Change::Column {
                                     column: ColumnRef::new(
@@ -155,6 +177,19 @@ impl ColumnGraph {
                                     kind: ColumnChangeKind::Added,
                                 });
                             }
+                        }
+                        let uses_same_name = lineage
+                            .outputs
+                            .iter()
+                            .flat_map(|o| o.inputs.iter().map(|(c, _)| c))
+                            .chain(lineage.row_inputs.iter().map(|(c, _)| c))
+                            .any(|c| c.column == column.column && c.relation != relation);
+                        if uses_same_name {
+                            let target = impact.nodes.entry(reader.to_owned()).or_default();
+                            target.reasons.insert(ImpactReason::NameCapture {
+                                upstream: column.clone(),
+                            });
+                            rows_changed(target, &node.relation, &mut queue);
                         }
                     }
                     Change::Column { column, kind } => {

@@ -1,7 +1,7 @@
 //! Benchmark: column lineage for a synthetic project.
 //!
 //! ```text
-//! cargo run --release -p ods-provider-sqlparser --example lineage_bench -- 2000
+//! cargo run --release -p ods-cli --example lineage_bench -- 2000
 //! ```
 //!
 //! Builds a layered DAG of `N` models. Each model has a CTE, a join of two upstream

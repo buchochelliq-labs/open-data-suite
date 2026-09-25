@@ -64,7 +64,17 @@ pub fn diff(
     let Some(before) = before else {
         return rows();
     };
-    if before.opaque || after.opaque || before.row_digest != after.row_digest {
+    let duplicated = |l: &QueryLineage| {
+        let mut seen = std::collections::BTreeSet::new();
+        l.outputs.iter().any(|o| !seen.insert(o.name.as_str()))
+    };
+    // Duplicate output names can't be matched one to one, so nothing is proven unchanged.
+    if before.opaque
+        || after.opaque
+        || before.row_digest != after.row_digest
+        || duplicated(before)
+        || duplicated(after)
+    {
         return rows();
     }
     let old: BTreeMap<&str, &str> = before
@@ -93,6 +103,25 @@ pub fn diff(
     }
     for name in old.keys().filter(|n| !new.contains_key(*n)) {
         changes.push(column(name, ColumnChangeKind::Removed));
+    }
+    // Consumers that read by position (UNION branches, `x(a, b)` renames, `*` order) see
+    // a moved column as a different column.
+    let old_order: Vec<&str> = before
+        .outputs
+        .iter()
+        .map(|o| o.name.as_str())
+        .filter(|n| new.contains_key(n))
+        .collect();
+    let new_order: Vec<&str> = after
+        .outputs
+        .iter()
+        .map(|o| o.name.as_str())
+        .filter(|n| old.contains_key(n))
+        .collect();
+    for (was, now) in old_order.iter().zip(&new_order) {
+        if was != now && old.get(now) == new.get(now) {
+            changes.push(column(now, ColumnChangeKind::Modified));
+        }
     }
     changes.sort();
     changes

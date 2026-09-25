@@ -15,9 +15,9 @@ use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, Relati
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage, SchemaLookup};
 use sha2::{Digest, Sha256};
 use sqlparser::ast::{
-    Expr, FunctionArg, FunctionArgExpr, FunctionArguments, GroupByExpr, Ident, JoinConstraint,
-    JoinOperator, NamedWindowExpr, OrderByKind, Query, Select, SelectItem,
-    SelectItemQualifiedWildcardKind, SetExpr, SetQuantifier, Statement, TableFactor,
+    Distinct, Expr, FunctionArg, FunctionArgExpr, FunctionArgumentClause, FunctionArguments,
+    GroupByExpr, Ident, JoinConstraint, JoinOperator, NamedWindowExpr, OrderByKind, Query, Select,
+    SelectItem, SelectItemQualifiedWildcardKind, SetExpr, SetQuantifier, Statement, TableFactor,
     TableWithJoins, WildcardAdditionalOptions, WindowSpec, WindowType, visit_expressions,
     visit_expressions_mut,
 };
@@ -81,6 +81,9 @@ struct Scope<'a> {
     windows: BTreeMap<String, WindowSpec>,
     /// Outputs defined so far, for lateral column aliases (`select a + 1 as b, b * 2`).
     aliases: Vec<Col>,
+    /// The named windows as written, part of every column digest at this level so a
+    /// changed `window w as (…)` changes the columns that use it.
+    windows_text: String,
     outer: Option<&'a Scope<'a>>,
 }
 
@@ -91,6 +94,7 @@ impl<'a> Scope<'a> {
             ctes,
             windows: BTreeMap::new(),
             aliases: Vec::new(),
+            windows_text: String::new(),
             outer,
         }
     }
@@ -163,6 +167,28 @@ struct Analyzer<'s> {
     dialect: SqlDialect,
     schema: &'s dyn SchemaLookup,
 }
+
+/// Niladic keywords some dialects parse as identifiers.
+const KEYWORDS: &[&str] = &[
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "localtime",
+    "localtimestamp",
+    "current_user",
+    "session_user",
+    "user",
+    "current_role",
+    "current_catalog",
+    "current_schema",
+    "current_database",
+    "sysdate",
+    "systimestamp",
+    "null",
+    "true",
+    "false",
+    "default",
+];
 
 const AGGREGATES: &[&str] = &[
     "sum",
@@ -276,17 +302,11 @@ fn digest(parts: &[&str]) -> String {
 impl Analyzer<'_> {
     /// Every physical relation named anywhere in the query (for opaque results).
     fn relations_in(&self, query: &Query) -> BTreeSet<RelationName> {
-        let ctes: BTreeSet<String> = query
-            .with
-            .iter()
-            .flat_map(|w| &w.cte_tables)
-            .map(|c| self.dialect.ident(&c.alias.name))
-            .collect();
+        // Every name is kept, CTE names included: `with orders as (select * from orders)`
+        // reads the physical `orders`, and an extra name only ever over-reports.
         let mut reads = BTreeSet::new();
         let _ = sqlparser::ast::visit_relations(query, |name| {
-            let parts = self.dialect.object_name(name);
-            let is_cte = parts.len() == 1 && ctes.contains(&parts[0]);
-            if !is_cte && let Ok(relation) = RelationName::new(parts) {
+            if let Ok(relation) = RelationName::new(self.dialect.object_name(name)) {
                 reads.insert(relation);
             }
             ControlFlow::<()>::Continue(())
@@ -345,7 +365,7 @@ impl Analyzer<'_> {
                         })
                         .collect();
                     out.rows.extend(all);
-                    row_parts.push("order by all".into());
+                    row_parts.push(format!("order by all {order_by}"));
                 }
                 OrderByKind::Expressions(exprs) => {
                     for order in exprs {
@@ -356,10 +376,10 @@ impl Analyzer<'_> {
                                 .iter()
                                 .map(|(r, _)| (r.clone(), IndirectKind::Sort))
                                 .collect();
-                            row_parts.push(col.digest.clone());
+                            row_parts.push(format!("{} {}", col.digest, order.options));
                             out.rows.extend(sorted);
                         } else {
-                            row_parts.push(order.expr.to_string());
+                            row_parts.push(order.to_string());
                             out.diagnostics.push(format!(
                                 "ORDER BY `{}` over a set operation or subquery was not resolved; \
                                  the sort is recorded by text only",
@@ -500,6 +520,16 @@ impl Analyzer<'_> {
             }
         }
 
+        scope.windows_text = select
+            .named_window
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !scope.windows_text.is_empty() {
+            row_parts.push(format!("window {}", scope.windows_text));
+        }
+
         // FROM and JOINs.
         for table in &select.from {
             self.table_with_joins(table, &mut scope, &mut out, &mut rows, &mut row_parts)?;
@@ -559,8 +589,8 @@ impl Analyzer<'_> {
 
         // Grouping, then group filters.
         match &select.group_by {
-            GroupByExpr::All(_) => {
-                row_parts.push("group by all".into());
+            GroupByExpr::All(modifiers) => {
+                row_parts.push(format!("group by all {}", modifiers_text(modifiers)));
                 for col in &outputs {
                     if !col
                         .inputs
@@ -575,7 +605,8 @@ impl Analyzer<'_> {
                     }
                 }
             }
-            GroupByExpr::Expressions(exprs, _) => {
+            GroupByExpr::Expressions(exprs, modifiers) => {
+                row_parts.push(format!("group modifiers {}", modifiers_text(modifiers)));
                 for expr in exprs {
                     if let Some(col) = self.group_ref(expr, &outputs, &scope) {
                         rows.extend(
@@ -595,6 +626,12 @@ impl Analyzer<'_> {
             if let Some(expr) = expr {
                 self.rows_from(expr, IndirectKind::Filter, &scope, &mut out, &mut rows)?;
                 row_parts.push(format!("{clause} {}", self.canon(expr, &scope)));
+            }
+        }
+        if let Some(Distinct::On(exprs)) = &select.distinct {
+            for expr in exprs {
+                self.rows_from(expr, IndirectKind::GroupBy, &scope, &mut out, &mut rows)?;
+                row_parts.push(format!("distinct on {}", self.canon(expr, &scope)));
             }
         }
         if select.distinct.is_some() {
@@ -737,6 +774,7 @@ impl Analyzer<'_> {
                     let mut derived = (**cte).clone();
                     rename(&mut derived, &renames)?;
                     row_parts.push(format!("cte {single}"));
+                    out.wildcards.extend(derived.wildcards.iter().cloned());
                     scope.sources.push(Source {
                         alias: alias_name,
                         kind: SourceKind::Derived(Rc::new(derived)),
@@ -769,9 +807,17 @@ impl Analyzer<'_> {
                 Ok(())
             }
             TableFactor::Derived {
-                subquery, alias, ..
+                lateral,
+                subquery,
+                alias,
+                ..
             } => {
-                let mut derived = self.query(subquery, &scope.ctes, scope.outer)?;
+                // A LATERAL subquery sees the sources to its left.
+                let mut derived = if *lateral {
+                    self.query(subquery, &scope.ctes, Some(&*scope))?
+                } else {
+                    self.query(subquery, &scope.ctes, scope.outer)?
+                };
                 let alias_name = alias
                     .as_ref()
                     .map_or_else(String::new, |a| self.dialect.ident(&a.name));
@@ -933,7 +979,7 @@ impl Analyzer<'_> {
         out.diagnostics.extend(acc.diagnostics);
         Ok(Col {
             name: name.to_owned(),
-            digest: digest(&["expr", &self.canon(expr, scope)]),
+            digest: digest(&["expr", &self.canon(expr, scope), &scope.windows_text]),
             inputs: acc.edges,
             confidence: acc.confidence.unwrap_or(Confidence::Exact),
         })
@@ -943,14 +989,8 @@ impl Analyzer<'_> {
     #[allow(clippy::too_many_lines, reason = "one arm per expression shape")]
     fn walk(&self, expr: &Expr, how: Use, scope: &Scope<'_>, acc: &mut Acc) -> Result<()> {
         match expr {
-            Expr::Identifier(ident) => {
-                self.reference(std::slice::from_ref(ident), how, scope, acc);
-                Ok(())
-            }
-            Expr::CompoundIdentifier(parts) => {
-                self.reference(parts, how, scope, acc);
-                Ok(())
-            }
+            Expr::Identifier(ident) => self.reference(std::slice::from_ref(ident), how, scope, acc),
+            Expr::CompoundIdentifier(parts) => self.reference(parts, how, scope, acc),
             Expr::Nested(inner) => self.walk(inner, how, scope, acc),
             Expr::CompoundFieldAccess { root, .. } => {
                 self.walk(root, how.transformed(), scope, acc)
@@ -1044,7 +1084,17 @@ impl Analyzer<'_> {
                 let kind = indirect_for(how, IndirectKind::Filter);
                 self.subquery(subquery, kind, kind, scope, acc)
             }
-            other => self.generic(other, how.transformed(), scope, acc),
+            other => match children(other) {
+                // Compound expressions (arithmetic, casts, predicates, …): walk each part
+                // so windows, CASEs and subqueries inside keep their meaning.
+                Some(parts) => {
+                    for part in parts {
+                        self.walk(part, how.transformed(), scope, acc)?;
+                    }
+                    Ok(())
+                }
+                None => self.generic(other, how.transformed(), scope, acc),
+            },
         }
     }
 
@@ -1065,6 +1115,27 @@ impl Analyzer<'_> {
                     | FunctionArg::Unnamed(arg)) = arg;
                     if let FunctionArgExpr::Expr(expr) = arg {
                         self.walk(expr, how, scope, acc)?;
+                    }
+                }
+                // `array_agg(a order by b)`, `listagg(a) … where …`: the clauses decide
+                // which values are combined, and in what order.
+                for clause in &list.clauses {
+                    match clause {
+                        FunctionArgumentClause::OrderBy(orders) => {
+                            for order in orders {
+                                self.walk(
+                                    &order.expr,
+                                    indirect_for(how, IndirectKind::Sort),
+                                    scope,
+                                    acc,
+                                )?;
+                            }
+                        }
+                        FunctionArgumentClause::Where(expr) => {
+                            self.walk(expr, indirect_for(how, IndirectKind::Filter), scope, acc)?;
+                        }
+                        FunctionArgumentClause::Limit(expr) => self.walk(expr, how, scope, acc)?,
+                        _ => {}
                     }
                 }
                 Ok(())
@@ -1117,8 +1188,9 @@ impl Analyzer<'_> {
         Ok(())
     }
 
-    /// Any other expression: every column it mentions feeds it. Subqueries inside such
-    /// expressions can't be scoped correctly here, so they make the query opaque.
+    /// Any other expression shape: every column it mentions feeds it. Constructs whose
+    /// meaning depends on structure (subqueries, lambdas, CASE, window functions) can't
+    /// be classified here, so they make the query opaque instead of being flattened.
     fn generic(&self, expr: &Expr, how: Use, scope: &Scope<'_>, acc: &mut Acc) -> Result<()> {
         let mut references: Vec<Vec<Ident>> = Vec::new();
         let mut unsupported = None;
@@ -1129,7 +1201,11 @@ impl Analyzer<'_> {
                 Expr::Subquery(_)
                 | Expr::Exists { .. }
                 | Expr::InSubquery { .. }
-                | Expr::Lambda(_) => {
+                | Expr::Lambda(_)
+                | Expr::Case { .. } => {
+                    unsupported = Some(first_words(&e.to_string()));
+                }
+                Expr::Function(f) if f.over.is_some() => {
                     unsupported = Some(first_words(&e.to_string()));
                 }
                 _ => {}
@@ -1138,77 +1214,85 @@ impl Analyzer<'_> {
         });
         if let Some(what) = unsupported {
             return Err(Opaque(format!(
-                "nested subquery or lambda in `{what}` is not supported here"
+                "`{what}` inside `{}` is not supported",
+                first_words(&expr.to_string())
             )));
         }
         for parts in references {
-            self.reference(&parts, how, scope, acc);
+            self.reference(&parts, how, scope, acc)?;
         }
         Ok(())
     }
 
-    fn reference(&self, parts: &[Ident], how: Use, scope: &Scope<'_>, acc: &mut Acc) {
-        if let [single] = parts
-            && acc.shadowed.contains(&self.dialect.ident(single))
+    fn reference(&self, parts: &[Ident], how: Use, scope: &Scope<'_>, acc: &mut Acc) -> Result<()> {
+        // Lambda parameters (`x`, or a field of one: `x.sku`) are not columns.
+        if let Some(first) = parts.first()
+            && acc.shadowed.contains(&self.dialect.ident(first))
         {
-            return;
+            return Ok(());
         }
         if let Some(resolved) = self.resolve(parts, scope) {
             acc.lower(resolved.confidence);
             for (column, edge) in resolved.edges {
                 acc.edges.insert((column, compose(how, edge)));
             }
-        } else {
-            let name = parts
-                .iter()
-                .map(|p| p.value.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            // Bare words such as `current_date` parse as identifiers; they read no column.
-            acc.diagnostics
-                .push(format!("`{name}` was not resolved to a column"));
-            acc.lower(Confidence::Inferred);
+            return Ok(());
         }
+        let name = parts
+            .iter()
+            .map(|p| p.value.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        // Niladic keywords (`current_date`, `null`) can parse as identifiers; they read no
+        // column. Anything else unresolved could be a real input we'd miss, so the query
+        // is opaque rather than silently incomplete (AGENTS.md rule 3).
+        if let [single] = parts
+            && single.quote_style.is_none()
+            && KEYWORDS.contains(&single.value.to_ascii_lowercase().as_str())
+        {
+            return Ok(());
+        }
+        Err(Opaque(format!(
+            "`{name}` could not be resolved to a column"
+        )))
     }
 
-    /// Resolves a (possibly qualified) column reference in `scope` or its outer scopes.
+    /// Resolves a column reference: `col`, `source.col`, `db.table.col`, or any of
+    /// those followed by struct field names (`source.col.field`).
     fn resolve(&self, parts: &[Ident], scope: &Scope<'_>) -> Option<Resolved> {
         let names: Vec<String> = parts.iter().map(|p| self.dialect.ident(p)).collect();
-        let (column, qualifier) = names.split_last()?;
-        let mut current = Some(scope);
-        while let Some(scope) = current {
-            if let Some(resolved) = Self::resolve_in(column, qualifier, scope) {
-                return Some(resolved);
-            }
-            current = scope.outer;
-        }
-        // `s.field` where `s` is a struct column rather than a source.
-        if let Some((root, _)) = names.split_first()
-            && names.len() > 1
-        {
-            let root_ident = Ident::new(root.clone());
-            return self
-                .resolve(std::slice::from_ref(&root_ident), scope)
-                .map(|mut r| {
-                    r.edges = r
+        // Prefer the longest qualifier: `a.b.c` is column `c` of source `a.b` before it is
+        // field `c` of column `b` of source `a`, before field path `b.c` of column `a`.
+        for split in (0..names.len()).rev() {
+            let (qualifier, rest) = names.split_at(split);
+            let Some(column) = rest.first() else {
+                continue;
+            };
+            if let Some(mut resolved) = Self::resolve_column(column, qualifier, scope) {
+                if rest.len() > 1 {
+                    resolved.edges = resolved
                         .edges
                         .into_iter()
                         .map(|(c, e)| (c, compose(Use::Value(DirectKind::Transformation), e)))
                         .collect();
-                    r
-                });
+                }
+                return Some(resolved);
+            }
         }
         None
     }
 
-    fn resolve_in(column: &str, qualifier: &[String], scope: &Scope<'_>) -> Option<Resolved> {
+    fn resolve_column(column: &str, qualifier: &[String], scope: &Scope<'_>) -> Option<Resolved> {
         if !qualifier.is_empty() {
             let source = Self::source_named(qualifier, scope)?;
             return Self::source_column(source, column).or_else(|| {
-                // The qualifier names a source that doesn't declare this column: trust the
+                // The qualifier names a table whose columns are unknown: trust the
                 // qualifier (the SQL says so), but mark it inferred.
                 match &source.kind {
-                    SourceKind::Table { relation, .. } => Some(Resolved {
+                    SourceKind::Table {
+                        relation,
+                        columns: None,
+                    } => Some(Resolved {
                         token: format!("{relation}.{column}"),
                         edges: [(
                             ColumnRef::new(relation.clone(), column),
@@ -1217,49 +1301,63 @@ impl Analyzer<'_> {
                         .into(),
                         confidence: Confidence::Inferred,
                     }),
-                    SourceKind::Derived(_) => None,
+                    _ => None,
                 }
             });
         }
-        let known: Vec<Resolved> = scope
-            .sources
-            .iter()
-            .filter_map(|s| Self::source_column(s, column))
-            .collect();
-        match known.len() {
-            1 => return known.into_iter().next(),
-            n if n > 1 => return Some(merge(known, Confidence::Inferred)),
-            _ => {}
+        // Known columns, innermost scope outward; lateral aliases only innermost.
+        let mut current = Some(scope);
+        let mut innermost = true;
+        while let Some(level) = current {
+            let known: Vec<Resolved> = level
+                .sources
+                .iter()
+                .filter_map(|s| Self::source_column(s, column))
+                .collect();
+            match known.len() {
+                1 => return known.into_iter().next(),
+                n if n > 1 => return Some(merge(known, Confidence::Inferred)),
+                _ => {}
+            }
+            if innermost && let Some(alias) = level.aliases.iter().rev().find(|c| c.name == column)
+            {
+                return Some(Resolved {
+                    edges: alias.inputs.clone(),
+                    token: alias.digest.clone(),
+                    confidence: alias.confidence,
+                });
+            }
+            innermost = false;
+            current = level.outer;
         }
-        // Lateral column alias (`select a + 1 as b, b * 2 as c`).
-        if let Some(alias) = scope.aliases.iter().rev().find(|c| c.name == column) {
-            return Some(Resolved {
-                edges: alias.inputs.clone(),
-                token: alias.digest.clone(),
-                confidence: alias.confidence,
-            });
+        // Only then: tables whose columns are unknown might have it (innermost first).
+        let mut current = Some(scope);
+        while let Some(level) = current {
+            let unknown: Vec<Resolved> = level
+                .sources
+                .iter()
+                .filter_map(|s| match &s.kind {
+                    SourceKind::Table {
+                        relation,
+                        columns: None,
+                    } => Some(Resolved {
+                        token: format!("{relation}.{column}"),
+                        edges: [(
+                            ColumnRef::new(relation.clone(), column),
+                            EdgeKind::Direct(DirectKind::Identity),
+                        )]
+                        .into(),
+                        confidence: Confidence::Inferred,
+                    }),
+                    _ => None,
+                })
+                .collect();
+            if !unknown.is_empty() {
+                return Some(merge(unknown, Confidence::Inferred));
+            }
+            current = level.outer;
         }
-        // Tables with unknown columns might have it.
-        let unknown: Vec<Resolved> = scope
-            .sources
-            .iter()
-            .filter_map(|s| match &s.kind {
-                SourceKind::Table {
-                    relation,
-                    columns: None,
-                } => Some(Resolved {
-                    token: format!("{relation}.{column}"),
-                    edges: [(
-                        ColumnRef::new(relation.clone(), column),
-                        EdgeKind::Direct(DirectKind::Identity),
-                    )]
-                    .into(),
-                    confidence: Confidence::Inferred,
-                }),
-                _ => None,
-            })
-            .collect();
-        (!unknown.is_empty()).then(|| merge(unknown, Confidence::Inferred))
+        None
     }
 
     fn source_named<'s>(qualifier: &[String], scope: &'s Scope<'_>) -> Option<&'s Source> {
@@ -1319,6 +1417,53 @@ impl Analyzer<'_> {
         });
         expr.to_string()
     }
+}
+
+/// The direct sub-expressions of common compound expressions, or `None` for shapes
+/// handled elsewhere or by the generic fallback.
+fn children(expr: &Expr) -> Option<Vec<&Expr>> {
+    Some(match expr {
+        Expr::BinaryOp { left, right, .. }
+        | Expr::IsDistinctFrom(left, right)
+        | Expr::IsNotDistinctFrom(left, right) => vec![left, right],
+        Expr::UnaryOp { expr, .. }
+        | Expr::Cast { expr, .. }
+        | Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::IsTrue(expr)
+        | Expr::IsNotTrue(expr)
+        | Expr::IsFalse(expr)
+        | Expr::IsNotFalse(expr)
+        | Expr::IsUnknown(expr)
+        | Expr::IsNotUnknown(expr)
+        | Expr::Collate { expr, .. }
+        | Expr::Extract { expr, .. }
+        | Expr::Ceil { expr, .. }
+        | Expr::Floor { expr, .. } => vec![expr],
+        Expr::Between {
+            expr, low, high, ..
+        } => vec![expr, low, high],
+        Expr::InList { expr, list, .. } => std::iter::once(&**expr).chain(list).collect(),
+        Expr::Like { expr, pattern, .. }
+        | Expr::ILike { expr, pattern, .. }
+        | Expr::SimilarTo { expr, pattern, .. }
+        | Expr::RLike { expr, pattern, .. } => vec![expr, pattern],
+        Expr::AtTimeZone {
+            timestamp,
+            time_zone,
+        } => vec![timestamp, time_zone],
+        Expr::Tuple(items) => items.iter().collect(),
+        Expr::Value(_) | Expr::TypedString(_) => Vec::new(),
+        _ => return None,
+    })
+}
+
+fn modifiers_text(modifiers: &[sqlparser::ast::GroupByWithModifier]) -> String {
+    modifiers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn merge(all: Vec<Resolved>, confidence: Confidence) -> Resolved {

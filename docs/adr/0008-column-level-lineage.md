@@ -82,20 +82,43 @@ Per model, in dependency order:
    change inside a CTE does.
 
 ### 3. Conservative by construction (AGENTS.md rule 3)
-A query is **opaque** when any of these holds:
-- the SQL doesn't parse;
-- it is a Python model;
+**A query is opaque** when any of these holds:
+- the SQL doesn't parse, or is a Python model;
 - it has a `select *` over a relation with unknown columns;
 - it uses table functions, NATURAL joins, recursive CTEs, or `*` with REPLACE/RENAME/ILIKE;
-- it has a subquery nested where it can't be scoped.
+- **a column reference can't be resolved**. Niladic keywords such as `current_date` are
+  the only exception;
+- a window, CASE, subquery or lambda appears inside an expression shape the analyzer
+  doesn't walk structurally.
 
-An opaque model is impacted by **any** change to what it reads. Impact never under-reports:
-- a changed row input makes every reader rerun;
-- a modified or removed column reruns exactly the readers that use it;
-- an added column only reaches `*` readers.
+Unknown-column tables are only considered after every known column in every enclosing
+scope. That way an outer reference is never captured by an inner table we know nothing
+about.
 
-Readers that are pruned are always reported, with the changed columns they don't use
-(rule 4).
+**Readers.** A node reads what its SQL reads **plus everything it declares** (dbt
+`depends_on`, with ephemeral models replaced by their own dependencies).
+
+**Impact never under-reports:**
+- **Opaque readers:** a node with no usable lineage is impacted by any change to what it
+  declares. That covers nodes without SQL (seeds with upstreams, snapshots, Python
+  models), opaque ones, and nodes that declare a relation their SQL never reads (e.g. a
+  `-- depends_on:` hint).
+- **Row changes:** a changed row input reruns every reader, and changes its rows.
+- **Modified or removed columns** rerun exactly the readers that use them. Indirect uses
+  attached to an output, such as a CASE condition, modify that output.
+- **Added columns** reach three kinds of reader:
+  - `*` readers, which gain the column;
+  - `*` readers that also shape rows with that relation, where DISTINCT, UNION or
+    GROUP BY may change the row set;
+  - readers that use a same-named column from another relation, since an unqualified
+    reference may now bind to the new column.
+
+**Diffs.** A digest covers the expression with resolved inputs, the named windows, the
+sort direction and nulls order, and GROUP BY modifiers. A moved column counts as modified
+for positional consumers. Duplicate output names make the whole model a row change.
+Under `--base`, a node without SQL lineage is compared by dbt's file checksum.
+
+Pruned readers are always reported, with the changed columns they don't use (rule 4).
 
 ### 4. Fast by construction
 - **Dependency waves.** Models are analyzed wave by wave, each wave in parallel with
@@ -106,7 +129,7 @@ Readers that are pruned are always reported, with the changed columns they don't
   - Changing a model re-analyzes only that model, unless its output columns changed.
   - A result that reads relations outside its declared dependencies is not cached.
 - **Measured on a synthetic 2,000-model project** (about 38k column edges, 41 waves;
-  `examples/lineage_bench.rs`, release build, 4 vCPU):
+  `crates/ods-cli/examples/lineage_bench.rs`, release build, 4 vCPU):
 
   | Operation | Time |
   |---|---|

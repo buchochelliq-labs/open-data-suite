@@ -363,12 +363,134 @@ fn unparseable_and_non_query_sql_is_opaque() {
 
 #[test]
 fn identifier_case_follows_the_dialect() {
-    let pg = analyze_with(SqlDialect::Postgres, r#"select "Amount" from db.orders"#);
-    // Quoted identifiers keep their case in Postgres, so this is not `amount`.
-    assert_eq!(names(&pg), ["Amount"]);
+    // Postgres folds unquoted names to lower case but keeps quoted ones: `AMOUNT` is
+    // `amount`, while `"Amount"` names a column that doesn't exist, so the query can't be
+    // analyzed safely.
+    let folded = analyze_with(SqlDialect::Postgres, "select AMOUNT from db.orders");
+    assert_eq!(
+        inputs(&folded, "amount"),
+        [(col("orders", "amount"), ID)].into()
+    );
+    let quoted = analyze_with(SqlDialect::Postgres, r#"select "Amount" from db.orders"#);
+    assert!(quoted.opaque, "{:?}", quoted.diagnostics);
     let dbx = analyze_with(SqlDialect::Databricks, "select `Amount` from db.orders");
     assert_eq!(
         inputs(&dbx, "amount"),
         [(col("orders", "amount"), ID)].into()
     );
+}
+
+// Regression tests for the architecture review of the column-lineage slice: each case
+// used to lose an input or keep a digest unchanged when the meaning changed.
+
+fn row_digest(sql: &str) -> String {
+    analyze(sql).row_digest
+}
+
+fn digest_of(sql: &str, output: &str) -> String {
+    analyze(sql)
+        .output(output)
+        .unwrap()
+        .expression_digest
+        .clone()
+}
+
+#[test]
+fn review_sort_direction_windows_and_grouping_modifiers_change_digests() {
+    assert_ne!(
+        row_digest("select id from db.orders order by amount desc limit 5"),
+        row_digest("select id from db.orders order by amount asc limit 5"),
+    );
+    assert_ne!(
+        digest_of(
+            "select sum(amount) over w as s from db.orders window w as (order by id)",
+            "s"
+        ),
+        digest_of(
+            "select sum(amount) over w as s from db.orders window w as (order by ordered_at)",
+            "s"
+        ),
+    );
+    assert_ne!(
+        row_digest("select status, sum(amount) from db.orders group by status with rollup"),
+        row_digest("select status, sum(amount) from db.orders group by status"),
+    );
+}
+
+#[test]
+fn review_lateral_struct_aggregate_order_and_windowed_arithmetic_keep_inputs() {
+    let lateral = analyze("select v from db.orders o, lateral (select o.amount * 2 as v) x");
+    assert!(!lateral.opaque, "{:?}", lateral.diagnostics);
+    assert_eq!(
+        inputs(&lateral, "v"),
+        [(col("orders", "amount"), XF)].into()
+    );
+
+    let field = analyze("select e.payload.customer as c from db.events e");
+    assert_eq!(inputs(&field, "c"), [(col("events", "payload"), XF)].into());
+
+    let ordered = analyze("select array_agg(id order by ordered_at) as ids from db.orders");
+    assert!(inputs(&ordered, "ids").contains(&(
+        col("orders", "ordered_at"),
+        EdgeKind::Indirect(IndirectKind::Sort)
+    )));
+
+    let windowed = analyze(
+        "select sum(amount) over w * 2 as s from db.orders window w as (partition by customer_id)",
+    );
+    assert!(inputs(&windowed, "s").contains(&(
+        col("orders", "customer_id"),
+        EdgeKind::Indirect(IndirectKind::Window)
+    )));
+}
+
+#[test]
+fn review_unresolvable_references_make_the_query_opaque_but_keywords_do_not() {
+    let unknown = analyze("select no_such_column from db.orders");
+    assert!(unknown.opaque);
+    assert_eq!(unknown.relations_read, [rel("orders")].into());
+    let keyword = analyze("select id, current_date as today from db.orders");
+    assert!(!keyword.opaque, "{:?}", keyword.diagnostics);
+}
+
+#[test]
+fn review_wildcards_inside_ctes_and_distinct_on_are_recorded() {
+    let cte = analyze("with c as (select distinct * from db.orders) select count(*) as n from c");
+    assert_eq!(cte.wildcard_relations, [rel("orders")].into());
+    assert!(
+        cte.row_inputs
+            .contains(&(col("orders", "status"), IndirectKind::GroupBy))
+    );
+
+    let on = analyze_with(
+        SqlDialect::Postgres,
+        "select distinct on (customer_id) id from db.orders order by customer_id, ordered_at",
+    );
+    assert!(
+        on.row_inputs
+            .contains(&(col("orders", "customer_id"), IndirectKind::GroupBy))
+    );
+}
+
+#[test]
+fn review_tables_with_unknown_columns_do_not_capture_outer_references() {
+    let l = analyze(
+        "select id from db.orders o
+         where exists (select 1 from db.nocatalog n where n.id = o.id and n.status = status)",
+    );
+    // The bare `status` belongs to `orders` (known), not the unknown inner table.
+    assert!(
+        l.row_inputs
+            .contains(&(col("orders", "status"), IndirectKind::Filter)),
+        "{:?}",
+        l.row_inputs
+    );
+}
+
+#[test]
+fn review_opaque_results_keep_tables_shadowed_by_cte_names() {
+    let l = analyze("with orders as (select * from orders) select * from orders");
+    assert!(l.opaque);
+    let orders = RelationName::new(["orders"]).unwrap();
+    assert!(l.relations_read.contains(&orders));
 }

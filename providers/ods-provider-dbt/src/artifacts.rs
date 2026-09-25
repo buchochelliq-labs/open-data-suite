@@ -94,6 +94,12 @@ struct RawConfig {
     enabled: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct RawChecksum {
+    #[serde(default)]
+    checksum: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawColumn {
     name: String,
@@ -115,6 +121,8 @@ struct RawNode {
     config: RawConfig,
     #[serde(default)]
     columns: BTreeMap<String, RawColumn>,
+    #[serde(default)]
+    checksum: RawChecksum,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,8 +152,10 @@ pub struct ManifestNode {
     pub materialized: Option<String>,
     /// Upstream node ids.
     pub depends_on: Vec<String>,
-    /// Columns declared in YAML (may be incomplete).
+    /// Columns declared in YAML: often incomplete, and not in table order.
     pub declared_columns: Vec<String>,
+    /// dbt's checksum of the node's source file (e.g. a model's SQL or a seed's CSV).
+    pub checksum: Option<String>,
 }
 
 /// The parts of `manifest.json` ODS uses.
@@ -304,6 +314,7 @@ impl Manifest {
                     materialized: n.config.materialized,
                     depends_on: n.depends_on.nodes,
                     declared_columns,
+                    checksum: n.checksum.checksum,
                 };
                 (node.unique_id.clone(), node)
             })

@@ -364,3 +364,44 @@ fn unknown_focus_is_a_usage_error() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stdout).contains("has no column"));
 }
+
+#[test]
+fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
+    // A seed's CSV changed: dbt's checksum differs, so everything downstream may change.
+    let head = Temp::new();
+    for file in ["manifest.json", "catalog.json"] {
+        fs::copy(fixture().join(file), head.0.join(file)).unwrap();
+    }
+    let manifest_path = head.0.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["nodes"]["seed.jaffle_ods.raw_payments"]["checksum"]["checksum"] =
+        Value::String("changed".into());
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+
+    let base = fixture();
+    let result = json(&[
+        "lineage",
+        "impact",
+        "--target-dir",
+        head.0.to_str().unwrap(),
+        "--base",
+        base.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        strings(&result["changed_models"]),
+        ["seed.jaffle_ods.raw_payments"]
+    );
+    let run = strings(&result["run"]);
+    for expected in [
+        "model.jaffle_ods.stg_payments",
+        "model.jaffle_ods.orders",
+        "model.jaffle_ods.customers",
+        "model.jaffle_ods.order_events",
+    ] {
+        assert!(
+            run.iter().any(|r| r == expected),
+            "{expected} must run: {run:?}"
+        );
+    }
+}
