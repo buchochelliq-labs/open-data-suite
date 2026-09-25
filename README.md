@@ -20,3 +20,7 @@ and Databricks, and every decision it makes can be explained.
 - Roadmap, milestones, and releases: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Contributor and AI-agent guide: [`AGENTS.md`](AGENTS.md)
 - Architecture decisions: [`docs/adr/`](docs/adr/)
+
+## Licence
+
+Licensed under the [Apache License, Version 2.0](LICENSE).

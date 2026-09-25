@@ -7,8 +7,8 @@ repo_url: https://github.com/buchochelliq-labs/open-data-suite
 repo_name: open-data-suite
 edit_uri: edit/main/docs/
 copyright: >-
-  OpenDataSuite contributors. Experimental software, provided "as is" without warranty.
-  See the Legal and trademarks page.
+  OpenDataSuite contributors. Licensed under Apache-2.0. Experimental software, provided
+  "as is" without warranty. See the Legal and trademarks page.
 
 docs_dir: docs
 # Working notes and competitive research are for contributors, not the public site.
