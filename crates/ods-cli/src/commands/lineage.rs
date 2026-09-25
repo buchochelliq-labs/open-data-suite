@@ -541,10 +541,15 @@ fn project(
         if sql_model && let Some(sql) = &node.compiled_code {
             lineage_node = lineage_node.with_sql(sql);
         }
-        // Only warehouse catalog columns are a table's real, ordered schema. Columns
-        // documented in YAML are often incomplete, so they are not used: an unknown schema
-        // is handled conservatively rather than a partial one presented as complete.
-        if let Some(columns) = catalog.and_then(|c| c.columns.get(&node.unique_id)) {
+        // Only a real, ordered schema is used: the warehouse catalog's, or a seed's CSV
+        // header (verified against dbt's checksum), which is exactly what dbt loads.
+        // Columns documented in YAML are often incomplete, so they are not used: an
+        // unknown schema is handled conservatively rather than a partial one presented
+        // as complete.
+        if let Some(columns) = catalog
+            .and_then(|c| c.columns.get(&node.unique_id))
+            .or(node.file_columns.as_ref())
+        {
             lineage_node =
                 lineage_node.with_columns(columns.iter().map(|c| analyzer.column_name(c)));
         }
@@ -830,6 +835,133 @@ impl Present for CompareReport {
 struct ColumnsReport {
     summary: Summary,
     models: Vec<ModelColumns>,
+    /// Seeds and sources: where each of their columns goes downstream.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    upstreams: Vec<UpstreamColumns>,
+}
+
+/// A seed's or source's columns and their downstream uses.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct UpstreamColumns {
+    unique_id: String,
+    name: String,
+    kind: NodeKind,
+    relation: String,
+    columns: Vec<ColumnUses>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct ColumnUses {
+    name: String,
+    /// Downstream columns it feeds directly (`model.column`), or rows it shapes
+    /// (`model`), each with what they feed in turn.
+    used_by: Vec<Downstream>,
+    /// Every column it reaches, any number of hops downstream, sorted.
+    reaches: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct Downstream {
+    /// `model.column`, or `model` when it shapes the model's rows.
+    column: String,
+    edge: EdgeKind,
+    /// It decides which rows the model has, so it affects all of its columns.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    shapes_rows: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    used_by: Vec<Downstream>,
+}
+
+/// Where `column` goes downstream, as a tree. A column seen higher up the same path is
+/// not expanded again, and a row-shaping use ends the path (it affects every column of
+/// that model, which `reaches` lists).
+fn downstream(
+    loaded: &Loaded,
+    column: &ColumnRef,
+    path: &mut BTreeSet<ColumnRef>,
+) -> Vec<Downstream> {
+    let mut out = Vec::new();
+    for u in loaded.graph.uses_of(column) {
+        let name = loaded.node_name(&u.node);
+        let Some(output) = &u.output else {
+            out.push(Downstream {
+                column: name,
+                edge: u.edge,
+                shapes_rows: true,
+                used_by: Vec::new(),
+            });
+            continue;
+        };
+        let next = loaded
+            .graph
+            .node(&u.node)
+            .map(|n| ColumnRef::new(n.relation.clone(), output.clone()));
+        let used_by = match next {
+            Some(next) if path.insert(next.clone()) => {
+                let below = downstream(loaded, &next, path);
+                path.remove(&next);
+                below
+            }
+            _ => Vec::new(),
+        };
+        out.push(Downstream {
+            column: format!("{name}.{output}"),
+            edge: u.edge,
+            shapes_rows: false,
+            used_by,
+        });
+    }
+    out
+}
+
+/// Every column `start` can affect downstream, any number of hops away. A column that
+/// shapes a model's rows affects all of that model's columns, and so everything they
+/// feed in turn.
+fn reaches(loaded: &Loaded, start: &ColumnRef) -> Vec<String> {
+    let mut seen = BTreeSet::from([start.clone()]);
+    let mut queue = vec![start.clone()];
+    let mut out = BTreeSet::new();
+    while let Some(column) = queue.pop() {
+        for u in loaded.graph.uses_of(&column) {
+            let Some(node) = loaded.graph.node(&u.node) else {
+                continue;
+            };
+            let affected: Vec<String> = match &u.output {
+                Some(output) => vec![output.clone()],
+                None => node.columns.clone(),
+            };
+            for output in affected {
+                let next = ColumnRef::new(node.relation.clone(), output.clone());
+                if seen.insert(next.clone()) {
+                    out.insert(format!("{}.{output}", loaded.node_name(&node.id)));
+                    queue.push(next);
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn downstream_items(uses: &[Downstream]) -> Vec<TreeItem> {
+    uses.iter()
+        .map(|u| {
+            let target = if u.shapes_rows {
+                format!("rows of {}", u.column)
+            } else {
+                u.column.clone()
+            };
+            TreeItem {
+                label: vec![
+                    Span::toned(target, Tone::Code),
+                    Span::toned(format!(" ({})", edge_name(u.edge)), Tone::Muted),
+                ],
+                children: downstream_items(&u.used_by),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -895,9 +1027,39 @@ impl ColumnsReport {
                 })
             })
             .collect();
+        let upstreams = loaded
+            .graph
+            .nodes()
+            .filter(|n| only.as_ref().is_none_or(|id| *id == n.id))
+            .filter(|n| n.lineage.is_none() && matches!(n.kind, NodeKind::Seed | NodeKind::Source))
+            .filter(|n| !n.columns.is_empty())
+            .map(|n| UpstreamColumns {
+                unique_id: n.id.clone(),
+                name: loaded.node_name(&n.id),
+                kind: n.kind,
+                relation: n.relation.to_string(),
+                columns: n
+                    .columns
+                    .iter()
+                    .map(|c| {
+                        let start = ColumnRef::new(n.relation.clone(), c.clone());
+                        ColumnUses {
+                            name: c.clone(),
+                            used_by: downstream(
+                                loaded,
+                                &start,
+                                &mut BTreeSet::from([start.clone()]),
+                            ),
+                            reaches: reaches(loaded, &start),
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
         Ok(Self {
             summary: Summary::of(loaded),
             models,
+            upstreams,
         })
     }
 }
@@ -957,6 +1119,33 @@ impl Present for ColumnsReport {
                 )]));
             }
             blocks.push(ViewNode::Tree(TreeItem { label, children }));
+        }
+        for upstream in &self.upstreams {
+            let kind = match upstream.kind {
+                NodeKind::Seed => "seed",
+                _ => "source",
+            };
+            blocks.push(ViewNode::Tree(TreeItem {
+                label: vec![
+                    Span::toned(upstream.name.as_str(), Tone::Code),
+                    Span::toned(format!(" ({kind}) used downstream by"), Tone::Muted),
+                ],
+                children: upstream
+                    .columns
+                    .iter()
+                    .map(|c| TreeItem {
+                        label: vec![Span::toned(c.name.as_str(), Tone::Emphasis)],
+                        children: if c.used_by.is_empty() {
+                            vec![TreeItem::leaf(vec![Span::toned(
+                                "not used downstream",
+                                Tone::Muted,
+                            )])]
+                        } else {
+                            downstream_items(&c.used_by)
+                        },
+                    })
+                    .collect(),
+            }));
         }
         ViewNode::Group(blocks)
     }
@@ -1068,8 +1257,12 @@ impl ImpactReport {
             let Some(after) = &node.lineage else {
                 // No SQL lineage (seeds, snapshots, Python models): compare dbt's file
                 // checksum; any difference, or a new node, may change every row.
+                // No checksum of the content (e.g. dbt's path-only checksum of a large
+                // seed) is no evidence that it's the same.
+                let checksum = head.checksums.get(&node.id).and_then(Option::as_ref);
                 let same = before_node.is_some()
-                    && base.checksums.get(&node.id) == head.checksums.get(&node.id);
+                    && checksum.is_some()
+                    && base.checksums.get(&node.id).and_then(Option::as_ref) == checksum;
                 if !same {
                     changed_models.push(node.id.clone());
                     changes.push(Change::Rows {

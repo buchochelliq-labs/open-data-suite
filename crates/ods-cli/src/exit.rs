@@ -77,6 +77,12 @@ pub mod codes {
     pub const LINEAGE_TARGET: &str = "ODS-E0203";
     /// `ods serve` can't bind its address or stopped with an I/O error.
     pub const SERVE: &str = "ODS-E0301";
+    /// The state database can't be opened, read or written, or is from a newer ODS.
+    pub const STATE_STORE: &str = "ODS-E0401";
+    /// Another run recorded state first; plan again and retry.
+    pub const STATE_CONFLICT: &str = "ODS-E0402";
+    /// A run's results or source freshness can't be read, or a State option is invalid.
+    pub const STATE_INPUT: &str = "ODS-E0403";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

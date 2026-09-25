@@ -75,6 +75,10 @@ pub enum ResourceType {
 struct RawMetadata {
     dbt_schema_version: String,
     #[serde(default)]
+    invocation_id: Option<String>,
+    #[serde(default)]
+    project_name: Option<String>,
+    #[serde(default)]
     adapter_type: Option<String>,
     #[serde(default)]
     dbt_version: Option<String>,
@@ -84,6 +88,16 @@ struct RawMetadata {
 struct RawDependsOn {
     #[serde(default)]
     nodes: Vec<String>,
+    #[serde(default)]
+    macros: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawMacro {
+    #[serde(default)]
+    macro_sql: String,
+    #[serde(default)]
+    depends_on: RawDependsOn,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -109,8 +123,21 @@ struct RawConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct RawChecksum {
+    /// `sha256`, or `path` for seeds too large to hash (then `checksum` is the path).
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     checksum: Option<String>,
+}
+
+impl RawChecksum {
+    /// The checksum, if it is a hash of the content.
+    fn of_content(self) -> Option<String> {
+        match self.name.as_deref() {
+            Some("path") => None,
+            _ => self.checksum,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +194,15 @@ struct RawTestMetadata {
 #[derive(Debug, Deserialize)]
 struct RawNode {
     unique_id: String,
+    #[serde(default)]
+    original_file_path: Option<String>,
+    #[serde(default)]
+    root_path: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    /// Model versions are numbers or strings.
+    #[serde(default)]
+    version: Option<serde_json::Value>,
     resource_type: ResourceType,
     #[serde(default)]
     relation_name: Option<String>,
@@ -176,8 +212,9 @@ struct RawNode {
     language: Option<String>,
     #[serde(default)]
     depends_on: RawDependsOn,
+    /// Kept whole for fingerprints; the fields ODS reads are parsed into [`RawConfig`].
     #[serde(default)]
-    config: RawConfig,
+    config: serde_json::Value,
     #[serde(default)]
     columns: BTreeMap<String, RawColumn>,
     #[serde(default)]
@@ -206,6 +243,8 @@ struct RawManifest {
     nodes: BTreeMap<String, RawNode>,
     #[serde(default)]
     sources: BTreeMap<String, RawNode>,
+    #[serde(default)]
+    macros: BTreeMap<String, RawMacro>,
 }
 
 /// A node from the manifest (model, seed, snapshot, source, test, …).
@@ -226,10 +265,25 @@ pub struct ManifestNode {
     pub materialized: Option<String>,
     /// Upstream node ids.
     pub depends_on: Vec<String>,
+    /// Macros it calls directly, by id (e.g. `macro.shop.cents_to_dollars`).
+    pub depends_on_macros: Vec<String>,
     /// Columns declared in YAML: often incomplete, and not in table order.
     pub declared_columns: Vec<String>,
-    /// dbt's checksum of the node's source file (e.g. a model's SQL or a seed's CSV).
+    /// dbt's checksum of the node's source file (e.g. a model's SQL or a seed's CSV);
+    /// `None` when dbt didn't hash the content (seeds over 1 MiB are identified by path).
     pub checksum: Option<String>,
+    /// Its name, e.g. `orders`.
+    pub name: Option<String>,
+    /// Its source file, relative to the project root, e.g. `seeds/raw_orders.csv`.
+    pub original_file_path: Option<String>,
+    /// The project root dbt recorded, if any (older manifests).
+    pub root_path: Option<String>,
+    /// A seed's columns, in order, from the header of its CSV file. Only set when the
+    /// file is found and its SHA-256 matches dbt's checksum, i.e. it is the file dbt
+    /// loaded.
+    pub file_columns: Option<Vec<String>>,
+    /// Its model version, e.g. `2`, for versioned models.
+    pub version: Option<String>,
     /// Scheduling configuration, as resolved by dbt.
     pub config: DbtConfig,
     /// For data tests: which test, on what.
@@ -315,6 +369,8 @@ pub struct DbtConfig {
     /// The `unique_key` of an incremental model or snapshot: the columns dbt merges on,
     /// one or several.
     pub unique_key: Vec<String>,
+    /// The whole resolved config, as dbt wrote it (a JSON object; `null` if absent).
+    pub raw: serde_json::Value,
 }
 
 impl DbtConfig {
@@ -329,8 +385,19 @@ impl DbtConfig {
             loaded_at_field: text("loaded_at_field"),
             loaded_at_query: text("loaded_at_query"),
             unique_key: config.get("unique_key").map(unique_key).unwrap_or_default(),
+            raw: config.clone(),
         }
     }
+}
+
+/// A macro: its source and the macros it calls.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtMacro {
+    /// The macro's Jinja source.
+    pub sql: String,
+    /// Macros it calls, by id.
+    pub depends_on: Vec<String>,
 }
 
 /// Which dbt artifact format the project was read from.
@@ -368,6 +435,12 @@ pub struct Manifest {
     pub dbt_version: Option<String>,
     /// The adapter, e.g. `databricks`; names the SQL dialect.
     pub adapter_type: Option<String>,
+    /// The dbt project's name.
+    pub project_name: Option<String>,
+    /// The dbt invocation that wrote it.
+    pub invocation_id: Option<String>,
+    /// Macros, by id: their source and the macros they call.
+    pub macros: BTreeMap<String, DbtMacro>,
     /// Enabled nodes and sources, sorted by id.
     pub nodes: Vec<ManifestNode>,
 }
@@ -451,7 +524,8 @@ impl Artifacts {
             let (manifest, catalog) = crate::info_schema::read(&dir, version)?;
             return Ok(Self { manifest, catalog });
         }
-        let manifest = Manifest::read(&json)?;
+        let mut manifest = Manifest::read(&json)?;
+        crate::seeds::attach_columns(&mut manifest, target_dir);
         let catalog_path = target_dir.join("catalog.json");
         let catalog = if catalog_path.is_file() {
             Some(Catalog::read(&catalog_path)?)
@@ -462,7 +536,7 @@ impl Artifacts {
     }
 }
 
-fn read(path: &Path) -> Result<String, DbtError> {
+pub(crate) fn read(path: &Path) -> Result<String, DbtError> {
     fs::read_to_string(path).map_err(|source| DbtError::Io {
         path: path.to_owned(),
         source,
@@ -479,7 +553,7 @@ fn schema_version(url: &str) -> Option<u32> {
         .ok()
 }
 
-fn check_version(
+pub(crate) fn check_version(
     path: &Path,
     artifact: &'static str,
     url: &str,
@@ -528,77 +602,27 @@ impl Manifest {
             &raw.metadata.dbt_schema_version,
             &MANIFEST_VERSIONS,
         )?;
-        let nodes = raw
-            .nodes
-            .into_values()
-            .chain(raw.sources.into_values())
-            .filter(|n| n.config.enabled != Some(false))
-            .map(|n| {
-                let mut constraints: Vec<DbtConstraint> = n
-                    .constraints
-                    .into_iter()
-                    .map(|c| c.into_constraint(None))
-                    .collect();
-                let mut declared_types = BTreeMap::new();
-                let mut column_descriptions = BTreeMap::new();
-                let mut declared_columns = Vec::new();
-                for column in n.columns.into_values() {
-                    if let Some(description) = column.description.filter(|d| !d.trim().is_empty()) {
-                        column_descriptions.insert(column.name.clone(), description);
-                    }
-                    constraints.extend(
-                        column
-                            .constraints
-                            .into_iter()
-                            .map(|c| c.into_constraint(Some(&column.name))),
-                    );
-                    if let Some(data_type) = column.data_type.filter(|t| !t.is_empty()) {
-                        declared_types.insert(column.name.clone(), data_type);
-                    }
-                    declared_columns.push(column.name);
-                }
-                declared_columns.sort();
-                let where_clause = n
-                    .config
-                    .where_clause
-                    .clone()
-                    .filter(|w| !w.trim().is_empty());
-                let test = n.test_metadata.map(|t| DbtTest {
-                    name: t.name,
-                    namespace: t.namespace,
-                    column_name: n.column_name,
-                    attached_node: n.attached_node,
-                    arguments: t.kwargs,
-                    where_clause,
-                });
-                let node = ManifestNode {
-                    unique_id: n.unique_id,
-                    resource_type: n.resource_type,
-                    relation_name: n.relation_name,
-                    compiled_code: n.compiled_code,
-                    language: n.language,
-                    materialized: n.config.materialized,
-                    depends_on: n.depends_on.nodes,
-                    declared_columns,
-                    checksum: n.checksum.checksum,
-                    config: DbtConfig {
-                        state: n.config.state.filter(|v| !v.is_null()),
-                        freshness: n.config.freshness.filter(|v| !v.is_null()),
-                        loaded_at_field: n.config.loaded_at_field.or(n.loaded_at_field),
-                        loaded_at_query: n.config.loaded_at_query.or(n.loaded_at_query),
-                        unique_key: n
-                            .config
-                            .unique_key
-                            .as_ref()
-                            .map(unique_key)
-                            .unwrap_or_default(),
-                    },
-                    test,
-                    constraints,
-                    declared_types,
-                    description: n.description.filter(|d| !d.trim().is_empty()),
-                    column_descriptions,
-                };
+        let invalid = |message: String| DbtError::Invalid {
+            path: path.to_owned(),
+            artifact: "manifest",
+            message,
+        };
+        let mut parsed = Vec::new();
+        for n in raw.nodes.into_values().chain(raw.sources.into_values()) {
+            let config: RawConfig = if n.config.is_null() {
+                RawConfig::default()
+            } else {
+                serde_json::from_value(n.config.clone())
+                    .map_err(|e| invalid(format!("`{}` has an invalid config: {e}", n.unique_id)))?
+            };
+            if config.enabled != Some(false) {
+                parsed.push((n, config));
+            }
+        }
+        let nodes = parsed
+            .into_iter()
+            .map(|(n, config)| {
+                let node = manifest_node(n, config);
                 (node.unique_id.clone(), node)
             })
             .collect::<BTreeMap<_, _>>();
@@ -607,8 +631,98 @@ impl Manifest {
             source: ArtifactSource::ManifestJson,
             dbt_version: raw.metadata.dbt_version,
             adapter_type: raw.metadata.adapter_type,
+            project_name: raw.metadata.project_name,
+            invocation_id: raw.metadata.invocation_id,
+            macros: raw
+                .macros
+                .into_iter()
+                .map(|(id, m)| {
+                    (
+                        id,
+                        DbtMacro {
+                            sql: m.macro_sql,
+                            depends_on: m.depends_on.macros,
+                        },
+                    )
+                })
+                .collect(),
             nodes: nodes.into_values().collect(),
         })
+    }
+}
+
+/// A manifest node from its raw form and parsed config.
+fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
+    let mut constraints: Vec<DbtConstraint> = n
+        .constraints
+        .into_iter()
+        .map(|c| c.into_constraint(None))
+        .collect();
+    let mut declared_types = BTreeMap::new();
+    let mut column_descriptions = BTreeMap::new();
+    let mut declared_columns = Vec::new();
+    for column in n.columns.into_values() {
+        if let Some(description) = column.description.filter(|d| !d.trim().is_empty()) {
+            column_descriptions.insert(column.name.clone(), description);
+        }
+        constraints.extend(
+            column
+                .constraints
+                .into_iter()
+                .map(|c| c.into_constraint(Some(&column.name))),
+        );
+        if let Some(data_type) = column.data_type.filter(|t| !t.is_empty()) {
+            declared_types.insert(column.name.clone(), data_type);
+        }
+        declared_columns.push(column.name);
+    }
+    declared_columns.sort();
+    let where_clause = config.where_clause.clone().filter(|w| !w.trim().is_empty());
+    let test = n.test_metadata.map(|t| DbtTest {
+        name: t.name,
+        namespace: t.namespace,
+        column_name: n.column_name,
+        attached_node: n.attached_node,
+        arguments: t.kwargs,
+        where_clause,
+    });
+    ManifestNode {
+        unique_id: n.unique_id,
+        resource_type: n.resource_type,
+        relation_name: n.relation_name,
+        compiled_code: n.compiled_code,
+        language: n.language,
+        materialized: config.materialized,
+        depends_on: n.depends_on.nodes,
+        depends_on_macros: n.depends_on.macros,
+        declared_columns,
+        checksum: n.checksum.of_content(),
+        name: n.name,
+        original_file_path: n.original_file_path,
+        root_path: n.root_path,
+        file_columns: None,
+        version: n.version.and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }),
+        config: DbtConfig {
+            state: config.state.filter(|v| !v.is_null()),
+            freshness: config.freshness.filter(|v| !v.is_null()),
+            loaded_at_field: config.loaded_at_field.or(n.loaded_at_field),
+            loaded_at_query: config.loaded_at_query.or(n.loaded_at_query),
+            raw: n.config,
+            unique_key: config
+                .unique_key
+                .as_ref()
+                .map(unique_key)
+                .unwrap_or_default(),
+        },
+        test,
+        constraints,
+        declared_types,
+        description: n.description.filter(|d| !d.trim().is_empty()),
+        column_descriptions,
     }
 }
 

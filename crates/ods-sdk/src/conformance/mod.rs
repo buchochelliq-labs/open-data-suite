@@ -15,6 +15,7 @@
 //! A failing case panics with the case name.
 
 pub mod lock;
+pub mod state_store;
 
 /// What a suite run did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

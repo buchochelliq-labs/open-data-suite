@@ -75,7 +75,10 @@ fn columns_trace_every_model_column_to_its_inputs() {
         "customers",
     ]);
     assert_eq!(result["summary"]["dialect"], "duckdb");
-    assert_eq!(result["summary"]["models_opaque"], 0);
+    assert_eq!(
+        result["summary"]["models_opaque"], 1,
+        "the Python model customer_segments"
+    );
     let model = &result["models"][0];
     assert_eq!(model["unique_id"], "model.jaffle_ods.customers");
     let lifetime = model["columns"]
@@ -158,9 +161,13 @@ fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
         strings(&result["run"]),
         [
             "model.jaffle_ods.customer_order_rank",
+            // A Python model is opaque: it may use any column of `customers`, so it runs,
+            // and so does everything reading it.
+            "model.jaffle_ods.customer_segments",
             "model.jaffle_ods.customers",
             "model.jaffle_ods.customers_snapshot_view",
-            "model.jaffle_ods.orders"
+            "model.jaffle_ods.orders",
+            "model.jaffle_ods.segment_summary"
         ]
     );
     // `order_events` doesn't read `orders` at all, so it's neither run nor pruned.
@@ -184,13 +191,20 @@ fn export_writes_openlineage_job_events_with_column_lineage() {
         "--output-file",
         file.to_str().unwrap(),
     ]);
-    assert_eq!(result["events"], 8);
-    assert_eq!(result["with_column_lineage"], 8);
+    assert_eq!(result["events"], 10, "every model, the Python one included");
+    assert_eq!(result["with_column_lineage"], 9, "all but the Python model");
     let events: Vec<Value> = fs::read_to_string(&file)
         .unwrap()
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
+    // The Python model: table-level lineage from what it declares, no column facet.
+    let python = events
+        .iter()
+        .find(|e| e["job"]["name"] == "model.jaffle_ods.customer_segments")
+        .expect("an event for the Python model");
+    assert_eq!(python["inputs"][0]["name"], "jaffle_ods.main.customers");
+    assert!(python["outputs"][0].get("facets").is_none(), "{python:#}");
     let orders = events
         .iter()
         .find(|e| e["job"]["name"] == "model.jaffle_ods.orders")
@@ -282,7 +296,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
     };
 
     let (result, text) = write("json", &[]);
-    assert_eq!(result["nodes"], 11);
+    assert_eq!(result["nodes"], 13);
     let document: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(document["schema_version"], 1);
     let orders = document["nodes"]
@@ -495,8 +509,8 @@ fn a_v2_target_without_json_is_read_from_the_information_schema() {
         "--target-dir",
         target.0.to_str().unwrap(),
     ]);
-    assert_eq!(result["summary"]["models_analyzed"], 8);
-    assert_eq!(result["summary"]["models_opaque"], 0);
+    assert_eq!(result["summary"]["models_analyzed"], 9);
+    assert_eq!(result["summary"]["models_opaque"], 1);
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -542,4 +556,57 @@ fn impact_on_a_column_that_does_not_exist_is_an_error_not_nothing() {
         "orders.nope=added",
     ]);
     assert!(added["run"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn seeds_get_column_lineage_without_a_catalog() {
+    // dbt 2.0's manifest.json, with no catalog: seed columns come from their CSV header.
+    let target = fixture().with_file_name("dbt-2.0");
+    let target = target.to_str().unwrap();
+    let impact = json(&[
+        "lineage",
+        "impact",
+        "--target-dir",
+        target,
+        "--artifacts",
+        "json",
+        "--column",
+        "raw_orders.status",
+    ]);
+    let run = strings(&impact["run"]);
+    assert!(run.contains(&"model.jaffle_ods.stg_orders".to_owned()));
+    assert!(
+        !run.contains(&"model.jaffle_ods.order_events".to_owned()),
+        "order_events doesn't read status, so a seed column change skips it: {run:?}"
+    );
+
+    let columns = json(&[
+        "lineage",
+        "columns",
+        "--target-dir",
+        target,
+        "--artifacts",
+        "json",
+        "--model",
+        "raw_orders",
+    ]);
+    let seed = &columns["upstreams"][0];
+    assert_eq!(seed["kind"], "seed");
+    let status = seed["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "status")
+        .unwrap();
+    assert_eq!(status["used_by"][0]["column"], "stg_orders.status");
+    assert_eq!(
+        status["used_by"][0]["used_by"][0]["column"],
+        "orders.status"
+    );
+    let reaches = strings(&status["reaches"]);
+    assert!(reaches.contains(&"orders.status".to_owned()));
+    assert!(
+        reaches.contains(&"customers_snapshot_view.lifetime_value".to_owned()),
+        "a filter on status shapes customers' rows, so everything downstream of them: {reaches:?}"
+    );
 }

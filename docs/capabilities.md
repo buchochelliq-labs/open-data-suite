@@ -79,6 +79,39 @@ Always review generated SQL before relying on its results.
 
 Details: [CLI reference](cli.md#mcp-server-for-ai-agents), [ADR-0010](adr/0010-mcp-server.md).
 
+## State: what to build, what to reuse
+
+`ods state plan` compares the project with its last successful build and says, per
+node, **build** or **reuse**, with the reason and the evidence. That includes which parts
+of a model's code changed, which upstream data is new, and whether a lag tolerance
+defers it. It prints the `dbt build --select …` command for exactly what must run.
+`ods state record` takes the state from the dbt runs you already do: only nodes that
+succeeded advance.
+
+```console
+$ ods state plan          # after editing stg_orders and running dbt compile
+decision: 8 to build, 5 to reuse
+
+node                     action  why
+raw_orders               reuse   code and inputs unchanged since run d11a1309…
+stg_customers            reuse   code and inputs unchanged since run d11a1309…
+stg_orders               build   code changed since run d11a1309…: compiled_sql
+orders                   build   upstream code changed: stg_orders will be rebuilt
+customers                build   upstream code changed: orders will be rebuilt
+customer_segments        build   upstream code changed: customers will be rebuilt
+segment_summary          build   upstream code changed: customer_segments will be rebuilt
+…
+run: dbt build --select stg_orders order_events orders customer_order_rank customers customer_segments customers_snapshot_view segment_summary
+```
+
+(Output shortened; from the demo project.)
+
+It is the first slice of the State MVP (v0.1.0). `ods state run`, which executes the plan
+and records its own runs, comes next.
+
+Details: [CLI reference](cli.md#state-plan-record-history),
+[ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md).
+
 ## dbt State configuration
 
 `ods state policies` reads dbt's State configuration (`lag_tolerance`,

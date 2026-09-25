@@ -1,0 +1,20 @@
+[package]
+name = "ods-state"
+description = "The OpenDataSuite State planner: what to build, what to reuse, and why (#18, #20, ADR-0013)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ods-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

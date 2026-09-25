@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+csv.workspace = true
 ods-core.workspace = true
 parquet.workspace = true
 serde.workspace = true

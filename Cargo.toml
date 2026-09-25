@@ -24,6 +24,8 @@ ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
+ods-store-sqlite = { path = "providers/ods-store-sqlite" }
+ods-state = { path = "crates/ods-state" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
@@ -50,6 +52,8 @@ sha2 = "0.10"
 # SQL parsing for column lineage (ADR-0008). Every 0.N release breaks the AST: pin and
 # upgrade deliberately.
 sqlparser = { version = "=0.63.0", features = ["visitor"] }
+# The local SQLite state store (#25, ADR-0013); bundles SQLite. 0.9 needs Rust 1.94.
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros"] }
 toml = "1"

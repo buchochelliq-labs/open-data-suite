@@ -20,6 +20,8 @@ root="$(pwd)"
 scrub() { sed "s#${root}#<project_root>#g" "$1" > "$2"; }
 
 if [[ -n "${DBT:-}" ]]; then
+  # A fresh database: the foreign key constraint on `orders` blocks replacing it.
+  rm -f target/jaffle_ods.duckdb
   "$DBT" build --profiles-dir . --quiet
   "$DBT" docs generate --profiles-dir . --quiet
   version="$("$DBT" --version | sed -n 's/.*installed: *\([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
@@ -29,11 +31,27 @@ if [[ -n "${DBT:-}" ]]; then
     scrub "target/${artifact}.json" "${out}/${artifact}.json"
   done
   echo "wrote ${out}"
+
+  # A real `dbt build`: its manifest and run results come from the same invocation, as
+  # `ods state record` requires (`run_results.json` above is `docs generate`'s).
+  rm -rf target-build
+  rm -f target/jaffle_ods.duckdb
+  "$DBT" build --profiles-dir . --quiet --target-path target-build
+  out="artifacts/dbt-${version}-build"
+  mkdir -p "$out"
+  for artifact in manifest run_results; do
+    scrub "target-build/${artifact}.json" "${out}/${artifact}.json"
+  done
+  echo "wrote ${out}"
 fi
 
 if [[ -n "${DBT_V2:-}" ]]; then
   rm -rf target-v2
-  "$DBT_V2" compile --profiles-dir . --generate-info-schema --target-path target-v2
+  # Compiling the Python model needs dbt's DuckDB driver, which dbt-oss downloads from
+  # its CDN; offline that one node fails. Its compiled code isn't needed (ODS treats
+  # Python models as opaque), so carry on as long as the artifacts were written.
+  "$DBT_V2" compile --profiles-dir . --generate-info-schema --target-path target-v2 || true
+  test -s target-v2/manifest.json
   version="$("$DBT_V2" --version | sed -n 's/^dbt[-a-z]* \([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
   out="artifacts/dbt-${version}"
   rm -rf "$out" && mkdir -p "$out/info_schema/v1"

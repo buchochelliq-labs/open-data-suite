@@ -12,7 +12,7 @@
 //! | `LineageSink` | #74, #92 | planned (ADR-0008) |
 //! | `ArtifactProvider` | #12 | planned (needs the #4 semantic graph) |
 //! | `MetadataProvider` | #15 | planned |
-//! | `StateStore` | #25 | planned (needs the #11 state model) |
+//! | [`StateStore`](state_store::StateStore) | #11, #25 | defined (ADR-0013) |
 //! | `FingerprintProvider` | #13 | planned |
 //! | `Executor` | #23 | planned |
 //! | `ChangeProvider` | #16 | planned |
@@ -27,3 +27,4 @@
 pub mod lock;
 pub mod observed_lineage;
 pub mod sql_lineage;
+pub mod state_store;

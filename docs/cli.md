@@ -10,7 +10,8 @@ codes).
 | Command | Status |
 |---|---|
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
-| `ods state plan\|run\|explain\|…` | planned: M1 State MVP (v0.1.0) |
+| `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
+| `ods state run\|explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -25,7 +26,7 @@ codes).
 | `ods completions <shell>` | available |
 
 Planned commands already appear in `--help`. They accept any arguments and exit with
-status 3 (`ods state plan --select x` reports "not implemented", not a usage error).
+status 3 (`ods state run --select x` reports "not implemented", not a usage error).
 
 ## Global flags
 
@@ -110,6 +111,9 @@ meanings get new numbers.
 | `ODS-E0202` | The project graph is inconsistent (duplicate ids or relations, or a dependency cycle). |
 | `ODS-E0203` | A model, column, change kind or dialect named on the command line doesn't exist. |
 | `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
+| `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
+| `ODS-E0402` | Another run recorded state first; plan again and retry. |
+| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. |
 
 ## Environment variables
 
@@ -261,6 +265,14 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 | `--run-events` | (`export`) write `COMPLETE` RunEvents instead of JobEvents, for sinks that only accept runs |
 | `--indirect-in-fields` | (`export`) also copy row-shaping inputs into every field, for consumers that ignore the facet's `dataset` array |
 
+Column lists come from the warehouse catalog (`dbt docs generate`). Without one, a
+seed's columns come from its CSV header, which is exactly what dbt loads. The header is
+only used if the file's checksum matches the one dbt recorded, so a changed or missing
+file leaves the columns unknown. Seed changes then reach only the models that read
+the changed columns.
+`ods lineage columns --model <seed or source>` shows where each column goes, hop by
+hop, and `reaches` (in JSON) lists every column it can affect.
+
 How impact is decided, most conservative first:
 - a model whose SQL can't be analyzed (a Python model, `select *` over a relation with
   unknown columns, unsupported syntax) is **opaque**: any change to what it reads makes it run;
@@ -394,6 +406,67 @@ ods state policies --model orders --json
 Defaults: if any model configures `state:` or `build_after`, the project relies on dbt
 State, so models without settings get dbt State's defaults (`45m`, `any`). Otherwise
 ODS rebuilds on any new upstream data (tolerance `0`).
+
+## State: plan, record, history
+
+`ods state plan` says, for every model, seed and snapshot, whether it must be **built**
+or can be **reused**, and why ([ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md)).
+It compares the project now with the last successful state, which `ods state record`
+takes from the dbt runs you already do. Nothing runs, and planning never writes.
+
+```sh
+dbt source freshness            # optional: data versions for sources (sources.json)
+dbt build
+ods state record                # the run's successful nodes become the state
+# … edit models, dbt compile …
+ods state plan                  # what to build, what to reuse, why, and the dbt command
+ods state plan --select +orders --json
+ods state history
+```
+
+A node is **built** when (first match wins):
+1. ODS has no successful build of it;
+2. its code can't be fingerprinted completely (e.g. no compiled SQL: run `dbt compile`);
+3. its fingerprint changed; the plan names the components (`file`, `compiled_sql`,
+   `config`, `macros`, `contract`, `engine`);
+4. a parent is built because *its* code changed;
+5. it depends on something ODS doesn't know, declares no inputs at all (seeds aside), or
+   its State config has a setting ODS can't honour yet;
+6. a source it reads has no usable data version, now or when it was last built. A
+   version only counts if `sources.json` was measured after the node's last build, so
+   run `dbt source freshness` before planning;
+7. a parent has new data (a source's `max_loaded_at` moved, a parent is rebuilt for
+   data, or a parent was rebuilt by a run it didn't read), unless its `lag_tolerance`
+   hasn't run out or `require_fresh_data_from: all` isn't met yet.
+
+Otherwise it is **reused**. Every reuse says so: ODS doesn't check yet that the relation
+it built still exists in the warehouse.
+
+`ods state record` only accepts a real build of the manifest's code:
+- `run_results.json` must come from `dbt build`, `run`, `seed` or `snapshot`, not
+  `--empty`;
+- `manifest.json` must come from the same invocation;
+- the run must not have been recorded already, or have started before the recorded
+  state.
+
+Record right after the run, before another dbt command rewrites the target directory.
+It advances only nodes whose status in `run_results.json` is `success`.
+Failed and skipped nodes keep their last successful state, so they (and what reads them)
+are built next time. Source versions are recorded only if `sources.json` was measured
+before the run started. Otherwise a node could be credited with data that arrived after
+it ran.
+
+| Flag | Meaning |
+|---|---|
+| `--state-db PATH` | SQLite state database; default `.ods/state.db` (created by `record`) |
+| `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default `default` |
+| `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |
+| `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |
+| `--run-results PATH` | (`record`) default `<target-dir>/run_results.json` |
+| `--limit N` | (`history`) default 20; `history` reads the target directory for the project name |
+
+State is kept per project and environment as immutable snapshots. A record that races
+another fails with `ODS-E0402` and writes nothing.
 
 ## Entity-relationship diagrams
 
