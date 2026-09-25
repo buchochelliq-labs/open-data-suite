@@ -22,12 +22,14 @@ unknown rather than guessed. Here is the demo project's diagram, showing key col
 erDiagram
     customer_order_rank {
         INTEGER order_id FK
+        INTEGER customer_id PK
+        BIGINT order_seq PK
     }
     customers {
         INTEGER customer_id PK "tested key"
     }
     orders {
-        INTEGER order_id PK "tested key"
+        INTEGER order_id PK
         INTEGER customer_id FK
     }
     stg_orders {
