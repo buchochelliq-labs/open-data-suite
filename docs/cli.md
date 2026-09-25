@@ -417,7 +417,10 @@ ODS rebuilds on any new upstream data (tolerance `0`).
 ([ADR-0014](adr/0014-executor-contract-and-state-run.md)):
 1. `dbt source freshness`, then `dbt compile`, so the plan sees current code and data;
 2. plan against the last successful state, as `ods state plan` does;
-3. `dbt build --select` exactly the nodes that must build, and nothing else;
+3. `dbt build --select` exactly the nodes that must build, and nothing else. Each node
+   is selected by its full `fqn:` and resource type; its file narrows the selection
+   when a folder shares its name. A node that can't be selected exactly stops the run
+   before dbt starts;
 4. record the run. Nodes that built and passed their tests advance. Failed nodes, the
    ones dbt skipped because of them, and nodes whose tests failed keep their last
    successful state, so they (and their tests) run again next time. If nothing

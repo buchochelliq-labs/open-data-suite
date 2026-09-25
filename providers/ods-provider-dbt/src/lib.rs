@@ -22,6 +22,7 @@ mod info_schema;
 pub mod normalize;
 mod runs;
 mod seeds;
+pub mod selection;
 pub mod state_config;
 
 pub use artifacts::{

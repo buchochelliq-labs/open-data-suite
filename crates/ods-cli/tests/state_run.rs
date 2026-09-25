@@ -155,10 +155,10 @@ fn builds_everything_once_then_only_what_changed() {
     assert_eq!(first["record"]["snapshot"], 1);
     assert_eq!(first["record"]["advanced"].as_array().unwrap().len(), 13);
     assert!(
-        first["execution"]["command"]
-            .as_str()
-            .unwrap()
-            .contains("build --select raw_customers")
+        first["execution"]["command"].as_str().unwrap().contains(
+            "build --select fqn:jaffle_ods,resource_type:model fqn:jaffle_ods,resource_type:seed"
+        ),
+        "everything is requested, so whole folders are selected: {first:#}"
     );
 
     // Nothing changed: nothing runs and nothing is recorded.
@@ -360,6 +360,15 @@ fn real_dbt() {
     ] {
         copy(&root.join(entry), &project.dir.join(entry));
     }
+    // A folder named like a model (#211): `fqn:…segment_summary` alone would also
+    // select the model in it.
+    let nested = project.dir.join("models/marts/segment_summary");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        nested.join("unrelated.sql"),
+        "select count(*) as n from {{ ref('raw_orders') }}\n",
+    )
+    .unwrap();
     let dbt = dbt.to_str().unwrap().to_owned();
     let real = |extra: &[&str]| {
         let mut args = vec![
@@ -382,7 +391,7 @@ fn real_dbt() {
             .as_array()
             .unwrap()
             .len(),
-        13
+        14
     );
     let (code, again) = real(&[]);
     assert_eq!(code, 0, "{again:#}");
@@ -409,6 +418,19 @@ fn real_dbt() {
     assert_eq!(
         names(&changed["result"]["execution"]["nodes"]),
         ["segment_summary"]
+    );
+    // dbt was asked for exactly that model, and built nothing else.
+    let command = changed["result"]["execution"]["command"].as_str().unwrap();
+    assert!(
+        command.contains(
+            "path:models/marts/segment_summary.sql,fqn:jaffle_ods.marts.segment_summary,resource_type:model"
+        ),
+        "{command}"
+    );
+    assert_eq!(
+        changed["result"]["execution"]["unrequested"],
+        serde_json::json!([]),
+        "{changed:#}"
     );
 
     std::fs::write(&model, "select nope from {{ ref('customer_segments') }}\n").unwrap();

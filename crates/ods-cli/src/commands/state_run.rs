@@ -417,7 +417,7 @@ impl RunReport {
             })?;
         if !execution.unrequested.is_empty() {
             report.warnings.push(format!(
-                "dbt also built {}, which weren't requested (a name selected more than one node); they weren't recorded and will be built next run",
+                "dbt also built {}, which weren't requested (the project changed after it was compiled?); they weren't recorded and will be built next run",
                 execution.unrequested.iter().map(|n| display_name(n)).collect::<Vec<_>>().join(", ")
             ));
         }
