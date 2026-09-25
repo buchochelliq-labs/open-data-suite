@@ -30,7 +30,17 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// An executor over a target directory that already holds a manifest, as after
+/// `dbt compile`: it selects nodes exactly from it.
 fn executor(dir: &Path) -> DbtExecutor {
+    let target = dir.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        target.join("manifest.json"),
+    )
+    .unwrap();
     DbtExecutor::new(fake_dbt(), dir.join("target"))
         .env("FAKE_DBT_LOG", dir.join("built.log").display().to_string())
         .env("FAKE_DBT_FAIL", "stg_orders")
@@ -113,7 +123,7 @@ async fn failed_parents_skip_their_children_and_failed_tests_are_checks() {
             .command
             .as_deref()
             .unwrap()
-            .contains("--select stg_orders stg_payments orders")
+            .contains("--select fqn:jaffle_ods.marts.orders,resource_type:model fqn:jaffle_ods.staging.stg_orders,resource_type:model fqn:jaffle_ods.staging.stg_payments,resource_type:model")
     );
 
     let executor = crate::executor(&dir)
@@ -228,8 +238,25 @@ async fn prepare_compiles_and_measures_sources() {
 }
 
 #[tokio::test]
+async fn nodes_are_selected_exactly_or_not_at_all() {
+    // Without a manifest there is nothing to select from: nothing runs.
+    let dir = scratch("no-manifest");
+    let err = DbtExecutor::new(fake_dbt(), dir.join("target"))
+        .execute(&ExecutionRequest::new(
+            vec![RequestedNode::new("model.jaffle_ods.orders", "orders")],
+            ExecutionMode::Run,
+        ))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("select nodes exactly"), "{err}");
+    assert!(!dir.join("target/run_results.json").exists());
+}
+
+#[tokio::test]
 async fn a_missing_program_is_an_error() {
     let dir = scratch("missing");
+    // A manifest to select from, so the failure is the missing program.
+    executor(&dir);
     let err = DbtExecutor::new(dir.join("no-such-dbt"), dir.join("target"))
         .execute(&ExecutionRequest::new(
             vec![RequestedNode::new(

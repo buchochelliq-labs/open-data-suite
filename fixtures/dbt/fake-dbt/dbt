@@ -69,6 +69,41 @@ def result(unique_id, status, at):
     return {"unique_id": unique_id, "status": status, "timing": timing, "message": status}
 
 
+def fqn_selects(node, selector):
+    """dbt's is_selected_node, without wildcards."""
+    fqn = node["fqn"]
+    parts = selector.split(".")
+    if node.get("version") is not None:
+        if fqn[-2] == selector or "_".join(fqn[-2:]) == "_".join(parts[-2:]):
+            return True
+    elif fqn[-1] == selector:
+        return True
+    flat = [p for seg in fqn for p in seg.split(".")]
+    return len(flat) >= len(parts) and flat[: len(parts)] == parts
+
+
+def path_selects(node, path):
+    ofp = node.get("original_file_path", "")
+    return ofp == path or ofp.startswith(path.rstrip("/") + "/")
+
+
+def selects(token, node):
+    """One `--select` token: comma-separated criteria, all of which must match."""
+    for criterion in token.split(","):
+        method, _, value = criterion.rpartition(":")
+        if method in ("", "fqn"):
+            ok = fqn_selects(node, value)
+        elif method == "path":
+            ok = path_selects(node, value)
+        elif method == "resource_type":
+            ok = node["resource_type"] == value
+        else:
+            raise SystemExit(f"fake dbt: unsupported selector {criterion}")
+        if not ok:
+            return False
+    return True
+
+
 def main():
     words, options = parse(sys.argv[1:])
     if "version" in options:
@@ -105,15 +140,10 @@ def main():
         print(f"fake dbt: unsupported command {words}", file=sys.stderr)
         return 2
 
-    selected = set(options.get("select", []))
     excluded = set(options.get("exclude-resource-type", []))
     nodes = manifest["nodes"]
-
-    def selector(node):
-        name = node["name"]
-        return f"{name}.v{node['version']}" if node.get("version") is not None else name
-
-    chosen = [i for i, n in nodes.items() if n["resource_type"] in STATE and selector(n) in selected]
+    chosen = [i for i, n in nodes.items()
+              if n["resource_type"] in STATE and any(selects(t, n) for t in options.get("select", []))]
     fail, fail_tests = names("FAKE_DBT_FAIL"), names("FAKE_DBT_FAIL_TEST")
     outcome, results = {}, []
     # Parents first, as dbt runs them.

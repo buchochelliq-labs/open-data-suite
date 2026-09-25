@@ -211,6 +211,8 @@ struct RawNode {
     #[serde(default)]
     raw_code: Option<String>,
     #[serde(default)]
+    fqn: Vec<String>,
+    #[serde(default)]
     language: Option<String>,
     #[serde(default)]
     depends_on: RawDependsOn,
@@ -263,6 +265,9 @@ pub struct ManifestNode {
     pub compiled_code: Option<String>,
     /// The code as written, with its Jinja.
     pub raw_code: Option<String>,
+    /// dbt's fully qualified name: package, folders and name (and version), e.g.
+    /// `["jaffle", "marts", "orders"]`. Empty when the artifacts don't record it.
+    pub fqn: Vec<String>,
     /// `sql` or `python`.
     pub language: Option<String>,
     /// The configured materialization.
@@ -696,6 +701,7 @@ fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
         relation_name: n.relation_name,
         compiled_code: n.compiled_code,
         raw_code: n.raw_code,
+        fqn: n.fqn,
         language: n.language,
         materialized: config.materialized,
         depends_on: n.depends_on.nodes,

@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
-- **Issues:** #23 (dbt execution provider), #24 (`ods state run`)
+- **Issues:** #23 (dbt execution provider), #24 (`ods state run`), #211 (exact selection)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -63,8 +63,21 @@ doesn't have that API. The CLI is the stable interface.
   `ods-provider-fake` has the in-memory reference implementation.
 
 **dbt provider** (`ods_provider_dbt::executor::DbtExecutor`):
-- It runs the dbt CLI as `dbt build --select <name>…` with the names ODS plans by
-  (`orders`, `orders.v2`). `run` mode adds
+- It runs the dbt CLI as `dbt build --select …` with **exact selectors** (#211).
+  dbt has no selector for a single node id. A bare name also matches a folder or
+  package of that name, and `fqn:` matches by prefix. So every selector is checked
+  against the manifest with dbt's own matching rules before dbt runs:
+  - a node is selected as `fqn:<its fqn>,resource_type:<type>`;
+  - a folder whose nodes of a type are all requested is selected whole
+    (`fqn:<prefix>,resource_type:<type>`), so a large BUILD set still makes a short
+    command;
+  - if a node's fqn also reaches another node (a folder named like the model), its file
+    narrows it: `path:<file>,fqn:<fqn>,resource_type:<type>`;
+  - a package node that can't be selected exactly is an error: nothing runs.
+
+  Tests still come in through dbt's indirect selection, as for any selection.
+  `run_results.json` is still checked, and anything built unrequested is still
+  reported. `run` mode adds
   `--exclude-resource-type test --exclude-resource-type unit_test` (dbt 1.8+).
 - `--target-path` is always passed as an absolute path. dbt would otherwise resolve it
   against `--project-dir`, and ODS would read a different directory.
@@ -112,13 +125,14 @@ is what the caller needs to see which nodes failed.
 - Negative / trade-offs:
   - `prepare` compiles the whole project on every run. That is correct, because
     fingerprints need compiled SQL, but slower than compiling only the selected nodes.
-  - Selection by name can match more than one node when a folder or package has the
-    same name. Such nodes are reported as `unrequested`, not hidden, but they still ran.
-  - Very large BUILD sets make a long command line.
+  - Exact selection needs the manifest in the target directory (after `prepare`, or
+    with `--no-compile`), and it relies on dbt's `fqn`, `path` and `resource_type`
+    selector semantics. ODS mirrors them, and the real-dbt test checks them.
+  - A BUILD set scattered across many partly-built folders still lists one selector
+    per node.
   - The JSON envelope can now carry a result *and* an error. This extends ADR-0004 §4
     for commands whose partial result matters.
 - Follow-up issues:
-  - Exact selection that can't widen (e.g. by `fqn:` or a generated selector file).
   - Per-node leases (#28) so concurrent runs don't both build a node.
   - Checking that reused relations still exist in the warehouse.
 

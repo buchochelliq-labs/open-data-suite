@@ -2,8 +2,9 @@
 //!
 //! - [`prepare`](Executor::prepare) runs `dbt compile`, so the manifest carries the
 //!   compiled SQL fingerprints need, and, if asked, `dbt source freshness`.
-//! - [`execute`](Executor::execute) runs `dbt build --select <name>…` with exactly the
-//!   requested nodes; [`ExecutionMode::Run`] leaves out data tests and unit tests
+//! - [`execute`](Executor::execute) runs `dbt build --select …` with
+//!   [exact selectors](crate::selection) for the requested nodes, checked against the
+//!   manifest so that no other node matches; [`ExecutionMode::Run`] leaves out data tests and unit tests
 //!   (`--exclude-resource-type`, dbt 1.8+). Outcomes come from the `run_results.json`
 //!   that invocation wrote; a file left by an earlier invocation is never read as this
 //!   one's.
@@ -366,8 +367,18 @@ impl Executor for DbtExecutor {
                 "nothing to execute: the request names no nodes".to_owned(),
             ));
         }
+        // Exact selectors, from the manifest the plan was made from.
+        let manifest = crate::Manifest::read(&self.artifact("manifest.json")).map_err(|e| {
+            ProviderError::Other(format!(
+                "can't read the manifest to select nodes exactly: {e}"
+            ))
+        })?;
+        let ids: Vec<String> = request.nodes.iter().map(|n| n.id.clone()).collect();
+        let selectors = crate::selection::exact_selectors(&manifest, &ids).map_err(|why| {
+            ProviderError::Other(format!("can't select exactly the planned nodes: {why}"))
+        })?;
         let mut args = vec!["build".to_owned(), "--select".to_owned()];
-        args.extend(request.nodes.iter().map(|n| n.name.clone()));
+        args.extend(selectors);
         if request.mode == ExecutionMode::Run {
             args.extend(
                 [
