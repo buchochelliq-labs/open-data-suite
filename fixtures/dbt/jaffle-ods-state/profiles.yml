@@ -1,0 +1,8 @@
+# Local, network-free profile used only to regenerate the committed artifacts.
+jaffle_ods:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "target/jaffle_ods.duckdb"
+      threads: 4

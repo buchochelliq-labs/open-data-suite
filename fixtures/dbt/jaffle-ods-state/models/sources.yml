@@ -1,0 +1,12 @@
+version: 2
+sources:
+  - name: landing
+    schema: main
+    tables:
+      - name: orders_feed
+        config:
+          loaded_at_field: _loaded_at
+      - name: events_feed
+        config:
+          loaded_at_query: "select max(received_at) from main.events_feed"
+      - name: customers_feed

@@ -1,0 +1,19 @@
+name: jaffle_ods
+version: "1.0.0"
+config-version: 2
+profile: jaffle_ods
+
+seed-paths: ["seeds"]
+model-paths: ["models"]
+macro-paths: ["macros"]
+target-path: "target"
+
+models:
+  jaffle_ods:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+      +state:
+        lag_tolerance: 4h
+        require_fresh_data_from: all

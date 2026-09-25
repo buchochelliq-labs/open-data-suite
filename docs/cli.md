@@ -9,7 +9,8 @@ codes).
 
 | Command | Status |
 |---|---|
-| `ods state` | planned: M1 State MVP (v0.1.0) |
+| `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
+| `ods state plan\|run\|explain\|…` | planned: M1 State MVP (v0.1.0) |
 | `ods erd` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
@@ -264,3 +265,36 @@ How impact is decided, most conservative first:
   only reach readers that `select *`;
 - every reader that is *not* affected is listed as skipped, with the changed columns it doesn't use.
 
+## dbt State configuration
+
+ODS reads dbt State configuration exactly as you already write it
+([ADR-0011](adr/0011-dbt-state-config-compatibility.md)):
+- `+state:` in `dbt_project.yml`;
+- `config: state:` in YAML;
+- `{{ config(state={...}) }}` in SQL;
+- SAO's `freshness: build_after:`;
+- source `loaded_at_field` / `loaded_at_query`.
+
+It takes the values dbt resolved into `manifest.json` or the dbt v2 Information Schema,
+so it behaves like your dbt version. dbt v2 merges the `state` block key by key; dbt 1.x
+lets a more specific block replace a less specific one.
+
+```sh
+dbt parse                                  # or compile/build
+ods state policies                         # every model, and how sources report new data
+ods state policies --model orders --json
+```
+
+| Setting | ODS |
+|---|---|
+| `state.lag_tolerance` (`4h`, `45m`, `{count, period}`) | applied |
+| `state.require_fresh_data_from` (`any`/`all`) | applied |
+| `freshness.build_after` (`count`, `period`, `updates_on`) | applied where `state` leaves a setting unset |
+| source `loaded_at_query` / `loaded_at_field` | applied (query first); otherwise warehouse metadata |
+| `state.compare_unrendered_code`, `state.pre_clone` | not applied yet; ignoring them only means more rebuilds |
+| `state.evaluate_volatile_sql: true`, `state.execute_hooks_on_any_reuse: true` | not applied yet; the model is never reused |
+| any other `state.*` key, or a value ODS can't read | reported; the model is never reused |
+
+Defaults: if any model configures `state:` or `build_after`, the project relies on dbt
+State, so models without settings get dbt State's defaults (`45m`, `any`). Otherwise
+ODS rebuilds on any new upstream data (tolerance `0`).
