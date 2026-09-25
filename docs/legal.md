@@ -9,10 +9,10 @@ before acting on it. The software's licence governs its use.
 
 ## Licence
 
-The project intends to license its code and documentation under the
-[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). The workspace's
-`Cargo.toml` declares this provisionally, and the final decision is tracked in issue
-#10. The licence takes effect when a `LICENSE` file is added to the repository.
+OpenDataSuite's code and documentation are licensed under the
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). The full text is in the
+repository's [`LICENSE`](https://github.com/buchochelliq-labs/open-data-suite/blob/main/LICENSE)
+file.
 
 ## Independence and trademarks
 

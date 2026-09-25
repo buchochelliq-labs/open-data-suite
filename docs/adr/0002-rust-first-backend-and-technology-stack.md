@@ -58,8 +58,8 @@ Baseline stack (all permissively licensed, actively maintained):
 | Testing | built-in tests, `insta` snapshots, fixtures | MIT/Apache-2.0 | No network in tests. |
 | Supply chain | `cargo-deny` (licences, advisories, sources) | MIT/Apache-2.0 | Permissive allow-list in `deny.toml`. |
 
-Project licence for ODS itself is provisionally **Apache-2.0** (patent grant, common for
-infrastructure). Final confirmation belongs to #10 / #101.
+Project licence for ODS itself is **Apache-2.0** (patent grant, common for
+infrastructure). The text is in the repository's `LICENSE` file (added 2026-09-25).
 
 ## Consequences
 - Positive: one implementation for every surface; small static binaries for CI;
@@ -67,7 +67,7 @@ infrastructure). Final confirmation belongs to #10 / #101.
 - Negative / trade-offs: contributors need Rust; bindings (#106) add a packaging surface;
   compile times need caching in CI.
 - Follow-up issues: #106 (bindings ADR), #108 (ADR-0003 presentation), #67 (LSP library),
-  #73 (SQL parser), #10 (licence confirmation), #101 (release tooling, e.g. `cargo-dist`/`release-plz`).
+  #73 (SQL parser), #10 (third-party licensing policy), #101 (release tooling, e.g. `cargo-dist`/`release-plz`).
 
 ## References
 - ADR-0001 — module boundaries
