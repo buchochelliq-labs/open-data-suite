@@ -136,21 +136,24 @@ impl SqliteStateStore {
 
     /// Runs `BEGIN IMMEDIATE` on a pooled connection: the write lock is taken up front,
     /// so a transaction never has to upgrade from reading to writing mid-way.
-    async fn begin_write(&self) -> Result<PoolConnection<Sqlite>, ProviderError> {
+    async fn begin_write(&self) -> Result<WriteTx, ProviderError> {
         let mut conn = self.pool.acquire().await.map_err(|e| db_error(&e))?;
         sqlx::query("BEGIN IMMEDIATE")
             .execute(&mut *conn)
             .await
             .map_err(|e| db_error(&e))?;
-        Ok(conn)
+        Ok(WriteTx(Some(conn)))
     }
 
     /// Commits if `result` is `Ok`, rolls back otherwise. A connection whose transaction
     /// can't be ended is closed rather than returned to the pool.
     async fn finish<T>(
-        mut conn: PoolConnection<Sqlite>,
+        mut tx: WriteTx,
         result: Result<T, ProviderError>,
     ) -> Result<T, ProviderError> {
+        let Some(mut conn) = tx.0.take() else {
+            return result;
+        };
         let end = if result.is_ok() { "COMMIT" } else { "ROLLBACK" };
         if let Err(e) = sqlx::query(end).execute(&mut *conn).await {
             drop(conn.detach());
@@ -169,7 +172,10 @@ impl SqliteStateStore {
         .await
         .map_err(|e| db_error(&e))?;
         let mut conn = self.begin_write().await?;
-        let result = Self::migrate_in(&mut conn, &self.location).await;
+        let result = match conn.conn() {
+            Ok(c) => Self::migrate_in(c, &self.location).await,
+            Err(e) => Err(e),
+        };
         Self::finish(conn, result).await
     }
 
@@ -267,6 +273,27 @@ impl SqliteStateStore {
     }
 }
 
+/// A connection inside `BEGIN IMMEDIATE`. If it is dropped before
+/// [`SqliteStateStore::finish`] (e.g. the future was cancelled), the connection is
+/// closed instead of going back to the pool, and SQLite rolls the transaction back.
+struct WriteTx(Option<PoolConnection<Sqlite>>);
+
+impl WriteTx {
+    fn conn(&mut self) -> Result<&mut SqliteConnection, ProviderError> {
+        self.0
+            .as_deref_mut()
+            .ok_or_else(|| ProviderError::Other("the transaction has ended".into()))
+    }
+}
+
+impl Drop for WriteTx {
+    fn drop(&mut self) {
+        if let Some(conn) = self.0.take() {
+            drop(conn.detach());
+        }
+    }
+}
+
 fn unsigned(id: i64) -> Result<u64, ProviderError> {
     u64::try_from(id).map_err(|_| ProviderError::Other(format!("invalid snapshot id {id}")))
 }
@@ -318,10 +345,15 @@ impl StateStore for SqliteStateStore {
         scope: &StateScope,
         snapshot: &StateSnapshot,
     ) -> Result<SnapshotId, ProviderError> {
+        // Never write what this build couldn't read back.
+        check_readable(snapshot)?;
         let document = serde_json::to_string(snapshot)
             .map_err(|e| ProviderError::Other(format!("can't serialize the snapshot: {e}")))?;
         let mut conn = self.begin_write().await?;
-        let result = Self::commit_in(&mut conn, scope, snapshot, &document).await;
+        let result = match conn.conn() {
+            Ok(c) => Self::commit_in(c, scope, snapshot, &document).await,
+            Err(e) => Err(e),
+        };
         Self::finish(conn, result).await
     }
 

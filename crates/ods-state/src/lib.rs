@@ -19,7 +19,7 @@ pub use recorder::{Outcome, Recorded, RunResult, record};
 pub use selection::select;
 
 use ods_core::FreshnessPolicy;
-use ods_core::state::{DataVersion, Fingerprint};
+use ods_core::state::{DataVersion, Fingerprint, Timestamp};
 
 /// A node ODS plans: a model, seed or snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +37,9 @@ pub struct Node {
     pub fingerprint: Result<Fingerprint, String>,
     /// When new upstream data makes it due.
     pub policy: FreshnessPolicy,
+    /// Its output depends only on its own code (e.g. a file of static rows), so having
+    /// no parents doesn't leave its data unexplained.
+    pub self_contained: bool,
 }
 
 impl Node {
@@ -56,7 +59,15 @@ impl Node {
             parents,
             fingerprint,
             policy,
+            self_contained: false,
         }
+    }
+
+    /// Marks the node's output as depending only on its own code.
+    #[must_use]
+    pub fn self_contained(mut self) -> Self {
+        self.self_contained = true;
+        self
     }
 }
 
@@ -70,6 +81,9 @@ pub struct Source {
     pub name: String,
     /// Its current data version, if anything reports one.
     pub version: Option<DataVersion>,
+    /// When `version` was observed. A version only says something about data a node
+    /// hasn't seen if it was observed after the node was built.
+    pub observed_at: Option<Timestamp>,
 }
 
 impl Source {
@@ -83,7 +97,15 @@ impl Source {
             id: id.into(),
             name: name.into(),
             version,
+            observed_at: None,
         }
+    }
+
+    /// Sets when the version was observed.
+    #[must_use]
+    pub fn observed_at(mut self, at: Option<Timestamp>) -> Self {
+        self.observed_at = at;
+        self
     }
 }
 

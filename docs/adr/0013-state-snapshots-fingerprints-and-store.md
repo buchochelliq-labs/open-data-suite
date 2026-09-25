@@ -105,14 +105,21 @@ graph LR
 
   | Component | From |
   |---|---|
-  | `file` | dbt's checksum of the model's SQL/Python or the seed's CSV |
+  | `file` | dbt's checksum of the model's SQL/Python or the seed's CSV (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint) |
   | `compiled_sql` | the compiled SQL, which includes vars, macros and upstream names as rendered |
   | `config` | resolved config, canonical JSON, without `tags`, `meta`, `docs`, `state`, `freshness` (policy and metadata don't change what gets built) |
-  | `macros` | the source of every macro the node depends on |
+  | `macros` | the source of every macro the node depends on, transitively, plus its materialization and the `generate_*_name` macros |
   | `contract` | declared column types and constraints |
+  | `relation` | the relation it builds, so a plan against another target's state doesn't reuse |
   | `engine` | dbt version and adapter |
-- A SQL model without compiled SQL (after `dbt parse` only) can't be fingerprinted
-  completely. It is always BUILT, with the reason "run `dbt compile`".
+- A node that can't be fingerprinted completely is always BUILT. That covers:
+  - a model without compiled SQL (after `dbt parse` only), with the reason "run
+    `dbt compile`";
+  - no content checksum;
+  - no recorded config;
+  - a macro missing from the artifacts.
+- Ephemeral models are not planned: their SQL is inlined into their readers' compiled
+  SQL, and their readers depend on their parents instead.
 
 ### Change evidence (#16, research §4.2)
 - Evidence is `{kind, subject, value, exactness}`, where `exactness` is one of `exact`,
@@ -120,9 +127,15 @@ graph LR
 - The M1 source of data evidence is dbt's `sources.json` (`dbt source freshness`):
   - `max_loaded_at` is a **semantic** data version for each source;
   - a source without it has **none**, and every node that reads it is BUILT.
-- `record()` only uses `sources.json` if it was taken before the run started.
+- `record()` only uses `sources.json` if it was taken strictly before the run started.
   Otherwise a node could be recorded as having seen data that arrived after it was
   built.
+- When planning, a source version only counts if it was observed **after** the node's
+  last build; an older `sources.json` says nothing about data since then (BUILD, and a
+  warning).
+- For upstream nodes, each snapshot entry records which run's build of each parent it
+  read. A parent rebuilt by another run is new data. Runs are compared, not clocks,
+  which can disagree across machines.
 - Delta table versions (#17, exact) come later, behind a capability.
 
 ### Planning rules (#18, #20), first match wins, in DAG order
@@ -132,18 +145,22 @@ graph LR
 4. Fingerprint differs: BUILD, naming the changed components.
 5. A parent will be built **because its code changed**: BUILD. Its output schema may have
    changed, so lag tolerance does not apply.
-6. A parent ODS doesn't know (neither a node nor a source): BUILD.
-7. The node's policy can't be honoured (`FreshnessPolicy::allows_reuse` is false):
+6. A parent ODS doesn't know (neither a node nor a source): BUILD. This propagates like
+   a code change.
+7. No declared inputs at all, unless the node is self-contained (a seed): BUILD. ODS
+   can't tell when data it reads by other means changes.
+8. The node's policy can't be honoured (`FreshnessPolicy::allows_reuse` is false):
    BUILD.
-8. Missing data evidence for any source it reads, now or when it was last built
-   (anything below `semantic`): BUILD.
-9. New upstream data: a source whose version moved, a parent being built for data,
-   or a parent rebuilt after this node was (e.g. this node failed in that run).
+9. Missing data evidence for any source it reads, now or when it was last built
+   (anything below `semantic`, or observed before the last build), or no record of
+   which build of a parent it read: BUILD.
+10. New upstream data: a source whose version moved, a parent being built for data,
+   or a parent rebuilt by a run this node didn't read (e.g. it failed in that run).
    - `require_fresh_data_from: all` with some parents unchanged: REUSE, stating the
      quorum;
    - within `lag_tolerance` of the node's last build: REUSE, stating when it becomes due;
    - otherwise: BUILD.
-10. Otherwise: REUSE, "code and inputs unchanged since run R".
+11. Otherwise: REUSE, "code and inputs unchanged since run R".
 
 - Entries are ordered by DAG depth, then by id.
 - A cycle is an error, not a plan.
@@ -153,10 +170,22 @@ graph LR
   `dbt build --select <names>`.
 
 ### Commands
-- `ods state plan` is read-only: it never writes to the store.
+- `ods state plan` never changes state. If the database exists but has an older schema,
+  opening it migrates it.
 - `ods state record` commits a dbt run as the next snapshot. It reads
   `run_results.json`, and `sources.json` if present. This lets projects adopt ODS state
   from the dbt runs they already do, until `ods state run` (#24) records its own runs.
+  It refuses anything that isn't a real build of the manifest's code, and writes
+  nothing:
+  - results from a command that builds nothing (anything but `build`, `run`, `seed` or
+    `snapshot`, e.g. `docs generate` or `compile`, which also report every node as a
+    success);
+  - `--empty` runs;
+  - a manifest from a different dbt invocation than the run results;
+  - a run already recorded;
+  - a run that started before the recorded state.
+  A manifest without a project name is refused too, since unrelated projects would
+  share state.
 
 ## Consequences
 - Positive:

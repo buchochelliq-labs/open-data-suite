@@ -20,6 +20,8 @@ root="$(pwd)"
 scrub() { sed "s#${root}#<project_root>#g" "$1" > "$2"; }
 
 if [[ -n "${DBT:-}" ]]; then
+  # A fresh database: the foreign key constraint on `orders` blocks replacing it.
+  rm -f target/jaffle_ods.duckdb
   "$DBT" build --profiles-dir . --quiet
   "$DBT" docs generate --profiles-dir . --quiet
   version="$("$DBT" --version | sed -n 's/.*installed: *\([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
@@ -27,6 +29,18 @@ if [[ -n "${DBT:-}" ]]; then
   mkdir -p "$out"
   for artifact in manifest catalog run_results; do
     scrub "target/${artifact}.json" "${out}/${artifact}.json"
+  done
+  echo "wrote ${out}"
+
+  # A real `dbt build`: its manifest and run results come from the same invocation, as
+  # `ods state record` requires (`run_results.json` above is `docs generate`'s).
+  rm -rf target-build
+  rm -f target/jaffle_ods.duckdb
+  "$DBT" build --profiles-dir . --quiet --target-path target-build
+  out="artifacts/dbt-${version}-build"
+  mkdir -p "$out"
+  for artifact in manifest run_results; do
+    scrub "target-build/${artifact}.json" "${out}/${artifact}.json"
   done
   echo "wrote ${out}"
 fi

@@ -360,6 +360,10 @@ pub struct NodeState {
     pub run_id: String,
     /// The version of each upstream source's data it saw; `None` when unknown.
     pub inputs: BTreeMap<String, Option<DataVersion>>,
+    /// For each upstream node, the run whose build of it this node read. Compared with
+    /// the parent's current run instead of clocks, which can disagree across machines.
+    #[serde(default)]
+    pub parents: BTreeMap<String, String>,
 }
 
 impl NodeState {
@@ -375,6 +379,7 @@ impl NodeState {
             built_at,
             run_id: run_id.into(),
             inputs,
+            parents: BTreeMap::new(),
         }
     }
 }
@@ -441,6 +446,8 @@ pub enum ReasonCode {
     CodeChanged,
     /// A parent is being built because its code changed.
     UpstreamCodeChanged,
+    /// It depends on something ODS doesn't know, or a parent is built for that reason.
+    UnknownDependency,
     /// Its policy has settings ODS can't honour, so it is never reused.
     PolicyBlocksReuse,
     /// Upstream data is newer than what it was built from.

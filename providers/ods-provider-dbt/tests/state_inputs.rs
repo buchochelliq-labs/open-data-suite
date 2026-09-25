@@ -32,7 +32,8 @@ fn fingerprints_are_reproducible_and_name_their_components() {
             "contract",
             "engine",
             "file",
-            "macros"
+            "macros",
+            "relation",
         ]
     );
     let seed = fingerprint(&m, node(&m, "seed.jaffle_ods.raw_orders")).unwrap();
@@ -69,6 +70,12 @@ fn a_model_without_compiled_sql_cannot_be_fingerprinted() {
 fn run_results_give_status_and_completion_per_node() {
     let run = RunResults::read(&fixture().join("run_results.json")).unwrap();
     assert!(run.invocation_id.is_some());
+    assert_eq!(
+        run.command.as_deref(),
+        Some("generate"),
+        "the fixture's run is `dbt docs generate`"
+    );
+    assert!(!run.empty);
     assert!(run.started_at.is_some());
     let orders = run
         .results
@@ -122,4 +129,58 @@ fn unsupported_run_results_versions_are_errors() {
     let error = RunResults::read(&path).unwrap_err().to_string();
     std::fs::remove_file(&path).ok();
     assert!(error.contains("v99"), "{error}");
+}
+
+#[test]
+fn content_that_dbt_did_not_hash_cannot_be_fingerprinted() {
+    let m = manifest();
+    let mut big_seed = node(&m, "seed.jaffle_ods.raw_orders").clone();
+    big_seed.checksum = None; // what `{name: "path", …}` reads as
+    assert!(fingerprint(&m, &big_seed).unwrap_err().contains("1 MiB"));
+
+    let mut no_config = node(&m, "model.jaffle_ods.orders").clone();
+    no_config.config.raw = serde_json::Value::Null;
+    assert!(fingerprint(&m, &no_config).is_err());
+
+    let mut unknown_macro = node(&m, "model.jaffle_ods.orders").clone();
+    unknown_macro
+        .depends_on_macros
+        .push("macro.jaffle_ods.not_there".into());
+    assert!(
+        fingerprint(&m, &unknown_macro)
+            .unwrap_err()
+            .contains("not_there")
+    );
+}
+
+#[test]
+fn a_materialization_or_naming_macro_change_changes_the_fingerprint() {
+    let base_manifest = manifest();
+    let orders = node(&base_manifest, "model.jaffle_ods.orders").clone();
+    let base = fingerprint(&base_manifest, &orders).unwrap();
+    let materialization = base_manifest
+        .macros
+        .keys()
+        .find(|id| id.ends_with("materialization_table_default"))
+        .expect("dbt's table materialization is in the manifest")
+        .clone();
+    let mut edited = manifest();
+    edited
+        .macros
+        .get_mut(&materialization)
+        .unwrap()
+        .sql
+        .push_str("\n-- patched");
+    let diff = fingerprint(&edited, &orders).unwrap().diff(&base);
+    assert_eq!(diff.changed, ["macros"]);
+
+    let mut renamed = orders.clone();
+    renamed.relation_name = Some("\"jaffle_ods\".\"dev\".\"orders\"".into());
+    assert_eq!(
+        fingerprint(&base_manifest, &renamed)
+            .unwrap()
+            .diff(&base)
+            .changed,
+        ["relation"]
+    );
 }

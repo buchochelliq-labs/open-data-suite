@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use ods_core::Quorum;
 use ods_core::freshness::format_duration;
 use ods_core::state::{
-    DataVersion, Evidence, Exactness, ExecutionPlan, NodeState, PlanAction, PlanEntry, Reason,
-    ReasonCode, SnapshotId, StateSnapshot, Timestamp,
+    Evidence, Exactness, ExecutionPlan, NodeState, PlanAction, PlanEntry, Reason, ReasonCode,
+    SnapshotId, StateSnapshot, Timestamp,
 };
 
 use crate::{Node, Project, Source};
@@ -32,6 +32,7 @@ fn is_code_change(code: ReasonCode) -> bool {
             | ReasonCode::CodeEvidenceIncomplete
             | ReasonCode::CodeChanged
             | ReasonCode::UpstreamCodeChanged
+            | ReasonCode::UnknownDependency
     )
 }
 
@@ -126,30 +127,27 @@ impl Context<'_> {
         for parent in &node.parents {
             let name = self.name(parent).to_owned();
             if let Some(source) = self.sources.get(parent.as_str()) {
-                let now = source.version.as_ref();
-                let then: Option<&DataVersion> = before.inputs.get(parent).and_then(Option::as_ref);
-                evidence.push(Evidence::new(
-                    "source_data_version",
-                    parent.clone(),
-                    now.map(|v| v.value.clone()),
-                    now.map_or(Exactness::None, |v| v.exactness),
-                ));
-                match (now, then) {
-                    (Some(now), Some(then)) if now.exactness.allows_reuse() => {
-                        if now.value == then.value {
-                            inputs.unchanged.push(name);
-                        } else {
-                            inputs.new_data.push(name);
-                        }
-                    }
-                    _ => inputs.missing.push(name),
-                }
+                Self::source_input(source, before, name, evidence, &mut inputs);
                 continue;
             }
             let Some((action, code)) = self.decided.get(parent) else {
                 inputs.unknown.push(parent.clone());
                 continue;
             };
+            evidence.push(Evidence::new(
+                "parent_decision",
+                parent.clone(),
+                Some(format!(
+                    "{}: {}",
+                    if *action == PlanAction::Build {
+                        "build"
+                    } else {
+                        "reuse"
+                    },
+                    serde_json_word(*code)
+                )),
+                Exactness::Exact,
+            ));
             if *action == PlanAction::Build {
                 if is_code_change(*code) {
                     inputs.code_changed.push(name);
@@ -158,20 +156,73 @@ impl Context<'_> {
                 }
                 continue;
             }
-            // Reused, but built after this node was: this node hasn't seen that data
-            // (e.g. it failed in the run that rebuilt its parent).
-            let parent_built = self
+            // Reused: has it been rebuilt since this node read it? Runs are compared,
+            // not clocks.
+            let current = self
                 .previous
                 .and_then(|s| s.nodes.get(parent))
-                .map(|p| p.built_at);
-            if parent_built.is_some_and(|t| t > before.built_at) {
-                inputs.new_data.push(name);
-            } else {
-                inputs.unchanged.push(name);
+                .map(|p| p.run_id.as_str());
+            match (before.parents.get(parent).map(String::as_str), current) {
+                (Some(seen), Some(now)) if seen == now => inputs.unchanged.push(name),
+                (Some(_), Some(_)) => inputs.new_data.push(name),
+                _ => inputs.missing.push(format!(
+                    "{name} (which of its builds this node read is unknown)"
+                )),
             }
         }
         inputs
     }
+
+    fn source_input(
+        source: &Source,
+        before: &NodeState,
+        name: String,
+        evidence: &mut Vec<Evidence>,
+        inputs: &mut Inputs,
+    ) {
+        let now = source.version.as_ref();
+        evidence.push(Evidence::new(
+            "source_data_version",
+            source.id.clone(),
+            now.map(|v| v.value.clone()),
+            now.map_or(Exactness::None, |v| v.exactness),
+        ));
+        let then = before.inputs.get(&source.id).and_then(Option::as_ref);
+        // A version observed before the node's last build can't show data that arrived
+        // after it.
+        let current = source.observed_at.is_some_and(|at| at > before.built_at);
+        match (now, then) {
+            (Some(now), Some(then))
+                if current && now.exactness.allows_reuse() && then.exactness.allows_reuse() =>
+            {
+                if now == then {
+                    inputs.unchanged.push(name);
+                } else {
+                    inputs.new_data.push(name);
+                }
+            }
+            (Some(_), _) if !current => inputs.missing.push(format!(
+                "{name} (its version was measured before the last build)"
+            )),
+            _ => inputs.missing.push(name),
+        }
+    }
+}
+
+/// A reason code as it is serialized, for evidence values.
+fn serde_json_word(code: ReasonCode) -> String {
+    format!("{code:?}")
+        .chars()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            let lower = c.to_ascii_lowercase();
+            if c.is_ascii_uppercase() && i > 0 {
+                vec!['_', lower]
+            } else {
+                vec![lower]
+            }
+        })
+        .collect()
 }
 
 /// Decides one node; returns the action and reasons.
@@ -224,7 +275,7 @@ fn decide(
     }
     if !inputs.unknown.is_empty() {
         return build(
-            ReasonCode::MissingDataEvidence,
+            ReasonCode::UnknownDependency,
             format!(
                 "depends on {}, which ODS doesn't know",
                 inputs.unknown.join(", ")
@@ -250,6 +301,12 @@ fn decide(
             format!("never reused: ODS can't honour {}", settings.join(", ")),
         );
     }
+    if node.parents.is_empty() && !node.self_contained {
+        return build(
+            ReasonCode::MissingDataEvidence,
+            "declares no inputs, so ODS can't tell when the data it reads changes".into(),
+        );
+    }
     decide_on_data(node, before, &inputs, now)
 }
 
@@ -265,7 +322,7 @@ fn decide_on_data(
         return build(
             ReasonCode::MissingDataEvidence,
             format!(
-                "no usable data version for {}; measure source freshness before planning",
+                "no usable evidence of the data in {}; measure source freshness before planning",
                 inputs.missing.join(", ")
             ),
         );

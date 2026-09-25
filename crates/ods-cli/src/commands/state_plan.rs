@@ -1,7 +1,7 @@
 //! `ods state plan`, `ods state record` and `ods state history` (#11, #20, #22, #25;
 //! ADR-0013). This is where dbt artifacts, the planner and the state store meet.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -136,6 +136,8 @@ struct Workspace {
     state_db: PathBuf,
     sources_file: Option<PathBuf>,
     sources_taken_at: Option<Timestamp>,
+    /// The dbt invocation that wrote the manifest.
+    invocation_id: Option<String>,
     /// Sources `dbt source freshness` couldn't measure.
     source_errors: Vec<String>,
 }
@@ -165,41 +167,26 @@ impl Workspace {
             .transpose()
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::STATE_INPUT, e.to_string()))?;
         let manifest = &artifacts.manifest;
-        let project_name = manifest
-            .project_name
-            .clone()
-            .unwrap_or_else(|| "dbt".into());
+        let sources_taken_at = freshness
+            .as_ref()
+            .and_then(|f| f.generated_at.as_deref())
+            .and_then(|t| Timestamp::parse(t).ok());
+        // Without a name, unrelated projects would share state: refuse.
+        let project_name = manifest.project_name.clone().ok_or_else(|| {
+            CliError::new(
+                ExitStatus::Failure,
+                codes::STATE_INPUT,
+                "the dbt artifacts don't name the project, so its state can't be told apart from other projects'",
+            )
+            .with_hint("use artifacts from dbt 1.7 or later (their metadata has `project_name`)")
+        })?;
         let environment = args
             .get_one::<String>("environment")
             .map_or("default", String::as_str);
         let scope = StateScope::new(&project_name, environment)
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?;
         let policies = resolve(manifest);
-        let buildable = |t: ResourceType| {
-            matches!(
-                t,
-                ResourceType::Model | ResourceType::Seed | ResourceType::Snapshot
-            )
-        };
-        let nodes = manifest
-            .nodes
-            .iter()
-            .filter(|n| buildable(n.resource_type))
-            .map(|n| {
-                Node::new(
-                    n.unique_id.clone(),
-                    display_name(&n.unique_id),
-                    kind_word(n.resource_type),
-                    n.depends_on.clone(),
-                    fingerprint(manifest, n),
-                    policies
-                        .nodes
-                        .get(&n.unique_id)
-                        .cloned()
-                        .unwrap_or_else(ods_core::FreshnessPolicy::conservative),
-                )
-            })
-            .collect();
+        let nodes = plan_nodes(manifest, &policies);
         let sources = manifest
             .nodes
             .iter()
@@ -215,6 +202,7 @@ impl Workspace {
                         DataVersion::new(value, Exactness::Semantic, "sources.json max_loaded_at")
                     });
                 Source::new(n.unique_id.clone(), display_name(&n.unique_id), version)
+                    .observed_at(sources_taken_at)
             })
             .collect();
         Ok(Self {
@@ -222,10 +210,8 @@ impl Workspace {
                 args.get_one::<String>("state-db")
                     .map_or(DEFAULT_STORE, String::as_str),
             ),
-            sources_taken_at: freshness
-                .as_ref()
-                .and_then(|f| f.generated_at.as_deref())
-                .and_then(|t| Timestamp::parse(t).ok()),
+            sources_taken_at,
+            invocation_id: manifest.invocation_id.clone(),
             source_errors: freshness
                 .map(|f| f.errors.into_keys().collect())
                 .unwrap_or_default(),
@@ -244,6 +230,82 @@ impl Workspace {
 
     fn latest(&self, store: &SqliteStateStore) -> Result<Option<StoredSnapshot>, CliError> {
         block_on(store.latest(&self.scope))?.map_err(|e| store_error(&e))
+    }
+}
+
+/// The models, seeds and snapshots ODS plans, as planner nodes.
+fn plan_nodes(
+    manifest: &ods_provider_dbt::Manifest,
+    policies: &ods_provider_dbt::state_config::StatePolicies,
+) -> Vec<Node> {
+    // Ephemeral models are never built: their SQL is inlined into their readers'
+    // compiled SQL (so it is in their fingerprints), and their readers depend on
+    // their parents instead.
+    let ephemeral: BTreeMap<&str, &[String]> = manifest
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.resource_type == ResourceType::Model && n.materialized.as_deref() == Some("ephemeral")
+        })
+        .map(|n| (n.unique_id.as_str(), n.depends_on.as_slice()))
+        .collect();
+    manifest
+        .nodes
+        .iter()
+        .filter(|n| {
+            matches!(
+                n.resource_type,
+                ResourceType::Model | ResourceType::Seed | ResourceType::Snapshot
+            ) && !ephemeral.contains_key(n.unique_id.as_str())
+        })
+        .map(|n| {
+            let node = Node::new(
+                n.unique_id.clone(),
+                node_name(n),
+                kind_word(n.resource_type),
+                through_ephemeral(&n.depends_on, &ephemeral),
+                fingerprint(manifest, n),
+                policies
+                    .nodes
+                    .get(&n.unique_id)
+                    .cloned()
+                    .unwrap_or_else(ods_core::FreshnessPolicy::conservative),
+            );
+            // A seed's rows are its file: nothing else feeds it.
+            if n.resource_type == ResourceType::Seed {
+                node.self_contained()
+            } else {
+                node
+            }
+        })
+        .collect()
+}
+
+/// Parents, with ephemeral models replaced by their own parents.
+fn through_ephemeral(parents: &[String], ephemeral: &BTreeMap<&str, &[String]>) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    let mut stack: Vec<&str> = parents.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        match ephemeral.get(p) {
+            Some(grandparents) => stack.extend(grandparents.iter().map(String::as_str)),
+            None => {
+                out.insert(p.to_owned());
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// A node's name as dbt selects it: `orders`, or `orders.v2` for a model version.
+fn node_name(n: &ods_provider_dbt::ManifestNode) -> String {
+    let name = n.name.clone().unwrap_or_else(|| display_name(&n.unique_id));
+    match &n.version {
+        Some(v) => format!("{name}.v{v}"),
+        None => name,
     }
 }
 
@@ -328,6 +390,15 @@ impl PlanReport {
                 "no sources.json: every node reading a source is built. Run `dbt source freshness` before planning."
                     .to_owned(),
             );
+        }
+        if let (Some(taken), Some(head)) = (ws.sources_taken_at, &latest)
+            && !ws.project.sources.is_empty()
+            && taken <= head.snapshot.created_at
+        {
+            warnings.push(format!(
+                "sources.json was measured at {taken}, before the last recorded run ({}): nodes reading sources are built. Run `dbt source freshness` again before planning.",
+                head.snapshot.created_at
+            ));
         }
         if !ws.source_errors.is_empty() {
             warnings.push(format!(
@@ -456,6 +527,7 @@ impl RecordReport {
                 "record right after `dbt run` or `dbt build`, from the same target directory",
             )
         })?;
+        check_recordable(&run, ws.invocation_id.as_deref())?;
         let started = run
             .started_at
             .as_deref()
@@ -467,7 +539,8 @@ impl RecordReport {
             .unwrap_or_else(Timestamp::now);
         let sources_predate_run = matches!(
             (ws.sources_taken_at, started),
-            (Some(taken), Some(started)) if taken <= started
+            // Strictly before: timestamps are to the second.
+            (Some(taken), Some(started)) if taken < started
         );
         let planned: BTreeSet<&str> = ws.project.nodes.iter().map(|n| n.id.as_str()).collect();
         let results: Vec<RunResult> = run
@@ -497,6 +570,27 @@ impl RecordReport {
             .unwrap_or_else(|| format!("run-{}", finished.unix()));
         let store = ws.open_store()?;
         let latest = ws.latest(&store)?;
+        let recent = block_on(store.history(&ws.scope, 1000))?.map_err(|e| store_error(&e))?;
+        if recent.iter().any(|h| h.run_id == run_id) {
+            return Err(CliError::new(
+                ExitStatus::Failure,
+                codes::STATE_INPUT,
+                format!("run {run_id} is already recorded"),
+            ));
+        }
+        if let (Some(head), Some(started)) = (&latest, started)
+            && started < head.snapshot.created_at
+        {
+            return Err(CliError::new(
+                ExitStatus::Failure,
+                codes::STATE_INPUT,
+                format!(
+                    "run {run_id} started at {started}, before the recorded state (snapshot {}, {})",
+                    head.id, head.snapshot.created_at
+                ),
+            )
+            .with_hint("record runs in the order they ran"));
+        }
         let recorded = ods_state::record(
             &ws.project,
             latest.as_ref().map(|s| (s.id, &s.snapshot)),
@@ -519,6 +613,42 @@ impl RecordReport {
             has_sources: !ws.project.sources.is_empty(),
             recorded,
         })
+    }
+}
+
+/// dbt commands whose successes are builds.
+const RECORDABLE: [&str; 4] = ["build", "run", "seed", "snapshot"];
+
+/// Refuses run results that don't show real builds of this manifest's code.
+fn check_recordable(run: &RunResults, manifest_invocation: Option<&str>) -> Result<(), CliError> {
+    let refuse = |message: String, hint: &str| {
+        Err(CliError::new(ExitStatus::Failure, codes::STATE_INPUT, message).with_hint(hint))
+    };
+    match run.command.as_deref() {
+        Some(command) if RECORDABLE.contains(&command) => {}
+        other => {
+            return refuse(
+                format!(
+                    "`run_results.json` is from `dbt {}`, which doesn't build anything",
+                    other.unwrap_or("?")
+                ),
+                "record right after `dbt build`, `run`, `seed` or `snapshot`",
+            );
+        }
+    }
+    if run.empty {
+        return refuse(
+            "the run used `--empty`: its relations have no rows".to_owned(),
+            "record a run without `--empty`",
+        );
+    }
+    match (manifest_invocation, run.invocation_id.as_deref()) {
+        (Some(manifest), Some(results)) if manifest == results => Ok(()),
+        _ => refuse(
+            "the manifest and the run results come from different dbt invocations, so ODS can't tell which code was built"
+                .to_owned(),
+            "record right after the run, before another dbt command rewrites the target directory (with `manifest.json`: `--artifacts json`)",
+        ),
     }
 }
 

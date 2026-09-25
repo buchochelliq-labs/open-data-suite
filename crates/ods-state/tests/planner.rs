@@ -45,10 +45,12 @@ fn source(id: &str, version: Option<&str>) -> Source {
         id,
         version.map(|v| DataVersion::new(v, Exactness::Semantic, "sources.json")),
     )
+    // Measured after the build at T0, before plans at T0 + 60.
+    .observed_at(Some(Timestamp::from_unix(T0 + 50)))
 }
 
 /// `raw_orders → stg_orders → orders → report`, `raw_users → stg_users → report`,
-/// and `lonely` (no parents).
+/// and `lonely` (no parents, self-contained like a seed).
 fn project() -> Project {
     Project::new(
         vec![
@@ -56,7 +58,7 @@ fn project() -> Project {
             node("stg_users", &["raw_users"], "su"),
             node("orders", &["stg_orders"], "o"),
             node("report", &["orders", "stg_users"], "r"),
-            node("lonely", &[], "l"),
+            node("lonely", &[], "l").self_contained(),
         ],
         vec![
             source("raw_orders", Some("v1")),
@@ -337,6 +339,11 @@ fn a_failed_run_keeps_the_last_successful_state_and_its_children_catch_up() {
         "failed node kept"
     );
     assert_eq!(second.nodes["model.p.stg_orders"].run_id, "run-2");
+    // Sources measured again after run 2, as `dbt source freshness` before planning.
+    let mut p = p.clone();
+    for source in &mut p.sources {
+        source.observed_at = Some(Timestamp::from_unix(T0 + 250));
+    }
     let got = actions(&p, Some(&second), T0 + 300);
     assert_eq!(got["stg_orders"], reuse(ReasonCode::Unchanged));
     assert_eq!(
@@ -461,4 +468,81 @@ fn every_reuse_says_the_relation_was_not_checked() {
             entry.name
         );
     }
+}
+
+#[test]
+fn a_source_version_measured_before_the_last_build_is_not_evidence() {
+    let p = project();
+    let snapshot = built(&p);
+    let mut stale = p.clone();
+    // The same file of versions as at record time, measured before the build.
+    stale.sources[0] =
+        source("raw_orders", Some("v1")).observed_at(Some(Timestamp::from_unix(T0 - 10)));
+    let got = actions(&stale, Some(&snapshot), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::MissingDataEvidence));
+    stale.sources[0].observed_at = None;
+    assert_eq!(
+        actions(&stale, Some(&snapshot), T0 + 60)["stg_orders"],
+        build(ReasonCode::MissingDataEvidence)
+    );
+}
+
+#[test]
+fn a_node_without_inputs_is_built_unless_self_contained() {
+    let p = Project::new(
+        vec![
+            node("hardcoded", &[], "h"),
+            node("seedlike", &[], "s").self_contained(),
+        ],
+        vec![],
+    );
+    let state = built(&p);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["hardcoded"], build(ReasonCode::MissingDataEvidence));
+    assert_eq!(got["seedlike"], reuse(ReasonCode::Unchanged));
+}
+
+#[test]
+fn an_unknown_dependency_propagates_like_a_code_change() {
+    let mut p = project();
+    p.nodes[0].parents.push("metric.p.unknown".into());
+    p.nodes[2].policy.lag_tolerance_secs = 3600;
+    let state = built(&p);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::UnknownDependency));
+    assert_eq!(
+        got["orders"],
+        build(ReasonCode::UpstreamCodeChanged),
+        "not deferred by lag tolerance"
+    );
+}
+
+#[test]
+fn which_parent_build_a_node_read_is_recorded_by_run_not_clock() {
+    let p = project();
+    let first = built(&p);
+    assert_eq!(
+        first.nodes["model.p.orders"].parents["model.p.stg_orders"],
+        "run-1"
+    );
+    // Run 2 rebuilds stg_orders only, with a clock that runs behind.
+    let results = [RunResult::new(
+        "model.p.stg_orders",
+        Outcome::Success,
+        Some(Timestamp::from_unix(T0 - 500)),
+    )];
+    let second = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &results,
+        "run-2",
+        Timestamp::from_unix(T0 - 400),
+        true,
+    )
+    .snapshot;
+    assert_eq!(
+        actions(&p, Some(&second), T0 + 60)["orders"],
+        build(ReasonCode::NewUpstreamData),
+        "a parent rebuilt by another run is new data, whatever the clocks say"
+    );
 }

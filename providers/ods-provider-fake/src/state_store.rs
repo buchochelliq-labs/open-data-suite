@@ -81,6 +81,7 @@ impl StateStore for FakeStateStore {
         scope: &StateScope,
         snapshot: &StateSnapshot,
     ) -> Result<SnapshotId, ProviderError> {
+        check_readable(snapshot)?;
         let mut inner = self.inner();
         let head = inner.heads.get(scope).copied();
         if head != snapshot.parent {

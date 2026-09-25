@@ -75,6 +75,8 @@ pub enum ResourceType {
 struct RawMetadata {
     dbt_schema_version: String,
     #[serde(default)]
+    invocation_id: Option<String>,
+    #[serde(default)]
     project_name: Option<String>,
     #[serde(default)]
     adapter_type: Option<String>,
@@ -121,8 +123,21 @@ struct RawConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct RawChecksum {
+    /// `sha256`, or `path` for seeds too large to hash (then `checksum` is the path).
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     checksum: Option<String>,
+}
+
+impl RawChecksum {
+    /// The checksum, if it is a hash of the content.
+    fn of_content(self) -> Option<String> {
+        match self.name.as_deref() {
+            Some("path") => None,
+            _ => self.checksum,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +194,11 @@ struct RawTestMetadata {
 #[derive(Debug, Deserialize)]
 struct RawNode {
     unique_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    /// Model versions are numbers or strings.
+    #[serde(default)]
+    version: Option<serde_json::Value>,
     resource_type: ResourceType,
     #[serde(default)]
     relation_name: Option<String>,
@@ -245,8 +265,13 @@ pub struct ManifestNode {
     pub depends_on_macros: Vec<String>,
     /// Columns declared in YAML: often incomplete, and not in table order.
     pub declared_columns: Vec<String>,
-    /// dbt's checksum of the node's source file (e.g. a model's SQL or a seed's CSV).
+    /// dbt's checksum of the node's source file (e.g. a model's SQL or a seed's CSV);
+    /// `None` when dbt didn't hash the content (seeds over 1 MiB are identified by path).
     pub checksum: Option<String>,
+    /// Its name, e.g. `orders`.
+    pub name: Option<String>,
+    /// Its model version, e.g. `2`, for versioned models.
+    pub version: Option<String>,
     /// Scheduling configuration, as resolved by dbt.
     pub config: DbtConfig,
     /// For data tests: which test, on what.
@@ -400,6 +425,8 @@ pub struct Manifest {
     pub adapter_type: Option<String>,
     /// The dbt project's name.
     pub project_name: Option<String>,
+    /// The dbt invocation that wrote it.
+    pub invocation_id: Option<String>,
     /// Macros, by id: their source and the macros they call.
     pub macros: BTreeMap<String, DbtMacro>,
     /// Enabled nodes and sources, sorted by id.
@@ -592,6 +619,7 @@ impl Manifest {
             dbt_version: raw.metadata.dbt_version,
             adapter_type: raw.metadata.adapter_type,
             project_name: raw.metadata.project_name,
+            invocation_id: raw.metadata.invocation_id,
             macros: raw
                 .macros
                 .into_iter()
@@ -655,7 +683,13 @@ fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
         depends_on: n.depends_on.nodes,
         depends_on_macros: n.depends_on.macros,
         declared_columns,
-        checksum: n.checksum.checksum,
+        checksum: n.checksum.of_content(),
+        name: n.name,
+        version: n.version.and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }),
         config: DbtConfig {
             state: config.state.filter(|v| !v.is_null()),
             freshness: config.freshness.filter(|v| !v.is_null()),

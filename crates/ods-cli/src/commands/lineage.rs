@@ -1068,8 +1068,12 @@ impl ImpactReport {
             let Some(after) = &node.lineage else {
                 // No SQL lineage (seeds, snapshots, Python models): compare dbt's file
                 // checksum; any difference, or a new node, may change every row.
+                // No checksum of the content (e.g. dbt's path-only checksum of a large
+                // seed) is no evidence that it's the same.
+                let checksum = head.checksums.get(&node.id).and_then(Option::as_ref);
                 let same = before_node.is_some()
-                    && base.checksums.get(&node.id) == head.checksums.get(&node.id);
+                    && checksum.is_some()
+                    && base.checksums.get(&node.id).and_then(Option::as_ref) == checksum;
                 if !same {
                     changed_models.push(node.id.clone());
                     changes.push(Change::Rows {

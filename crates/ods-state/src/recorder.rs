@@ -85,6 +85,21 @@ pub fn record(
     let mut advanced = BTreeSet::new();
     let mut kept = BTreeMap::new();
     let mut ignored = BTreeSet::new();
+    let succeeded: BTreeSet<&str> = results
+        .iter()
+        .filter(|r| r.outcome == Outcome::Success)
+        .map(|r| r.node.as_str())
+        .collect();
+    // Which build of each node exists after this run: this run's, or the one before.
+    let run_of = |id: &str| -> Option<String> {
+        if succeeded.contains(id) && by_id.get(id).is_some_and(|n| n.fingerprint.is_ok()) {
+            Some(run_id.to_owned())
+        } else {
+            previous
+                .and_then(|(_, s)| s.nodes.get(id))
+                .map(|p| p.run_id.clone())
+        }
+    };
     for result in results {
         let Some(node) = by_id.get(result.node.as_str()) else {
             ignored.insert(result.node.clone());
@@ -101,15 +116,19 @@ pub fn record(
                         })
                     })
                     .collect();
-                nodes.insert(
-                    node.id.clone(),
-                    NodeState::new(
-                        fingerprint.clone(),
-                        result.completed_at.unwrap_or(finished_at),
-                        run_id,
-                        inputs,
-                    ),
+                let mut state = NodeState::new(
+                    fingerprint.clone(),
+                    result.completed_at.unwrap_or(finished_at),
+                    run_id,
+                    inputs,
                 );
+                state.parents = node
+                    .parents
+                    .iter()
+                    .filter(|p| by_id.contains_key(p.as_str()))
+                    .filter_map(|p| Some((p.clone(), run_of(p)?)))
+                    .collect();
+                nodes.insert(node.id.clone(), state);
                 advanced.insert(node.id.clone());
             }
             (Outcome::Success, Err(why)) => {

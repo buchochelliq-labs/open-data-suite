@@ -62,6 +62,10 @@ pub struct RunResults {
     pub started_at: Option<String>,
     /// When the file was written.
     pub generated_at: Option<String>,
+    /// The dbt command that wrote it (`build`, `run`, `compile`, `generate`, …).
+    pub command: Option<String>,
+    /// Whether it ran with `--empty` (schema-only builds with no rows).
+    pub empty: bool,
     /// Per-node results, in file order.
     pub results: Vec<NodeResult>,
 }
@@ -69,6 +73,8 @@ pub struct RunResults {
 #[derive(Deserialize)]
 struct RawRunResults {
     metadata: RawRunMetadata,
+    #[serde(default)]
+    args: RawArgs,
     #[serde(default)]
     results: Vec<RawNodeResult>,
 }
@@ -82,6 +88,14 @@ struct RawRunMetadata {
     invocation_started_at: Option<String>,
     #[serde(default)]
     generated_at: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct RawArgs {
+    #[serde(default)]
+    which: Option<String>,
+    #[serde(default)]
+    empty: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +165,8 @@ impl RunResults {
             // Older versions have no start time: the earliest step stands in for it.
             started_at: raw.metadata.invocation_started_at.or(earliest),
             generated_at: raw.metadata.generated_at,
+            command: raw.args.which,
+            empty: raw.args.empty == Some(true),
             results,
         })
     }

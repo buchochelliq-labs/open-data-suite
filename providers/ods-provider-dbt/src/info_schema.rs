@@ -212,6 +212,7 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
     });
     let manifest = Manifest {
         project_name,
+        invocation_id: None,
         macros,
         schema_version: version,
         dbt_version,
@@ -386,6 +387,8 @@ fn read_nodes(
                 "constraints",
                 "description",
                 "unique_key",
+                "name",
+                "version",
             ],
         )? {
             if matches!(row.get("enabled"), Some(Field::Bool(false))) {
@@ -425,6 +428,8 @@ fn read_nodes(
                     .map(|c| c.iter().cloned().collect())
                     .unwrap_or_default(),
                 checksum,
+                name: text(&row, "name"),
+                version: text(&row, "version").filter(|v| !v.is_empty()),
                 config: config(&row, &path)?,
                 test: None,
                 constraints: {
@@ -492,6 +497,8 @@ fn read_tests(
             depends_on_macros: Vec::new(),
             declared_columns: Vec::new(),
             checksum: None,
+            name: None,
+            version: None,
             config: DbtConfig::default(),
             test: Some(DbtTest {
                 name,

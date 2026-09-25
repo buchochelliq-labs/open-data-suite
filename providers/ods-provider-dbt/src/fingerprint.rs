@@ -7,8 +7,9 @@
 //! | `file` | dbt's checksum of the node's source file |
 //! | `compiled_sql` | the compiled SQL (models and snapshots) |
 //! | `config` | the resolved config, minus settings that don't change what gets built |
-//! | `macros` | every macro it calls, directly or not |
+//! | `macros` | every macro it calls, directly or not, plus its materialization and the `generate_*_name` macros that place it |
 //! | `contract` | declared column types and constraints |
+//! | `relation` | the relation it builds (database, schema, alias) |
 //! | `engine` | dbt version and adapter |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,7 +54,10 @@ fn canonical_json(value: &Value, out: &mut String) {
     }
 }
 
-fn config_content(node: &ManifestNode) -> String {
+fn config_content(node: &ManifestNode) -> Result<String, String> {
+    if !node.config.raw.is_object() {
+        return Err("dbt recorded no config for it".to_owned());
+    }
     let mut config = node.config.raw.clone();
     if let Value::Object(map) = &mut config {
         for key in IGNORED_CONFIG_KEYS {
@@ -62,13 +66,41 @@ fn config_content(node: &ManifestNode) -> String {
     }
     let mut out = String::new();
     canonical_json(&config, &mut out);
-    out
+    Ok(out)
+}
+
+/// Macros that shape a node without appearing in its `depends_on`: the materialization
+/// that builds it, and the `generate_*_name` macros that decide where it goes.
+fn implicit_macros<'m>(manifest: &'m Manifest, node: &ManifestNode) -> Vec<&'m str> {
+    let materialization = node
+        .materialized
+        .as_deref()
+        .map(|m| format!("materialization_{m}_"));
+    manifest
+        .macros
+        .keys()
+        .filter(|id| {
+            let name = id.rsplit('.').next().unwrap_or(id);
+            materialization
+                .as_deref()
+                .is_some_and(|m| name.starts_with(m))
+                || [
+                    "generate_schema_name",
+                    "generate_alias_name",
+                    "generate_database_name",
+                ]
+                .iter()
+                .any(|g| name.ends_with(g))
+        })
+        .map(String::as_str)
+        .collect()
 }
 
 /// Every macro `node` calls, directly or through other macros, as `id sha256` lines.
-fn macros_content(manifest: &Manifest, node: &ManifestNode) -> String {
+fn macros_content(manifest: &Manifest, node: &ManifestNode) -> Result<String, String> {
     let mut seen = BTreeSet::new();
     let mut stack: Vec<&str> = node.depends_on_macros.iter().map(String::as_str).collect();
+    stack.extend(implicit_macros(manifest, node));
     while let Some(id) = stack.pop() {
         if !seen.insert(id) {
             continue;
@@ -79,13 +111,13 @@ fn macros_content(manifest: &Manifest, node: &ManifestNode) -> String {
     }
     let mut out = String::new();
     for id in seen {
-        let digest = manifest
+        let m = manifest
             .macros
             .get(id)
-            .map_or_else(|| "missing".to_owned(), |m| sha256_hex(m.sql.as_bytes()));
-        let _ = writeln!(out, "{id} {digest}");
+            .ok_or_else(|| format!("it calls macro `{id}`, which the artifacts don't include"))?;
+        let _ = writeln!(out, "{id} {}", sha256_hex(m.sql.as_bytes()));
     }
-    out
+    Ok(out)
 }
 
 fn contract_content(node: &ManifestNode) -> String {
@@ -126,12 +158,15 @@ pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerpri
         .checksum
         .as_deref()
         .filter(|c| !c.is_empty())
-        .ok_or_else(|| "dbt recorded no checksum of its file".to_owned())?;
+        .ok_or_else(|| {
+            "dbt recorded no checksum of its content (e.g. a seed over 1 MiB)".to_owned()
+        })?;
     let mut components: Vec<(&str, String)> = vec![
         ("file", file.to_owned()),
-        ("config", config_content(node)),
-        ("macros", macros_content(manifest, node)),
+        ("config", config_content(node)?),
+        ("macros", macros_content(manifest, node)?),
         ("contract", contract_content(node)),
+        ("relation", node.relation_name.clone().unwrap_or_default()),
         (
             "engine",
             format!(

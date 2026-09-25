@@ -422,17 +422,27 @@ A node is **built** when (first match wins):
 3. its fingerprint changed; the plan names the components (`file`, `compiled_sql`,
    `config`, `macros`, `contract`, `engine`);
 4. a parent is built because *its* code changed;
-5. it depends on something ODS doesn't know, or its State config has a setting ODS
-   can't honour yet;
-6. a source it reads has no usable data version, now or when it was last built;
+5. it depends on something ODS doesn't know, declares no inputs at all (seeds aside), or
+   its State config has a setting ODS can't honour yet;
+6. a source it reads has no usable data version, now or when it was last built. A
+   version only counts if `sources.json` was measured after the node's last build, so
+   run `dbt source freshness` before planning;
 7. a parent has new data (a source's `max_loaded_at` moved, a parent is rebuilt for
-   data, or a parent was rebuilt after it), unless its `lag_tolerance` hasn't run out
-   or `require_fresh_data_from: all` isn't met yet.
+   data, or a parent was rebuilt by a run it didn't read), unless its `lag_tolerance`
+   hasn't run out or `require_fresh_data_from: all` isn't met yet.
 
 Otherwise it is **reused**. Every reuse says so: ODS doesn't check yet that the relation
 it built still exists in the warehouse.
 
-`ods state record` advances only nodes whose status in `run_results.json` is `success`.
+`ods state record` only accepts a real build of the manifest's code:
+- `run_results.json` must come from `dbt build`, `run`, `seed` or `snapshot`, not
+  `--empty`;
+- `manifest.json` must come from the same invocation;
+- the run must not have been recorded already, or have started before the recorded
+  state.
+
+Record right after the run, before another dbt command rewrites the target directory.
+It advances only nodes whose status in `run_results.json` is `success`.
 Failed and skipped nodes keep their last successful state, so they (and what reads them)
 are built next time. Source versions are recorded only if `sources.json` was measured
 before the run started. Otherwise a node could be credited with data that arrived after
@@ -445,7 +455,7 @@ it ran.
 | `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |
 | `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |
 | `--run-results PATH` | (`record`) default `<target-dir>/run_results.json` |
-| `--limit N` | (`history`) default 20 |
+| `--limit N` | (`history`) default 20; `history` reads the target directory for the project name |
 
 State is kept per project and environment as immutable snapshots. A record that races
 another fails with `ODS-E0402` and writes nothing.

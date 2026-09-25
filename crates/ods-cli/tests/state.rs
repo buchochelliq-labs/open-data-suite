@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-/// A scratch directory holding a copy of the dbt 1.10 fixture's artifacts (optionally
+/// A scratch directory holding a copy of the fixture's `dbt build` artifacts (optionally
 /// edited) and the state database. Removed when dropped.
 struct Scratch {
     dir: PathBuf,
@@ -25,8 +25,8 @@ impl Scratch {
         let target = dir.join("target");
         std::fs::create_dir_all(&target).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10");
-        for file in ["manifest.json", "catalog.json", "run_results.json"] {
+            .join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-build");
+        for file in ["manifest.json", "run_results.json"] {
             std::fs::copy(fixture.join(file), target.join(file)).unwrap();
         }
         Self { dir }
@@ -77,7 +77,7 @@ impl Scratch {
     }
 
     fn plan(&self, extra: &[&str]) -> Value {
-        let mut args = vec!["state", "plan", "--now", "2026-09-25T04:00:00Z"];
+        let mut args = vec!["state", "plan", "--now", "2026-09-25T12:00:00Z"];
         args.extend(extra);
         self.ok(&args)
     }
@@ -214,14 +214,18 @@ fn a_recorded_run_is_reused_until_something_changes() {
 fn a_failed_node_keeps_its_last_state_and_catches_up_next_time() {
     let s = Scratch::new("failure");
     s.ok(&["state", "record"]);
-    // A second run: stg_orders rebuilt later, orders failed, its children skipped.
+    // A second run: stg_orders rebuilt, orders failed, its children skipped.
+    s.edit("manifest.json", |m| {
+        m["metadata"]["invocation_id"] = json!("run-2");
+    });
     s.edit("run_results.json", |r| {
         r["metadata"]["invocation_id"] = json!("run-2");
-        r["metadata"]["generated_at"] = json!("2026-09-25T05:00:00Z");
+        r["metadata"]["invocation_started_at"] = json!("2026-09-25T09:59:00Z");
+        r["metadata"]["generated_at"] = json!("2026-09-25T10:00:00Z");
         for result in r["results"].as_array_mut().unwrap() {
             let id = result["unique_id"].as_str().unwrap().to_owned();
             for timing in result["timing"].as_array_mut().unwrap() {
-                timing["completed_at"] = json!("2026-09-25T05:00:00Z");
+                timing["completed_at"] = json!("2026-09-25T10:00:00Z");
             }
             match id.as_str() {
                 "model.jaffle_ods.orders" => result["status"] = json!("error"),
@@ -288,4 +292,165 @@ fn environments_keep_separate_state() {
     s.ok(&["state", "record", "--environment", "dev"]);
     assert_eq!(s.plan(&["--environment", "dev"])["reuse"], 11);
     assert_eq!(s.plan(&["--environment", "prod"])["build"], 11);
+}
+
+#[test]
+fn only_real_builds_of_this_code_are_recorded() {
+    let refused = |edit: &dyn Fn(&Scratch), why: &str| {
+        let s = Scratch::new("refused");
+        edit(&s);
+        let (code, json) = s.ods(&["state", "record"]);
+        assert_eq!(code, 1, "{why}: {json:#}");
+        assert_eq!(json["diagnostics"][0]["code"], "ODS-E0403", "{why}");
+        assert!(!s.db().exists(), "{why}: nothing is written");
+    };
+    refused(
+        &|s| {
+            s.edit("run_results.json", |r| {
+                r["args"]["which"] = json!("generate");
+            });
+        },
+        "`dbt docs generate` reports every node as a success",
+    );
+    refused(
+        &|s| {
+            s.edit("run_results.json", |r| {
+                r["args"]["which"] = json!("compile");
+            });
+        },
+        "`dbt compile` builds nothing",
+    );
+    refused(
+        &|s| s.edit("run_results.json", |r| r["args"]["empty"] = json!(true)),
+        "`--empty` builds no rows",
+    );
+    refused(
+        &|s| {
+            s.edit("manifest.json", |m| {
+                m["metadata"]["invocation_id"] = json!("a-later-compile");
+            });
+        },
+        "the manifest was rewritten after the run",
+    );
+}
+
+#[test]
+fn a_run_is_recorded_once_and_in_order() {
+    let s = Scratch::new("order");
+    s.ok(&["state", "record"]);
+    let (code, json) = s.ods(&["state", "record"]);
+    assert_eq!(code, 1);
+    assert!(
+        json["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already recorded")
+    );
+
+    // A different run that started before the recorded one finished.
+    s.edit("manifest.json", |m| {
+        m["metadata"]["invocation_id"] = json!("older");
+    });
+    s.edit("run_results.json", |r| {
+        r["metadata"]["invocation_id"] = json!("older");
+        r["metadata"]["invocation_started_at"] = json!("2026-01-01T00:00:00Z");
+    });
+    let (code, json) = s.ods(&["state", "record"]);
+    assert_eq!(code, 1);
+    assert!(
+        json["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("before the recorded state"),
+        "{json:#}"
+    );
+    assert_eq!(
+        s.ok(&["state", "history"])["snapshots"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+fn sources_json(generated_at: &str, max_loaded_at: &str) -> Value {
+    json!({
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/sources/v3.json",
+            "generated_at": generated_at,
+            "invocation_id": "freshness"
+        },
+        "results": [{
+            "unique_id": "source.jaffle_ods.landing.feed",
+            "status": "pass",
+            "max_loaded_at": max_loaded_at,
+            "snapshotted_at": generated_at
+        }],
+        "elapsed_time": 0.1
+    })
+}
+
+#[test]
+fn source_versions_count_only_when_measured_after_the_last_build() {
+    let s = Scratch::new("sources");
+    // A source that stg_orders reads.
+    s.edit("manifest.json", |m| {
+        m["sources"]["source.jaffle_ods.landing.feed"] = json!({
+            "unique_id": "source.jaffle_ods.landing.feed",
+            "resource_type": "source",
+            "name": "feed",
+            "config": {"enabled": true}
+        });
+        m["nodes"]["model.jaffle_ods.stg_orders"]["depends_on"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("source.jaffle_ods.landing.feed"));
+    });
+    let write = |value: &Value| {
+        std::fs::write(s.target().join("sources.json"), value.to_string()).unwrap();
+    };
+    // `dbt source freshness` just before the build.
+    write(&sources_json(
+        "2026-09-25T06:40:00Z",
+        "2026-09-25T06:30:00+00:00",
+    ));
+    let recorded = s.ok(&["state", "record"]);
+    assert_eq!(recorded["sources_recorded"], true);
+
+    // Planning later with the same file: it says nothing about data since the build.
+    let plan = s.plan(&[]);
+    assert_eq!(
+        decisions(&plan)["stg_orders"],
+        pair("build", "missing_data_evidence")
+    );
+    assert!(
+        plan["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("dbt source freshness"),
+        "{:#}",
+        plan["warnings"]
+    );
+
+    // Measured again after the build, no new data: reused.
+    write(&sources_json(
+        "2026-09-25T11:00:00Z",
+        "2026-09-25T06:30:00+00:00",
+    ));
+    let plan = s.plan(&[]);
+    assert_eq!(decisions(&plan)["stg_orders"], pair("reuse", "unchanged"));
+    assert_eq!(
+        decisions(&plan)["stg_customers"],
+        pair("reuse", "unchanged")
+    );
+
+    // New data arrived.
+    write(&sources_json(
+        "2026-09-25T11:00:00Z",
+        "2026-09-25T10:45:00+00:00",
+    ));
+    let got = decisions(&s.plan(&[]));
+    assert_eq!(got["stg_orders"], pair("build", "new_upstream_data"));
+    assert_eq!(got["orders"], pair("build", "new_upstream_data"));
+    assert_eq!(got["stg_customers"], pair("reuse", "unchanged"));
 }
