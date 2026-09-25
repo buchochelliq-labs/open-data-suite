@@ -151,6 +151,10 @@ pub fn record(
                 advanced.insert(node.id.clone());
             }
             (Outcome::Success, Err(why)) => {
+                // It was rebuilt, so the kept state's checks no longer vouch for it.
+                if let Some(state) = nodes.get_mut(&node.id) {
+                    state.tested = None;
+                }
                 kept.insert(
                     node.id.clone(),
                     format!("succeeded, but its code can't be fingerprinted: {why}"),

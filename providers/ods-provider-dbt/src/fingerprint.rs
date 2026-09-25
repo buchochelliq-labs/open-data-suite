@@ -225,8 +225,42 @@ pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerpri
     Ok(Fingerprint::from_content(components))
 }
 
+/// The project and package macros a check calls, directly or through other macros,
+/// as `id sha256` lines. dbt's own and the adapter's macros are left out (the engine
+/// version stands for them): `dbt test`/`dbt build` add ones they resolve at run time
+/// (e.g. `get_limit_subquery`) to a test's `depends_on`, which `dbt compile` doesn't,
+/// and hashing them would make a test look changed from one command to the next.
+fn check_macros_content(manifest: &Manifest, test: &ManifestNode) -> Result<String, String> {
+    let adapter = manifest
+        .adapter_type
+        .as_deref()
+        .map(|a| format!("macro.dbt_{a}."));
+    let engine = |id: &str| {
+        id.starts_with("macro.dbt.") || adapter.as_deref().is_some_and(|a| id.starts_with(a))
+    };
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<&str> = test.depends_on_macros.iter().map(String::as_str).collect();
+    while let Some(id) = stack.pop() {
+        if engine(id) || !seen.insert(id) {
+            continue;
+        }
+        if let Some(m) = manifest.macros.get(id) {
+            stack.extend(m.depends_on.iter().map(String::as_str));
+        }
+    }
+    let mut out = String::new();
+    for id in seen {
+        let m = manifest
+            .macros
+            .get(id)
+            .ok_or_else(|| format!("it calls macro `{id}`, which the artifacts don't include"))?;
+        let _ = writeln!(out, "{id} {}", sha256_hex(m.sql.as_bytes()));
+    }
+    Ok(out)
+}
+
 /// The scheme [`checks_digest`] uses; changing it makes every node untested once.
-pub const CHECKS_SCHEME: &str = "dbt-checks/1";
+pub const CHECKS_SCHEME: &str = "dbt-checks/2";
 
 /// The checks that cover `node`: the data tests and unit tests that read it, which
 /// `dbt test`/`dbt build` run with it by default.
@@ -256,7 +290,18 @@ pub fn checks_digest(manifest: &Manifest, node: &str) -> Option<String> {
     if checks.is_empty() {
         return None;
     }
-    let mut components = vec![(Fingerprint::SCHEME.to_owned(), CHECKS_SCHEME.to_owned())];
+    let mut components = vec![
+        (Fingerprint::SCHEME.to_owned(), CHECKS_SCHEME.to_owned()),
+        // dbt's own and the adapter's macros aren't hashed below: they are this.
+        (
+            "engine".to_owned(),
+            format!(
+                "dbt {} / {}",
+                manifest.dbt_version.as_deref().unwrap_or("unknown"),
+                manifest.adapter_type.as_deref().unwrap_or("unknown")
+            ),
+        ),
+    ];
     for id in checks {
         let content = if let Some(test) = manifest.nodes.iter().find(|n| n.unique_id == id) {
             // A generic test is its macro and arguments; a singular test its SQL.
@@ -267,7 +312,7 @@ pub fn checks_digest(manifest: &Manifest, node: &str) -> Option<String> {
             format!(
                 "config {}\nmacros {}\ncode {}\narguments {}\ndepends_on {}\n",
                 config_content(test).ok()?,
-                macros_content(manifest, test).ok()?,
+                check_macros_content(manifest, test).ok()?,
                 test.raw_code.as_deref().unwrap_or(""),
                 arguments,
                 test.depends_on.join(","),

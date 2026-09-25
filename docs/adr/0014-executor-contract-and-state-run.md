@@ -151,7 +151,8 @@ is what the caller needs to see which nodes failed.
   `--debug`/`-d`, `--quiet`/`-q`, colour, parsing, version check, `--store-failures`,
   and a few others). Everything else is refused, with the ODS option to use where
   there is one. It also refuses to build when the environment sets `DBT_EMPTY`,
-  `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE`, which
+  `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE` (or
+  their deprecated spellings `DBT_DEFER_TO_STATE` and `DBT_FAVOR_STATE_MODE`), which
   would make a build something ODS can't record as the real thing.
 - `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
   snapshots the plan needs. `--test` builds and tests, like `dbt build`.

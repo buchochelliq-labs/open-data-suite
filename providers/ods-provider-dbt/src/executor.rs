@@ -279,13 +279,16 @@ const PASSTHROUGH_SHORT: [char; 3] = ['x', 'd', 'q'];
 /// dbt settings read from the environment that, like the refused options, make a build
 /// something other than the real thing (empty, sampled, one time window) or read
 /// relations ODS didn't build.
-const REFUSED_ENV: [&str; 6] = [
+const REFUSED_ENV: [&str; 8] = [
     "DBT_EMPTY",
     "DBT_SAMPLE",
     "DBT_EVENT_TIME_START",
     "DBT_EVENT_TIME_END",
     "DBT_DEFER",
     "DBT_FAVOR_STATE",
+    // Deprecated spellings dbt still maps to the two above.
+    "DBT_DEFER_TO_STATE",
+    "DBT_FAVOR_STATE_MODE",
 ];
 
 /// The arguments in `args` that may not be passed through.
@@ -605,6 +608,8 @@ impl Provider for DbtExecutor {
 #[async_trait]
 impl Executor for DbtExecutor {
     async fn prepare(&self, request: &PrepareRequest) -> Result<PrepareReport, ProviderError> {
+        // Up front, so the reason isn't lost in whatever dbt makes of it.
+        self.refuse_env()?;
         // Freshness first: every dbt command rewrites `manifest.json`, and only
         // `compile`'s carries the compiled SQL fingerprints need.
         let mut warnings = Vec::new();

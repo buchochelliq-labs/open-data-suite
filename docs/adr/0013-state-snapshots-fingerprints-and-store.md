@@ -105,7 +105,9 @@ graph LR
   tests don't force a rebuild, they make `ods state test` pick the node up again.
 - It also records `checks`, a digest of the node's checks (for dbt: every data test
   and unit test that reads it, with their definitions: arguments, SQL, config and
-  macros). A build counts as tested only against the checks it has now: adding,
+  the project and package macros they call; dbt's and the adapter's own macros are
+  covered by the dbt version and adapter, since dbt lists different ones depending on
+  the command that wrote the manifest). A build counts as tested only against the checks it has now: adding,
   removing or editing one makes it untested. Records without a digest (written before
   it existed) don't count. A node with no checks is never tested: nothing vouches for
   it, and `ods state test` has nothing to run for it.
