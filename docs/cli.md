@@ -15,7 +15,7 @@ codes).
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
-| `ods lineage columns\|impact\|export` | available (preview): column-level lineage, see [below](#column-level-lineage) |
+| `ods lineage columns\|impact\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -227,7 +227,22 @@ ods lineage impact --column orders.amount=removed
 ods lineage impact --base ../prod-target                 # diff two builds, impact of every change
 ods lineage export --namespace unitycatalog://adb-123.azuredatabricks.net \
                    --output-file lineage.ndjson          # OpenLineage JobEvents
+ods lineage view --open                                  # offline HTML explorer
+ods lineage graph --format dot-columns --output-file g.dot && dot -Tsvg g.dot > g.svg
 ```
+
+![The offline lineage explorer tracing customers.lifetime_value](images/lineage-viewer.png)
+
+`ods lineage view` writes one self-contained HTML file (no network, no external scripts):
+search models and columns (`/`), click a column to highlight everything upstream (blue)
+and downstream (orange), toggle indirect edges, focus on the selection, and deep-link with
+`lineage.html#node=<id>&column=<name>`. The same page and JSON contract will power the
+VS Code view (#107).
+
+`ods lineage graph --format` writes `json` (the documented graph contract,
+`schema_version` 1), `dot` / `dot-columns` (Graphviz), `mermaid` (Markdown, model level)
+or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUMN]`
+(repeatable) plus `--upstream N` / `--downstream N` keeps only the connected part.
 
 | Flag | Meaning |
 |---|---|

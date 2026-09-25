@@ -1,0 +1,472 @@
+<!doctype html>
+<!--
+  ODS lineage viewer (ADR-0008). A single self-contained file: no network, no external
+  scripts, works offline. It renders a GraphDocument (schema_version 1) embedded below.
+  The VS Code extension (#107) reuses this page in a webview with the same JSON contract.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ODS lineage</title>
+<style>
+  :root {
+    --bg: #fbfcfd; --panel: #ffffff; --fg: #1d2733; --muted: #6b7785; --line: #d5dce4;
+    --node: #ffffff; --header: #e8eff7; --opaque: #f6e2c2; --source: #e6f2e9;
+    --direct: #5a7089; --indirect: #a98bd0; --up: #2f6fd6; --down: #d9730d; --sel: #0f9d8a;
+    --dim: 0.18;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161b; --panel: #181e25; --fg: #e3e9ef; --muted: #8b97a5; --line: #2c3540;
+      --node: #1b222a; --header: #243142; --opaque: #4a3a22; --source: #1f3a2a;
+      --direct: #8aa0b8; --indirect: #b59be0; --up: #6ea2ff; --down: #ffa34d; --sel: #2fd3bb;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #app { display: grid; grid-template-columns: 1fr 340px; grid-template-rows: auto 1fr; height: 100%; }
+  header { grid-column: 1 / 3; display: flex; gap: 12px; align-items: center; padding: 8px 12px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 14px; margin: 0 8px 0 0; }
+  #search-wrap { position: relative; }
+  #search { width: 280px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--fg); }
+  #results { position: absolute; top: 32px; left: 0; width: 380px; max-height: 320px; overflow: auto; z-index: 10;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; display: none; }
+  #results div { padding: 5px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #results div:hover, #results div.active { background: var(--header); }
+  #results .kind { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  label { color: var(--muted); user-select: none; }
+  button { padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
+  #stats { margin-left: auto; color: var(--muted); }
+  #canvas { position: relative; overflow: hidden; cursor: grab; }
+  #canvas.dragging { cursor: grabbing; }
+  svg { width: 100%; height: 100%; display: block; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 12px; }
+  aside h2 { font-size: 14px; margin: 0 0 4px; word-break: break-all; }
+  aside h3 { font-size: 12px; margin: 14px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  aside .kv { color: var(--muted); }
+  aside ul { margin: 0; padding-left: 16px; }
+  aside li { margin: 2px 0; word-break: break-all; }
+  aside .link { color: var(--up); cursor: pointer; }
+  aside .warn { color: var(--down); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; color: var(--muted); }
+  .node rect.body { fill: var(--node); stroke: var(--line); }
+  .node rect.head { fill: var(--header); stroke: var(--line); }
+  .node.opaque rect.head { fill: var(--opaque); }
+  .node.source rect.head, .node.seed rect.head { fill: var(--source); }
+  .node text { fill: var(--fg); font-size: 12px; }
+  .node text.title { font-weight: 600; }
+  .node text.col { cursor: pointer; }
+  .node .row:hover rect { fill: var(--header); }
+  .node .row rect { fill: transparent; }
+  .edge { fill: none; stroke: var(--direct); stroke-width: 1.2; opacity: .75; }
+  .edge.indirect { stroke: var(--indirect); stroke-dasharray: 4 3; }
+  .edge.model { stroke: var(--muted); stroke-width: 1.4; }
+  .dimmed { opacity: var(--dim); }
+  .edge.up { stroke: var(--up); opacity: 1; stroke-width: 2; }
+  .edge.down { stroke: var(--down); opacity: 1; stroke-width: 2; }
+  .row.up rect { fill: color-mix(in srgb, var(--up) 22%, transparent) !important; }
+  .row.down rect { fill: color-mix(in srgb, var(--down) 22%, transparent) !important; }
+  .row.sel rect, .node.sel rect.head { fill: color-mix(in srgb, var(--sel) 30%, transparent) !important; }
+  .node.up rect.head { stroke: var(--up); stroke-width: 2; }
+  .node.down rect.head { stroke: var(--down); stroke-width: 2; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>ODS lineage</h1>
+    <div id="search-wrap">
+      <input id="search" type="search" placeholder="Search models and columns  ( / )" autocomplete="off">
+      <div id="results"></div>
+    </div>
+    <label><input type="checkbox" id="show-indirect" checked> indirect edges</label>
+    <label><input type="checkbox" id="show-columns" checked> columns</label>
+    <label><input type="checkbox" id="focus-only"> focus on selection</label>
+    <button id="fit">Fit</button>
+    <button id="clear">Clear</button>
+    <span class="legend">
+      <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="var(--direct)" stroke-width="2"/></svg>direct</span>
+      <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="var(--indirect)" stroke-width="2" stroke-dasharray="4 3"/></svg>indirect</span>
+      <span><svg width="10" height="10"><rect width="10" height="10" fill="var(--up)"/></svg>upstream</span>
+      <span><svg width="10" height="10"><rect width="10" height="10" fill="var(--down)"/></svg>downstream</span>
+    </span>
+    <span id="stats"></span>
+  </header>
+  <div id="canvas"><svg id="svg"><g id="viewport"><g id="edges"></g><g id="nodes"></g></g></svg></div>
+  <aside id="details"><p class="kv">Click a model or column to see where its data comes from and what depends on it.</p></aside>
+</div>
+<script type="application/json" id="ods-graph">/*__ODS_GRAPH__*/</script>
+<script>
+"use strict";
+(function () {
+  const doc = JSON.parse(document.getElementById("ods-graph").textContent);
+  const SVG = "http://www.w3.org/2000/svg";
+  const W = 230, HEAD = 26, ROW = 19, GAPX = 110, GAPY = 26;
+  const byId = new Map(doc.nodes.map(n => [n.id, n]));
+  const large = doc.nodes.length > 300;
+  const state = { indirect: true, columns: !large, focus: false, sel: null, up: new Set(), down: new Set() };
+  document.getElementById("show-columns").checked = state.columns;
+
+  // ---------- indexes
+  const key = (node, col) => col == null ? node + "\u0000" : node + "\u0000" + col;
+  const inEdges = new Map(), outEdges = new Map(), nodeIn = new Map(), nodeOut = new Map();
+  const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
+  doc.column_edges.forEach((e, i) => {
+    push(outEdges, key(e.from.node, e.from.column), i);
+    push(inEdges, key(e.to.node, e.to.column), i);
+  });
+  doc.node_edges.forEach(e => { push(nodeOut, e.from, e.to); push(nodeIn, e.to, e.from); });
+
+  // ---------- traversal (conservative: a row-shaping edge affects every column)
+  function traceColumn(node, col) {
+    const up = new Set(), down = new Set(), edgesUp = new Set(), edgesDown = new Set();
+    const walkUp = (n, c) => {
+      for (const k of [key(n, c), key(n, null)]) {
+        for (const i of inEdges.get(k) || []) {
+          const e = doc.column_edges[i];
+          if (!state.indirect && e.kind.type === "indirect") continue;
+          edgesUp.add(i);
+          const kk = key(e.from.node, e.from.column);
+          if (!up.has(kk)) { up.add(kk); walkUp(e.from.node, e.from.column); }
+        }
+      }
+    };
+    const walkDown = (n, c) => {
+      for (const i of outEdges.get(key(n, c)) || []) {
+        const e = doc.column_edges[i];
+        if (!state.indirect && e.kind.type === "indirect") continue;
+        edgesDown.add(i);
+        if (e.to.column == null) {
+          const node = byId.get(e.to.node);
+          for (const col of (node ? node.columns : [])) {
+            const kk = key(e.to.node, col);
+            if (!down.has(kk)) { down.add(kk); walkDown(e.to.node, col); }
+          }
+        } else {
+          const kk = key(e.to.node, e.to.column);
+          if (!down.has(kk)) { down.add(kk); walkDown(e.to.node, e.to.column); }
+        }
+      }
+    };
+    walkUp(node, col); walkDown(node, col);
+    return { up, down, edgesUp, edgesDown };
+  }
+  function traceNode(id) {
+    const up = new Set(), down = new Set();
+    const walk = (m, set, n) => { for (const x of m.get(n) || []) if (!set.has(x)) { set.add(x); walk(m, set, x); } };
+    walk(nodeIn, up, id); walk(nodeOut, down, id);
+    return { up, down };
+  }
+
+  // ---------- layout: layers by dependency depth, ordered by barycentre
+  function layout(visible) {
+    const layers = new Map();
+    for (const n of doc.nodes) if (visible.has(n.id)) push(layers, n.layer, n.id);
+    const order = [...layers.keys()].sort((a, b) => a - b);
+    for (const l of order) layers.get(l).sort((a, b) => byId.get(a).name.localeCompare(byId.get(b).name));
+    const height = id => HEAD + (state.columns ? byId.get(id).columns.length * ROW : 0);
+    const pos = new Map();
+    const place = () => {
+      order.forEach((l, li) => {
+        let y = 0;
+        for (const id of layers.get(l)) { pos.set(id, { x: li * (W + GAPX), y, h: height(id) }); y += height(id) + GAPY; }
+      });
+    };
+    place();
+    for (let pass = 0; pass < 6; pass++) {
+      const seq = pass % 2 === 0 ? order : [...order].reverse();
+      for (const l of seq) {
+        const nbrs = pass % 2 === 0 ? nodeIn : nodeOut;
+        const ids = layers.get(l);
+        const bary = new Map(ids.map(id => {
+          const ys = (nbrs.get(id) || []).filter(x => pos.has(x)).map(x => pos.get(x).y + pos.get(x).h / 2);
+          return [id, ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : pos.get(id).y];
+        }));
+        ids.sort((a, b) => bary.get(a) - bary.get(b));
+      }
+      place();
+    }
+    return pos;
+  }
+
+  // ---------- rendering
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const gNodes = document.getElementById("nodes"), gEdges = document.getElementById("edges");
+  let pos = new Map();
+
+  function visibleNodes() {
+    if (!state.focus || !state.sel) return new Set(doc.nodes.map(n => n.id));
+    const keep = new Set([state.sel.node]);
+    for (const k of [...state.up, ...state.down]) keep.add(k.split("\u0000")[0]);
+    return keep;
+  }
+  function anchor(node, col, side) {
+    const p = pos.get(node), n = byId.get(node);
+    if (!p) return null;
+    const x = side === "out" ? p.x + W : p.x;
+    if (col == null || !state.columns) return { x, y: p.y + HEAD / 2 };
+    const i = n.columns.indexOf(col);
+    return { x, y: i < 0 ? p.y + HEAD / 2 : p.y + HEAD + i * ROW + ROW / 2 };
+  }
+  const curve = (a, b) => {
+    const dx = Math.max(40, (b.x - a.x) / 2);
+    return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`;
+  };
+
+  function render() {
+    const visible = visibleNodes();
+    pos = layout(visible);
+    gNodes.replaceChildren(); gEdges.replaceChildren();
+    const selected = state.sel;
+    const hasSel = !!selected;
+    const nodeRole = id => {
+      if (!hasSel) return "";
+      if (selected.node === id && selected.column == null) return "sel";
+      if (selected.column == null) return state.up.has(id) ? "up" : state.down.has(id) ? "down" : "dimmed";
+      const any = prefix => [...prefix].some(k => k.startsWith(id + "\u0000"));
+      return selected.node === id || any(state.up) || any(state.down) ? "" : "dimmed";
+    };
+
+    if (state.columns) {
+      doc.column_edges.forEach((e, i) => {
+        if (!state.indirect && e.kind.type === "indirect") return;
+        const a = anchor(e.from.node, e.from.column, "out"), b = anchor(e.to.node, e.to.column, "in");
+        if (!a || !b) return;
+        let cls = "edge " + e.kind.type;
+        if (hasSel && selected.column != null) {
+          cls += state.edgesUp.has(i) ? " up" : state.edgesDown.has(i) ? " down" : " dimmed";
+        } else if (hasSel) {
+          const onPath = (e.to.node === selected.node && state.up.has(e.from.node)) || (e.from.node === selected.node && state.down.has(e.to.node))
+            || (state.up.has(e.from.node) && state.up.has(e.to.node)) || (state.down.has(e.from.node) && state.down.has(e.to.node));
+          if (!onPath) cls += " dimmed";
+        }
+        const path = el("path", { d: curve(a, b), class: cls }, gEdges);
+        const t = el("title", {}, path);
+        t.textContent = `${e.from.node}.${e.from.column} → ${e.to.node}${e.to.column ? "." + e.to.column : " (rows)"}: ${e.kind.type} ${e.kind.subtype}`;
+      });
+    } else {
+      for (const e of doc.node_edges) {
+        const a = anchor(e.from, null, "out"), b = anchor(e.to, null, "in");
+        if (!a || !b) continue;
+        let cls = "edge model";
+        if (hasSel) {
+          const inUp = (state.up.has(e.from) || e.from === selected.node) && (state.up.has(e.to) || e.to === selected.node);
+          const inDown = (state.down.has(e.from) || e.from === selected.node) && (state.down.has(e.to) || e.to === selected.node);
+          cls += inUp ? " up" : inDown ? " down" : " dimmed";
+        }
+        el("path", { d: curve(a, b), class: cls }, gEdges);
+      }
+    }
+
+    for (const id of visible) {
+      const n = byId.get(id), p = pos.get(id);
+      const role = nodeRole(id);
+      const g = el("g", { class: `node ${n.kind}${n.opaque ? " opaque" : ""} ${role}`, transform: `translate(${p.x},${p.y})` }, gNodes);
+      el("rect", { class: "body", width: W, height: p.h, rx: 6 }, g);
+      const head = el("rect", { class: "head", width: W, height: HEAD, rx: 6 }, g);
+      head.style.cursor = "pointer";
+      head.addEventListener("click", ev => { ev.stopPropagation(); select(id, null); });
+      const title = el("text", { class: "title", x: 10, y: 17 }, g);
+      title.textContent = (n.opaque ? "⚠ " : "") + n.name;
+      title.style.pointerEvents = "none";
+      const kind = el("text", { x: W - 8, y: 17, "text-anchor": "end", fill: "var(--muted)", "font-size": 10 }, g);
+      kind.textContent = n.kind;
+      kind.style.pointerEvents = "none";
+      if (!state.columns) continue;
+      n.columns.forEach((c, i) => {
+        const k = key(id, c);
+        let rcls = "row";
+        if (hasSel) {
+          if (selected.node === id && selected.column === c) rcls += " sel";
+          else if (state.up.has(k)) rcls += " up";
+          else if (state.down.has(k)) rcls += " down";
+        }
+        const row = el("g", { class: rcls, transform: `translate(0,${HEAD + i * ROW})` }, g);
+        el("rect", { width: W, height: ROW }, row);
+        const t = el("text", { class: "col", x: 12, y: 14 }, row);
+        t.textContent = c;
+        row.style.cursor = "pointer";
+        row.addEventListener("click", ev => { ev.stopPropagation(); select(id, c); });
+      });
+    }
+    const colEdges = doc.column_edges.length;
+    document.getElementById("stats").textContent =
+      `${visible.size} of ${doc.nodes.length} nodes · ${colEdges} column edges`;
+  }
+
+  // ---------- selection and details
+  function select(node, column) {
+    state.sel = { node, column };
+    if (column == null) {
+      const t = traceNode(node);
+      state.up = t.up; state.down = t.down; state.edgesUp = new Set(); state.edgesDown = new Set();
+    } else {
+      const t = traceColumn(node, column);
+      state.up = t.up; state.down = t.down; state.edgesUp = t.edgesUp; state.edgesDown = t.edgesDown;
+    }
+    render();
+    details();
+    center(node);
+  }
+  function clearSel() {
+    state.sel = null; state.up = new Set(); state.down = new Set();
+    render();
+    const d = document.getElementById("details");
+    d.replaceChildren();
+    const p = document.createElement("p"); p.className = "kv";
+    p.textContent = "Click a model or column to see where its data comes from and what depends on it.";
+    d.appendChild(p);
+  }
+  function h(tag, text, cls, parent) {
+    const e = document.createElement(tag);
+    if (text != null) e.textContent = text;
+    if (cls) e.className = cls;
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function linkItem(ul, label, node, column, note) {
+    const li = h("li", null, null, ul);
+    const a = h("span", label, "link", li);
+    a.addEventListener("click", () => select(node, column));
+    if (note) h("span", " " + note, "kv", li);
+  }
+  function details() {
+    const d = document.getElementById("details");
+    d.replaceChildren();
+    const { node, column } = state.sel;
+    const n = byId.get(node);
+    h("h2", column ? `${n.name}.${column}` : n.name, null, d);
+    h("div", `${n.kind} · ${n.relation}`, "kv", d);
+    if (n.confidence) h("div", `lineage confidence: ${n.confidence}`, "kv", d);
+    if (n.opaque) h("div", "⚠ opaque: the SQL could not be analyzed, so every input is assumed to affect every column", "warn", d);
+    for (const note of n.diagnostics || []) h("div", note, "warn", d);
+    const nameOf = id => (byId.get(id) || { name: id }).name;
+    if (column != null) {
+      const direct = [];
+      for (const k of [key(node, column), key(node, null)]) {
+        for (const i of inEdges.get(k) || []) direct.push(doc.column_edges[i]);
+      }
+      h("h3", "Inputs", null, d);
+      const ul = h("ul", null, null, d);
+      if (!direct.length) h("li", "none (a literal, or a source column)", "kv", ul);
+      for (const e of direct) {
+        linkItem(ul, `${nameOf(e.from.node)}.${e.from.column}`, e.from.node, e.from.column,
+          `${e.kind.type} ${e.kind.subtype}${e.to.column == null ? " (shapes rows)" : ""}`);
+      }
+      h("h3", `Upstream columns (${state.up.size})`, null, d);
+      const up = h("ul", null, null, d);
+      for (const k of [...state.up].sort()) { const [nn, cc] = k.split("\u0000"); linkItem(up, `${nameOf(nn)}.${cc}`, nn, cc); }
+      h("h3", `Downstream columns (${state.down.size}) — would change`, null, d);
+      const down = h("ul", null, null, d);
+      for (const k of [...state.down].sort()) { const [nn, cc] = k.split("\u0000"); linkItem(down, `${nameOf(nn)}.${cc}`, nn, cc); }
+    } else {
+      h("h3", `Columns (${n.columns.length})`, null, d);
+      const cols = h("ul", null, null, d);
+      for (const c of n.columns) linkItem(cols, c, node, c);
+      h("h3", `Upstream (${state.up.size})`, null, d);
+      const up = h("ul", null, null, d);
+      for (const id of [...state.up].sort()) linkItem(up, nameOf(id), id, null);
+      h("h3", `Downstream (${state.down.size})`, null, d);
+      const down = h("ul", null, null, d);
+      for (const id of [...state.down].sort()) linkItem(down, nameOf(id), id, null);
+    }
+  }
+
+  // ---------- pan and zoom
+  const canvas = document.getElementById("canvas"), viewport = document.getElementById("viewport");
+  const view = { x: 20, y: 20, k: 1 };
+  const apply = () => viewport.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+  function fit() {
+    let maxX = 0, maxY = 0;
+    for (const p of pos.values()) { maxX = Math.max(maxX, p.x + W); maxY = Math.max(maxY, p.y + p.h); }
+    const r = canvas.getBoundingClientRect();
+    view.k = Math.min(1.2, Math.max(0.05, Math.min((r.width - 40) / (maxX || 1), (r.height - 40) / (maxY || 1))));
+    view.x = 20; view.y = 20; apply();
+  }
+  function center(node) {
+    const p = pos.get(node); if (!p) return;
+    const r = canvas.getBoundingClientRect();
+    view.k = Math.max(view.k, 0.6);
+    view.x = r.width / 2 - (p.x + W / 2) * view.k;
+    view.y = r.height / 3 - p.y * view.k;
+    apply();
+  }
+  let drag = null;
+  canvas.addEventListener("mousedown", e => { drag = { x: e.clientX - view.x, y: e.clientY - view.y, moved: false }; canvas.classList.add("dragging"); });
+  window.addEventListener("mousemove", e => { if (!drag) return; drag.moved = true; view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; apply(); });
+  window.addEventListener("mouseup", () => { drag = null; canvas.classList.remove("dragging"); });
+  canvas.addEventListener("click", () => { if (state.sel && !(drag && drag.moved)) clearSel(); });
+  canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const k = Math.min(3, Math.max(0.03, view.k * Math.exp(-e.deltaY * 0.0015)));
+    view.x = mx - (mx - view.x) * (k / view.k); view.y = my - (my - view.y) * (k / view.k); view.k = k; apply();
+  }, { passive: false });
+
+  // ---------- search
+  const search = document.getElementById("search"), results = document.getElementById("results");
+  const index = [];
+  for (const n of doc.nodes) {
+    index.push({ label: n.name, hay: (n.name + " " + n.id).toLowerCase(), node: n.id, column: null, kind: n.kind });
+    for (const c of n.columns) index.push({ label: `${n.name}.${c}`, hay: `${n.name}.${c}`.toLowerCase(), node: n.id, column: c, kind: "column" });
+  }
+  let active = 0, matches = [];
+  function showResults() {
+    const q = search.value.trim().toLowerCase();
+    results.replaceChildren();
+    if (!q) { results.style.display = "none"; return; }
+    const terms = q.split(/\s+/);
+    matches = index.filter(x => terms.every(t => x.hay.includes(t)))
+      .sort((a, b) => (a.hay.startsWith(q) ? 0 : 1) - (b.hay.startsWith(q) ? 0 : 1) || a.label.length - b.label.length)
+      .slice(0, 50);
+    active = 0;
+    matches.forEach((m, i) => {
+      const div = h("div", m.label, i === 0 ? "active" : null, results);
+      h("span", m.kind, "kind", div);
+      div.addEventListener("mousedown", ev => { ev.preventDefault(); choose(m); });
+    });
+    results.style.display = matches.length ? "block" : "none";
+  }
+  function choose(m) { results.style.display = "none"; search.blur(); select(m.node, m.column); }
+  search.addEventListener("input", showResults);
+  search.addEventListener("keydown", e => {
+    const items = results.children;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!items.length) return;
+      items[active].classList.remove("active");
+      active = (active + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+      items[active].classList.add("active");
+    } else if (e.key === "Enter" && matches[active]) { choose(matches[active]); }
+    else if (e.key === "Escape") { search.value = ""; showResults(); search.blur(); }
+  });
+  search.addEventListener("blur", () => setTimeout(() => { results.style.display = "none"; }, 100));
+  window.addEventListener("keydown", e => {
+    if (e.key === "/" && document.activeElement !== search) { e.preventDefault(); search.focus(); }
+    else if (e.key === "Escape" && document.activeElement !== search) clearSel();
+  });
+
+  // ---------- toggles
+  document.getElementById("show-indirect").addEventListener("change", e => { state.indirect = e.target.checked; state.sel ? select(state.sel.node, state.sel.column) : render(); });
+  document.getElementById("show-columns").addEventListener("change", e => { state.columns = e.target.checked; render(); fit(); });
+  document.getElementById("focus-only").addEventListener("change", e => { state.focus = e.target.checked; render(); if (state.sel) center(state.sel.node); });
+  document.getElementById("fit").addEventListener("click", fit);
+  document.getElementById("clear").addEventListener("click", clearSel);
+
+  // Deep link: #node=<id>&column=<name>
+  render(); fit();
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (params.get("node") && byId.has(params.get("node"))) select(params.get("node"), params.get("column"));
+})();
+</script>
+</body>
+</html>

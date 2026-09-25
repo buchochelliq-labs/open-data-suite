@@ -13,10 +13,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::{ColumnRef, EdgeKind};
+use ods_lineage::export::Endpoint;
 use ods_lineage::openlineage::{EventKind, ExportOptions, IndirectPlacement};
 use ods_lineage::{
-    BuildStats, Change, ColumnChangeKind, ColumnGraph, Impact, ImpactReason, LineageNode,
-    LineageProject, MemoryCache, NodeKind, build, diff,
+    BuildStats, Change, ColumnChangeKind, ColumnGraph, GraphFilter, Impact, ImpactReason,
+    LineageNode, LineageProject, MemoryCache, NodeKind, build, diff,
 };
 use ods_provider_dbt::{Artifacts, ResourceType};
 use ods_provider_sqlparser::{SqlDialect, SqlparserAnalyzer};
@@ -80,7 +81,90 @@ impl Module for Lineage {
                             .help("Compare with another build's target directory and use every difference"),
                     ),
             ))
-            .subcommand(common_args(
+            .subcommand(graph_command())
+            .subcommand(view_command())
+            .subcommand(export_command())
+    }
+
+    fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
+        let Some((name, args)) = matches.subcommand() else {
+            return Ok(());
+        };
+        let loaded = Loaded::load(args)?;
+        match name {
+            "columns" => {
+                let model = args.get_one::<String>("model").map(String::as_str);
+                ctx.emit(&ColumnsReport::build(&loaded, model)?)
+            }
+            "impact" => {
+                let report = if let Some(base) = args.get_one::<String>("base") {
+                    ImpactReport::against(&loaded, Path::new(base))?
+                } else {
+                    let columns: Vec<&String> =
+                        args.get_many("column").into_iter().flatten().collect();
+                    if columns.is_empty() {
+                        return Err(CliError::new(
+                            ExitStatus::Usage,
+                            codes::LINEAGE_TARGET,
+                            "nothing to analyze: pass --column or --base",
+                        ));
+                    }
+                    ImpactReport::for_columns(&loaded, &columns)?
+                };
+                ctx.emit(&report)
+            }
+            "export" => ctx.emit(&ExportReport::write(&loaded, args)?),
+            "graph" => ctx.emit(&GraphReport::write(&loaded, args, false)?),
+            "view" => ctx.emit(&GraphReport::write(&loaded, args, true)?),
+            _ => Ok(()),
+        }
+    }
+}
+
+fn graph_command() -> Command {
+    focus_args(common_args(
+                Command::new("graph")
+                    .about("Export the lineage graph as JSON, DOT, Mermaid or GraphML")
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .value_name("FORMAT")
+                            .value_parser(["json", "dot", "dot-columns", "mermaid", "graphml"])
+                            .default_value("json")
+                            .help("json (the viewer/VS Code contract), dot (models), dot-columns, mermaid (models) or graphml"),
+                    )
+                    .arg(
+                        Arg::new("output-file")
+                            .long("output-file")
+                            .value_name("PATH")
+                            .required(true)
+                            .help("Where to write the graph"),
+                    ),
+            ))
+}
+
+fn view_command() -> Command {
+    focus_args(common_args(
+        Command::new("view")
+            .about("Write a self-contained, offline HTML lineage explorer")
+            .arg(
+                Arg::new("output-file")
+                    .long("output-file")
+                    .value_name("PATH")
+                    .default_value("lineage.html")
+                    .help("Where to write the page"),
+            )
+            .arg(
+                Arg::new("open")
+                    .long("open")
+                    .action(ArgAction::SetTrue)
+                    .help("Open the page in the default browser"),
+            ),
+    ))
+}
+
+fn export_command() -> Command {
+    common_args(
                 Command::new("export")
                     .about("Write OpenLineage events with column-lineage facets")
                     .arg(
@@ -122,40 +206,32 @@ impl Module for Lineage {
                             .value_name("RFC3339")
                             .help("eventTime for every event; defaults to now"),
                     ),
-            ))
-    }
+            )
+}
 
-    fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let Some((name, args)) = matches.subcommand() else {
-            return Ok(());
-        };
-        let loaded = Loaded::load(args)?;
-        match name {
-            "columns" => {
-                let model = args.get_one::<String>("model").map(String::as_str);
-                ctx.emit(&ColumnsReport::build(&loaded, model)?)
-            }
-            "impact" => {
-                let report = if let Some(base) = args.get_one::<String>("base") {
-                    ImpactReport::against(&loaded, Path::new(base))?
-                } else {
-                    let columns: Vec<&String> =
-                        args.get_many("column").into_iter().flatten().collect();
-                    if columns.is_empty() {
-                        return Err(CliError::new(
-                            ExitStatus::Usage,
-                            codes::LINEAGE_TARGET,
-                            "nothing to analyze: pass --column or --base",
-                        ));
-                    }
-                    ImpactReport::for_columns(&loaded, &columns)?
-                };
-                ctx.emit(&report)
-            }
-            "export" => ctx.emit(&ExportReport::write(&loaded, args)?),
-            _ => Ok(()),
-        }
-    }
+fn focus_args(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("focus")
+                .long("focus")
+                .value_name("MODEL[.COLUMN]")
+                .action(ArgAction::Append)
+                .help("Only what is connected to this model or column; repeatable"),
+        )
+        .arg(
+            Arg::new("upstream")
+                .long("upstream")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .help("With --focus, at most N hops upstream"),
+        )
+        .arg(
+            Arg::new("downstream")
+                .long("downstream")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .help("With --focus, at most N hops downstream"),
+        )
 }
 
 /// A project analyzed end to end.
@@ -907,4 +983,172 @@ fn now_rfc3339() -> String {
         (rem % 3600) / 60,
         rem % 60
     )
+}
+
+// ---------------------------------------------------------------- graph and view
+
+/// The offline viewer page; the graph JSON replaces the placeholder.
+const VIEWER: &str = include_str!("../../assets/lineage-viewer.html");
+const VIEWER_PLACEHOLDER: &str = "/*__ODS_GRAPH__*/";
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct GraphReport {
+    summary: Summary,
+    format: String,
+    output_file: PathBuf,
+    nodes: usize,
+    node_edges: usize,
+    column_edges: usize,
+    opened: bool,
+}
+
+impl GraphReport {
+    fn write(loaded: &Loaded, args: &ArgMatches, viewer: bool) -> Result<Self, CliError> {
+        let mut focus = Vec::new();
+        for spec in args.get_many::<String>("focus").into_iter().flatten() {
+            focus.push(loaded.endpoint(spec)?);
+        }
+        let filter = GraphFilter::focused(focus).with_depth(
+            args.get_one::<usize>("upstream").copied(),
+            args.get_one::<usize>("downstream").copied(),
+        );
+        let document = loaded.graph.document(&|id| loaded.node_name(id), &filter);
+        let format = if viewer {
+            "html".to_owned()
+        } else {
+            args.get_one::<String>("format")
+                .cloned()
+                .unwrap_or_else(|| "json".into())
+        };
+        let text = match format.as_str() {
+            "html" => {
+                // `<` is escaped so the JSON can't close the <script> element it lives in.
+                let json = serde_json::to_string(&document)
+                    .map_err(|e| {
+                        CliError::new(ExitStatus::Failure, codes::INTERNAL, e.to_string())
+                    })?
+                    .replace('<', "\\u003c");
+                VIEWER.replacen(VIEWER_PLACEHOLDER, &json, 1)
+            }
+            "json" => serde_json::to_string_pretty(&document)
+                .map_err(|e| CliError::new(ExitStatus::Failure, codes::INTERNAL, e.to_string()))?,
+            "dot" => document.to_dot(false),
+            "dot-columns" => document.to_dot(true),
+            "mermaid" => document.to_mermaid(),
+            _ => document.to_graphml(),
+        };
+        let path = PathBuf::from(
+            args.get_one::<String>("output-file")
+                .map_or("lineage.html", String::as_str),
+        );
+        fs::write(&path, text).map_err(|e| {
+            CliError::new(
+                ExitStatus::Failure,
+                codes::LINEAGE_ARTIFACTS,
+                format!("cannot write `{}`: {e}", path.display()),
+            )
+        })?;
+        let opened = viewer && args.get_flag("open") && open_in_browser(&path);
+        Ok(Self {
+            summary: Summary::of(loaded),
+            format,
+            output_file: path,
+            nodes: document.nodes.len(),
+            node_edges: document.node_edges.len(),
+            column_edges: document.column_edges.len(),
+            opened,
+        })
+    }
+}
+
+impl Present for GraphReport {
+    const COMMAND: &'static str = "lineage.graph";
+
+    fn view(&self) -> ViewNode {
+        let mut blocks = vec![
+            ViewNode::Heading("Lineage graph".into()),
+            self.summary.view(),
+            ViewNode::KeyValue(vec![
+                (
+                    "file".into(),
+                    vec![Span::toned(
+                        self.output_file.display().to_string(),
+                        Tone::Code,
+                    )],
+                ),
+                ("format".into(), vec![Span::plain(self.format.as_str())]),
+                (
+                    "graph".into(),
+                    vec![Span::plain(format!(
+                        "{} nodes, {} node edges, {} column edges",
+                        self.nodes, self.node_edges, self.column_edges
+                    ))],
+                ),
+            ]),
+        ];
+        if self.format == "html" && !self.opened {
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(format!(
+                    "open {} in a browser; it works offline",
+                    self.output_file.display()
+                ))],
+            });
+        }
+        ViewNode::Group(blocks)
+    }
+}
+
+/// Best effort: returns whether a browser launcher started.
+fn open_in_browser(path: &Path) -> bool {
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+impl Loaded {
+    /// Parses `MODEL` or `MODEL.COLUMN` into a graph endpoint.
+    fn endpoint(&self, spec: &str) -> Result<Endpoint, CliError> {
+        if let Ok(node) = self.node_id(spec) {
+            return Ok(Endpoint { node, column: None });
+        }
+        let (model, column) = spec.rsplit_once('.').ok_or_else(|| {
+            CliError::new(
+                ExitStatus::Usage,
+                codes::LINEAGE_TARGET,
+                format!("no model, seed, snapshot or source is called `{spec}`"),
+            )
+        })?;
+        let node = self.node_id(model)?;
+        let column = self.analyzer.column_name(column);
+        let known = self
+            .graph
+            .node(&node)
+            .is_some_and(|n| n.columns.contains(&column));
+        if !known {
+            return Err(CliError::new(
+                ExitStatus::Usage,
+                codes::LINEAGE_TARGET,
+                format!("`{model}` has no column `{column}`"),
+            ));
+        }
+        Ok(Endpoint {
+            node,
+            column: Some(column),
+        })
+    }
 }
