@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use parquet::file::reader::SerializedFileReader;
 use parquet::record::Field;
 
-use crate::artifacts::{ArtifactSource, Catalog, DbtError, Manifest, ManifestNode, ResourceType};
+use crate::artifacts::{
+    ArtifactSource, Catalog, DbtConfig, DbtError, Manifest, ManifestNode, ResourceType,
+};
 
 /// Information Schema versions this reader understands.
 const VERSIONS: [u32; 1] = [1];
@@ -63,6 +65,25 @@ fn text(row: &Row, column: &str) -> Option<String> {
         Some(Field::Str(value)) => Some(value.clone()),
         _ => None,
     }
+}
+
+/// The node's resolved `config` (a JSON string column), plus the sources' own
+/// `loaded_at_*` columns.
+fn config(row: &Row, path: &Path) -> Result<DbtConfig, DbtError> {
+    let mut config = match text(row, "config").filter(|c| !c.is_empty()) {
+        Some(json) => DbtConfig::from_json(
+            &serde_json::from_str(&json)
+                .map_err(|e| invalid(path, format!("a `config` isn't JSON: {e}")))?,
+        ),
+        None => DbtConfig::default(),
+    };
+    config.loaded_at_field = config
+        .loaded_at_field
+        .or_else(|| text(row, "loaded_at_field"));
+    config.loaded_at_query = config
+        .loaded_at_query
+        .or_else(|| text(row, "loaded_at_query"));
+    Ok(config)
 }
 
 fn required(row: &Row, column: &str, path: &Path) -> Result<String, DbtError> {
@@ -161,6 +182,9 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
                 "node_language",
                 "materialized",
                 "enabled",
+                "config",
+                "loaded_at_field",
+                "loaded_at_query",
             ],
         )? {
             if matches!(row.get("enabled"), Some(Field::Bool(false))) {
@@ -198,6 +222,7 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
                     .map(|c| c.iter().cloned().collect())
                     .unwrap_or_default(),
                 checksum,
+                config: config(&row, &path)?,
                 unique_id,
             });
         }

@@ -5,6 +5,7 @@ mod config;
 mod lineage;
 mod planned;
 mod serve;
+mod state;
 mod version;
 
 pub use completions::Completions;
@@ -12,17 +13,13 @@ pub use config::Config;
 pub use lineage::Lineage;
 pub use planned::Planned;
 pub use serve::Serve;
+pub use state::State;
 pub use version::Version;
 
 use crate::module::Registry;
 
 /// Modules on the roadmap that are not implemented yet, with their milestone.
 const PLANNED: &[(&str, &str, &str)] = &[
-    (
-        "state",
-        "Plan and run only what needs to run, with explanations",
-        "M1 State MVP (v0.1.0)",
-    ),
     (
         "erd",
         "Generate and inspect entity-relationship models",
@@ -57,6 +54,9 @@ const PLANNED: &[(&str, &str, &str)] = &[
 /// `default_registry_contains_the_roadmap_commands` checks.
 pub fn default_registry() -> Registry {
     let mut registry = Registry::new();
+    registry
+        .register(Box::new(State))
+        .expect("built-in command names are unique and not reserved");
     for &(name, about, milestone) in PLANNED {
         registry
             .register(Box::new(Planned::new(name, about, milestone)))

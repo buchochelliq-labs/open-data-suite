@@ -1,0 +1,23 @@
+version: 2
+models:
+  - name: customers
+    description: One row per customer with order statistics.
+    config:
+      state:
+        lag_tolerance: 1d
+        pre_clone: never
+      freshness:
+        build_after:
+          count: 1
+          period: day
+          updates_on: all
+    columns:
+      - name: customer_id
+        description: Primary key.
+        data_tests: [unique, not_null]
+      - name: lifetime_value
+        description: Sum of non-returned order amounts, in dollars.
+  - name: orders
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]

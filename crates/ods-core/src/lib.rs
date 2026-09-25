@@ -6,10 +6,12 @@
 //! persisted domain type follows. The semantic graph itself is delivered by #4.
 
 pub mod capability;
+pub mod freshness;
 pub mod lineage;
 pub mod strategy;
 
 pub use capability::{Capability, CapabilitySet, CustomCapability, UnknownCapability};
+pub use freshness::{FreshnessPolicy, LoadedAt, PolicyOrigin, Quorum, UnappliedSetting};
 pub use lineage::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, RelationName};
 pub use strategy::{Choice, ChoiceError, Skipped, Strategy, choose};
 

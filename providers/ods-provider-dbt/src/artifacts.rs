@@ -92,6 +92,14 @@ struct RawConfig {
     materialized: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    state: Option<serde_json::Value>,
+    #[serde(default)]
+    freshness: Option<serde_json::Value>,
+    #[serde(default)]
+    loaded_at_field: Option<String>,
+    #[serde(default)]
+    loaded_at_query: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -123,6 +131,11 @@ struct RawNode {
     columns: BTreeMap<String, RawColumn>,
     #[serde(default)]
     checksum: RawChecksum,
+    // dbt 1.x sources also carry these at the top level.
+    #[serde(default)]
+    loaded_at_field: Option<String>,
+    #[serde(default)]
+    loaded_at_query: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +169,39 @@ pub struct ManifestNode {
     pub declared_columns: Vec<String>,
     /// dbt's checksum of the node's source file (e.g. a model's SQL or a seed's CSV).
     pub checksum: Option<String>,
+    /// Scheduling configuration, as resolved by dbt.
+    pub config: DbtConfig,
+}
+
+/// A node's scheduling configuration as dbt resolved it: project, folder, YAML and SQL
+/// `config()` already merged. dbt v2 merges the `state` block key by key; dbt 1.x lets
+/// a more specific block replace a less specific one. Either way it is used as given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtConfig {
+    /// The dbt State `state:` block, e.g. `{"lag_tolerance": "4h"}`.
+    pub state: Option<serde_json::Value>,
+    /// The `freshness:` block, e.g. `{"build_after": {"count": 1, "period": "day"}}`.
+    pub freshness: Option<serde_json::Value>,
+    /// Column or expression whose maximum says when a source last received data.
+    pub loaded_at_field: Option<String>,
+    /// Query returning when a source last received data.
+    pub loaded_at_query: Option<String>,
+}
+
+impl DbtConfig {
+    /// Builds it from a parsed config object, e.g. the Information Schema's `config`
+    /// column. Null values count as unset.
+    pub(crate) fn from_json(config: &serde_json::Value) -> Self {
+        let value = |key: &str| config.get(key).filter(|v| !v.is_null()).cloned();
+        let text = |key: &str| config.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+        Self {
+            state: value("state"),
+            freshness: value("freshness"),
+            loaded_at_field: text("loaded_at_field"),
+            loaded_at_query: text("loaded_at_query"),
+        }
+    }
 }
 
 /// Which dbt artifact format the project was read from.
@@ -368,6 +414,12 @@ impl Manifest {
                     depends_on: n.depends_on.nodes,
                     declared_columns,
                     checksum: n.checksum.checksum,
+                    config: DbtConfig {
+                        state: n.config.state.filter(|v| !v.is_null()),
+                        freshness: n.config.freshness.filter(|v| !v.is_null()),
+                        loaded_at_field: n.config.loaded_at_field.or(n.loaded_at_field),
+                        loaded_at_query: n.config.loaded_at_query.or(n.loaded_at_query),
+                    },
                 };
                 (node.unique_id.clone(), node)
             })

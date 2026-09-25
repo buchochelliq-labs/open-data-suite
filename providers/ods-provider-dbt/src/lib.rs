@@ -17,8 +17,9 @@
 
 mod artifacts;
 mod info_schema;
+pub mod state_config;
 
 pub use artifacts::{
-    ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtError, Manifest, ManifestNode,
-    ResourceType,
+    ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtError, Manifest,
+    ManifestNode, ResourceType,
 };
