@@ -95,7 +95,7 @@ decision: 8 to build, 5 to reuse
 node                     action  why
 raw_orders               reuse   code and inputs unchanged since run d11a1309…
 stg_customers            reuse   code and inputs unchanged since run d11a1309…
-stg_orders               build   code changed since run d11a1309…: compiled_sql
+stg_orders               build   code changed since run d11a1309…: sql
 orders                   build   upstream code changed: stg_orders will be rebuilt
 customers                build   upstream code changed: orders will be rebuilt
 customer_segments        build   upstream code changed: customers will be rebuilt
@@ -105,6 +105,9 @@ run: dbt build --select stg_orders order_events orders customer_order_rank custo
 ```
 
 (Output shortened; from the demo project.)
+
+Comments, whitespace and keyword case don't count as changes: reformatting a model
+reuses it, and the plan says only formatting changed.
 
 `ods state run` does all of it: it compiles, plans, runs `dbt build` on exactly the
 nodes that must build, and records the result. Nodes that fail keep their last

@@ -27,21 +27,62 @@ fn fingerprints_are_reproducible_and_name_their_components() {
     assert_eq!(
         names,
         [
-            "compiled_sql",
-            "config",
-            "contract",
-            "engine",
-            "file",
-            "macros",
-            "relation",
+            "config", "contract", "engine", "macros", "relation", "scheme", "sql"
         ]
     );
     let seed = fingerprint(&m, node(&m, "seed.jaffle_ods.raw_orders")).unwrap();
+    assert!(!seed.components.contains_key("sql"), "seeds have no SQL");
+    assert!(seed.components.contains_key("file"), "a seed is its CSV");
+    let python = fingerprint(&m, node(&m, "model.jaffle_ods.customer_segments")).unwrap();
     assert!(
-        !seed.components.contains_key("compiled_sql"),
-        "seeds have no SQL"
+        python.components.contains_key("file") && python.components.contains_key("compiled_code"),
+        "Python isn't normalised: {:?}",
+        python.components.keys()
     );
     assert_eq!(m.project_name.as_deref(), Some("jaffle_ods"));
+}
+
+fn with_sql(node: &ods_provider_dbt::ManifestNode, sql: &str) -> ods_provider_dbt::ManifestNode {
+    let mut node = node.clone();
+    node.compiled_code = Some(sql.to_owned());
+    node
+}
+
+#[test]
+fn formatting_only_edits_keep_the_fingerprint_and_are_recorded_as_cosmetic() {
+    let m = manifest();
+    let orders = node(&m, "model.jaffle_ods.orders");
+    let sql = orders.compiled_code.clone().unwrap();
+    let base = fingerprint(&m, orders).unwrap();
+
+    // A comment, reindenting and keyword case: same fingerprint, different raw text.
+    let reformatted = format!(
+        "-- orders, one row per order\n{}\n/* end */",
+        sql.replace("select", "SELECT").replace('\n', "\n    ")
+    );
+    let mut edited = with_sql(orders, &reformatted);
+    // dbt's checksum of the file changes with any edit; it isn't part of a SQL model's
+    // fingerprint.
+    edited.checksum = Some("edited".to_owned());
+    let after = fingerprint(&m, &edited).unwrap();
+    assert_eq!(after.digest, base.digest);
+    assert_eq!(after.cosmetic_changes(&base), ["sql"]);
+
+    // A real change is still a change.
+    let changed = fingerprint(&m, &with_sql(orders, &format!("{sql} where 1 = 0"))).unwrap();
+    assert_eq!(changed.diff(&base).changed, ["sql"]);
+
+    // SQL that can't be normalised safely is hashed as is.
+    let dollar = format!("{sql} -- $");
+    let raw = fingerprint(&m, &with_sql(orders, &format!("{sql}\nwhere $1 = 1"))).unwrap();
+    let raw_reformatted =
+        fingerprint(&m, &with_sql(orders, &format!("{sql}\nwhere  $1 = 1"))).unwrap();
+    assert_ne!(raw.digest, raw_reformatted.digest);
+    assert_eq!(
+        fingerprint(&m, &with_sql(orders, &dollar)).unwrap().digest,
+        base.digest,
+        "a `$` in a comment is fine"
+    );
 }
 
 #[test]

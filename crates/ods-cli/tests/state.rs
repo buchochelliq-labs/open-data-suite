@@ -162,11 +162,30 @@ fn a_recorded_run_is_reused_until_something_changes() {
         "reuse is labelled as not checked against the warehouse: {entry:#}"
     );
 
+    // A comment and a reformat of stg_orders change nothing that is built (#209).
+    s.edit("manifest.json", |m| {
+        let node = &mut m["nodes"]["model.jaffle_ods.stg_orders"];
+        let sql = node["compiled_code"].as_str().unwrap().to_owned();
+        node["compiled_code"] = json!(format!("-- edited\n{}", sql.replace('\n', "\n  ")));
+        node["checksum"]["checksum"] = json!("edited");
+    });
+    let plan = s.plan(&[]);
+    let stg = plan["plan"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "stg_orders")
+        .unwrap();
+    assert_eq!(stg["action"], "reuse", "{stg:#}");
+    let why = stg["reasons"][0]["message"].as_str().unwrap();
+    assert!(why.contains("only formatting changed (sql)"), "{why}");
+    assert_eq!(decisions(&plan)["orders"], pair("reuse", "unchanged"));
+
     // Change stg_orders' compiled SQL, as `dbt compile` would after an edit.
     s.edit("manifest.json", |m| {
         let node = &mut m["nodes"]["model.jaffle_ods.stg_orders"];
         let sql = node["compiled_code"].as_str().unwrap().to_owned();
-        node["compiled_code"] = json!(format!("{sql}\n-- edited"));
+        node["compiled_code"] = json!(format!("{sql}\nwhere 1 = 1"));
     });
     let plan = s.plan(&[]);
     let got = decisions(&plan);
@@ -198,7 +217,7 @@ fn a_recorded_run_is_reused_until_something_changes() {
         .iter()
         .find(|e| e["name"] == "stg_orders")
         .unwrap();
-    assert_eq!(stg["changed_components"], json!(["compiled_sql"]));
+    assert_eq!(stg["changed_components"], json!(["sql"]));
 
     // `--select` narrows the plan, not the decisions.
     let narrowed = s.plan(&["--select", "+orders"]);

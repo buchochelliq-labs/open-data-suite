@@ -19,6 +19,7 @@ mod artifacts;
 pub mod executor;
 pub mod fingerprint;
 mod info_schema;
+pub mod normalize;
 mod runs;
 mod seeds;
 pub mod state_config;
