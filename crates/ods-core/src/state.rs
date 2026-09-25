@@ -407,22 +407,35 @@ pub struct TestRecord {
     pub run_id: String,
     /// When they finished.
     pub at: Timestamp,
+    /// The [digest](Fingerprint::digest) of the checks that passed, as the provider
+    /// fingerprints the node's set of checks. When the checks change (one is added,
+    /// removed or edited), the node is no longer tested. `None` in records written before
+    /// it existed, which therefore don't count as tested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<String>,
 }
 
 impl TestRecord {
-    /// A record of checks that passed.
-    pub fn new(run_id: impl Into<String>, at: Timestamp) -> Self {
+    /// A record that the checks with digest `checks` passed.
+    pub fn new(run_id: impl Into<String>, at: Timestamp, checks: impl Into<String>) -> Self {
         Self {
             run_id: run_id.into(),
             at,
+            checks: Some(checks.into()),
         }
     }
 }
 
 impl NodeState {
-    /// Whether its current build's checks have passed.
-    pub fn is_tested(&self) -> bool {
-        self.tested.is_some()
+    /// Whether its current build passed the checks whose digest is `checks` (the
+    /// node's checks now). Never when the node has no checks, or they can't be
+    /// identified: nothing then says the build is valid.
+    pub fn is_tested_with(&self, checks: Option<&str>) -> bool {
+        checks.is_some_and(|c| {
+            self.tested
+                .as_ref()
+                .is_some_and(|t| t.checks.as_deref() == Some(c))
+        })
     }
 }
 

@@ -64,6 +64,15 @@ impl Project {
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
 
+    /// Edits a data test's definition, as changing its arguments in YAML would.
+    fn change_test(&self, test: &str) {
+        let path = self.dir.join("base/manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let entry = &mut manifest["nodes"][test]["test_metadata"]["kwargs"];
+        entry["where"] = Value::String("order_id > 0".to_owned());
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+
     fn db(&self) -> PathBuf {
         self.dir.join(".ods/state.db")
     }
@@ -289,6 +298,20 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
     );
     let again = project.run(&["--test"]).1;
     assert!(names(&again["result"]["execution"]["nodes"]).contains(&"orders".to_owned()));
+
+    // A tested build that is rebuilt and fails its tests is no longer tested: the
+    // warehouse holds the new build, so `ods state test` picks it up.
+    let project = project.with("FAKE_DBT_FAIL_TEST", "");
+    project.run_ok(&["--test"]);
+    assert_eq!(project.test_ok(&[])["outcome"], "nothing_to_test");
+    project.change_code("model.jaffle_ods.orders");
+    let project = project.with("FAKE_DBT_FAIL_TEST", "unique_orders_order_id");
+    assert_eq!(project.run(&["--test"]).0, 1);
+    let (_, tested) = project.test(&[]);
+    assert!(
+        names(&tested["result"]["execution"]["nodes"]).contains(&"orders".to_owned()),
+        "{tested:#}"
+    );
 }
 
 /// By default dbt's own output streams to stderr while it runs, as with dbt itself;
@@ -335,13 +358,36 @@ fn a_skipped_test_leaves_its_node_untested() {
         "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
     );
 
+    // Not a failure, but not a pass either: orders stays untested.
     let (code, tested) = project.test(&["--all"]);
     assert_eq!(code, 1, "{tested:#}");
-    assert_eq!(names(&tested["result"]["record"]["failed"]), ["orders"]);
+    assert_eq!(tested["result"]["outcome"], "incomplete");
+    assert_eq!(tested["result"]["record"]["failed"], serde_json::json!([]));
+    assert!(!names(&tested["result"]["record"]["passed"]).contains(&"orders".to_owned()));
 
     let project = project.with("FAKE_DBT_SKIP_TEST", "");
     let again = project.test_ok(&[]);
-    assert_eq!(again["tested"], 1, "only orders was left untested");
+    assert_eq!(again["requested"], 1, "only orders was left untested");
+    assert_eq!(names(&again["record"]["passed"]), ["orders"]);
+}
+
+/// A test run in which no test ran vouches for nothing, and a changed test makes its
+/// nodes untested again (#220 review).
+#[test]
+fn only_tests_that_ran_mark_a_build_tested_and_changed_tests_run_again() {
+    let project = Project::new("vouch").with("FAKE_DBT_NO_TESTS", "1");
+    project.run_ok(&[]);
+    let (code, json) = project.test(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["result"]["outcome"], "incomplete");
+    assert_eq!(json["result"]["record"]["passed"], serde_json::json!([]));
+
+    let project = project.with("FAKE_DBT_NO_TESTS", "");
+    assert_eq!(project.test_ok(&[])["requested"], 5);
+    assert_eq!(project.test_ok(&[])["outcome"], "nothing_to_test");
+    // Only the nodes that test reads are tested again: stg_orders is left alone.
+    project.change_test("test.jaffle_ods.unique_orders_order_id.fed79b3a6e");
+    let again = project.test_ok(&[]);
     assert_eq!(names(&again["record"]["passed"]), ["orders"]);
 }
 
@@ -363,7 +409,9 @@ fn a_plain_run_builds_without_tests() {
     let (code, tested) = project.test(&[]);
     assert_eq!(code, 1, "the failing test fails: {tested:#}");
     let tested = &tested["result"];
-    assert_eq!(tested["tested"], 13);
+    // Only the 5 nodes with tests: the other 8 have nothing that could vouch for them.
+    assert_eq!(tested["requested"], 5);
+    assert_eq!(tested["without_checks"], 8);
     assert!(
         tested["execution"]["command"]
             .as_str()
@@ -374,17 +422,17 @@ fn a_plain_run_builds_without_tests() {
             ))
     );
     assert_eq!(names(&tested["record"]["failed"]), ["orders"]);
-    assert_eq!(tested["record"]["passed"].as_array().unwrap().len(), 12);
+    assert_eq!(tested["record"]["passed"].as_array().unwrap().len(), 4);
 
     // Once fixed, only the node still untested is tested again.
     let project = project.with("FAKE_DBT_FAIL_TEST", "");
     let again = project.test_ok(&[]);
-    assert_eq!(again["tested"], 1);
+    assert_eq!(again["requested"], 1);
     assert_eq!(names(&again["record"]["passed"]), ["orders"]);
     let nothing = project.test_ok(&[]);
     assert_eq!(nothing["outcome"], "nothing_to_test");
     // --all tests everything again, and a build with --test marks what it builds tested.
-    assert_eq!(project.test_ok(&["--all"])["tested"], 13);
+    assert_eq!(project.test_ok(&["--all"])["requested"], 5);
     project.change_code("model.jaffle_ods.orders");
     project.run_ok(&["--test"]);
     assert_eq!(project.test_ok(&[])["outcome"], "nothing_to_test");
@@ -555,7 +603,10 @@ fn real_dbt() {
     let test = |extra: &[&str]| dbt_cmd("test", extra);
     let (code, tested) = test(&[]);
     assert_eq!(code, 0, "{tested:#}");
-    assert_eq!(tested["result"]["tested"], 14, "{tested:#}");
+    assert_eq!(
+        tested["result"]["requested"], 5,
+        "the nodes with tests: {tested:#}"
+    );
     let (code, tested) = test(&[]);
     assert_eq!(code, 0, "{tested:#}");
     assert_eq!(tested["result"]["outcome"], "nothing_to_test");

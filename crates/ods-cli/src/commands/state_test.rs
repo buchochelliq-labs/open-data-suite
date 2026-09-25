@@ -12,7 +12,8 @@ use std::path::PathBuf;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::SnapshotId;
 use ods_sdk::contracts::executor::{
-    ExecutionMode, ExecutionReport, ExecutionRequest, Executor, NodeExecution, PrepareRequest,
+    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
+    PrepareRequest,
 };
 use ods_sdk::contracts::state_store::StateStore;
 use ods_state::{RecordedTests, TestResult};
@@ -49,6 +50,9 @@ enum TestOutcome {
     Passed,
     /// Some tests failed.
     Failed,
+    /// No test failed, but some nodes' tests didn't all run (dbt stopped early, or
+    /// they were deselected): those nodes stay untested.
+    Incomplete,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,8 +62,10 @@ pub(super) struct TestReport {
     scope: String,
     based_on: SnapshotId,
     outcome: TestOutcome,
-    /// Nodes whose tests ran.
-    tested: usize,
+    /// Nodes whose tests were asked to run.
+    requested: usize,
+    /// Built nodes in the selection that have no tests: nothing can mark them tested.
+    without_checks: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     left_out: Vec<LeftOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,6 +86,15 @@ impl TestReport {
     /// Runs the tests and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let report = Self::build(args)?;
+        if report.outcome == TestOutcome::Incomplete {
+            let error = CliError::new(
+                ExitStatus::Failure,
+                codes::STATE_EXECUTION,
+                "some tests didn't run, so their nodes weren't marked tested",
+            )
+            .with_hint("see which below; run `ods state test` again once dbt can run them all");
+            return ctx.emit_failed(&report, error);
+        }
         if report.outcome == TestOutcome::Failed {
             let failed = report
                 .record
@@ -129,22 +144,24 @@ impl TestReport {
         let store = ws.open_store()?;
         let latest = ws.latest(&store)?.ok_or_else(no_state)?;
 
-        // What to test: built by ODS, in the selection, untested unless --all.
+        // What to test: built by ODS, in the selection, with checks, and not tested
+        // with the checks it has now unless --all. A node without checks has nothing
+        // to run: it is never tested.
         let selected = ods_state::select(&ws.project, &select_specs(args))
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?;
         let all = args.get_flag("all");
-        let candidates: Vec<(String, String, String)> = ws
+        let built: Vec<&ods_state::Node> = ws
             .project
             .nodes
             .iter()
             .filter(|n| selected.contains(&n.id))
-            .filter(|n| {
-                latest
-                    .snapshot
-                    .nodes
-                    .get(&n.id)
-                    .is_some_and(|s| all || !s.is_tested())
-            })
+            .filter(|n| latest.snapshot.nodes.contains_key(&n.id))
+            .collect();
+        let without_checks = built.iter().filter(|n| n.checks.is_none()).count();
+        let candidates: Vec<(String, String, String)> = built
+            .iter()
+            .filter(|n| n.checks.is_some())
+            .filter(|n| all || !n.is_tested(&latest.snapshot.nodes[&n.id]))
             .map(|n| (n.id.clone(), n.name.clone(), n.kind.clone()))
             .collect();
         let (requested, left_out) = narrow(args, &ws.project, candidates)?;
@@ -153,7 +170,8 @@ impl TestReport {
             scope: ws.scope.to_string(),
             based_on: latest.id,
             outcome: TestOutcome::NothingToTest,
-            tested: requested.len(),
+            requested: requested.len(),
+            without_checks,
             left_out,
             execution: None,
             record: None,
@@ -168,12 +186,27 @@ impl TestReport {
             CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
                 .with_hint("nothing was recorded")
         })?;
+        // A check that didn't run leaves its node untested (the executor lists it as
+        // skipped), so partial results can't mark anything tested. But if dbt failed
+        // with no test failing, something else went wrong: nothing is marked tested.
+        let failed =
+            |n: &NodeExecution| n.status == ExecutionStatus::Failed || !n.checks_failed.is_empty();
+        let trusted = execution.succeeded || execution.nodes.iter().any(failed);
         let results: Vec<TestResult> = execution
             .nodes
             .iter()
-            .map(|n| TestResult::new(n.node.clone(), n.fully_checked(), n.completed_at))
+            .filter_map(|n| {
+                if failed(n) {
+                    Some(TestResult::new(n.node.clone(), false, n.completed_at))
+                } else if trusted && n.fully_checked() {
+                    Some(TestResult::new(n.node.clone(), true, n.completed_at))
+                } else {
+                    None
+                }
+            })
             .collect();
         let recorded = ods_state::record_tests(
+            &ws.project,
             (latest.id, &latest.snapshot),
             &results,
             &execution.run_id,
@@ -181,10 +214,12 @@ impl TestReport {
         );
         let snapshot =
             block_on(store.commit(&ws.scope, &recorded.snapshot))?.map_err(|e| store_error(&e))?;
-        report.outcome = if recorded.failed.is_empty() {
+        report.outcome = if !recorded.failed.is_empty() {
+            TestOutcome::Failed
+        } else if recorded.passed.len() == execution.nodes.len() {
             TestOutcome::Passed
         } else {
-            TestOutcome::Failed
+            TestOutcome::Incomplete
         };
         report.execution = Some(execution);
         report.record = Some(TestRecordReport { snapshot, recorded });
@@ -216,15 +251,31 @@ impl Present for TestReport {
         summary.push((
             "outcome".into(),
             vec![match self.outcome {
-                TestOutcome::NothingToTest => {
-                    Span::toned("nothing to test: every build is tested", Tone::Success)
-                }
-                TestOutcome::Passed => {
-                    Span::toned(format!("{} tested, all passed", self.tested), Tone::Success)
-                }
-                TestOutcome::Failed => Span::toned("tests failed or didn't run", Tone::Error),
+                TestOutcome::NothingToTest => Span::toned(
+                    "nothing to test: every build with tests is tested",
+                    Tone::Success,
+                ),
+                TestOutcome::Passed => Span::toned(
+                    format!("{} tested, all passed", self.requested),
+                    Tone::Success,
+                ),
+                TestOutcome::Failed => Span::toned("tests failed", Tone::Error),
+                TestOutcome::Incomplete => Span::toned(
+                    "some tests didn't run; those nodes stay untested",
+                    Tone::Warning,
+                ),
             }],
         ));
+        if self.without_checks > 0 {
+            summary.push((
+                "no tests".into(),
+                vec![Span::plain(format!(
+                    "{} built node{} (never marked tested)",
+                    self.without_checks,
+                    if self.without_checks == 1 { "" } else { "s" }
+                ))],
+            ));
+        }
         let mut blocks = vec![
             ViewNode::Heading("State test".into()),
             ViewNode::KeyValue(summary),
@@ -280,6 +331,8 @@ fn test_cell(n: &NodeExecution) -> Span {
             format!("didn't run: {}", names(&n.checks_skipped)),
             Tone::Warning,
         )
+    } else if n.checks_passed.is_empty() {
+        Span::toned("no tests ran on it", Tone::Warning)
     } else {
         Span::toned("not tested", Tone::Warning)
     }

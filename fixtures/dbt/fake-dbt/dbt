@@ -12,6 +12,7 @@ the way dbt would. Environment:
   FAKE_DBT_LOG   file to append the ids of built nodes to, one per line
   FAKE_DBT_EXIT  exit with this status after writing nothing (e.g. a connection failure)
   FAKE_DBT_KEEP_MANIFEST  `build` leaves manifest.json alone (as if another command wrote it)
+  FAKE_DBT_NO_TESTS  `test` runs no tests and succeeds (as with `--indirect-selection empty`)
 """
 
 import datetime
@@ -167,6 +168,8 @@ def main():
         # Tests of the selected nodes (eager indirect selection); nothing is built.
         for test_id, test in nodes.items():
             deps = test.get("depends_on", {}).get("nodes", [])
+            if os.environ.get("FAKE_DBT_NO_TESTS"):
+                break
             if test["resource_type"] == "test" and any(d in chosen for d in deps):
                 results.append(result(test_id, test_status(test), started))
         doc = {"metadata": metadata("run-results", 6, invocation, started),

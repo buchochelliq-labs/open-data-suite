@@ -219,6 +219,7 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
         adapter_type,
         source: ArtifactSource::InfoSchema,
         nodes,
+        unit_tests: Vec::new(),
     };
     Ok((manifest, catalog))
 }

@@ -455,7 +455,7 @@ stdout carries only the report (one JSON document with `--json`).
 | `--exclude SPEC` | leave these nodes out (same syntax as `--select`); they keep their last state and stay to build; repeatable |
 | `--resource-type model\|seed\|snapshot` | only build nodes of these types; the others stay to build; repeatable |
 | `--full-refresh` | dbt's `--full-refresh` for the nodes being built |
-| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Options that change which nodes run, which project or warehouse is used, where results go, or build partial data are refused: selection (`--select`/`-s`, `--exclude`, `--selector`, `--resource-type`, `--indirect-selection`, `--state`, `--defer`), `--target`/`-t`, `--project-dir`, `--profiles-dir`, `--profile`, `--vars`, `--target-path`, `--no-write-json`, `--full-refresh`/`-f`, `--empty`, `--sample` and `--event-time-*`. Use the ODS option where there is one |
+| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Only options about how dbt runs and logs are accepted: `--threads`, `--log-level`, `--log-format`, `--log-path`, `--printer-width`, `--warn-error`, `--warn-error-options`, `--fail-fast`/`-x`, `--debug`/`-d`, `--quiet`/`-q`, `--(no-)use-colors`, `--(no-)partial-parse`, `--store-failures` and the like. Anything else (selection, target, project, vars, `--empty`, `--sample`, …) is refused: use the ODS option where there is one. A run also refuses to start when `DBT_EMPTY`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE` is set |
 | `--dry-run` | prepare and plan, but build and record nothing |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
@@ -508,9 +508,20 @@ ods state test --all            # test everything ODS has a build of
 ods state test --select +orders -- --threads 8
 ```
 
-Nodes whose tests pass are marked tested. Nodes whose tests fail stay untested, so the
-next `ods state test` runs them again, and the command exits 1 with `ODS-E0404`. Builds
-are unchanged: failing tests don't make a node rebuild unless its code or data changes.
+A node is marked tested only when every test that reads it ran and passed: the tests
+dbt attaches to it (data tests and unit tests), as they are now. So:
+
+- a node with no tests is never tested, and isn't run (the report counts it under
+  `no tests`);
+- adding, removing or editing a node's test makes it untested again;
+- a test dbt skipped (e.g. after `-- --fail-fast`) or didn't run tested nothing: the
+  outcome is `incomplete` and the command exits 1 with `ODS-E0404`.
+
+Nodes whose tests fail stay untested, so the next `ods state test` runs them again,
+and the command exits 1 with `ODS-E0404`. Builds are unchanged: failing tests don't
+make a node rebuild unless its code or data changes. A rebuild that fails, or whose
+tests fail, clears the node's tested mark, since the warehouse may now hold that
+build. Tests check what is in the warehouse now, with the tests as they are now.
 It takes `--select`, `--exclude`, `--no-compile`, the dbt options and `-- DBT_ARGS` as
 `ods state run` does, plus `--all`.
 

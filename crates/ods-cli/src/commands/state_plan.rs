@@ -8,7 +8,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{
     DataVersion, Exactness, ExecutionPlan, PlanAction, SnapshotId, StateSnapshot, Timestamp,
 };
-use ods_provider_dbt::fingerprint::fingerprint;
+use ods_provider_dbt::fingerprint::{checks_digest, fingerprint};
 use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{
     ArtifactPreference, Artifacts, ResourceType, RunResults, RunStatus, SourceFreshness,
@@ -285,7 +285,8 @@ fn plan_nodes(
                     .get(&n.unique_id)
                     .cloned()
                     .unwrap_or_else(ods_core::FreshnessPolicy::conservative),
-            );
+            )
+            .with_checks(checks_digest(manifest, &n.unique_id));
             // A seed's rows are its file: nothing else feeds it.
             if n.resource_type == ResourceType::Seed {
                 node.self_contained()

@@ -127,26 +127,32 @@ is what the caller needs to see which nodes failed.
 
 ### Run and test modes (#220), contract 0.2
 - `ExecutionMode::Test` runs only the requested nodes' checks and builds nothing. A
-  node's outcome is its checks': it succeeds when they all pass (or it has none).
-- `NodeExecution::checks_skipped` lists checks on a node the engine skipped (dbt's
-  `--fail-fast`, or a test whose other parent failed). A skipped check tested nothing:
-  in a test run the node is `skipped`, and after `--test` the built node is recorded
-  as built but untested, so `ods state test` picks it up.
+  node fails when a check on it fails.
+- Only checks that ran vouch for a node. `NodeExecution::checks_passed` lists the
+  checks that ran and passed on it; `checks_skipped` lists the ones the engine
+  skipped (dbt's `--fail-fast`, a test whose other parent failed) **and** the ones it
+  knows cover the node but that didn't run at all (deselected, e.g. by
+  `DBT_INDIRECT_SELECTION`, or missing from partial results). A node is
+  `fully_checked` only when checks passed on it and none failed or was skipped: a node
+  without checks, or a run in which none ran, is never tested. For dbt, "the checks
+  that cover a node" are read from the manifest of the same invocation; if it can't be
+  read, no pass counts. In a test run such a node is `skipped`; after `--test` it is
+  recorded as built but untested, so `ods state test` picks it up.
+- `ods state test` records passes only when dbt succeeded or a test failed (the usual
+  reason `dbt test` exits non-zero). If dbt failed with no test failing, nothing is
+  marked tested. Nodes whose tests didn't all run keep what they had, and the command
+  reports `incomplete` (exit 1).
 - `ExecutionRequest::full_refresh` and `engine_args` pass options through. An executor
   refuses engine arguments that would change which nodes run, or where results are
-  written. It also refuses arguments that would make what ran differ from what gets
-  recorded. For dbt that means:
-  - selection: `--select`/`-s`, `--models`/`-m`, `--exclude`, `--selector`,
-    `--resource-type(s)`, `--exclude-resource-type(s)`, `--indirect-selection`,
-    `--state`, `--defer`, `--favor-state`;
-  - project and warehouse: `--project-dir`, `--profiles-dir`, `--profile`,
-    `--target`/`-t`, `--vars`. The plan was made from the ODS options;
-  - results: `--target-path`, `--(no-)write-json`;
-  - partial builds recorded as full ones: `--full-refresh`/`-f` (use the ODS flag),
-    `--empty`, `--sample`, `--event-time-start/end`.
-
-  Short options can be bundled (`-xf`), so any short cluster containing a reserved
-  letter is refused.
+  written, or would make what ran differ from what gets recorded. The dbt executor
+  uses an **allowlist**, since dbt has many spellings (`--model`, `-sx`, options added
+  in later versions): only options about how dbt runs and logs pass (`--threads`,
+  `--log-*`, `--printer-width`, `--warn-error(-options)`, `--fail-fast`/`-x`,
+  `--debug`/`-d`, `--quiet`/`-q`, colour, parsing, version check, `--store-failures`,
+  and a few others). Everything else is refused, with the ODS option to use where
+  there is one. It also refuses to build when the environment sets `DBT_EMPTY`,
+  `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE`, which
+  would make a build something ODS can't record as the real thing.
 - `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
   snapshots the plan needs. `--test` builds and tests, like `dbt build`.
 - `ods state test` tests what was built but not yet tested (`--all`: everything), with

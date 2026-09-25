@@ -225,6 +225,69 @@ pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerpri
     Ok(Fingerprint::from_content(components))
 }
 
+/// The scheme [`checks_digest`] uses; changing it makes every node untested once.
+pub const CHECKS_SCHEME: &str = "dbt-checks/1";
+
+/// The checks that cover `node`: the data tests and unit tests that read it, which
+/// `dbt test`/`dbt build` run with it by default.
+pub fn checks_of<'m>(manifest: &'m Manifest, node: &str) -> Vec<&'m str> {
+    let mut checks: Vec<&str> = manifest
+        .nodes
+        .iter()
+        .filter(|n| n.resource_type == ResourceType::Test && n.depends_on.iter().any(|d| d == node))
+        .map(|n| n.unique_id.as_str())
+        .chain(
+            manifest
+                .unit_tests
+                .iter()
+                .filter(|t| t.depends_on.iter().any(|d| d == node))
+                .map(|t| t.unique_id.as_str()),
+        )
+        .collect();
+    checks.sort_unstable();
+    checks
+}
+
+/// A digest of the checks that cover `node` and their definitions (#220): a build
+/// tested against these checks is tested; against others, it isn't. `None` when it
+/// has no checks, or one can't be fingerprinted, so it is never marked tested.
+pub fn checks_digest(manifest: &Manifest, node: &str) -> Option<String> {
+    let checks = checks_of(manifest, node);
+    if checks.is_empty() {
+        return None;
+    }
+    let mut components = vec![(Fingerprint::SCHEME.to_owned(), CHECKS_SCHEME.to_owned())];
+    for id in checks {
+        let content = if let Some(test) = manifest.nodes.iter().find(|n| n.unique_id == id) {
+            // A generic test is its macro and arguments; a singular test its SQL.
+            let mut arguments = String::new();
+            if let Some(t) = &test.test {
+                canonical_json(&t.arguments, &mut arguments);
+            }
+            format!(
+                "config {}\nmacros {}\ncode {}\narguments {}\ndepends_on {}\n",
+                config_content(test).ok()?,
+                macros_content(manifest, test).ok()?,
+                test.raw_code.as_deref().unwrap_or(""),
+                arguments,
+                test.depends_on.join(","),
+            )
+        } else {
+            let unit = manifest.unit_tests.iter().find(|t| t.unique_id == id)?;
+            let mut definition = unit.definition.clone();
+            if let Value::Object(map) = &mut definition {
+                // When it was parsed, not what it checks.
+                map.remove("created_at");
+            }
+            let mut out = String::new();
+            canonical_json(&definition, &mut out);
+            out
+        };
+        components.push((id.to_owned(), content));
+    }
+    Some(Fingerprint::from_content(components).digest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

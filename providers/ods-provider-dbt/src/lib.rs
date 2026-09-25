@@ -27,6 +27,6 @@ pub mod state_config;
 
 pub use artifacts::{
     ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtConstraint, DbtError,
-    DbtMacro, DbtTest, Manifest, ManifestNode, ResourceType,
+    DbtMacro, DbtTest, DbtUnitTest, Manifest, ManifestNode, ResourceType,
 };
 pub use runs::{NodeResult, RunResults, RunStatus, SourceFreshness};

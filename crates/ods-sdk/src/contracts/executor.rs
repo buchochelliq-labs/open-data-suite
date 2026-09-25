@@ -21,8 +21,14 @@
 //! - Every execution has a [`run_id`](ExecutionReport::run_id) no other execution by
 //!   the same provider has had.
 //! - In [`ExecutionMode::Test`] nothing is built: only the requested nodes' checks run.
-//!   A node is a success when all its checks passed (or it has none), and failed when
-//!   any failed; the failed checks are listed on it as in the other modes.
+//!   A node is failed when any check on it failed; the failed checks are listed on it
+//!   as in the other modes.
+//! - In either mode, the checks that ran and passed on a node are listed on it
+//!   ([`NodeExecution::checks_passed`]), and a check the engine knows covers the node
+//!   but didn't run is listed as [skipped](NodeExecution::checks_skipped). So a node
+//!   is only [fully checked](NodeExecution::fully_checked) when checks ran on it and
+//!   every one it has passed: no results, a node with no checks, or a run that
+//!   stopped early never vouch for a build.
 //! - [`ExecutionRequest::full_refresh`] rebuilds incremental state from scratch, and
 //!   [`ExecutionRequest::engine_args`] passes options through to the engine as they
 //!   are. An executor refuses engine arguments that would change which nodes run, or
@@ -196,6 +202,9 @@ pub struct NodeExecution {
     /// [`ExecutionMode::Test`] it isn't tested, and its status isn't `success`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub checks_skipped: Vec<String>,
+    /// Checks on this node that ran and passed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks_passed: Vec<String>,
 }
 
 impl NodeExecution {
@@ -213,6 +222,7 @@ impl NodeExecution {
             message,
             checks_failed: Vec::new(),
             checks_skipped: Vec::new(),
+            checks_passed: Vec::new(),
         }
     }
 
@@ -230,11 +240,19 @@ impl NodeExecution {
         self
     }
 
-    /// Whether the node was built (or, in a test run, tested) and every check on it
-    /// ran and passed.
+    /// Lists checks on this node that ran and passed.
+    #[must_use]
+    pub fn with_checks_passed(mut self, checks: Vec<String>) -> Self {
+        self.checks_passed = checks;
+        self
+    }
+
+    /// Whether the node was built (or, in a test run, tested), checks ran on it, and
+    /// every check on it ran and passed.
     #[must_use]
     pub fn fully_checked(&self) -> bool {
         self.status == ExecutionStatus::Success
+            && !self.checks_passed.is_empty()
             && self.checks_failed.is_empty()
             && self.checks_skipped.is_empty()
     }

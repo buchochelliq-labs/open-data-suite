@@ -1,6 +1,6 @@
 //! In-memory [`Executor`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -29,6 +29,7 @@ pub struct FakeExecutor {
     clock: FakeClock,
     nodes: BTreeSet<String>,
     failing: BTreeSet<String>,
+    checks: BTreeMap<String, Vec<String>>,
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -39,6 +40,7 @@ impl FakeExecutor {
             clock,
             nodes: nodes.into_iter().map(Into::into).collect(),
             failing: BTreeSet::new(),
+            checks: BTreeMap::new(),
             inner: Arc::default(),
         }
     }
@@ -49,6 +51,21 @@ impl FakeExecutor {
         let node = node.into();
         self.nodes.insert(node.clone());
         self.failing.insert(node);
+        self
+    }
+
+    /// Gives `node` checks, which pass whenever they run (in `Build` and `Test`
+    /// modes). A node without checks is never fully checked.
+    #[must_use]
+    pub fn with_checks(
+        mut self,
+        node: impl Into<String>,
+        checks: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let node = node.into();
+        self.nodes.insert(node.clone());
+        self.checks
+            .insert(node, checks.into_iter().map(Into::into).collect());
         self
     }
 
@@ -105,18 +122,26 @@ impl Executor for FakeExecutor {
             .nodes
             .iter()
             .map(|n| {
+                let checks = self.checks.get(&n.id).cloned().unwrap_or_default();
                 let (status, message) = if !self.nodes.contains(&n.id) {
                     (ExecutionStatus::Failed, Some("unknown node".to_owned()))
                 } else if self.failing.contains(&n.id) {
                     (ExecutionStatus::Failed, Some("failed".to_owned()))
-                } else {
-                    // A test run builds nothing.
-                    if request.mode != ExecutionMode::Test {
-                        inner.built.push(n.id.clone());
+                } else if request.mode == ExecutionMode::Test {
+                    // A test run builds nothing, and tests nothing without checks.
+                    if checks.is_empty() {
+                        (ExecutionStatus::Skipped, Some("no checks".to_owned()))
+                    } else {
+                        (ExecutionStatus::Success, None)
                     }
+                } else {
+                    inner.built.push(n.id.clone());
                     (ExecutionStatus::Success, None)
                 };
+                let ran_checks =
+                    status == ExecutionStatus::Success && request.mode != ExecutionMode::Run;
                 NodeExecution::new(n.id.clone(), status, Some(finished), message)
+                    .with_checks_passed(if ran_checks { checks } else { Vec::new() })
             })
             .collect();
         Ok(ExecutionReport::new(
