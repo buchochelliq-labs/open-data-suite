@@ -10,14 +10,14 @@
     {
       "title": "M1 State MVP (v0.1.0)",
       "due_on": "2026-12-18T00:00:00Z",
-      "description": "First public release: local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor.",
-      "issues": [11, 12, 13, 14, 18, 20, 22, 21, 23, 25, 24, 26, 16, 99]
+      "description": "First public release: local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor; code- and data-aware (dbt source freshness, Delta table versions, staleness policies).",
+      "issues": [11, 12, 13, 14, 18, 20, 22, 21, 23, 25, 24, 26, 16, 19, 17, 99]
     },
     {
       "title": "M2 Databricks & data-aware State (v0.2.0)",
       "due_on": "2027-02-26T00:00:00Z",
-      "description": "Unity Catalog/Delta providers, freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets.",
-      "issues": [15, 17, 19, 29, 30, 27, 28, 126, 31]
+      "description": "Unity Catalog metadata, full Delta change providers, remaining freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets.",
+      "issues": [15, 29, 30, 27, 28, 126, 31]
     },
     {
       "title": "M3 ERD & Usage (v0.3.0)",
