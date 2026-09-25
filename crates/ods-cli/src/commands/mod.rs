@@ -2,7 +2,10 @@
 
 mod completions;
 mod config;
+mod erd;
 mod lineage;
+mod mcp;
+mod mcp_tools;
 mod planned;
 mod serve;
 mod state;
@@ -10,7 +13,9 @@ mod version;
 
 pub use completions::Completions;
 pub use config::Config;
+pub use erd::ErdCommand;
 pub use lineage::Lineage;
+pub use mcp::Mcp;
 pub use planned::Planned;
 pub use serve::Serve;
 pub use state::State;
@@ -20,11 +25,6 @@ use crate::module::Registry;
 
 /// Modules on the roadmap that are not implemented yet, with their milestone.
 const PLANNED: &[(&str, &str, &str)] = &[
-    (
-        "erd",
-        "Generate and inspect entity-relationship models",
-        "M3 ERD & Usage (v0.3.0)",
-    ),
     (
         "usage",
         "Inspect real downstream usage of assets and columns",
@@ -57,6 +57,9 @@ pub fn default_registry() -> Registry {
     registry
         .register(Box::new(State))
         .expect("built-in command names are unique and not reserved");
+    registry
+        .register(Box::new(ErdCommand))
+        .expect("built-in command names are unique and not reserved");
     for &(name, about, milestone) in PLANNED {
         registry
             .register(Box::new(Planned::new(name, about, milestone)))
@@ -67,6 +70,9 @@ pub fn default_registry() -> Registry {
         .expect("built-in command names are unique and not reserved");
     registry
         .register(Box::new(Serve))
+        .expect("built-in command names are unique and not reserved");
+    registry
+        .register(Box::new(Mcp))
         .expect("built-in command names are unique and not reserved");
     registry
         .register(Box::new(Config))
@@ -97,6 +103,7 @@ mod tests {
                 "agent",
                 "lineage",
                 "serve",
+                "mcp",
                 "config",
                 "version",
                 "completions"

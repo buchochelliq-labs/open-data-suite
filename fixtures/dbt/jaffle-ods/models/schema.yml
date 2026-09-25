@@ -12,3 +12,32 @@ models:
     columns:
       - name: order_id
         data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('customers')
+                field: customer_id
+  - name: customer_order_rank
+    columns:
+      - name: order_id
+        data_tests:
+          - unique
+          - relationships:
+              arguments:
+                to: ref('orders')
+                field: order_id
+  - name: stg_orders
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+  - name: stg_payments
+    columns:
+      - name: payment_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id

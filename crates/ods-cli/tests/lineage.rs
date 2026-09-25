@@ -511,3 +511,35 @@ fn copy_dir(from: &Path, to: &Path) {
         }
     }
 }
+
+#[test]
+fn impact_on_a_column_that_does_not_exist_is_an_error_not_nothing() {
+    let target = fixture();
+    let target = target.to_str().unwrap();
+    let out = ods(&[
+        "lineage",
+        "impact",
+        "--target-dir",
+        target,
+        "--column",
+        "orders.nope",
+        "--json",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a typo must not read as `nothing affected`"
+    );
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(envelope["diagnostics"][0]["code"], "ODS-E0203");
+    // New columns don't exist yet, so `added` accepts any name.
+    let added = json(&[
+        "lineage",
+        "impact",
+        "--target-dir",
+        target,
+        "--column",
+        "orders.nope=added",
+    ]);
+    assert!(added["run"].as_array().unwrap().is_empty());
+}

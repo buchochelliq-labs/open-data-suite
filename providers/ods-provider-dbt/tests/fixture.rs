@@ -143,3 +143,99 @@ fn asking_for_an_information_schema_that_is_not_there_is_an_error() {
         .unwrap_err();
     assert!(err.to_string().contains("dbt Information Schema"), "{err}");
 }
+
+/// (test name, attached node, column, arguments `to`/`field`, `depends_on`) for comparison.
+type TestSummary = (String, Option<String>, Option<String>, String, Vec<String>);
+
+fn tests_of(m: &Manifest) -> Vec<TestSummary> {
+    let mut tests: Vec<TestSummary> = m
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            let t = n.test.as_ref()?;
+            let mut deps = n.depends_on.clone();
+            deps.sort();
+            Some((
+                t.name.clone(),
+                t.attached_node.clone(),
+                t.column_name.clone(),
+                format!("{}/{}", t.arguments["to"], t.arguments["field"]),
+                deps,
+            ))
+        })
+        .collect();
+    tests.sort();
+    tests
+}
+
+#[test]
+fn data_tests_read_the_same_from_every_format() {
+    use ods_provider_dbt::ArtifactPreference;
+    let v1 = tests_of(&Artifacts::load(&target()).unwrap().manifest);
+    let v2_json = tests_of(
+        &Artifacts::load_with(&v2(), ArtifactPreference::Json)
+            .unwrap()
+            .manifest,
+    );
+    let v2_parquet = tests_of(
+        &Artifacts::load_with(&v2(), ArtifactPreference::InfoSchema)
+            .unwrap()
+            .manifest,
+    );
+    assert_eq!(v1.len(), 12);
+    assert_eq!(v1, v2_json);
+    assert_eq!(v1, v2_parquet);
+    let relationship = v1
+        .iter()
+        .find(|t| t.0 == "relationships" && t.1.as_deref() == Some("model.jaffle_ods.orders"))
+        .unwrap();
+    assert_eq!(relationship.2.as_deref(), Some("customer_id"));
+    assert_eq!(relationship.3, r#""ref('customers')"/"customer_id""#);
+    assert_eq!(
+        relationship.4,
+        ["model.jaffle_ods.customers", "model.jaffle_ods.orders"]
+    );
+}
+
+#[test]
+fn catalog_types_are_read() {
+    let catalog = Artifacts::load(&target()).unwrap().catalog.unwrap();
+    let types = &catalog.types["model.jaffle_ods.orders"];
+    assert_eq!(types["order_id"].to_lowercase(), "integer");
+    assert_eq!(
+        types.len(),
+        catalog.columns["model.jaffle_ods.orders"].len()
+    );
+}
+
+#[test]
+fn model_and_column_constraints_are_collected() {
+    let json = r#"{
+      "metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json"},
+      "nodes": {"model.p.orders": {
+        "unique_id": "model.p.orders", "resource_type": "model",
+        "constraints": [{"type": "foreign_key", "columns": ["customer_id"],
+                         "to": "ref('customers')", "to_columns": ["id"]}],
+        "columns": {"order_id": {"name": "order_id", "data_type": "bigint",
+                                 "constraints": [{"type": "primary_key"}, {"type": "not_null"}]}}
+      }}
+    }"#;
+    let manifest = Manifest::parse(Path::new("manifest.json"), json).unwrap();
+    let node = &manifest.nodes[0];
+    assert_eq!(node.declared_types["order_id"], "bigint");
+    let kinds: Vec<(&str, Vec<String>)> = node
+        .constraints
+        .iter()
+        .map(|c| (c.kind.as_str(), c.columns.clone()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("foreign_key", vec!["customer_id".to_owned()]),
+            ("primary_key", vec!["order_id".to_owned()]),
+            ("not_null", vec!["order_id".to_owned()])
+        ]
+    );
+    assert_eq!(node.constraints[0].to.as_deref(), Some("ref('customers')"));
+    assert_eq!(node.constraints[0].to_columns, ["id"]);
+}

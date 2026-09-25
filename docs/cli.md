@@ -11,13 +11,15 @@ codes).
 |---|---|
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
 | `ods state plan\|run\|explain\|…` | planned: M1 State MVP (v0.1.0) |
-| `ods erd` | planned: M3 ERD & Usage (v0.3.0) |
+| `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
+| `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
+| `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -392,3 +394,72 @@ ods state policies --model orders --json
 Defaults: if any model configures `state:` or `build_after`, the project relies on dbt
 State, so models without settings get dbt State's defaults (`45m`, `any`). Otherwise
 ODS rebuilds on any new upstream data (tolerance `0`).
+
+## Entity-relationship diagrams
+
+`ods erd generate` draws the keys and relationships your project already asserts
+([ADR-0012](adr/0012-erd-from-tests-and-constraints.md)):
+- `unique` + `not_null` tests make a primary key (`unique` alone is a nullable unique key);
+- `relationships` tests make references;
+- contract `primary_key` / `foreign_key` constraints are declared keys and references.
+
+Every key and relationship says whether it is **declared**, **tested** or **inferred**.
+
+```sh
+dbt parse && dbt docs generate            # docs generate adds column types
+ods erd generate                          # Mermaid erDiagram on stdout
+ods erd generate --select orders --depth 2 --output-file erd.mmd
+ods erd generate --format dot | dot -Tsvg > erd.svg
+ods erd generate --infer --format json    # also guess from naming, labelled inferred
+```
+
+| Flag | Meaning |
+|---|---|
+| `--format` | `mermaid` (default), `dot` or `json` |
+| `--select MODEL` | only this model and entities within `--depth` relationships (default 1); repeatable |
+| `--infer` | also propose keys (`id`, `<entity>_id`) and references (`<x>_id`) from naming; ambiguous names are reported, not guessed |
+| `--all` | include entities without relationships (hidden by default) |
+| `--output-file PATH` | write the diagram and print a summary instead |
+
+## MCP server for AI agents
+
+`ods mcp` serves the ODS engines to AI agents over the Model Context Protocol, on stdio
+([ADR-0010](adr/0010-mcp-server.md)). The server is read-only and local:
+- no login, no network, no telemetry;
+- no tool writes files, runs dbt or queries a warehouse;
+- every tool is marked read-only, so clients can auto-approve it.
+
+```sh
+claude mcp add ods -- ods mcp --target-dir target          # Claude Code
+```
+
+```json
+{ "mcpServers": { "ods": { "command": "ods", "args": ["mcp", "--target-dir", "target"] } } }
+```
+
+The JSON form works for Cursor (`.cursor/mcp.json`), VS Code (`.vscode/mcp.json`, under
+`servers`) and other MCP clients.
+
+| Tool | Answers |
+|---|---|
+| `ods_project_summary` | dbt version, counts, lineage coverage, whether dbt State is used |
+| `ods_search` | models and columns by name |
+| `ods_get_node` | where each column of a model comes from |
+| `ods_lineage` | the column-level graph around models or columns (JSON or Mermaid) |
+| `ods_impact` | which models must run for column changes or against another build, and which can be skipped |
+| `ods_erd` | keys and relationships (Mermaid, JSON or DOT) |
+| `ods_test_gaps` | tests worth adding, with evidence and YAML to paste |
+| `ods_list_opaque` | models whose lineage is unknown, and why |
+| `ods_state_policies` | freshness policies from dbt State configs |
+| `ods_compare_observed` | static lineage against Unity Catalog's recorded lineage |
+
+It also serves:
+- resources `ods://project/summary`, `ods://erd`, `ods://lineage/graph` and
+  `ods://node/{id}`;
+- prompts `assess_change_impact`, `review_breaking_changes` and `add_missing_tests`.
+
+Artifacts are re-read on every call, and a cache means only changed models are
+re-analyzed. So run `dbt compile` after editing, and the next answer is current. The
+server takes `ods lineage`'s options: `--artifacts`, `--dialect`, `--observed`,
+`--trust-observed`. A tool's result is the same JSON as the matching command's `--json`
+output.

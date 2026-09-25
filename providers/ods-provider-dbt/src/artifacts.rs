@@ -111,6 +111,50 @@ struct RawChecksum {
 #[derive(Debug, Deserialize)]
 struct RawColumn {
     name: String,
+    #[serde(default)]
+    data_type: Option<String>,
+    #[serde(default)]
+    constraints: Vec<RawConstraint>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawConstraint {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    columns: Option<Vec<String>>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    to_columns: Option<Vec<String>>,
+    #[serde(default)]
+    expression: Option<String>,
+}
+
+impl RawConstraint {
+    /// `column` is set for a column-level constraint, which applies to that column.
+    pub(crate) fn into_constraint(self, column: Option<&str>) -> DbtConstraint {
+        DbtConstraint {
+            kind: self.kind,
+            columns: self
+                .columns
+                .filter(|c| !c.is_empty())
+                .or_else(|| column.map(|c| vec![c.to_owned()]))
+                .unwrap_or_default(),
+            to: self.to,
+            to_columns: self.to_columns.unwrap_or_default(),
+            expression: self.expression,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTestMetadata {
+    name: String,
+    #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
+    kwargs: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +175,14 @@ struct RawNode {
     columns: BTreeMap<String, RawColumn>,
     #[serde(default)]
     checksum: RawChecksum,
+    #[serde(default)]
+    test_metadata: Option<RawTestMetadata>,
+    #[serde(default)]
+    column_name: Option<String>,
+    #[serde(default)]
+    attached_node: Option<String>,
+    #[serde(default)]
+    constraints: Vec<RawConstraint>,
     // dbt 1.x sources also carry these at the top level.
     #[serde(default)]
     loaded_at_field: Option<String>,
@@ -171,6 +223,46 @@ pub struct ManifestNode {
     pub checksum: Option<String>,
     /// Scheduling configuration, as resolved by dbt.
     pub config: DbtConfig,
+    /// For data tests: which test, on what.
+    pub test: Option<DbtTest>,
+    /// Contract constraints, model- and column-level (column-level ones name their
+    /// column in [`DbtConstraint::columns`]).
+    pub constraints: Vec<DbtConstraint>,
+    /// Column data types declared in YAML, by column name.
+    pub declared_types: BTreeMap<String, String>,
+}
+
+/// A data test, as declared: `unique`, `not_null`, `relationships`, a package test, …
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtTest {
+    /// The generic test's name, e.g. `relationships`.
+    pub name: String,
+    /// The package defining it, e.g. `dbt_utils`; `None` for dbt's own tests.
+    pub namespace: Option<String>,
+    /// The column it tests, if it is a column test.
+    pub column_name: Option<String>,
+    /// The node it tests.
+    pub attached_node: Option<String>,
+    /// Its arguments, e.g. `{"to": "ref('customers')", "field": "id"}`.
+    pub arguments: serde_json::Value,
+}
+
+/// A model contract constraint (`primary_key`, `foreign_key`, `unique`, `not_null`,
+/// `check`, …).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtConstraint {
+    /// The constraint type, as written.
+    pub kind: String,
+    /// The constrained columns.
+    pub columns: Vec<String>,
+    /// For foreign keys: the referenced relation, e.g. `ref('customers')`.
+    pub to: Option<String>,
+    /// For foreign keys: the referenced columns.
+    pub to_columns: Vec<String>,
+    /// Free-form expression (older foreign-key syntax, checks).
+    pub expression: Option<String>,
 }
 
 /// A node's scheduling configuration as dbt resolved it: project, folder, YAML and SQL
@@ -249,6 +341,8 @@ pub struct Manifest {
 pub struct Catalog {
     /// Columns by `unique_id`.
     pub columns: BTreeMap<String, Vec<String>>,
+    /// Warehouse data types by `unique_id`, then column name.
+    pub types: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,6 +350,8 @@ struct RawCatalogColumn {
     name: String,
     #[serde(default)]
     index: i64,
+    #[serde(default, rename = "type")]
+    data_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,9 +497,33 @@ impl Manifest {
             .chain(raw.sources.into_values())
             .filter(|n| n.config.enabled != Some(false))
             .map(|n| {
-                let mut declared_columns: Vec<String> =
-                    n.columns.into_values().map(|c| c.name).collect();
+                let mut constraints: Vec<DbtConstraint> = n
+                    .constraints
+                    .into_iter()
+                    .map(|c| c.into_constraint(None))
+                    .collect();
+                let mut declared_types = BTreeMap::new();
+                let mut declared_columns = Vec::new();
+                for column in n.columns.into_values() {
+                    constraints.extend(
+                        column
+                            .constraints
+                            .into_iter()
+                            .map(|c| c.into_constraint(Some(&column.name))),
+                    );
+                    if let Some(data_type) = column.data_type.filter(|t| !t.is_empty()) {
+                        declared_types.insert(column.name.clone(), data_type);
+                    }
+                    declared_columns.push(column.name);
+                }
                 declared_columns.sort();
+                let test = n.test_metadata.map(|t| DbtTest {
+                    name: t.name,
+                    namespace: t.namespace,
+                    column_name: n.column_name,
+                    attached_node: n.attached_node,
+                    arguments: t.kwargs,
+                });
                 let node = ManifestNode {
                     unique_id: n.unique_id,
                     resource_type: n.resource_type,
@@ -420,6 +540,9 @@ impl Manifest {
                         loaded_at_field: n.config.loaded_at_field.or(n.loaded_at_field),
                         loaded_at_query: n.config.loaded_at_query.or(n.loaded_at_query),
                     },
+                    test,
+                    constraints,
+                    declared_types,
                 };
                 (node.unique_id.clone(), node)
             })
@@ -452,16 +575,20 @@ impl Catalog {
             &raw.metadata.dbt_schema_version,
             &CATALOG_VERSIONS,
         )?;
-        let columns = raw
-            .nodes
-            .into_iter()
-            .chain(raw.sources)
-            .map(|(id, node)| {
-                let mut columns: Vec<RawCatalogColumn> = node.columns.into_values().collect();
-                columns.sort_by_key(|c| c.index);
-                (id, columns.into_iter().map(|c| c.name).collect())
-            })
-            .collect();
-        Ok(Self { columns })
+        let mut columns = BTreeMap::new();
+        let mut types = BTreeMap::new();
+        for (id, node) in raw.nodes.into_iter().chain(raw.sources) {
+            let mut ordered: Vec<RawCatalogColumn> = node.columns.into_values().collect();
+            ordered.sort_by_key(|c| c.index);
+            let node_types: BTreeMap<String, String> = ordered
+                .iter()
+                .filter_map(|c| Some((c.name.clone(), c.data_type.clone()?)))
+                .collect();
+            if !node_types.is_empty() {
+                types.insert(id.clone(), node_types);
+            }
+            columns.insert(id, ordered.into_iter().map(|c| c.name).collect());
+        }
+        Ok(Self { columns, types })
     }
 }

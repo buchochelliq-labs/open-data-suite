@@ -28,6 +28,7 @@ EXACT = {
     "ods-policy": FOUNDATION,
     "ods-sdk": SDK,
     "ods-web": EDGE,
+    "ods-mcp": EDGE,
     "ods-cli": BINARY,
 }
 MODULES = {"ods-lineage", "ods-state", "ods-erd", "ods-usage", "ods-ci", "ods-lsp", "ods-agent", "ods-mesh", "ods-synthetic"}

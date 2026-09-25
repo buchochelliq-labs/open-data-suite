@@ -282,7 +282,15 @@ pub(super) fn preference(args: &ArgMatches) -> ArtifactPreference {
     }
 }
 
+/// One analysis cache per process: a long-running command (`ods mcp`) re-reads the
+/// project on every request, and only changed models are analyzed again.
+pub(super) fn shared_cache() -> &'static MemoryCache {
+    static CACHE: std::sync::OnceLock<MemoryCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(MemoryCache::default)
+}
+
 /// How to read and analyze a project.
+#[derive(Debug, Clone)]
 pub(super) struct LoadOptions {
     pub(super) dialect: Option<String>,
     pub(super) preference: ArtifactPreference,
@@ -333,11 +341,7 @@ impl Loaded {
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        Self::from_dir(
-            &target_dir,
-            &LoadOptions::from_args(args),
-            &MemoryCache::default(),
-        )
+        Self::from_dir(&target_dir, &LoadOptions::from_args(args), shared_cache())
     }
 
     pub(super) fn from_dir(
@@ -416,7 +420,7 @@ impl Loaded {
     }
 
     /// Finds a node by `unique_id` or unique name.
-    fn node_id(&self, name: &str) -> Result<String, CliError> {
+    pub(super) fn node_id(&self, name: &str) -> Result<String, CliError> {
         if self.graph.node(name).is_some() {
             return Ok(name.to_owned());
         }
@@ -1003,19 +1007,38 @@ impl ImpactReport {
                 )
             })?;
             let id = loaded.node_id(model)?;
-            let relation = loaded
-                .graph
-                .node(&id)
-                .map(|n| n.relation.clone())
-                .ok_or_else(|| {
-                    CliError::new(
-                        ExitStatus::Failure,
-                        codes::INTERNAL,
-                        format!("`{id}` vanished from the graph"),
-                    )
-                })?;
+            let node = loaded.graph.node(&id).ok_or_else(|| {
+                CliError::new(
+                    ExitStatus::Failure,
+                    codes::INTERNAL,
+                    format!("`{id}` vanished from the graph"),
+                )
+            })?;
+            let column = loaded.analyzer.column_name(column);
+            // A modified or removed column must exist: an unknown name would "affect
+            // nothing" and report every reader as safe to skip (AGENTS.md rule 3).
+            // Where the node's columns aren't known at all, fall back to "its rows may
+            // change", which impacts every reader.
+            if kind != ColumnChangeKind::Added && !node.columns.contains(&column) {
+                if node.columns.is_empty() {
+                    changes.push(Change::Rows {
+                        relation: node.relation.clone(),
+                    });
+                    continue;
+                }
+                return Err(CliError::new(
+                    ExitStatus::Usage,
+                    codes::LINEAGE_TARGET,
+                    format!("`{model}` has no column `{column}`"),
+                )
+                .with_hint(format!(
+                    "its columns are: {}; use `={}` for a new column",
+                    node.columns.join(", "),
+                    "added"
+                )));
+            }
             changes.push(Change::Column {
-                column: ColumnRef::new(relation, loaded.analyzer.column_name(column)),
+                column: ColumnRef::new(node.relation.clone(), column),
                 kind,
             });
         }
@@ -1528,7 +1551,7 @@ fn open_in_browser(path: &Path) -> bool {
 
 impl Loaded {
     /// Parses `MODEL` or `MODEL.COLUMN` into a graph endpoint.
-    fn endpoint(&self, spec: &str) -> Result<Endpoint, CliError> {
+    pub(super) fn endpoint(&self, spec: &str) -> Result<Endpoint, CliError> {
         if let Ok(node) = self.node_id(spec) {
             return Ok(Endpoint { node, column: None });
         }

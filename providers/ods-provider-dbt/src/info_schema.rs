@@ -14,7 +14,8 @@ use parquet::file::reader::SerializedFileReader;
 use parquet::record::Field;
 
 use crate::artifacts::{
-    ArtifactSource, Catalog, DbtConfig, DbtError, Manifest, ManifestNode, ResourceType,
+    ArtifactSource, Catalog, DbtConfig, DbtConstraint, DbtError, DbtTest, Manifest, ManifestNode,
+    RawConstraint, ResourceType,
 };
 
 /// Information Schema versions this reader understands.
@@ -160,8 +161,143 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
         .unwrap_or_default();
 
     let mut parents = read_parents(dir)?;
-    let (declared, actual) = read_columns(dir)?;
+    let mut columns = read_columns(dir)?;
 
+    let mut nodes = read_nodes(dir, &mut parents, &mut columns)?;
+    nodes.extend(read_tests(dir, &mut parents)?);
+    nodes.sort_by(|a, b| a.unique_id.cmp(&b.unique_id));
+
+    let catalog = (!columns.actual.is_empty()).then(|| {
+        let mut catalog = Catalog::default();
+        for (node, mut ordered) in columns.actual {
+            ordered.sort();
+            catalog.types.insert(
+                node.clone(),
+                ordered
+                    .iter()
+                    .map(|(_, c, t)| (c.clone(), t.clone()))
+                    .collect(),
+            );
+            catalog
+                .columns
+                .insert(node, ordered.into_iter().map(|(_, c, _)| c).collect());
+        }
+        catalog
+    });
+    let manifest = Manifest {
+        schema_version: version,
+        dbt_version,
+        adapter_type,
+        source: ArtifactSource::InfoSchema,
+        nodes,
+    };
+    Ok((manifest, catalog))
+}
+
+/// Parents of every node, from `dbt.edges`. It also links macros and tests; those are
+/// filtered out when the lineage project is built, like manifest `depends_on`.
+fn read_parents(dir: &Path) -> Result<BTreeMap<String, Vec<String>>, DbtError> {
+    let path = dir.join("dbt.edges.parquet");
+    let mut parents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for edge in read_table(dir, "dbt.edges", &["parent_unique_id", "child_unique_id"])? {
+        parents
+            .entry(required(&edge, "child_unique_id", &path)?)
+            .or_default()
+            .push(required(&edge, "parent_unique_id", &path)?);
+    }
+    Ok(parents)
+}
+
+type Declared = BTreeMap<String, BTreeSet<String>>;
+type Actual = BTreeMap<String, Vec<(i64, String, String)>>;
+
+/// What `dbt.node_columns` says about each node's columns.
+#[derive(Default)]
+struct Columns {
+    /// Every declared or discovered column.
+    declared: Declared,
+    /// The warehouse's own ordered list (the catalog), with types, where
+    /// `data_type_actual` is known.
+    actual: Actual,
+    /// Types declared in YAML.
+    declared_types: BTreeMap<String, BTreeMap<String, String>>,
+    /// Column-level constraints.
+    constraints: BTreeMap<String, Vec<DbtConstraint>>,
+}
+
+fn read_columns(dir: &Path) -> Result<Columns, DbtError> {
+    let path = dir.join("dbt.node_columns.parquet");
+    let mut columns = Columns::default();
+    for row in read_table(
+        dir,
+        "dbt.node_columns",
+        &[
+            "node_unique_id",
+            "column_name",
+            "column_index",
+            "data_type_actual",
+            "data_type_declared",
+            "constraints",
+        ],
+    )? {
+        let node = required(&row, "node_unique_id", &path)?;
+        let column = required(&row, "column_name", &path)?;
+        columns
+            .declared
+            .entry(node.clone())
+            .or_default()
+            .insert(column.clone());
+        if let Some(data_type) = text(&row, "data_type_declared").filter(|t| !t.is_empty()) {
+            columns
+                .declared_types
+                .entry(node.clone())
+                .or_default()
+                .insert(column.clone(), data_type);
+        }
+        let column_constraints = constraints(&row, &path, Some(&column))?;
+        if !column_constraints.is_empty() {
+            columns
+                .constraints
+                .entry(node.clone())
+                .or_default()
+                .extend(column_constraints);
+        }
+        if let Some(data_type) = text(&row, "data_type_actual") {
+            let index = match row.get("column_index") {
+                Some(Field::Long(i)) => *i,
+                Some(Field::Int(i)) => i64::from(*i),
+                _ => i64::MAX,
+            };
+            columns
+                .actual
+                .entry(node)
+                .or_default()
+                .push((index, column, data_type));
+        }
+    }
+    Ok(columns)
+}
+
+/// A `constraints` column: a JSON array of `{type, columns, to, to_columns, …}`.
+fn constraints(
+    row: &Row,
+    path: &Path,
+    column: Option<&str>,
+) -> Result<Vec<DbtConstraint>, DbtError> {
+    let Some(json) = text(row, "constraints").filter(|c| !c.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let raw: Vec<RawConstraint> = serde_json::from_str(&json)
+        .map_err(|e| invalid(path, format!("a `constraints` isn't valid: {e}")))?;
+    Ok(raw.into_iter().map(|c| c.into_constraint(column)).collect())
+}
+
+/// Models, seeds, snapshots and sources.
+fn read_nodes(
+    dir: &Path,
+    parents: &mut BTreeMap<String, Vec<String>>,
+    columns: &mut Columns,
+) -> Result<Vec<ManifestNode>, DbtError> {
     let mut nodes = Vec::new();
     for (table, resource_type) in NODE_TABLES {
         let path = dir.join(format!("{table}.parquet"));
@@ -185,6 +321,7 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
                 "config",
                 "loaded_at_field",
                 "loaded_at_query",
+                "constraints",
             ],
         )? {
             if matches!(row.get("enabled"), Some(Field::Bool(false))) {
@@ -217,86 +354,89 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
                 language: text(&row, "node_language"),
                 materialized: text(&row, "materialized"),
                 depends_on: parents.remove(&unique_id).unwrap_or_default(),
-                declared_columns: declared
+                declared_columns: columns
+                    .declared
                     .get(&unique_id)
                     .map(|c| c.iter().cloned().collect())
                     .unwrap_or_default(),
                 checksum,
                 config: config(&row, &path)?,
+                test: None,
+                constraints: {
+                    let mut all = constraints(&row, &path, None)?;
+                    all.extend(columns.constraints.remove(&unique_id).unwrap_or_default());
+                    all
+                },
+                declared_types: columns
+                    .declared_types
+                    .remove(&unique_id)
+                    .unwrap_or_default(),
                 unique_id,
             });
         }
     }
-    nodes.sort_by(|a, b| a.unique_id.cmp(&b.unique_id));
-
-    let catalog = (!actual.is_empty()).then(|| Catalog {
-        columns: actual
-            .into_iter()
-            .map(|(node, mut columns)| {
-                columns.sort();
-                (node, columns.into_iter().map(|(_, c)| c).collect())
-            })
-            .collect(),
-    });
-    let manifest = Manifest {
-        schema_version: version,
-        dbt_version,
-        adapter_type,
-        source: ArtifactSource::InfoSchema,
-        nodes,
-    };
-    Ok((manifest, catalog))
+    Ok(nodes)
 }
 
-/// Parents of every node, from `dbt.edges`. It also links macros and tests; those are
-/// filtered out when the lineage project is built, like manifest `depends_on`.
-fn read_parents(dir: &Path) -> Result<BTreeMap<String, Vec<String>>, DbtError> {
-    let path = dir.join("dbt.edges.parquet");
-    let mut parents: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for edge in read_table(dir, "dbt.edges", &["parent_unique_id", "child_unique_id"])? {
-        parents
-            .entry(required(&edge, "child_unique_id", &path)?)
-            .or_default()
-            .push(required(&edge, "parent_unique_id", &path)?);
+/// Data tests from `dbt.data_tests`, with what they depend on.
+fn read_tests(
+    dir: &Path,
+    parents: &mut BTreeMap<String, Vec<String>>,
+) -> Result<Vec<ManifestNode>, DbtError> {
+    let path = dir.join("dbt.data_tests.parquet");
+    if !path.is_file() {
+        return Ok(Vec::new());
     }
-    Ok(parents)
-}
-
-type Declared = BTreeMap<String, BTreeSet<String>>;
-type Actual = BTreeMap<String, Vec<(i64, String)>>;
-
-/// Columns from `dbt.node_columns`: every declared or discovered column, and the
-/// warehouse's own ordered list (the catalog) where `data_type_actual` is known.
-fn read_columns(dir: &Path) -> Result<(Declared, Actual), DbtError> {
-    let path = dir.join("dbt.node_columns.parquet");
-    let mut declared = Declared::new();
-    let mut actual = Actual::new();
+    let mut tests = Vec::new();
     for row in read_table(
         dir,
-        "dbt.node_columns",
+        "dbt.data_tests",
         &[
-            "node_unique_id",
+            "unique_id",
+            "test_name",
+            "test_definition_package",
+            "arguments",
             "column_name",
-            "column_index",
-            "data_type_actual",
+            "node_unique_id",
+            "enabled",
         ],
     )? {
-        let node = required(&row, "node_unique_id", &path)?;
-        let column = required(&row, "column_name", &path)?;
-        declared
-            .entry(node.clone())
-            .or_default()
-            .insert(column.clone());
-        if text(&row, "data_type_actual").is_some() {
-            let index = match row.get("column_index") {
-                Some(Field::Long(i)) => *i,
-                Some(Field::Int(i)) => i64::from(*i),
-                _ => i64::MAX,
-            };
-            actual.entry(node).or_default().push((index, column));
+        if matches!(row.get("enabled"), Some(Field::Bool(false))) {
+            continue;
         }
+        let unique_id = required(&row, "unique_id", &path)?;
+        let Some(name) = text(&row, "test_name") else {
+            // A singular (SQL) test: no generic test to interpret.
+            continue;
+        };
+        let arguments = match text(&row, "arguments").filter(|a| !a.is_empty()) {
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| invalid(&path, format!("test `arguments` aren't JSON: {e}")))?,
+            None => serde_json::Value::Null,
+        };
+        tests.push(ManifestNode {
+            resource_type: ResourceType::Test,
+            relation_name: None,
+            compiled_code: None,
+            language: None,
+            materialized: None,
+            depends_on: parents.remove(&unique_id).unwrap_or_default(),
+            declared_columns: Vec::new(),
+            checksum: None,
+            config: DbtConfig::default(),
+            test: Some(DbtTest {
+                name,
+                namespace: text(&row, "test_definition_package").filter(|p| p != "dbt"),
+                column_name: text(&row, "column_name"),
+                attached_node: text(&row, "node_unique_id"),
+                arguments,
+            }),
+            constraints: Vec::new(),
+            declared_types: BTreeMap::new(),
+            unique_id,
+        });
     }
-    Ok((declared, actual))
+    Ok(tests)
 }
 
 /// A stable, dependency-free 64-bit FNV-1a fingerprint (only compared for equality).
