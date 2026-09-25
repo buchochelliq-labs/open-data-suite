@@ -9,12 +9,19 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 csv.workspace = true
 ods-core.workspace = true
+ods-sdk.workspace = true
 parquet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+ods-sdk = { workspace = true, features = ["conformance"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true

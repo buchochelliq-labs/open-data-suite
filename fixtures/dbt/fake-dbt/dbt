@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""A stand-in for the dbt CLI in ODS's tests: no warehouse, no network.
+
+It answers `compile`, `build` and `source freshness` by writing artifacts derived from
+the committed jaffle-ods `dbt build` artifacts, with a fresh invocation id each time,
+the way dbt would. Environment:
+
+  FAKE_DBT_BASE  directory with the base manifest.json [default: ../jaffle-ods/artifacts/dbt-1.10-build]
+  FAKE_DBT_FAIL  comma-separated node names that fail to build
+  FAKE_DBT_FAIL_TEST  comma-separated test names that fail
+  FAKE_DBT_LOG   file to append the ids of built nodes to, one per line
+  FAKE_DBT_EXIT  exit with this status after writing nothing (e.g. a connection failure)
+"""
+
+import datetime
+import json
+import os
+import sys
+import uuid
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.environ.get("FAKE_DBT_BASE") or os.path.join(
+    HERE, "..", "jaffle-ods", "artifacts", "dbt-1.10-build"
+)
+STATE = ("model", "seed", "snapshot")
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def names(env):
+    return {n for n in os.environ.get(env, "").split(",") if n}
+
+
+def parse(argv):
+    words, options, key = [], {}, None
+    for arg in argv:
+        if arg.startswith("--"):
+            key = arg[2:]
+            options.setdefault(key, [])
+        elif key is not None:
+            options[key].append(arg)
+        else:
+            words.append(arg)
+    return words, options
+
+
+def write(path, doc):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=1)
+
+
+def metadata(kind, version, invocation, started):
+    return {
+        "dbt_schema_version": f"https://schemas.getdbt.com/dbt/{kind}/v{version}.json",
+        "dbt_version": "1.10.23",
+        "generated_at": now(),
+        "invocation_id": invocation,
+        "invocation_started_at": started,
+        "env": {},
+    }
+
+
+def result(unique_id, status, at):
+    timing = [{"name": "execute", "started_at": at, "completed_at": now()}]
+    return {"unique_id": unique_id, "status": status, "timing": timing, "message": status}
+
+
+def main():
+    words, options = parse(sys.argv[1:])
+    if "version" in options:
+        print("Core:\n  - installed: 1.10.23 (fake)")
+        return 0
+    if os.environ.get("FAKE_DBT_EXIT"):
+        print("fake dbt: failing before writing anything", file=sys.stderr)
+        return int(os.environ["FAKE_DBT_EXIT"])
+    target = (options.get("target-path") or ["target"])[0]
+    invocation, started = str(uuid.uuid4()), now()
+    with open(os.path.join(BASE, "manifest.json")) as f:
+        manifest = json.load(f)
+    manifest["metadata"]["invocation_id"] = invocation
+    manifest["metadata"]["generated_at"] = now()
+
+    if words[:2] == ["source", "freshness"]:
+        # Like dbt, it rewrites the manifest, and without compiled SQL.
+        for node in manifest["nodes"].values():
+            node.pop("compiled_code", None)
+            node["compiled"] = False
+        write(os.path.join(target, "manifest.json"), manifest)
+        doc = {"metadata": metadata("sources", 3, invocation, started), "results": [], "elapsed_time": 0}
+        write(os.path.join(target, "sources.json"), doc)
+        return 0
+
+    write(os.path.join(target, "manifest.json"), manifest)
+    if words[:1] == ["compile"]:
+        doc = {"metadata": metadata("run-results", 6, invocation, started),
+               "results": [], "elapsed_time": 0, "args": {"which": "compile"}}
+        write(os.path.join(target, "run_results.json"), doc)
+        return 0
+    if words[:1] != ["build"]:
+        print(f"fake dbt: unsupported command {words}", file=sys.stderr)
+        return 2
+
+    selected = set(options.get("select", []))
+    excluded = set(options.get("exclude-resource-type", []))
+    nodes = manifest["nodes"]
+
+    def selector(node):
+        name = node["name"]
+        return f"{name}.v{node['version']}" if node.get("version") is not None else name
+
+    chosen = [i for i, n in nodes.items() if n["resource_type"] in STATE and selector(n) in selected]
+    fail, fail_tests = names("FAKE_DBT_FAIL"), names("FAKE_DBT_FAIL_TEST")
+    outcome, results = {}, []
+    # Parents first, as dbt runs them.
+    pending = list(chosen)
+    while pending:
+        progressed = False
+        for node_id in list(pending):
+            parents = [p for p in nodes[node_id].get("depends_on", {}).get("nodes", []) if p in chosen]
+            if any(p not in outcome for p in parents):
+                continue
+            pending.remove(node_id)
+            progressed = True
+            if any(outcome[p] != "success" for p in parents):
+                status = "skipped"
+            elif nodes[node_id]["name"] in fail:
+                status = "error"
+            else:
+                status = "success"
+            outcome[node_id] = status
+            results.append(result(node_id, status, started))
+        if not progressed:
+            break
+    built = [i for i, s in outcome.items() if s == "success"]
+    if "test" not in excluded:
+        for test_id, test in nodes.items():
+            deps = test.get("depends_on", {}).get("nodes", [])
+            if test["resource_type"] == "test" and deps and all(d in outcome for d in deps):
+                ok = all(outcome[d] == "success" for d in deps)
+                status = "skipped" if not ok else ("fail" if test["name"] in fail_tests else "pass")
+                results.append(result(test_id, status, started))
+    if os.environ.get("FAKE_DBT_LOG"):
+        with open(os.environ["FAKE_DBT_LOG"], "a") as f:
+            for node_id in built:
+                f.write(node_id + "\n")
+    doc = {"metadata": metadata("run-results", 6, invocation, started),
+           "results": results, "elapsed_time": 0, "args": {"which": "build"}}
+    write(os.path.join(target, "run_results.json"), doc)
+    failed = any(r["status"] in ("error", "fail") for r in results)
+    return 1 if failed else 0
+
+
+sys.exit(main())

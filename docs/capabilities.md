@@ -106,11 +106,21 @@ run: dbt build --select stg_orders order_events orders customer_order_rank custo
 
 (Output shortened; from the demo project.)
 
-It is the first slice of the State MVP (v0.1.0). `ods state run`, which executes the plan
-and records its own runs, comes next.
+`ods state run` does all of it: it compiles, plans, runs `dbt build` on exactly the
+nodes that must build, and records the result. Nodes that fail keep their last
+successful state and are built next time.
 
-Details: [CLI reference](cli.md#state-plan-record-history),
-[ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md).
+```console
+$ ods state run           # after editing segment_summary
+plan: 1 to build, 12 to reuse
+ran: dbt build --select segment_summary …
+outcome: succeeded
+recorded: snapshot 2: 1 node advanced
+```
+
+Details: [CLI reference](cli.md#state-run),
+[ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md),
+[ADR-0014](adr/0014-executor-contract-and-state-run.md).
 
 ## dbt State configuration
 

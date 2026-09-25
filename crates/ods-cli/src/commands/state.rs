@@ -2,7 +2,9 @@
 //! - `ods state policies` shows the freshness policies read from the project (#168);
 //! - `ods state plan`, `record` and `history` plan against, record and list the state
 //!   (ADR-0013, `state_plan`);
-//! - the other subcommands (`run`, `explain`, …) report "not implemented".
+//! - `ods state run` plans, builds exactly what needs building with dbt, and records
+//!   the successes (ADR-0014, `state_run`);
+//! - the other subcommands (`explain`, …) report "not implemented".
 
 use std::path::PathBuf;
 
@@ -13,7 +15,7 @@ use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{ArtifactPreference, Artifacts};
 use serde::Serialize;
 
-use super::{Planned, state_plan};
+use super::{Planned, state_plan, state_run};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -31,7 +33,7 @@ impl Module for State {
     fn command(&self) -> Command {
         Command::new("state")
             .about(format!(
-                "{ABOUT} [preview: `plan`, `record`, `history`, `policies`; more in {MILESTONE}]"
+                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`; more in {MILESTONE}]"
             ))
             .args_conflicts_with_subcommands(true)
             .subcommand(
@@ -59,6 +61,7 @@ impl Module for State {
                             .help("Only this model (name or unique_id)"),
                     ),
             )
+            .subcommand(state_run::run_command())
             .subcommand(state_plan::plan_command())
             .subcommand(state_plan::record_command())
             .subcommand(state_plan::history_command())
@@ -78,6 +81,7 @@ impl Module for State {
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         match matches.subcommand() {
             Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args)?),
+            Some(("run", args)) => state_run::RunReport::run(args, ctx),
             Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args)?),
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args)?),
             Some(("history", args)) => ctx.emit(&state_plan::HistoryReport::build(args)?),

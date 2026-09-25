@@ -14,6 +14,7 @@
 //! in the [`Report`], so a provider is never tested for behaviour it doesn't claim.
 //! A failing case panics with the case name.
 
+pub mod executor;
 pub mod lock;
 pub mod state_store;
 

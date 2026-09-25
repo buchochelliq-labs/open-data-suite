@@ -16,6 +16,7 @@
 //! the same [`Manifest`].
 
 mod artifacts;
+pub mod executor;
 pub mod fingerprint;
 mod info_schema;
 mod runs;

@@ -176,6 +176,8 @@ impl RunResults {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SourceFreshness {
+    /// dbt's invocation id.
+    pub invocation_id: Option<String>,
     /// When the measurement was taken.
     pub generated_at: Option<String>,
     /// Source id → `max_loaded_at`. Sources whose check failed are absent.
@@ -234,6 +236,7 @@ impl SourceFreshness {
             }
         }
         Ok(Self {
+            invocation_id: raw.metadata.invocation_id,
             generated_at: raw.metadata.generated_at,
             max_loaded_at,
             errors,
