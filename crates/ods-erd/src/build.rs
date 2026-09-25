@@ -213,7 +213,7 @@ fn apply_facts(
                     add_key(&mut keys, columns, *basis, evidence.clone());
                     // Two different primary keys: keep the stronger one, report both.
                     if keys.len() > 1 {
-                        keys.sort_by(|a, b| b.basis.cmp(&a.basis));
+                        keys.sort_by_key(|k| std::cmp::Reverse(k.basis));
                         diagnostics.push(format!(
                             "{entity}: conflicting primary keys {:?} and {:?}",
                             keys[0].columns, keys[1].columns

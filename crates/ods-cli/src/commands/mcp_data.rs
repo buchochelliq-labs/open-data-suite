@@ -119,7 +119,7 @@ pub(super) fn find_data(project: &Project, arguments: &Value) -> ToolOutput {
             let total = own + columns.iter().map(|(s, _)| s).sum::<usize>();
             (total > 0).then(|| {
                 let mut columns = columns;
-                columns.sort_by(|a, b| b.0.cmp(&a.0));
+                columns.sort_by_key(|c| std::cmp::Reverse(c.0));
                 (
                     total,
                     json!({
