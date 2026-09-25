@@ -228,6 +228,27 @@
         149,
         157
       ]
+    },
+    {
+      "title": "M10 Advanced Intelligence & Developer Experience",
+      "description": "Unscheduled. Cross-cutting developer intelligence: drift/parity, dead-code analysis, lineage confidence, contract compatibility, reproducibility, query-plan inspection, metadata search, policy-as-code, watch mode, portable snapshots, PII propagation, mutation testing, migration assistance and interactive exploration.",
+      "issues": [
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208
+      ]
     }
   ],
   "duplicates": {
