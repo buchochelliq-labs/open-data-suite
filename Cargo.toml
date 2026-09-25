@@ -16,6 +16,7 @@ publish = false
 ods-core = { path = "crates/ods-core" }
 ods-config = { path = "crates/ods-config" }
 ods-sdk = { path = "crates/ods-sdk" }
+ods-lineage = { path = "crates/ods-lineage" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
 
 # Shared third-party crates (see ADR-0002)
@@ -24,12 +25,15 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 insta = "1"
+# Data parallelism for CPU-bound analysis (ADR-0008).
+rayon = "1"
 # Terminal rendering; only ods-cli may depend on it (ADR-0003, enforced by check-layering.py).
 # `^0.0.x` pins the patch version, so every upgrade is a deliberate PR.
 rs-rich = "0.0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros"] }
 toml = "1"
