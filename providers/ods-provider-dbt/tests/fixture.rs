@@ -239,3 +239,50 @@ fn model_and_column_constraints_are_collected() {
     assert_eq!(node.constraints[0].to.as_deref(), Some("ref('customers')"));
     assert_eq!(node.constraints[0].to_columns, ["id"]);
 }
+
+/// Constraints of one fixture node as `(type, columns, expression)`.
+fn constraints_of(m: &Manifest, id: &str) -> Vec<(String, Vec<String>, Option<String>)> {
+    m.nodes
+        .iter()
+        .find(|n| n.unique_id == id)
+        .unwrap()
+        .constraints
+        .iter()
+        .map(|c| (c.kind.clone(), c.columns.clone(), c.expression.clone()))
+        .collect()
+}
+
+#[test]
+fn fixture_constraints_read_from_every_format() {
+    use ods_provider_dbt::ArtifactPreference;
+    let v1 = Artifacts::load(&target()).unwrap().manifest;
+    let v2_json = Artifacts::load_with(&v2(), ArtifactPreference::Json)
+        .unwrap()
+        .manifest;
+    let v2_parquet = Artifacts::load_with(&v2(), ArtifactPreference::InfoSchema)
+        .unwrap()
+        .manifest;
+    let rank = "model.jaffle_ods.customer_order_rank";
+    let expected = vec![
+        (
+            "primary_key".to_owned(),
+            vec!["customer_id".to_owned(), "order_seq".to_owned()],
+            None,
+        ),
+        (
+            "foreign_key".to_owned(),
+            vec!["order_id".to_owned()],
+            Some("main.orders (order_id)".to_owned()),
+        ),
+    ];
+    for manifest in [&v1, &v2_json, &v2_parquet] {
+        assert_eq!(constraints_of(manifest, rank), expected, "model-level");
+    }
+    // Column-level constraints are in both manifests. dbt 2.0.5's Information Schema
+    // doesn't record them (`node_columns.constraints` is empty).
+    let orders = "model.jaffle_ods.orders";
+    let column_level = vec![("primary_key".to_owned(), vec!["order_id".to_owned()], None)];
+    assert_eq!(constraints_of(&v1, orders), column_level);
+    assert_eq!(constraints_of(&v2_json, orders), column_level);
+    assert_eq!(constraints_of(&v2_parquet, orders), vec![]);
+}

@@ -229,6 +229,70 @@ fn resolve_reference(text: &str, by_name: &ByName) -> Option<String> {
     by_name.get(text).cloned().flatten()
 }
 
+/// The dot-separated parts of a warehouse identifier, unquoted and lowercased:
+/// `"db"."Main".orders` → `[db, main, orders]`.
+fn identifier_parts(text: &str) -> Vec<String> {
+    let mut parts = vec![String::new()];
+    let mut quote: Option<char> = None;
+    for c in text.trim().chars() {
+        match (quote, c) {
+            (None, '"' | '`' | '[') => quote = Some(if c == '[' { ']' } else { c }),
+            (Some(q), _) if c == q => quote = None,
+            (None, '.') => parts.push(String::new()),
+            (None, c) if c.is_whitespace() => {}
+            (_, c) => parts
+                .last_mut()
+                .expect("never empty")
+                .extend(c.to_lowercase()),
+        }
+    }
+    parts
+}
+
+/// Node ids by every trailing part of their warehouse relation (`orders`,
+/// `main.orders`, `db.main.orders`), for constraints that name a table instead of a
+/// `ref()`. `None` marks an ambiguous name.
+fn relation_index(artifacts: &Artifacts) -> ByName {
+    let mut index = ByName::new();
+    for node in &artifacts.manifest.nodes {
+        let Some(relation) = &node.relation_name else {
+            continue;
+        };
+        let parts = identifier_parts(relation);
+        for start in 0..parts.len() {
+            index
+                .entry(parts[start..].join("."))
+                .and_modify(|id| {
+                    if id.as_deref() != Some(node.unique_id.as_str()) {
+                        *id = None;
+                    }
+                })
+                .or_insert_with(|| Some(node.unique_id.clone()));
+        }
+    }
+    index
+}
+
+/// The target and columns of a foreign key written as an expression,
+/// `schema.table (column, …)` (dbt before `to`/`to_columns`, and still accepted).
+fn parse_reference_expression(
+    expression: &str,
+    relations: &ByName,
+) -> Option<(String, Vec<String>)> {
+    let (table, rest) = expression.trim().split_once('(')?;
+    let columns: Vec<String> = rest
+        .strip_suffix(')')?
+        .split(',')
+        .map(|c| identifier_parts(c).join("."))
+        .filter(|c| !c.is_empty())
+        .collect();
+    let target = relations
+        .get(&identifier_parts(table).join("."))
+        .cloned()
+        .flatten()?;
+    (!columns.is_empty()).then_some((target, columns))
+}
+
 /// Entities (models, seeds, snapshots, sources) with their columns, and node ids by
 /// display name for resolving `ref()`/`source()` references.
 fn entities_of(artifacts: &Artifacts) -> (Vec<EntityInput>, ByName) {
@@ -284,13 +348,15 @@ fn erd_input(
     loaded: Option<&Loaded>,
 ) -> (Vec<EntityInput>, Vec<Fact>, Vec<String>) {
     let (entities, by_name) = entities_of(artifacts);
+    let relations = relation_index(artifacts);
     let known: std::collections::BTreeSet<&str> = entities.iter().map(|e| e.id.as_str()).collect();
     let mut facts = Vec::new();
     let mut diagnostics = Vec::new();
     for node in &artifacts.manifest.nodes {
         if known.contains(node.unique_id.as_str()) {
             for constraint in &node.constraints {
-                constraint_facts(node, constraint, &by_name, &mut facts, &mut diagnostics);
+                let names = (&by_name, &relations);
+                constraint_facts(node, constraint, names, &mut facts, &mut diagnostics);
             }
             // Incremental models and snapshots name the key dbt merges on; often
             // several columns.
@@ -452,7 +518,7 @@ fn test_facts(
 fn constraint_facts(
     node: &ManifestNode,
     constraint: &DbtConstraint,
-    by_name: &ByName,
+    (by_name, relations): (&ByName, &ByName),
     facts: &mut Vec<Fact>,
     diagnostics: &mut Vec<String>,
 ) {
@@ -483,16 +549,21 @@ fn constraint_facts(
             }
         }
         "foreign_key" => {
-            let target = constraint
-                .to
-                .as_deref()
-                .and_then(|to| resolve_reference(to, by_name));
+            let target = match constraint.to.as_deref() {
+                Some(to) => {
+                    resolve_reference(to, by_name).map(|id| (id, constraint.to_columns.clone()))
+                }
+                None => constraint
+                    .expression
+                    .as_deref()
+                    .and_then(|e| parse_reference_expression(e, relations)),
+            };
             match target {
-                Some(to) if !columns.is_empty() => facts.push(Fact::ForeignKey {
+                Some((to, to_columns)) if !columns.is_empty() => facts.push(Fact::ForeignKey {
                     entity,
                     columns,
                     to,
-                    to_columns: constraint.to_columns.clone(),
+                    to_columns,
                     basis: Basis::Declared,
                     evidence,
                 }),

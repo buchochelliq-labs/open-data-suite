@@ -406,11 +406,19 @@ ODS rebuilds on any new upstream data (tolerance `0`).
   identifies the rows, the smallest such combination is the primary key, even without
   `not_null` tests (most composite grains are never tested that way);
 - `relationships` tests make references;
-- contract `primary_key` / `foreign_key` constraints are declared keys and references;
+- contract constraints are declared keys and references: `primary_key` and `unique`
+  (column-level, or model-level over several columns), `not_null`, and `foreign_key`
+  in either syntax, `to: ref('orders')` + `to_columns`, or
+  `expression: "schema.orders (order_id)"` (matched against the warehouse relation;
+  an unknown or ambiguous table is a diagnostic);
 - **joins in the project's own SQL** make references too, so projects without
   `relationships` tests still get a diagram. `a.x = b.y and a.z = b.w` becomes one
   composite relationship. Its direction and cardinality come from tested or declared
   keys; when neither side is one, the cardinality is *unknown* (`}o--o{`), never guessed.
+
+dbt 2.0's Parquet Information Schema doesn't record column-level constraints (model-level
+ones are there). If your keys are column-level constraints, read dbt 2.0's
+`manifest.json` instead (`--artifacts json`).
 
 Tests with a `where` filter say nothing about the whole table, so they are skipped with a
 diagnostic. Every key and relationship says whether it is **declared**, **tested**,

@@ -648,11 +648,14 @@ fn infer_relationships(
                 .filter(|(_, id, _)| *id != entity.id)
                 .cloned()
                 .collect();
-            // Prefer targets whose key is tested or declared over guessed ones.
-            let best = candidates.iter().map(|(b, _, _)| *b).max();
+            // Prefer targets whose key is tested or declared over guessed ones. Tested and
+            // declared rank the same: a constraint on one table and a test on another
+            // don't say which of them a column refers to.
+            let trusted = |b: Basis| matches!(b, Basis::Declared | Basis::Tested);
+            let best = candidates.iter().map(|(b, _, _)| trusted(*b)).max();
             let mut targets: Vec<(&str, String)> = candidates
                 .into_iter()
-                .filter(|(b, _, _)| Some(*b) == best)
+                .filter(|(b, _, _)| Some(trusted(*b)) == best)
                 .map(|(_, id, c)| (id, c))
                 .collect();
             targets.sort();
