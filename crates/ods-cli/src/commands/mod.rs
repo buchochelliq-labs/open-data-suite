@@ -2,12 +2,16 @@
 
 mod completions;
 mod config;
+mod lineage;
 mod planned;
+mod serve;
 mod version;
 
 pub use completions::Completions;
 pub use config::Config;
+pub use lineage::Lineage;
 pub use planned::Planned;
+pub use serve::Serve;
 pub use version::Version;
 
 use crate::module::Registry;
@@ -59,6 +63,12 @@ pub fn default_registry() -> Registry {
             .expect("built-in command names are unique and not reserved");
     }
     registry
+        .register(Box::new(Lineage))
+        .expect("built-in command names are unique and not reserved");
+    registry
+        .register(Box::new(Serve))
+        .expect("built-in command names are unique and not reserved");
+    registry
         .register(Box::new(Config))
         .expect("built-in command names are unique and not reserved");
     registry
@@ -85,6 +95,8 @@ mod tests {
                 "ci",
                 "lsp",
                 "agent",
+                "lineage",
+                "serve",
                 "config",
                 "version",
                 "completions"

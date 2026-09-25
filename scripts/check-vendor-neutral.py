@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NEUTRAL_CRATES = [
     "ods-core", "ods-events", "ods-config", "ods-policy", "ods-sdk",
-    "ods-state", "ods-erd", "ods-usage", "ods-ci", "ods-lsp", "ods-agent",
+    "ods-lineage", "ods-state", "ods-erd", "ods-usage", "ods-ci", "ods-lsp", "ods-agent",
     "ods-mesh", "ods-synthetic",
 ]
 # Written without separators; parts are joined before matching. Common English words

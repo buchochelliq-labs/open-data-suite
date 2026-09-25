@@ -69,6 +69,14 @@ pub mod codes {
     pub const NOT_IMPLEMENTED: &str = "ODS-E0003";
     /// `ODS_LOG` holds an unknown log level.
     pub const INVALID_LOG_LEVEL: &str = "ODS-E0004";
+    /// dbt artifacts are missing, unreadable or unsupported, or output can't be written.
+    pub const LINEAGE_ARTIFACTS: &str = "ODS-E0201";
+    /// The project graph is inconsistent (duplicate ids or relations, a cycle).
+    pub const LINEAGE_BUILD: &str = "ODS-E0202";
+    /// A model, column, dialect or change named on the command line doesn't exist.
+    pub const LINEAGE_TARGET: &str = "ODS-E0203";
+    /// `ods serve` can't bind its address or stopped with an I/O error.
+    pub const SERVE: &str = "ODS-E0301";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

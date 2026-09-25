@@ -7,6 +7,9 @@
 //! | Contract | Issue | Status |
 //! |---|---|---|
 //! | [`LockProvider`](lock::LockProvider) | #28 | defined |
+//! | [`SqlLineageAnalyzer`](sql_lineage::SqlLineageAnalyzer) | #73, #74 | defined (ADR-0008) |
+//! | [`ObservedLineageSource`](observed_lineage::ObservedLineageSource) | #74 | defined (ADR-0008) |
+//! | `LineageSink` | #74, #92 | planned (ADR-0008) |
 //! | `ArtifactProvider` | #12 | planned (needs the #4 semantic graph) |
 //! | `MetadataProvider` | #15 | planned |
 //! | `StateStore` | #25 | planned (needs the #11 state model) |
@@ -22,3 +25,5 @@
 //! | `LlmProvider` | #33 | planned |
 
 pub mod lock;
+pub mod observed_lineage;
+pub mod sql_lineage;
