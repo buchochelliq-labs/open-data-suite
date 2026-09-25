@@ -15,7 +15,8 @@ codes).
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
-| `ods lineage columns\|impact\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
+| `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
+| `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -105,6 +106,7 @@ meanings get new numbers.
 | `ODS-E0201` | dbt artifacts are missing, unreadable or an unsupported version, or lineage output can't be written. |
 | `ODS-E0202` | The project graph is inconsistent (duplicate ids or relations, or a dependency cycle). |
 | `ODS-E0203` | A model, column, change kind or dialect named on the command line doesn't exist. |
+| `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
 
 ## Environment variables
 
@@ -212,9 +214,11 @@ Configuration errors exit with status 4.
 
 ## Column-level lineage
 
-`ods lineage` reads a dbt target directory (`manifest.json`, plus `catalog.json` when
-`dbt docs generate` has run), parses every model's compiled SQL, and builds column-level
-lineage ([ADR-0008](adr/0008-column-level-lineage.md)). It needs no dbt login, no
+`ods lineage` reads a dbt target directory, parses every model's compiled SQL, and builds
+column-level lineage. It reads dbt 1.7–1.12 (`manifest.json` v11/v12, plus `catalog.json`
+when `dbt docs generate` has run) and dbt v2, either its `manifest.json` or, with
+`--generate-info-schema`, the Parquet "dbt Information Schema"; with `--no-write-json` the
+Information Schema is used automatically. All three give the same lineage ([ADR-0008](adr/0008-column-level-lineage.md)). It needs no dbt login, no
 warehouse connection and no network.
 
 ```sh
@@ -247,6 +251,7 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 | Flag | Meaning |
 |---|---|
 | `--target-dir DIR` | dbt target directory; default `target` |
+| `--artifacts FORMAT` | `auto` (default: `manifest.json` if present, else the Information Schema), `json`, or `info-schema` (dbt v2's Parquet `target/info_schema/v1/`) |
 | `--dialect NAME` | `databricks`, `spark`, `duckdb`, `snowflake`, `bigquery`, `postgres`, `redshift` or `generic`; default: the manifest's adapter type |
 | `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable |
 | `--base DIR` | (`impact`) another build to compare with; every difference in compiled SQL becomes column changes |
@@ -261,3 +266,94 @@ How impact is decided, most conservative first:
   only reach readers that `select *`;
 - every reader that is *not* affected is listed as skipped, with the changed columns it doesn't use.
 
+### Observed lineage (Unity Catalog)
+
+Databricks Unity Catalog records column lineage for every query it runs:
+- from notebooks, jobs, pipelines and SQL warehouses;
+- including Python and PySpark;
+- in the system table `system.access.column_lineage`, kept for a year.
+
+ODS reads an export of that table, so it needs no workspace connection or credentials.
+It uses the export in two ways:
+
+1. **To check the analyzer:** `ods lineage compare` reports, per model:
+   - which observed edges it predicted (*agrees*);
+   - which predicted edges didn't run (*covers*);
+   - which observed edges it missed (*misses*);
+   - which models have no observed runs.
+
+   Columns a platform reports as feeding a column but ODS classifies as row-shaping
+   (joins, filters, window ordering) count as agreement.
+2. **To fill in models the analyzer can't read**, such as Python models: pass
+   `--observed FILE` to any lineage command. Their lineage appears with confidence
+   `observed`. Observed lineage only covers what ran, so by default impact still treats
+   these models as opaque (they run whenever what they read changes). With
+   `--trust-observed`, impact relies on it and can skip them.
+
+```sql
+-- In a SQL warehouse or notebook; download the result as CSV or JSON.
+SELECT source_table_full_name, source_column_name,
+       target_table_full_name, target_column_name, event_time
+FROM system.access.column_lineage
+WHERE target_table_catalog = 'analytics'          -- your dbt catalog
+  AND event_date >= current_date() - INTERVAL 30 DAYS
+```
+
+```sh
+ods lineage compare --observed column_lineage.csv
+ods lineage impact --column stg_orders.status --observed column_lineage.csv [--trust-observed]
+ods serve --observed column_lineage.csv          # reloads when the export changes too
+```
+
+The export may have any columns in any order, as long as it includes the source and
+target table names (full names, or catalog/schema/name) and column names. Rows without a
+source table (file paths) or target table (plain reads) are skipped. Names are
+normalized like the SQL dialect's identifiers. `.csv`, `.json` (an array) and
+`.ndjson`/`.jsonl` are read. A test fixture in this format is in
+`fixtures/databricks/uc-lineage/`; it is synthetic.
+
+| Flag | Meaning |
+|---|---|
+| `--observed FILE` | (all `lineage` commands and `serve`; required by `compare`) an export of `system.access.column_lineage` |
+| `--trust-observed` | let impact rely on observed lineage for models without static lineage |
+
+### Hosting the explorer
+
+The same page ships three ways ([ADR-0009](adr/0009-hostable-explorer-ods-web.md)):
+
+```sh
+ods lineage view                              # one offline file, graph embedded
+ods lineage view --site public/lineage        # static site: index.html + graph.json
+ods serve                                     # http://127.0.0.1:8765/, live reload
+ods serve --host 0.0.0.0 --port 8080 --base-path /lineage   # behind a reverse proxy
+```
+
+A static site can go on any static web server (S3, GitHub Pages, nginx). Browsers won't
+fetch `graph.json` from a `file://` page, so use `ods lineage view` for local files.
+
+`ods serve` analyzes the project once, then serves:
+- the explorer, which adds a *What if this changes?* panel that runs impact on the server;
+- a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
+  `/api/impact?node=&column=&kind=` and `/healthz`.
+
+It checks `manifest.json`, `catalog.json` and the Information Schema every second. When
+they change (e.g. after `dbt compile`) it re-analyzes only the models that changed, and
+open pages reload. If a reload fails, the last good graph stays up and the error appears
+in `/api/version`.
+
+It listens on loopback by default and then only answers requests for `localhost`,
+`127.0.0.1` or `[::1]`, which stops DNS-rebinding attacks from web pages. There is no
+authentication yet (#97): with `--host` anything other than loopback, put it behind a
+proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
+`/api/version` hides local paths and error text (they go to the server log). Responses
+carry a strict Content-Security-Policy, and nothing is written. `--base-path` accepts
+plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
+
+| Flag | Meaning |
+|---|---|
+| `--host ADDR` | (`serve`) address to listen on; default `127.0.0.1` |
+| `--port PORT` | (`serve`) default `8765`; `0` picks a free port (the URL is printed) |
+| `--base-path PATH` | (`serve`) URL prefix, e.g. `/lineage`; the page is served at `/lineage/` |
+| `--allow-host NAME` | (`serve`) also accept this `Host` name, e.g. the one your reverse proxy forwards; repeatable |
+| `--no-watch` | (`serve`) don't reload when artifacts change |
+| `--site DIR` | (`lineage view`) write a static site instead of one file |

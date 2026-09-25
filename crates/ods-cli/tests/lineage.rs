@@ -334,17 +334,51 @@ fn view_writes_a_self_contained_offline_page() {
     let page = fs::read_to_string(&file).unwrap();
     assert!(!page.contains("/*__ODS_GRAPH__*/"), "graph embedded");
     assert!(page.contains("\"schema_version\":1"));
+    assert!(
+        page.contains(r#"<meta name="ods-source" content="embedded">"#),
+        "the page uses its embedded graph and never fetches"
+    );
     // Offline: no external scripts, styles, fonts or requests.
     for external in [
         "<script src",
         "<link",
         "@import",
-        "fetch(",
         "XMLHttpRequest",
         "url(http",
     ] {
         assert!(!page.contains(external), "page references `{external}`");
     }
+    let urls: Vec<&str> = page
+        .match_indices("http")
+        .map(|(i, _)| &page[i..(i + 30).min(page.len())])
+        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        .collect();
+    assert!(
+        urls.iter()
+            .all(|u| u.starts_with("http://www.w3.org/2000/svg")),
+        "only the SVG namespace, no remote URLs: {urls:?}"
+    );
+}
+
+#[test]
+fn view_can_write_a_static_site_to_host() {
+    let out_dir = Temp::new();
+    let site = out_dir.0.join("site");
+    let target = fixture();
+    let result = json(&[
+        "lineage",
+        "view",
+        "--target-dir",
+        target.to_str().unwrap(),
+        "--site",
+        site.to_str().unwrap(),
+    ]);
+    assert_eq!(result["format"], "site");
+    let index = fs::read_to_string(site.join("index.html")).unwrap();
+    assert!(index.contains(r#"<meta name="ods-source" content="graph.json">"#));
+    let graph: Value = serde_json::from_slice(&fs::read(site.join("graph.json")).unwrap()).unwrap();
+    assert_eq!(graph["schema_version"], 1);
+    assert_eq!(graph["nodes"].as_array().unwrap().len(), result["nodes"]);
 }
 
 #[test]
@@ -403,5 +437,77 @@ fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
             run.iter().any(|r| r == expected),
             "{expected} must run: {run:?}"
         );
+    }
+}
+
+fn v2_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-2.0")
+}
+
+#[test]
+fn dbt_1x_json_v2_json_and_v2_parquet_give_the_same_lineage() {
+    let out = Temp::new();
+    let graph = |target: &Path, artifacts: &str| {
+        let file = out.0.join(format!(
+            "{artifacts}-{}.json",
+            target.file_name().unwrap().to_str().unwrap()
+        ));
+        json(&[
+            "lineage",
+            "graph",
+            "--target-dir",
+            target.to_str().unwrap(),
+            "--artifacts",
+            artifacts,
+            "--output-file",
+            file.to_str().unwrap(),
+        ]);
+        let document: Value = serde_json::from_str(&fs::read_to_string(file).unwrap()).unwrap();
+        (
+            document["column_edges"].clone(),
+            document["node_edges"].clone(),
+        )
+    };
+    let v1 = graph(&fixture(), "json");
+    let v2_json = graph(&v2_fixture(), "json");
+    let v2_parquet = graph(&v2_fixture(), "info-schema");
+    assert!(v1.0.as_array().unwrap().len() > 50);
+    assert_eq!(v1, v2_json, "dbt v2's manifest.json matches dbt 1.x");
+    assert_eq!(
+        v2_json, v2_parquet,
+        "the Parquet Information Schema matches the JSON"
+    );
+}
+
+#[test]
+fn a_v2_target_without_json_is_read_from_the_information_schema() {
+    // `dbt compile --generate-info-schema --no-write-json`: Parquet plus compiled SQL only.
+    let target = Temp::new();
+    copy_dir(
+        &v2_fixture().join("info_schema"),
+        &target.0.join("info_schema"),
+    );
+    copy_dir(&v2_fixture().join("compiled"), &target.0.join("compiled"));
+    assert!(!target.0.join("manifest.json").exists());
+    let result = json(&[
+        "lineage",
+        "columns",
+        "--target-dir",
+        target.0.to_str().unwrap(),
+    ]);
+    assert_eq!(result["summary"]["models_analyzed"], 8);
+    assert_eq!(result["summary"]["models_opaque"], 0);
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
     }
 }

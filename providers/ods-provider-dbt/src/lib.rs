@@ -9,7 +9,16 @@
 //! |---|---|---|
 //! | `manifest.json` | v11, v12 | 1.7 – 1.12, v2 (JSON output) |
 //! | `catalog.json` | v1 | all |
+//! | dbt Information Schema (Parquet, `target/info_schema/v1/`) | v1 | v2 |
+//!
+//! dbt v2 writes `manifest.json` by default and the Information Schema with
+//! `--generate-info-schema`; with `--no-write-json` only the latter exists. Both read into
+//! the same [`Manifest`].
 
 mod artifacts;
+mod info_schema;
 
-pub use artifacts::{Artifacts, Catalog, DbtError, Manifest, ManifestNode, ResourceType};
+pub use artifacts::{
+    ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtError, Manifest, ManifestNode,
+    ResourceType,
+};

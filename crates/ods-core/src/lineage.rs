@@ -152,12 +152,19 @@ pub enum EdgeKind {
 }
 
 /// How much to trust a piece of lineage (AGENTS.md rule 3: inference is never fact).
+///
+/// Ordered by how *complete* the lineage is known to be, so the minimum over a query is
+/// its weakest part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Confidence {
     /// Nothing is known: consumers must assume every input affects every output.
     Unknown,
+    /// Recorded by a platform while queries ran, not derived from code (e.g. a Python
+    /// model's lineage from a catalog). True for the runs seen, but possibly incomplete:
+    /// paths that didn't run are missing.
+    Observed,
     /// Derived with assumptions, e.g. an unqualified column matched to the only
     /// relation that could have it, or a `select *` expanded from a declared schema.
     Inferred,
@@ -189,7 +196,8 @@ mod tests {
 
     #[test]
     fn confidence_orders_from_unknown_to_exact() {
-        assert!(Confidence::Unknown < Confidence::Inferred);
+        assert!(Confidence::Unknown < Confidence::Observed);
+        assert!(Confidence::Observed < Confidence::Inferred);
         assert!(Confidence::Inferred < Confidence::Exact);
     }
 }

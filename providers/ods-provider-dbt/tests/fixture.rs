@@ -67,3 +67,79 @@ fn unsupported_versions_and_invalid_json_are_clear_errors() {
         DbtError::Invalid { .. }
     ));
 }
+
+/// A node as lineage sees it: id, relation, compiled SQL, dependencies.
+type Node = (String, Option<String>, Option<String>, Vec<String>);
+
+fn v2() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-2.0")
+}
+
+#[test]
+fn reads_dbt_v2_manifest_json() {
+    let artifacts =
+        Artifacts::load_with(&v2(), ods_provider_dbt::ArtifactPreference::Json).unwrap();
+    let manifest = &artifacts.manifest;
+    assert_eq!(
+        manifest.source,
+        ods_provider_dbt::ArtifactSource::ManifestJson
+    );
+    assert_eq!(manifest.schema_version, 12);
+    assert_eq!(manifest.dbt_version.as_deref(), Some("2.0.5"));
+    assert!(artifacts.catalog.is_none(), "compile writes no catalog");
+}
+
+#[test]
+fn reads_the_dbt_v2_information_schema_like_the_manifest() {
+    use ods_provider_dbt::{ArtifactPreference, ArtifactSource};
+    let json = Artifacts::load_with(&v2(), ArtifactPreference::Json)
+        .unwrap()
+        .manifest;
+    let parquet = Artifacts::load_with(&v2(), ArtifactPreference::InfoSchema)
+        .unwrap()
+        .manifest;
+    assert_eq!(parquet.source, ArtifactSource::InfoSchema);
+    assert_eq!(parquet.schema_version, 1);
+    assert_eq!(parquet.dbt_version.as_deref(), Some("2.0.5"));
+    assert_eq!(parquet.adapter_type.as_deref(), Some("duckdb"));
+
+    let lineage_nodes = |m: &Manifest| -> Vec<Node> {
+        let ids: std::collections::BTreeSet<&str> = m
+            .nodes
+            .iter()
+            .filter(|n| n.relation_name.is_some())
+            .map(|n| n.unique_id.as_str())
+            .collect();
+        m.nodes
+            .iter()
+            .filter(|n| matches!(n.resource_type, ResourceType::Model | ResourceType::Seed))
+            .map(|n| {
+                let mut deps: Vec<String> = n
+                    .depends_on
+                    .iter()
+                    .filter(|d| ids.contains(d.as_str()))
+                    .cloned()
+                    .collect();
+                deps.sort();
+                (
+                    n.unique_id.clone(),
+                    n.relation_name.clone(),
+                    n.compiled_code.as_deref().map(|c| c.trim().to_owned()),
+                    deps,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(lineage_nodes(&parquet), lineage_nodes(&json));
+
+    // Pointing at the versioned directory itself works too.
+    let direct = Artifacts::load(&v2().join("info_schema/v1")).unwrap();
+    assert_eq!(direct.manifest.source, ArtifactSource::InfoSchema);
+}
+
+#[test]
+fn asking_for_an_information_schema_that_is_not_there_is_an_error() {
+    let err = Artifacts::load_with(&target(), ods_provider_dbt::ArtifactPreference::InfoSchema)
+        .unwrap_err();
+    assert!(err.to_string().contains("dbt Information Schema"), "{err}");
+}
