@@ -122,6 +122,8 @@ def main():
         return int(os.environ["FAKE_DBT_EXIT"])
     target = (options.get("target-path") or ["target"])[0]
     invocation, started = str(uuid.uuid4()), now()
+    # Like dbt, it logs to stdout as it runs.
+    print(f"fake dbt: {' '.join(words)}", flush=True)
     with open(os.path.join(BASE, "manifest.json")) as f:
         manifest = json.load(f)
     manifest["metadata"]["invocation_id"] = invocation

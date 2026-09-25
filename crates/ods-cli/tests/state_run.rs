@@ -69,6 +69,12 @@ impl Project {
     }
 
     fn ods(&self, args: &[&str]) -> (i32, Value) {
+        let (code, json, _) = self.ods_with_stderr(args);
+        (code, json)
+    }
+
+    /// Like [`ods`](Self::ods), and also returns what ODS wrote to stderr.
+    fn ods_with_stderr(&self, args: &[&str]) -> (i32, Value, String) {
         let target = self.dir.join("target");
         let db = self.db();
         // ODS's own options go before any `--`: what follows it is for dbt.
@@ -99,7 +105,11 @@ impl Project {
                 String::from_utf8_lossy(&out.stderr)
             )
         });
-        (out.status.code().unwrap(), json)
+        (
+            out.status.code().unwrap(),
+            json,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     }
 
     fn run(&self, extra: &[&str]) -> (i32, Value) {
@@ -279,6 +289,32 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
     );
     let again = project.run(&["--test"]).1;
     assert!(names(&again["result"]["execution"]["nodes"]).contains(&"orders".to_owned()));
+}
+
+/// By default dbt's own output streams to stderr while it runs, as with dbt itself;
+/// stdout keeps only ODS's report.
+#[test]
+fn dbt_output_streams_to_stderr() {
+    let project = Project::new("dbt-output");
+    let dbt = fixture("fake-dbt/dbt");
+    let (code, json, stderr) =
+        project.ods_with_stderr(&["state", "run", "--dbt", dbt.to_str().unwrap()]);
+    assert_eq!(code, 0, "{json:#}");
+    for line in ["fake dbt: compile", "fake dbt: build"] {
+        assert!(
+            stderr.contains(line),
+            "{line} missing from stderr:\n{stderr}"
+        );
+    }
+    let (_, _, captured) = project.ods_with_stderr(&[
+        "state",
+        "run",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ]);
+    assert!(!captured.contains("fake dbt:"), "{captured}");
 }
 
 /// A test dbt skipped (e.g. after `--fail-fast` stopped) tested nothing: the node is

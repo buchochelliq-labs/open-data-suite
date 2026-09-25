@@ -177,9 +177,18 @@ impl DbtExecutor {
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
             }
         }
-        let output = command.output().await.map_err(|e| {
-            ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
-        })?;
+        // Not `Command::output()`: tokio's always pipes stdout and stderr, which would
+        // swallow dbt's output in `DbtOutput::Stderr` mode.
+        let output = command
+            .spawn()
+            .map_err(|e| {
+                ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
+            })?
+            .wait_with_output()
+            .await
+            .map_err(|e| {
+                ProviderError::Other(format!("`{}` failed: {e}", self.program.display()))
+            })?;
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         let lines: Vec<&str> = text.lines().collect();

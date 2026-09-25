@@ -463,6 +463,33 @@ stdout carries only the report (one JSON document with `--json`).
 | `--project-dir`, `--profiles-dir`, `--target` | passed to dbt |
 | `--dbt-output stderr\|capture` | show dbt's output on stderr (default), or capture it and quote the end on failure |
 
+### What you see while it runs
+
+ODS runs the dbt CLI as a child process: up to three invocations, one after another,
+each starting with dbt's usual `Running with dbt=…` banner:
+
+| # | dbt command | Why | Skipped with |
+|---|---|---|---|
+| 1 | `dbt source freshness` | measure source data, so nodes reading changed sources build | `--no-source-freshness`, `--no-compile` |
+| 2 | `dbt compile` | compiled SQL for every node, which the fingerprints need | `--no-compile` |
+| 3 | `dbt build --select … [--exclude-resource-type test --exclude-resource-type unit_test]` | build exactly the plan's BUILD set | `--dry-run`, or nothing to build |
+
+`ods state test` runs 1 and 2 the same way, then `dbt test --select …`.
+
+- **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
+  streams to **stderr** as dbt writes it, exactly as dbt prints it: ODS doesn't
+  reformat it. With `--dbt-output capture` it is hidden, and the last lines are quoted
+  in the error if dbt fails.
+- **ODS's report** (the plan, the exact dbt command it ran, the outcome, what was
+  recorded, and a table with each node's result and why it ran) is printed to
+  **stdout** once dbt has finished, or as one JSON document with `--json`. So
+  `ods state run --json > run.json` keeps dbt's progress on the terminal and the
+  report in the file.
+- **dbt's own files** are written as usual: `logs/dbt.log` in the project (dbt's debug
+  log), and `manifest.json`, `run_results.json` and `sources.json` in the target
+  directory. ODS reads those artifacts; it keeps its state in `.ods/state.db`.
+- ODS writes no log file of its own, and prints nothing of its own while dbt runs.
+
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.
 ODS checks that the manifest it records from comes from its own build, and records
