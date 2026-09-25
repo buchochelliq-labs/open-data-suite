@@ -19,7 +19,7 @@ use ods_lineage::{
     BuildStats, Change, ColumnChangeKind, ColumnGraph, GraphFilter, Impact, ImpactReason,
     LineageNode, LineageProject, MemoryCache, NodeKind, build, diff,
 };
-use ods_provider_dbt::{Artifacts, ResourceType};
+use ods_provider_dbt::{ArtifactPreference, Artifacts, ResourceType};
 use ods_provider_sqlparser::{SqlDialect, SqlparserAnalyzer};
 use ods_sdk::contracts::sql_lineage::SqlLineageAnalyzer;
 use serde::Serialize;
@@ -39,6 +39,14 @@ fn common_args(command: Command) -> Command {
                 .value_name("DIR")
                 .default_value("target")
                 .help("dbt target directory with manifest.json (and catalog.json, if generated)"),
+        )
+        .arg(
+            Arg::new("artifacts")
+                .long("artifacts")
+                .value_name("FORMAT")
+                .value_parser(["auto", "json", "info-schema"])
+                .default_value("auto")
+                .help("dbt artifacts to read: manifest.json, or dbt v2's Parquet Information Schema (auto prefers manifest.json)"),
         )
         .arg(
             Arg::new("dialect")
@@ -254,16 +262,22 @@ impl Loaded {
                 .map_or("target", String::as_str),
         );
         let dialect = args.get_one::<String>("dialect").map(String::as_str);
-        Self::from_dir(&target_dir, dialect, &MemoryCache::default())
+        let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
+            Some("json") => ArtifactPreference::Json,
+            Some("info-schema") => ArtifactPreference::InfoSchema,
+            _ => ArtifactPreference::Auto,
+        };
+        Self::from_dir(&target_dir, dialect, preference, &MemoryCache::default())
     }
 
     fn from_dir(
         target_dir: &Path,
         dialect: Option<&str>,
+        preference: ArtifactPreference,
         cache: &MemoryCache,
     ) -> Result<Self, CliError> {
         let started = Instant::now();
-        let artifacts = Artifacts::load(target_dir).map_err(|e| {
+        let artifacts = Artifacts::load_with(target_dir, preference).map_err(|e| {
             CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, e.to_string()).with_hint(
                 "run `dbt compile` (and `dbt docs generate` for warehouse columns) first",
             )
@@ -697,9 +711,13 @@ impl ImpactReport {
     }
 
     fn against(head: &Loaded, base_dir: &Path) -> Result<Self, CliError> {
+        // The base may be in either format (e.g. prod on dbt 1.x, a branch on v2). If the
+        // formats differ, checksums of nodes without lineage differ too, so those count
+        // as changed: conservative.
         let base = Loaded::from_dir(
             base_dir,
             Some(head.analyzer.dialect().name()),
+            ArtifactPreference::Auto,
             &MemoryCache::default(),
         )?;
         let mut changes = Vec::new();

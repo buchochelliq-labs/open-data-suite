@@ -1,6 +1,15 @@
 # cargo-deny configuration. Licence policy is provisional until #10 lands.
 [graph]
 all-features = true
+# Check the platforms `ods` ships for (the CI matrix), not every target Rust knows.
+# E.g. `parquet` pulls a CC0-licensed build-time RNG only on wasm32, which we don't ship.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
 
 [advisories]
 version = 2

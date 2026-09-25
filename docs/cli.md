@@ -212,9 +212,11 @@ Configuration errors exit with status 4.
 
 ## Column-level lineage
 
-`ods lineage` reads a dbt target directory (`manifest.json`, plus `catalog.json` when
-`dbt docs generate` has run), parses every model's compiled SQL, and builds column-level
-lineage ([ADR-0008](adr/0008-column-level-lineage.md)). It needs no dbt login, no
+`ods lineage` reads a dbt target directory, parses every model's compiled SQL, and builds
+column-level lineage. It reads dbt 1.7–1.12 (`manifest.json` v11/v12, plus `catalog.json`
+when `dbt docs generate` has run) and dbt v2, either its `manifest.json` or, with
+`--generate-info-schema`, the Parquet "dbt Information Schema"; with `--no-write-json` the
+Information Schema is used automatically. All three give the same lineage ([ADR-0008](adr/0008-column-level-lineage.md)). It needs no dbt login, no
 warehouse connection and no network.
 
 ```sh
@@ -247,6 +249,7 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 | Flag | Meaning |
 |---|---|
 | `--target-dir DIR` | dbt target directory; default `target` |
+| `--artifacts FORMAT` | `auto` (default: `manifest.json` if present, else the Information Schema), `json`, or `info-schema` (dbt v2's Parquet `target/info_schema/v1/`) |
 | `--dialect NAME` | `databricks`, `spark`, `duckdb`, `snowflake`, `bigquery`, `postgres`, `redshift` or `generic`; default: the manifest's adapter type |
 | `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable |
 | `--base DIR` | (`impact`) another build to compare with; every difference in compiled SQL becomes column changes |

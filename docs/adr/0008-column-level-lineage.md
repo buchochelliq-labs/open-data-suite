@@ -156,7 +156,13 @@ Pruned readers are always reported, with the changed columns they don't use (rul
 ### 6. dbt specifics
 - Only public artifacts are read: manifest v11/v12 `compiled_code`, `relation_name` and
   `depends_on`, plus catalog v1 columns. No Jinja is rendered and no warehouse is queried.
-- dbt v2's Parquet artifacts are a planned second input. So is importing Fusion's
+- **dbt v2** is read either from its `manifest.json` (still schema v12) or from the Parquet
+  "dbt Information Schema" v1 (`dbt.models`/`seeds`/`snapshots`/`sources`, `dbt.edges`,
+  `dbt.node_columns`, `dbt.project`), via the `parquet` crate (Apache-2.0, no Arrow).
+  dbt-oss leaves `compiled_code` empty there, so compiled SQL is read from
+  `target/compiled/<package>/<original_file_path>`. Warehouse column lists come from
+  `node_columns` rows with `data_type_actual`. The fixture proves all three inputs (dbt
+  1.10 JSON, v2 JSON, v2 Parquet) produce identical lineage. So is importing Fusion's
   `dbt.column_lineage` Parquet, when a user has it, as a cross-checked second source:
   its `direct`/`indirect`/`scan` kinds map onto our edge kinds, and a disagreement
   lowers confidence.

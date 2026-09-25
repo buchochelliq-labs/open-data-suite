@@ -27,6 +27,9 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 insta = "1"
+# Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
+# compression codecs dbt may use.
+parquet = { version = "60", default-features = false, features = ["zstd", "snap", "lz4", "flate2-zlib-rs"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"
 # Terminal rendering; only ods-cli may depend on it (ADR-0003, enforced by check-layering.py).

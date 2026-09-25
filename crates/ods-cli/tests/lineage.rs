@@ -405,3 +405,75 @@ fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
         );
     }
 }
+
+fn v2_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-2.0")
+}
+
+#[test]
+fn dbt_1x_json_v2_json_and_v2_parquet_give_the_same_lineage() {
+    let out = Temp::new();
+    let graph = |target: &Path, artifacts: &str| {
+        let file = out.0.join(format!(
+            "{artifacts}-{}.json",
+            target.file_name().unwrap().to_str().unwrap()
+        ));
+        json(&[
+            "lineage",
+            "graph",
+            "--target-dir",
+            target.to_str().unwrap(),
+            "--artifacts",
+            artifacts,
+            "--output-file",
+            file.to_str().unwrap(),
+        ]);
+        let document: Value = serde_json::from_str(&fs::read_to_string(file).unwrap()).unwrap();
+        (
+            document["column_edges"].clone(),
+            document["node_edges"].clone(),
+        )
+    };
+    let v1 = graph(&fixture(), "json");
+    let v2_json = graph(&v2_fixture(), "json");
+    let v2_parquet = graph(&v2_fixture(), "info-schema");
+    assert!(v1.0.as_array().unwrap().len() > 50);
+    assert_eq!(v1, v2_json, "dbt v2's manifest.json matches dbt 1.x");
+    assert_eq!(
+        v2_json, v2_parquet,
+        "the Parquet Information Schema matches the JSON"
+    );
+}
+
+#[test]
+fn a_v2_target_without_json_is_read_from_the_information_schema() {
+    // `dbt compile --generate-info-schema --no-write-json`: Parquet plus compiled SQL only.
+    let target = Temp::new();
+    copy_dir(
+        &v2_fixture().join("info_schema"),
+        &target.0.join("info_schema"),
+    );
+    copy_dir(&v2_fixture().join("compiled"), &target.0.join("compiled"));
+    assert!(!target.0.join("manifest.json").exists());
+    let result = json(&[
+        "lineage",
+        "columns",
+        "--target-dir",
+        target.0.to_str().unwrap(),
+    ]);
+    assert_eq!(result["summary"]["models_analyzed"], 8);
+    assert_eq!(result["summary"]["models_opaque"], 0);
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}

@@ -44,7 +44,8 @@ pub struct BuildStats {
     pub analyzed: usize,
     /// Models whose result came from the cache.
     pub cached: usize,
-    /// Models that could not be analyzed.
+    /// Nodes whose lineage is unknown: SQL that couldn't be analyzed, models without
+    /// SQL, and nodes with upstreams but no lineage (e.g. snapshots).
     pub opaque: usize,
     /// Dependency waves (the critical path length).
     pub waves: usize,
@@ -110,7 +111,7 @@ pub fn build(
                     stats.analyzed += 1;
                 }
             }
-            if node.lineage.as_ref().is_some_and(|l| l.opaque) {
+            if node.is_opaque() {
                 stats.opaque += 1;
             }
             if !node.columns.is_empty() {

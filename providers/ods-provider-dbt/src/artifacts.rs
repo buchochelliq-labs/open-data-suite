@@ -158,12 +158,37 @@ pub struct ManifestNode {
     pub checksum: Option<String>,
 }
 
-/// The parts of `manifest.json` ODS uses.
+/// Which dbt artifact format the project was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ArtifactSource {
+    /// `manifest.json` (dbt 1.7+ and v2's JSON output).
+    ManifestJson,
+    /// dbt v2's Parquet "dbt Information Schema".
+    InfoSchema,
+}
+
+/// Which artifacts to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ArtifactPreference {
+    /// `manifest.json` if present, else the Information Schema.
+    #[default]
+    Auto,
+    /// Only `manifest.json` (+ `catalog.json`).
+    Json,
+    /// Only the Parquet Information Schema.
+    InfoSchema,
+}
+
+/// The parts of the project manifest ODS uses, from either artifact format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Manifest {
-    /// Schema version, e.g. 12.
+    /// Schema version of the source format: manifest v11/v12, or Information Schema v1.
     pub schema_version: u32,
+    /// Which format it was read from.
+    pub source: ArtifactSource,
     /// The dbt version that wrote it.
     pub dbt_version: Option<String>,
     /// The adapter, e.g. `databricks`; names the SQL dialect.
@@ -213,13 +238,41 @@ pub struct Artifacts {
 }
 
 impl Artifacts {
-    /// Reads `manifest.json` and, if present, `catalog.json` from a dbt target directory.
+    /// Reads a dbt target directory: `manifest.json` (plus `catalog.json` if present)
+    /// or, for dbt v2, the Parquet Information Schema under `info_schema/v1/` (the
+    /// directory may also be the `v1/` directory itself).
     ///
     /// # Errors
-    /// Returns [`DbtError`] if the manifest is missing or invalid, or the catalog is
-    /// present but invalid.
+    /// Returns [`DbtError`] if no supported artifacts are found or they are invalid.
     pub fn load(target_dir: &Path) -> Result<Self, DbtError> {
-        let manifest = Manifest::read(&target_dir.join("manifest.json"))?;
+        Self::load_with(target_dir, ArtifactPreference::Auto)
+    }
+
+    /// Like [`Artifacts::load`], choosing the format explicitly.
+    ///
+    /// # Errors
+    /// Returns [`DbtError`] if the chosen artifacts are missing or invalid.
+    pub fn load_with(target_dir: &Path, preference: ArtifactPreference) -> Result<Self, DbtError> {
+        let json = target_dir.join("manifest.json");
+        let use_json = match preference {
+            ArtifactPreference::Json => true,
+            ArtifactPreference::InfoSchema => false,
+            ArtifactPreference::Auto => json.is_file(),
+        };
+        if !use_json {
+            let Some((dir, version)) = crate::info_schema::locate(target_dir) else {
+                return Err(DbtError::Io {
+                    path: target_dir.join("info_schema/v1/dbt.models.parquet"),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no manifest.json and no dbt Information Schema",
+                    ),
+                });
+            };
+            let (manifest, catalog) = crate::info_schema::read(&dir, version)?;
+            return Ok(Self { manifest, catalog });
+        }
+        let manifest = Manifest::read(&json)?;
         let catalog_path = target_dir.join("catalog.json");
         let catalog = if catalog_path.is_file() {
             Some(Catalog::read(&catalog_path)?)
@@ -321,6 +374,7 @@ impl Manifest {
             .collect::<BTreeMap<_, _>>();
         Ok(Self {
             schema_version,
+            source: ArtifactSource::ManifestJson,
             dbt_version: raw.metadata.dbt_version,
             adapter_type: raw.metadata.adapter_type,
             nodes: nodes.into_values().collect(),
