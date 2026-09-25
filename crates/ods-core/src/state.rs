@@ -167,9 +167,19 @@ pub struct Fingerprint {
     pub digest: String,
     /// Component name → SHA-256 of its canonical content.
     pub components: BTreeMap<String, String>,
+    /// Component name → SHA-256 of its content *before* canonicalisation, for
+    /// components that ignore formatting (#209). Not part of [`digest`](Self::digest):
+    /// it only lets a plan say that a reused node's text changed in form alone.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cosmetic: BTreeMap<String, String>,
 }
 
 impl Fingerprint {
+    /// The component that names the scheme a provider fingerprinted with. When a
+    /// provider changes how it fingerprints, this component changes, so no node is
+    /// reused across the change (and the plan can say why).
+    pub const SCHEME: &'static str = "scheme";
+
     /// A fingerprint from components' canonical content, which is hashed here.
     pub fn from_content<I, K, V>(components: I) -> Self
     where
@@ -197,7 +207,25 @@ impl Fingerprint {
         Self {
             digest: sha256_hex(canonical.as_bytes()),
             components,
+            cosmetic: BTreeMap::new(),
         }
+    }
+
+    /// Records the raw content of a component that ignores formatting.
+    #[must_use]
+    pub fn with_cosmetic(mut self, name: impl Into<String>, raw: impl AsRef<[u8]>) -> Self {
+        self.cosmetic.insert(name.into(), sha256_hex(raw.as_ref()));
+        self
+    }
+
+    /// Components whose raw content changed since `before` while the fingerprint
+    /// didn't: formatting-only changes. Only components both recorded are compared.
+    pub fn cosmetic_changes(&self, before: &Fingerprint) -> Vec<String> {
+        self.cosmetic
+            .iter()
+            .filter(|(name, raw)| before.cosmetic.get(*name).is_some_and(|b| b != *raw))
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// What differs from `before`: components changed, added and removed.
@@ -581,6 +609,22 @@ impl ExecutionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cosmetic_digests_explain_but_never_change_a_fingerprint() {
+        let base = Fingerprint::from_content([("sql", "select 1")]);
+        let a = base.clone().with_cosmetic("sql", "select 1");
+        let b = base.clone().with_cosmetic("sql", "SELECT 1");
+        assert_eq!(a.digest, b.digest);
+        assert!(a.diff(&b).is_empty());
+        assert_eq!(b.cosmetic_changes(&a), ["sql"]);
+        // Snapshots recorded before cosmetic digests existed claim nothing.
+        assert!(b.cosmetic_changes(&base).is_empty());
+        // Old documents without the field still read, and write back unchanged.
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(!json.contains("cosmetic"));
+        assert_eq!(serde_json::from_str::<Fingerprint>(&json).unwrap(), base);
+    }
 
     #[test]
     fn timestamps_parse_dbt_formats_and_round_trip() {

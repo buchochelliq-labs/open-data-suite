@@ -406,8 +406,9 @@ fn read_nodes(
             // The Information Schema has no file checksum: fingerprint the raw code, or
             // the compiled code, where there is one. Seeds have neither, so they never
             // look unchanged (conservative).
-            let checksum = text(&row, "raw_code")
-                .filter(|code| !code.is_empty())
+            let raw_code = text(&row, "raw_code").filter(|code| !code.is_empty());
+            let checksum = raw_code
+                .clone()
                 .map(|code| format!("raw_code:{}", fingerprint(&code)))
                 .or_else(|| {
                     compiled_code
@@ -418,6 +419,7 @@ fn read_nodes(
                 resource_type,
                 relation_name: text(&row, "relation_name"),
                 compiled_code,
+                raw_code,
                 language: text(&row, "node_language"),
                 materialized: text(&row, "materialized"),
                 depends_on_macros: Vec::new(),
@@ -494,6 +496,7 @@ fn read_tests(
             resource_type: ResourceType::Test,
             relation_name: None,
             compiled_code: None,
+            raw_code: None,
             language: None,
             materialized: None,
             depends_on: parents.remove(&unique_id).unwrap_or_default(),

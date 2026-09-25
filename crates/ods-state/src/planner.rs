@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use ods_core::Quorum;
 use ods_core::freshness::format_duration;
 use ods_core::state::{
-    Evidence, Exactness, ExecutionPlan, NodeState, PlanAction, PlanEntry, Reason, ReasonCode,
-    SnapshotId, StateSnapshot, Timestamp,
+    Evidence, Exactness, ExecutionPlan, Fingerprint, NodeState, PlanAction, PlanEntry, Reason,
+    ReasonCode, SnapshotId, StateSnapshot, Timestamp,
 };
 
 use crate::{Node, Project, Source};
@@ -254,6 +254,15 @@ fn decide(
     let diff = fingerprint.diff(&before.fingerprint);
     if !diff.is_empty() {
         *changed_components = diff.all();
+        if changed_components.iter().any(|c| c == Fingerprint::SCHEME) {
+            return build(
+                ReasonCode::CodeChanged,
+                format!(
+                    "ODS fingerprints code differently since run {}, so it can't be compared: built once",
+                    before.run_id
+                ),
+            );
+        }
         return build(
             ReasonCode::CodeChanged,
             format!(
@@ -365,12 +374,22 @@ fn decide_on_data(
             format!("new upstream data in {new}"),
         );
     }
+    let cosmetic = node
+        .fingerprint
+        .as_ref()
+        .map_or_else(|_| Vec::new(), |f| f.cosmetic_changes(&before.fingerprint));
+    let message = if cosmetic.is_empty() {
+        format!("code and inputs unchanged since run {}", before.run_id)
+    } else {
+        format!(
+            "code and inputs unchanged since run {}; only formatting changed ({}): comments or whitespace",
+            before.run_id,
+            cosmetic.join(", ")
+        )
+    };
     (
         PlanAction::Reuse,
-        vec![Reason::new(
-            ReasonCode::Unchanged,
-            format!("code and inputs unchanged since run {}", before.run_id),
-        )],
+        vec![Reason::new(ReasonCode::Unchanged, message)],
     )
 }
 

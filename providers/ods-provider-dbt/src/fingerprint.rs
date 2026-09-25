@@ -4,13 +4,22 @@
 //!
 //! | Component | From |
 //! |---|---|
-//! | `file` | dbt's checksum of the node's source file |
-//! | `compiled_sql` | the compiled SQL (models and snapshots) |
+//! | `scheme` | [`SCHEME`]: changes whenever this table does |
+//! | `sql` | SQL models and snapshots: the compiled SQL, [normalised](crate::normalize) so formatting doesn't count |
+//! | `file` | dbt's checksum of the source file: seeds, Python models, and SQL models whose Jinja isn't [pure](crate::normalize::jinja_is_pure) (or whose raw code isn't recorded) |
+//! | `compiled_code` | Python models: the compiled code, as is |
 //! | `config` | the resolved config, minus settings that don't change what gets built |
 //! | `macros` | every macro it calls, directly or not, plus its materialization and the `generate_*_name` macros that place it |
 //! | `contract` | declared column types and constraints |
 //! | `relation` | the relation it builds (database, schema, alias) |
 //! | `engine` | dbt version and adapter |
+//!
+//! SQL models and snapshots usually have no `file` component: the compiled SQL, config
+//! and macros are what gets built, so an edit to the file that changes none of them (a
+//! comment, a reformat, Jinja that renders the same SQL) doesn't rebuild the model. The
+//! exception is Jinja that could run SQL itself: anything beyond `ref`, `source`,
+//! `config`, `var`, `is_incremental`, `if`/`for`/`set`. What that runs isn't in the
+//! compiled SQL, so the file still counts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -18,7 +27,14 @@ use std::fmt::Write as _;
 use ods_core::state::{Fingerprint, sha256_hex};
 use serde_json::Value;
 
+use crate::normalize::{jinja_is_pure, normalize_sql};
 use crate::{Manifest, ManifestNode, ResourceType};
+
+/// The fingerprint scheme. Bump it whenever a component's meaning changes, so snapshots
+/// fingerprinted the old way are never compared as equal.
+///
+/// 2: SQL is normalised and SQL models no longer hash their file (#209).
+pub const SCHEME: &str = "dbt/2";
 
 /// Config keys that describe or schedule a node rather than change what it builds.
 /// Changing them doesn't rebuild anything.
@@ -154,15 +170,8 @@ fn contract_content(node: &ManifestNode) -> String {
 /// Returns a reason when dbt didn't record enough: no file checksum, or no compiled SQL
 /// for a model or snapshot (the manifest came from `dbt parse`).
 pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerprint, String> {
-    let file = node
-        .checksum
-        .as_deref()
-        .filter(|c| !c.is_empty())
-        .ok_or_else(|| {
-            "dbt recorded no checksum of its content (e.g. a seed over 1 MiB)".to_owned()
-        })?;
     let mut components: Vec<(&str, String)> = vec![
-        ("file", file.to_owned()),
+        (Fingerprint::SCHEME, SCHEME.to_owned()),
         ("config", config_content(node)?),
         ("macros", macros_content(manifest, node)?),
         ("contract", contract_content(node)),
@@ -176,19 +185,42 @@ pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerpri
             ),
         ),
     ];
-    if matches!(
-        node.resource_type,
-        ResourceType::Model | ResourceType::Snapshot
-    ) {
-        let compiled = node
-            .compiled_code
+    let compiled = || {
+        node.compiled_code
             .as_deref()
             .filter(|c| !c.trim().is_empty())
             .ok_or_else(|| {
                 "no compiled SQL in the manifest; run `dbt compile` (or `run`/`build`) first"
                     .to_owned()
-            })?;
-        components.push(("compiled_sql", compiled.to_owned()));
+            })
+    };
+    let file = || {
+        node.checksum
+            .as_deref()
+            .filter(|c| !c.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                "dbt recorded no checksum of its content (e.g. a seed over 1 MiB)".to_owned()
+            })
+    };
+    let code = matches!(
+        node.resource_type,
+        ResourceType::Model | ResourceType::Snapshot
+    );
+    let python = node.language.as_deref() == Some("python");
+    if code && !python {
+        let sql = compiled()?;
+        // Unnormalisable SQL is hashed as is: formatting then counts, which only ever
+        // rebuilds more.
+        components.push(("sql", normalize_sql(sql).unwrap_or_else(|| sql.to_owned())));
+        if !node.raw_code.as_deref().is_some_and(jinja_is_pure) {
+            components.push(("file", file()?));
+        }
+        return Ok(Fingerprint::from_content(components).with_cosmetic("sql", sql));
+    }
+    components.push(("file", file()?));
+    if code {
+        components.push(("compiled_code", compiled()?.to_owned()));
     }
     Ok(Fingerprint::from_content(components))
 }

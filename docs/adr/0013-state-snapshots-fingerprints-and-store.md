@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
-- **Issues:** #11 (state model), #13 (fingerprints), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store)
+- **Issues:** #11 (state model), #13 (fingerprints; formatting-insensitive SQL #209), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -101,17 +101,56 @@ graph LR
 - A fingerprint is a map from component name to SHA-256 digest, plus a digest of
   `name\0digest\n` over the sorted components. It is canonical and reproducible, and a
   diff lists changed, added and removed components.
-- dbt components:
+- dbt components (scheme `dbt/2`, #209):
 
   | Component | From |
   |---|---|
-  | `file` | dbt's checksum of the model's SQL/Python or the seed's CSV (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint) |
-  | `compiled_sql` | the compiled SQL, which includes vars, macros and upstream names as rendered |
+  | `scheme` | the fingerprint scheme; when it changes, every node is built once, with a reason saying so |
+  | `sql` | SQL models and snapshots: the compiled SQL (vars, macros and upstream names as rendered), normalised so that comments and whitespace don't count |
+  | `file` | dbt's checksum of the file (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint): seeds, Python models, and SQL models whose Jinja isn't pure (see below) or whose raw code isn't recorded |
+  | `compiled_code` | Python models: the compiled code, as is |
   | `config` | resolved config, canonical JSON, without `tags`, `meta`, `docs`, `state`, `freshness` (policy and metadata don't change what gets built) |
   | `macros` | the source of every macro the node depends on, transitively, plus its materialization and the `generate_*_name` macros |
   | `contract` | declared column types and constraints |
   | `relation` | the relation it builds, so a plan against another target's state doesn't reuse |
   | `engine` | dbt version and adapter |
+- Normalising SQL (#209): the compiled SQL is split into tokens and rejoined with
+  single spaces. Comments are dropped, except optimizer hints (`/*+ … */`). Nothing
+  else changes: identifiers, keywords and literals keep their case and spelling,
+  because some dialects let keyword-like names be case-sensitive.
+  - It is an allow-list. Outside quotes and comments it accepts only ASCII letters,
+    digits, `_`, ASCII whitespace, `( ) , ;` and `= < > + - * / % | : ! .`.
+  - It gives up on everything whose meaning depends on the dialect, and the raw text
+    is hashed instead. Formatting then counts, which only ever builds more. That
+    covers:
+    - `[`, `$`, `#`, `@`, `{` and non-ASCII characters;
+    - a backslash in quotes, a triple quote, or a quote touching a word or another
+      quote (`x'41'`, `N'a'`);
+    - `--` without a following space, `//`, a block comment starting with anything
+      but whitespace, `*`, `-`, `=` or a `+` hint (so `/*!` and `/*M!`), nested block
+      comments, and a `\r` not followed by `\n`;
+    - two literals separated only by whitespace;
+    - `.` next to whitespace;
+    - an unterminated quote or comment.
+  - Accepted: whitespace that only decides between success and a syntax error, e.g.
+    `count (*)` in MySQL without `IGNORE_SPACE`. Such an edit is reused; the error
+    shows on the next real change. No different data is built.
+  - SQL models usually have no `file` component. The compiled SQL, config and macros
+    are what gets built, so an edit that changes none of them (a comment, a reformat,
+    Jinja that renders the same SQL) reuses.
+  - The exception is Jinja that could run SQL the compiled code doesn't show. The
+    check is an allow-list: a model's `{{ }}` and `{% %}` may only use `if`, `elif`,
+    `else`, `for`, `set` (and their `end` tags), call `ref`, `source`, `config`,
+    `var`, `env_var` or `is_incremental`, and read names. Any other call, including a
+    user or package macro, a method call (`adapter.drop_relation(...)`), an indirect
+    call (`(run_query)(…)`, `dbt['x'](…)`), rebinding a pure name
+    (`{% set ref = run_query %}`), `{% do %}` or `{% call %}`, could run SQL whose
+    arguments live only in the file. `(` is only allowed right after a pure name or
+    as grouping.
+    Such a model, or one whose raw code isn't recorded, keeps `file`, so for it
+    formatting counts again.
+  - The raw text's digest is kept outside the fingerprint (`cosmetic`), so a reused
+    node's reason can say "only formatting changed".
 - A node that can't be fingerprinted completely is always BUILT. That covers:
   - a model without compiled SQL (after `dbt parse` only), with the reason "run
     `dbt compile`";

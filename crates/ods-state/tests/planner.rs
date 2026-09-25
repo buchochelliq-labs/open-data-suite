@@ -546,3 +546,54 @@ fn which_parent_build_a_node_read_is_recorded_by_run_not_clock() {
         "a parent rebuilt by another run is new data, whatever the clocks say"
     );
 }
+
+fn messages(project: &Project, snapshot: &StateSnapshot) -> BTreeMap<String, String> {
+    plan(
+        project,
+        Some((SnapshotId(1), snapshot)),
+        &all(project),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap()
+    .entries
+    .into_iter()
+    .map(|e| (e.name, e.reasons[0].message.clone()))
+    .collect()
+}
+
+#[test]
+fn a_formatting_only_change_is_reused_and_named() {
+    let with_raw = |raw: &str| Ok(fp("so").unwrap().with_cosmetic("sql", raw));
+    let mut p = project();
+    p.nodes[0].fingerprint = with_raw("select 1");
+    let state = built(&p);
+    p.nodes[0].fingerprint = with_raw("SELECT 1 -- one");
+    assert_eq!(
+        actions(&p, Some(&state), T0 + 60)["stg_orders"],
+        reuse(ReasonCode::Unchanged)
+    );
+    let why = &messages(&p, &state)["stg_orders"];
+    assert!(why.contains("only formatting changed (sql)"), "{why}");
+    assert_eq!(
+        messages(&p, &state)["orders"],
+        "code and inputs unchanged since run run-1"
+    );
+}
+
+#[test]
+fn a_new_fingerprint_scheme_rebuilds_once_and_says_why() {
+    let p = project();
+    let state = built(&p);
+    let mut upgraded = p.clone();
+    upgraded.nodes[0].fingerprint = Ok(Fingerprint::from_content([
+        (Fingerprint::SCHEME, "v2"),
+        ("file", "so"),
+        ("config", "{}"),
+    ]));
+    assert_eq!(
+        actions(&upgraded, Some(&state), T0 + 60)["stg_orders"],
+        build(ReasonCode::CodeChanged)
+    );
+    let why = &messages(&upgraded, &state)["stg_orders"];
+    assert!(why.contains("fingerprints code differently"), "{why}");
+}

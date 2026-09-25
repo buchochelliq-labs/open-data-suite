@@ -209,6 +209,8 @@ struct RawNode {
     #[serde(default)]
     compiled_code: Option<String>,
     #[serde(default)]
+    raw_code: Option<String>,
+    #[serde(default)]
     language: Option<String>,
     #[serde(default)]
     depends_on: RawDependsOn,
@@ -259,6 +261,8 @@ pub struct ManifestNode {
     pub relation_name: Option<String>,
     /// Rendered SQL, present after `dbt compile`/`run`/`build` for SQL models.
     pub compiled_code: Option<String>,
+    /// The code as written, with its Jinja.
+    pub raw_code: Option<String>,
     /// `sql` or `python`.
     pub language: Option<String>,
     /// The configured materialization.
@@ -691,6 +695,7 @@ fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
         resource_type: n.resource_type,
         relation_name: n.relation_name,
         compiled_code: n.compiled_code,
+        raw_code: n.raw_code,
         language: n.language,
         materialized: config.materialized,
         depends_on: n.depends_on.nodes,

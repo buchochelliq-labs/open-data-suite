@@ -58,7 +58,8 @@ impl Project {
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let entry = &mut manifest["nodes"][node];
         let code = entry["compiled_code"].as_str().unwrap().to_owned();
-        entry["compiled_code"] = Value::String(format!("{code}\n-- changed"));
+        // A statement terminator: a real change, however formatting is treated.
+        entry["compiled_code"] = Value::String(format!("{code}\n;"));
         entry["checksum"]["checksum"] = Value::String(format!("changed-{}", code.len()));
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
@@ -389,7 +390,20 @@ fn real_dbt() {
 
     let model = project.dir.join("models/marts/segment_summary.sql");
     let sql = std::fs::read_to_string(&model).unwrap();
-    std::fs::write(&model, format!("{sql}\n-- changed\n")).unwrap();
+    // A comment and reindenting: nothing to build (#209).
+    std::fs::write(
+        &model,
+        format!("-- reformatted\n{}", sql.replace('\n', "\n    ")),
+    )
+    .unwrap();
+    let (code, cosmetic) = real(&[]);
+    assert_eq!(code, 0, "{cosmetic:#}");
+    assert_eq!(
+        cosmetic["result"]["outcome"], "nothing_to_build",
+        "{cosmetic:#}"
+    );
+
+    std::fs::write(&model, sql.replace("count(*)", "count(segment)")).unwrap();
     let (code, changed) = real(&[]);
     assert_eq!(code, 0, "{changed:#}");
     assert_eq!(
