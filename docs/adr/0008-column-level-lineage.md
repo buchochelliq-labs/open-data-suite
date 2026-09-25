@@ -195,3 +195,28 @@ Pruned readers are always reported, with the changed columns they don't use (rul
 - sqlglot `lineage.py` (MIT) and SQLMesh (Apache-2.0), for the algorithm; DataHub `sqlglot_lineage.py` (Apache-2.0), for confidence
 - OpenLineage `ColumnLineageDatasetFacet` 1-2-0 and the naming spec
 - dbt v2 (`dbt-labs/dbt`, Apache-2.0): `dbt-lineage-core`, `dbt-metadata-parquet/src/cll_epoch.rs`, read for format and positioning only
+
+## Addendum (2026-09-25): observed lineage
+
+Static analysis can't read Python models, and nothing checks it against reality. Catalogs
+that execute queries record lineage (Unity Catalog's `system.access.column_lineage`,
+Snowflake's `ACCESS_HISTORY`, `OpenLineage` events).
+
+We add:
+- **An `ObservedLineageSource` SDK contract.** It returns neutral `ObservedLineage`:
+  column edges, row inputs and relation edges. It has a fake in `ods-provider-fake`.
+- **`Confidence::Observed`.** It ranks below `Inferred`, because observed lineage is
+  true but possibly incomplete.
+- **In `ods-lineage`:**
+  - `ColumnGraph::compare_observed` gives per-model agreement, precision and recall.
+    Observed edges from row-shaping inputs count as agreement.
+  - `ColumnGraph::with_observed` stitches observed lineage into **opaque nodes only**;
+    analyzable models are never overwritten.
+- **`ods-provider-databricks`**, which reads UC exports (CSV/JSON). A live system-table
+  query can come later behind the same contract.
+
+The conservative rule (rule 3) is kept:
+- stitched lineage stays `opaque` for impact unless the user passes `--trust-observed`;
+- relations a node declares but wasn't observed reading still make it run;
+- when comparing builds (`impact --base`), changes are derived from the code
+  (unstitched graph), never from what happened to run.

@@ -18,6 +18,7 @@ clap_complete.workspace = true
 ods-config.workspace = true
 ods-core.workspace = true
 ods-lineage.workspace = true
+ods-provider-databricks.workspace = true
 ods-provider-dbt.workspace = true
 ods-provider-sqlparser.workspace = true
 ods-sdk.workspace = true
