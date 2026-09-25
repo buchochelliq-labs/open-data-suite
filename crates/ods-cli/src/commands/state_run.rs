@@ -66,7 +66,7 @@ pub(super) fn run_command() -> Command {
         Arg::new("no-compile")
             .long("no-compile")
             .action(ArgAction::SetTrue)
-            .help("Plan from the artifacts already in the target directory instead of running `dbt compile` first"),
+            .help("Plan from the artifacts already in the target directory instead of running `dbt compile` first. Sources aren't measured either: only --sources is read"),
     )
     .arg(
         Arg::new("no-source-freshness")
@@ -150,7 +150,17 @@ fn prepare(
     warnings: &mut Vec<String>,
 ) -> Result<(Option<PrepareReport>, Sources), CliError> {
     if args.get_flag("no-compile") {
-        return Ok((None, Sources::AsGiven));
+        // Measuring would rewrite the manifest (dbt does that on every command), so
+        // nothing is measured. A `sources.json` left in the target directory could
+        // predate new data, so only an explicit `--sources` is trusted.
+        let sources = if args.contains_id("sources")
+            && args.value_source("sources") == Some(clap::parser::ValueSource::CommandLine)
+        {
+            Sources::AsGiven
+        } else {
+            Sources::Ignore
+        };
+        return Ok((None, sources));
     }
     let measure = !args.get_flag("no-source-freshness");
     let request = if measure {
@@ -198,6 +208,9 @@ fn record(
             RunResult::new(
                 n.node.clone(),
                 match n.status {
+                    // Built but not validated: keep the last validated state, so the
+                    // node and its checks run again.
+                    ExecutionStatus::Success if !n.checks_failed.is_empty() => Outcome::Failed,
                     ExecutionStatus::Success => Outcome::Success,
                     ExecutionStatus::Skipped => Outcome::Skipped,
                     _ => Outcome::Failed,
@@ -262,6 +275,8 @@ pub(super) enum RunOutcome {
     Succeeded,
     /// Some nodes or checks failed; the successes were recorded.
     Failed,
+    /// dbt ran, but nothing could be recorded (e.g. another run recorded first).
+    NotRecorded,
 }
 
 /// What was committed.
@@ -301,14 +316,19 @@ pub(super) struct RunReport {
 impl RunReport {
     /// Runs the whole flow and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let report = Self::build(args)?;
+        let (report, record_error) = Self::build(args)?;
+        if let Some(error) = record_error {
+            return ctx.emit_failed(&report, error);
+        }
         match report.outcome {
             RunOutcome::Failed => {
                 let execution = report.execution.as_ref();
                 let failed = execution.map_or(0, |e| {
                     e.nodes
                         .iter()
-                        .filter(|n| n.status != ExecutionStatus::Success)
+                        .filter(|n| {
+                            n.status != ExecutionStatus::Success || !n.checks_failed.is_empty()
+                        })
                         .count()
                 });
                 let checks = execution.map_or(0, |e| e.checks_failed.len());
@@ -316,13 +336,13 @@ impl RunReport {
                     ExitStatus::Failure,
                     codes::STATE_EXECUTION,
                     format!(
-                        "the run didn't fully succeed ({} failed or skipped, {} failed)",
+                        "the run didn't fully succeed ({} failed, were skipped or failed their tests; {} failed)",
                         count(failed, "node"),
                         count(checks, "check")
                     ),
                 )
                 .with_hint(
-                    "nodes that succeeded were recorded; the others keep their last successful state and are built next run",
+                    "nodes that built and passed their tests were recorded; the others keep their last successful state and are built (and tested) next run",
                 );
                 ctx.emit_failed(&report, error)
             }
@@ -330,7 +350,9 @@ impl RunReport {
         }
     }
 
-    fn build(args: &ArgMatches) -> Result<Self, CliError> {
+    /// Runs the flow. A failure to record after dbt ran comes back with the report, so
+    /// the caller still sees what dbt did.
+    fn build(args: &ArgMatches) -> Result<(Self, Option<CliError>), CliError> {
         let target_dir = PathBuf::from(
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
@@ -375,11 +397,11 @@ impl RunReport {
             has_sources: !ws.project.sources.is_empty(),
         };
         if dry_run {
-            return Ok(report);
+            return Ok((report, None));
         }
         let (Some(store), false) = (store, requested.is_empty()) else {
             report.outcome = RunOutcome::NothingToBuild;
-            return Ok(report);
+            return Ok((report, None));
         };
 
         // 3. Execute.
@@ -401,15 +423,23 @@ impl RunReport {
         }
 
         // 4. Record.
-        let record = record(args, sources, &execution, latest.as_ref(), &store)?;
-        report.outcome = if execution.succeeded {
-            RunOutcome::Succeeded
-        } else {
-            RunOutcome::Failed
-        };
+        let recorded = record(args, sources, &execution, latest.as_ref(), &store);
         report.execution = Some(execution);
-        report.record = Some(record);
-        Ok(report)
+        Ok(match recorded {
+            Ok(record) => {
+                report.outcome = if report.execution.as_ref().is_some_and(|e| e.succeeded) {
+                    RunOutcome::Succeeded
+                } else {
+                    RunOutcome::Failed
+                };
+                report.record = Some(record);
+                (report, None)
+            }
+            Err(error) => {
+                report.outcome = RunOutcome::NotRecorded;
+                (report, Some(error))
+            }
+        })
     }
 }
 
@@ -447,6 +477,9 @@ impl RunReport {
                 }
                 RunOutcome::Succeeded => Span::toned("succeeded", Tone::Success),
                 RunOutcome::Failed => Span::toned("failed", Tone::Error),
+                RunOutcome::NotRecorded => {
+                    Span::toned("dbt ran, but nothing was recorded", Tone::Error)
+                }
             }],
         ));
         if let Some(record) = &self.record {
@@ -484,6 +517,9 @@ impl RunReport {
                         vec![
                             vec![Span::toned(display_name(&n.node), Tone::Code)],
                             vec![match n.status {
+                                ExecutionStatus::Success if !n.checks_failed.is_empty() => {
+                                    Span::toned("built, tests failed", Tone::Error)
+                                }
                                 ExecutionStatus::Success => Span::toned("success", Tone::Success),
                                 ExecutionStatus::Skipped => Span::toned("skipped", Tone::Warning),
                                 _ => Span::toned(

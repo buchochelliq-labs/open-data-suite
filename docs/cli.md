@@ -418,8 +418,9 @@ ODS rebuilds on any new upstream data (tolerance `0`).
 1. `dbt source freshness`, then `dbt compile`, so the plan sees current code and data;
 2. plan against the last successful state, as `ods state plan` does;
 3. `dbt build --select` exactly the nodes that must build, and nothing else;
-4. record the run. Nodes that succeeded advance. Failed nodes, and the ones dbt skipped
-   because of them, keep their last successful state and build next time. If nothing
+4. record the run. Nodes that built and passed their tests advance. Failed nodes, the
+   ones dbt skipped because of them, and nodes whose tests failed keep their last
+   successful state, so they (and their tests) run again next time. If nothing
    succeeded, nothing is recorded.
 
 ```sh
@@ -433,7 +434,9 @@ ods state run --select +orders --json
 
 It exits 0 when everything built and every test passed, or when there was nothing to
 build. It exits 1 with `ODS-E0404` when dbt couldn't run or when nodes or tests
-failed; the successes are recorded either way. dbt's own output goes to stderr, so
+failed; the successes are recorded either way. If recording fails after dbt ran (for
+example, another run recorded first), the report says what dbt did, with outcome
+`not_recorded`. dbt's own output goes to stderr, so
 stdout carries only the report (one JSON document with `--json`).
 
 | Flag | Meaning |
@@ -441,7 +444,7 @@ stdout carries only the report (one JSON document with `--json`).
 | `--select SPEC` | only consider these nodes: `name`, `+name`, `name+`; repeatable |
 | `--mode build\|run` | `build` (default) also runs the selected nodes' tests; `run` doesn't (dbt 1.8+) |
 | `--dry-run` | prepare and plan, but build and record nothing |
-| `--no-compile` | plan from the artifacts already in `--target-dir` |
+| `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
 | `--dbt PROGRAM` | the dbt executable; default `dbt` |
 | `--project-dir`, `--profiles-dir`, `--target` | passed to dbt |

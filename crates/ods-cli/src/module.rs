@@ -78,6 +78,7 @@ impl<'a> Context<'a> {
     /// Always: `error`, or the failure to write the output.
     pub fn emit_failed<T: Present>(&mut self, result: &T, error: CliError) -> Result<(), CliError> {
         present::emit_with_error(result, &error, &self.output, self.out)?;
+        self.out.flush()?;
         Err(error.in_envelope())
     }
 

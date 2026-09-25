@@ -56,7 +56,9 @@ doesn't have that API. The CLI is the stable interface.
   couldn't start, or its outcome can't be read.
 - A requested node the engine didn't report on is `skipped`, never a success.
 - `build` mode also runs the nodes' checks (dbt tests). `run` mode doesn't. Checks are
-  never reported as nodes.
+  never reported as nodes. A failed check is listed on each requested node it checks.
+  When the executor can't tell which nodes a check covers, it lists the check on all of
+  them.
 - Every executor must pass `ods_sdk::conformance::executor` (7 cases).
   `ods-provider-fake` has the in-memory reference implementation.
 
@@ -72,22 +74,32 @@ doesn't have that API. The CLI is the stable interface.
 - `prepare` runs `source freshness` *before* `compile`. Otherwise freshness would
   overwrite the compiled manifest.
 - dbt's output goes to stderr (or is captured and quoted on failure), never to stdout,
-  which carries ODS's report.
+  which carries ODS's report. With capture, the quoted lines can reach the JSON
+  envelope. dbt masks `DBT_ENV_SECRET_*` values in its output, and ODS adds nothing
+  from the environment; `Debug` shows only environment variable names.
 
 **`ods state run`**:
 1. **Prepare**, unless `--no-compile`. If a source measurement was attempted and
    failed, any `sources.json` left behind is ignored, so nodes reading sources build.
+   `--no-compile` measures nothing: `dbt source freshness` would rewrite the compiled
+   manifest. A leftover `sources.json` could predate new data, so only an explicit
+   `--sources` file is read then.
 2. **Plan**, exactly as `ods state plan`, against the head snapshot read now.
 3. **Execute** the BUILD set. This is skipped by `--dry-run`, or when nothing needs
    building; no state changes then.
 4. **Record** from the artifacts the run wrote:
    - Their manifest describes the code that was built. It must come from the executor's
      `run_id` invocation, or nothing is recorded.
-   - Successes advance. Failed and skipped nodes keep their last successful state.
+   - Nodes that built *and passed their checks* advance. Failed and skipped nodes keep
+     their last successful state. So does a node that built but failed a test: it isn't
+     validated, so it and its tests run again next time instead of the failure going
+     unseen.
    - `unrequested` nodes aren't recorded, so they build again next time.
    - If nothing succeeded, nothing is committed.
    - The commit is a compare-and-swap on the head read in step 2. If another run
      recorded state meanwhile, this run's results are dropped (`ODS-E0402`), not merged.
+   - If recording fails after dbt ran, the report still says what dbt did (outcome
+     `not_recorded`), next to the error.
 
 A run that didn't fully succeed exits 1 with `ODS-E0404`, after recording its successes.
 In JSON mode its envelope carries both the result and the error diagnostic: the report

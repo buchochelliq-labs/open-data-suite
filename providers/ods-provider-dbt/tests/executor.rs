@@ -140,6 +140,20 @@ async fn failed_parents_skip_their_children_and_failed_tests_are_checks() {
         report.checks_failed,
         ["test.jaffle_ods.unique_orders_order_id.fed79b3a6e"]
     );
+    // The failed test is listed on the node it checks, and only there.
+    let failed_on: Vec<(&str, usize)> = report
+        .nodes
+        .iter()
+        .map(|n| (n.node.as_str(), n.checks_failed.len()))
+        .collect();
+    assert_eq!(
+        failed_on,
+        [
+            ("model.jaffle_ods.stg_orders", 0),
+            ("model.jaffle_ods.stg_payments", 0),
+            ("model.jaffle_ods.orders", 1)
+        ]
+    );
     assert!(!report.succeeded);
 }
 

@@ -233,7 +233,7 @@ fn nothing_is_committed_when_nothing_succeeds() {
 }
 
 #[test]
-fn failed_tests_fail_the_run_but_the_nodes_advance() {
+fn a_node_whose_tests_fail_keeps_its_last_state() {
     let project = Project::new("tests").with("FAKE_DBT_FAIL_TEST", "unique_orders_order_id");
     let (code, json) = project.run(&[]);
     assert_eq!(code, 1, "{json:#}");
@@ -242,7 +242,19 @@ fn failed_tests_fail_the_run_but_the_nodes_advance() {
         result["execution"]["checks_failed"][0],
         "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
     );
-    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 13);
+    // `orders` was built, but not validated: it doesn't advance, so it (and its test)
+    // runs again next time.
+    let advanced = names(&result["record"]["advanced"]);
+    assert_eq!(advanced.len(), 12, "{advanced:?}");
+    assert!(!advanced.contains(&"orders".to_owned()), "{advanced:?}");
+    assert!(
+        result["record"]["kept"]
+            .as_object()
+            .unwrap()
+            .contains_key("model.jaffle_ods.orders")
+    );
+    let again = project.run(&[]).1;
+    assert!(names(&again["result"]["execution"]["nodes"]).contains(&"orders".to_owned()));
 
     // `--mode run` leaves tests out.
     project.change_code("model.jaffle_ods.orders");
@@ -253,6 +265,24 @@ fn failed_tests_fail_the_run_but_the_nodes_advance() {
             .unwrap()
             .contains("--exclude-resource-type test")
     );
+}
+
+#[test]
+fn a_run_that_cant_be_recorded_still_reports_what_dbt_did() {
+    let project = Project::new("unrecorded").with("FAKE_DBT_KEEP_MANIFEST", "1");
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["diagnostics"][0]["code"], "ODS-E0403");
+    assert_eq!(json["result"]["outcome"], "not_recorded");
+    assert_eq!(
+        json["result"]["execution"]["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        13
+    );
+    assert!(json["result"].get("record").is_none());
+    assert!(project.history().is_empty());
 }
 
 #[test]

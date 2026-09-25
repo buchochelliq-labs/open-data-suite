@@ -44,7 +44,7 @@ pub enum DbtOutput {
 }
 
 /// Runs the dbt CLI.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DbtExecutor {
     program: PathBuf,
     target_path: PathBuf,
@@ -53,6 +53,21 @@ pub struct DbtExecutor {
     target: Option<String>,
     env: BTreeMap<String, String>,
     output: DbtOutput,
+}
+
+// Environment values can be credentials: show only their names.
+impl std::fmt::Debug for DbtExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbtExecutor")
+            .field("program", &self.program)
+            .field("target_path", &self.target_path)
+            .field("project_dir", &self.project_dir)
+            .field("profiles_dir", &self.profiles_dir)
+            .field("target", &self.target)
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .field("output", &self.output)
+            .finish()
+    }
 }
 
 impl DbtExecutor {
@@ -198,6 +213,107 @@ fn is_check(id: &str) -> bool {
     id.starts_with("test.") || id.starts_with("unit_test.")
 }
 
+/// Hooks and other operations dbt reports alongside the nodes: neither nodes nor checks.
+fn is_operation(id: &str) -> bool {
+    id.starts_with("operation.")
+}
+
+/// For each failed check, the nodes it checks, from the manifest this run wrote.
+/// `None` if the manifest can't be read, so the caller can assume the worst.
+fn checked_nodes(manifest: &Path, checks: &[String]) -> Option<BTreeMap<String, Vec<String>>> {
+    let manifest = crate::Manifest::read(manifest).ok()?;
+    let wanted: BTreeSet<&str> = checks.iter().map(String::as_str).collect();
+    Some(
+        manifest
+            .nodes
+            .iter()
+            .filter(|n| wanted.contains(n.unique_id.as_str()))
+            .map(|n| (n.unique_id.clone(), n.depends_on.clone()))
+            .collect(),
+    )
+}
+
+/// Each requested node's outcome, the failed checks, and the nodes built unrequested.
+fn outcomes(
+    request: &ExecutionRequest,
+    run: &RunResults,
+    manifest: &Path,
+) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
+    let by_id: BTreeMap<&str, &crate::runs::NodeResult> = run
+        .results
+        .iter()
+        .map(|r| (r.unique_id.as_str(), r))
+        .collect();
+    let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
+    let checks_failed: Vec<String> = run
+        .results
+        .iter()
+        .filter(|r| {
+            is_check(&r.unique_id)
+                && !requested.contains(r.unique_id.as_str())
+                && r.status != RunStatus::Success
+                && r.status != RunStatus::Skipped
+        })
+        .map(|r| r.unique_id.clone())
+        .collect();
+    let covers = if checks_failed.is_empty() {
+        Some(BTreeMap::new())
+    } else {
+        checked_nodes(manifest, &checks_failed)
+    };
+    let failed_on = |node: &str| -> Vec<String> {
+        checks_failed
+            .iter()
+            .filter(|c| {
+                covers.as_ref().is_none_or(|covers| {
+                    // A check the manifest doesn't know could cover anything.
+                    covers
+                        .get(*c)
+                        .is_none_or(|deps| deps.iter().any(|d| d == node))
+                })
+            })
+            .cloned()
+            .collect()
+    };
+    let nodes = request
+        .nodes
+        .iter()
+        .map(|n| match by_id.get(n.id.as_str()) {
+            Some(r) => NodeExecution::new(
+                n.id.clone(),
+                match r.status {
+                    RunStatus::Success => ExecutionStatus::Success,
+                    RunStatus::Skipped => ExecutionStatus::Skipped,
+                    _ => ExecutionStatus::Failed,
+                },
+                r.completed_at
+                    .as_deref()
+                    .and_then(|t| Timestamp::parse(t).ok()),
+                Some(r.raw_status.clone()),
+            )
+            .with_checks_failed(failed_on(&n.id)),
+            None => NodeExecution::new(
+                n.id.clone(),
+                ExecutionStatus::Skipped,
+                None,
+                Some("dbt didn't run it".to_owned()),
+            ),
+        })
+        .collect();
+    let unrequested = run
+        .results
+        .iter()
+        .filter(|r| {
+            !is_check(&r.unique_id)
+                && !is_operation(&r.unique_id)
+                && !requested.contains(r.unique_id.as_str())
+                && r.status != RunStatus::Skipped
+        })
+        .map(|r| r.unique_id.clone())
+        .collect();
+    (nodes, checks_failed, unrequested)
+}
+
 impl Provider for DbtExecutor {
     fn info(&self) -> ProviderInfo {
         ProviderInfo::new(KIND, "dbt", env!("CARGO_PKG_VERSION"), CapabilitySet::new())
@@ -277,57 +393,8 @@ impl Executor for DbtExecutor {
                 ));
             }
         };
-        let by_id: BTreeMap<&str, &crate::runs::NodeResult> = run
-            .results
-            .iter()
-            .map(|r| (r.unique_id.as_str(), r))
-            .collect();
-        let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
-        let nodes = request
-            .nodes
-            .iter()
-            .map(|n| match by_id.get(n.id.as_str()) {
-                Some(r) => NodeExecution::new(
-                    n.id.clone(),
-                    match r.status {
-                        RunStatus::Success => ExecutionStatus::Success,
-                        RunStatus::Skipped => ExecutionStatus::Skipped,
-                        _ => ExecutionStatus::Failed,
-                    },
-                    r.completed_at
-                        .as_deref()
-                        .and_then(|t| Timestamp::parse(t).ok()),
-                    Some(r.raw_status.clone()),
-                ),
-                None => NodeExecution::new(
-                    n.id.clone(),
-                    ExecutionStatus::Skipped,
-                    None,
-                    Some("dbt didn't run it".to_owned()),
-                ),
-            })
-            .collect();
-        let checks_failed = run
-            .results
-            .iter()
-            .filter(|r| {
-                is_check(&r.unique_id)
-                    && !requested.contains(r.unique_id.as_str())
-                    && r.status != RunStatus::Success
-                    && r.status != RunStatus::Skipped
-            })
-            .map(|r| r.unique_id.clone())
-            .collect();
-        let unrequested = run
-            .results
-            .iter()
-            .filter(|r| {
-                !is_check(&r.unique_id)
-                    && !requested.contains(r.unique_id.as_str())
-                    && r.status == RunStatus::Success
-            })
-            .map(|r| r.unique_id.clone())
-            .collect();
+        let (nodes, checks_failed, unrequested) =
+            outcomes(request, &run, &self.artifact("manifest.json"));
         let finished = run
             .generated_at
             .as_deref()

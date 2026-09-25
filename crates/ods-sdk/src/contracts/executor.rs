@@ -6,7 +6,9 @@
 //!   asked, measures how new each source's data is. It builds nothing.
 //! - [`execute`](Executor::execute) builds the requested nodes and no others. Whatever
 //!   the provider runs alongside them (e.g. data tests) is reported as a
-//!   [check](ExecutionReport::checks_failed), never as a node.
+//!   [check](ExecutionReport::checks_failed), never as a node. A failed check is also
+//!   listed on each requested node it checks ([`NodeExecution::checks_failed`]); if the
+//!   executor can't tell which nodes a failed check covers, it lists it on all of them.
 //! - An empty request is refused with [`ProviderError::Other`] and runs nothing: some
 //!   engines read "no selection" as "everything".
 //! - A node that fails is reported as [`ExecutionStatus::Failed`] in an `Ok` report;
@@ -153,6 +155,10 @@ pub struct NodeExecution {
     pub completed_at: Option<Timestamp>,
     /// The engine's own word or message, for people.
     pub message: Option<String>,
+    /// Checks on this node that failed (in [`ExecutionMode::Build`]). The node was
+    /// built, but its result isn't validated: consumers must not treat it as a
+    /// success. A check on several nodes is listed on each.
+    pub checks_failed: Vec<String>,
 }
 
 impl NodeExecution {
@@ -168,7 +174,15 @@ impl NodeExecution {
             status,
             completed_at,
             message,
+            checks_failed: Vec::new(),
         }
+    }
+
+    /// Lists checks on this node that failed.
+    #[must_use]
+    pub fn with_checks_failed(mut self, checks: Vec<String>) -> Self {
+        self.checks_failed = checks;
+        self
     }
 }
 

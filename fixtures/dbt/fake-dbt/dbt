@@ -10,6 +10,7 @@ the way dbt would. Environment:
   FAKE_DBT_FAIL_TEST  comma-separated test names that fail
   FAKE_DBT_LOG   file to append the ids of built nodes to, one per line
   FAKE_DBT_EXIT  exit with this status after writing nothing (e.g. a connection failure)
+  FAKE_DBT_KEEP_MANIFEST  `build` leaves manifest.json alone (as if another command wrote it)
 """
 
 import datetime
@@ -93,7 +94,8 @@ def main():
         write(os.path.join(target, "sources.json"), doc)
         return 0
 
-    write(os.path.join(target, "manifest.json"), manifest)
+    if not (words[:1] == ["build"] and os.environ.get("FAKE_DBT_KEEP_MANIFEST")):
+        write(os.path.join(target, "manifest.json"), manifest)
     if words[:1] == ["compile"]:
         doc = {"metadata": metadata("run-results", 6, invocation, started),
                "results": [], "elapsed_time": 0, "args": {"which": "compile"}}
