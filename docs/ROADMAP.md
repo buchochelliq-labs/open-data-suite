@@ -103,6 +103,10 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 | **#17** *(M1 slice)* | Delta change detection, minimal: latest table version + commit timestamp for sources, behind the `relation_versions` capability |
 | #99 | Plugin conformance test suite (State-related contracts) |
 | **#168** | Read dbt State configs (`state:`, `freshness.build_after`, `loaded_at_*`) so existing dbt State projects work unchanged; dbt defaults (45m/`any`) only when the project already uses State, otherwise tolerance 0 |
+| **#211** | dbt executor: exact selection that can't widen (`fqn:`/selector file), no command-line length limit |
+| **#212** | Distribution: release binaries, Homebrew, `pip`-installable wrapper |
+| #209 | Formatting-insensitive SQL fingerprints: comment/whitespace edits reuse |
+| #214 | `ods.toml` settings for `ods state run` (dbt path, dirs, target, environment) |
 | #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
 
 **Why data awareness moved into M1:** skipping only on code changes still rebuilds
@@ -121,13 +125,13 @@ watermark/partition triggers, WAIT decisions, clone/defer, distributed locking, 
 The M1 slices keep #17 and #19 open; their remainder ships in M2.
 
 ### M2 — Databricks & data-aware State (→ v0.2.0)
-| #15 Databricks/UC metadata provider · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) |
+| #15 Databricks/UC metadata provider · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) · #210 `ods state savings` (builds skipped, time/cost avoided) · #215 public benchmark of `ods state run` |
 
 ### M3 — ERD & Usage (→ v0.3.0)
 | #172 ODS metadata index (queryable lineage/State/ERD/usage) · #60 ERD domain model · #61 dbt ERD provider · #62 relationship inference · #63 render/export · #65 `ods erd` CLI · #55 Usage domain & UsageProvider · #56 Unity Catalog usage provider · #59 `ods usage` CLI · #66 warehouse-native ERD providers (stretch) · #64 interactive ERD web view (stretch) |
 
 ### M4 — ODS CI (→ v0.4.0)
-| #75 change-impact engine (on the column lineage delivered in M1 preview) · #171 column lineage for Python models · #84 selective CI planner · #85 PR report/check output · #58 usage in CI risk · #109 data diff · #110 data diff in CI |
+| #75 change-impact engine (on the column lineage delivered in M1 preview) · #171 column lineage for Python models · #84 selective CI planner · #85 PR report/check output · #58 usage in CI risk · #109 data diff · #110 data diff in CI · #213 GitHub Action PR impact comment |
 
 ### M5 — LSP & VS Code (→ v0.5.0)
 | #67 clean-room LSP architecture · #68 indexing · #69 completion · #70 diagnostics · #71 navigation/hover · #72 semantic rename · #107 VS Code extension · #116 SQL scratch/REPL |
