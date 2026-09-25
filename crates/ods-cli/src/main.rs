@@ -11,7 +11,7 @@ use ods_cli::commands::default_registry;
 
 fn main() -> ExitCode {
     let registry = default_registry();
-    let (stdout, stderr) = (io::stdout(), io::stderr());
+    let (stdout, mut stderr) = (io::stdout(), io::stderr());
     // `vars()` would panic on a non-UTF-8 variable. Configuration only needs UTF-8 ones;
     // an `ODS…` variable that is not UTF-8 is reported instead of silently dropped.
     let (mut env, mut invalid_env) = (Vec::new(), Vec::new());
@@ -29,7 +29,9 @@ fn main() -> ExitCode {
             stdout_is_terminal: stdout.is_terminal(),
             stderr_is_terminal: stderr.is_terminal(),
             out: &mut stdout.lock(),
-            err: &mut stderr.lock(),
+            // Locked per write, not for the whole run: log lines from other threads
+            // (e.g. `ods serve` reloading) share stderr and would otherwise block forever.
+            err: &mut stderr,
             ods_log: std::env::var("ODS_LOG").ok(),
             no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
             dumb_terminal: ods_cli::output::term_is_dumb(),
