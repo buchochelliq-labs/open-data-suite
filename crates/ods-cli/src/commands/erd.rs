@@ -319,6 +319,15 @@ fn entities_of(artifacts: &Artifacts) -> (Vec<EntityInput>, ByName) {
                     })
                     .collect()
             }
+            None if node.file_columns.is_some() => node
+                .file_columns
+                .iter()
+                .flatten()
+                .map(|c| {
+                    ColumnInput::new(c.clone(), node.declared_types.get(c).cloned())
+                        .with_description(node.column_descriptions.get(c).cloned())
+                })
+                .collect(),
             None => node
                 .declared_columns
                 .iter()

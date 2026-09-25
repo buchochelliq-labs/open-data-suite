@@ -115,7 +115,7 @@ fn pair(action: &str, code: &str) -> (String, String) {
 fn without_state_everything_is_built_and_planning_writes_nothing() {
     let s = Scratch::new("fresh");
     let plan = s.plan(&[]);
-    assert_eq!(plan["build"], 11);
+    assert_eq!(plan["build"], 13);
     assert_eq!(plan["reuse"], 0);
     assert_eq!(plan["based_on"], Value::Null);
     assert!(
@@ -138,15 +138,20 @@ fn a_recorded_run_is_reused_until_something_changes() {
     let s = Scratch::new("reuse");
     let recorded = s.ok(&["state", "record"]);
     assert_eq!(recorded["snapshot"], 1);
-    assert_eq!(recorded["advanced"].as_array().unwrap().len(), 11);
+    assert_eq!(recorded["advanced"].as_array().unwrap().len(), 13);
     assert_eq!(recorded["scope"], "jaffle_ods/default");
 
     let plan = s.plan(&[]);
     assert_eq!(
         (plan["build"].clone(), plan["reuse"].clone()),
-        (json!(0), json!(11))
+        (json!(0), json!(13))
     );
     assert_eq!(plan["dbt_command"], Value::Null);
+    assert_eq!(
+        decisions(&plan)["customer_segments"],
+        pair("reuse", "unchanged"),
+        "a Python model is fingerprinted like any other (its code is in the manifest)"
+    );
     let entry = &plan["plan"]["entries"][0];
     assert!(
         entry["evidence"]
@@ -168,6 +173,15 @@ fn a_recorded_run_is_reused_until_something_changes() {
     assert_eq!(got["stg_orders"], pair("build", "code_changed"));
     assert_eq!(got["orders"], pair("build", "upstream_code_changed"));
     assert_eq!(got["customers"], pair("build", "upstream_code_changed"));
+    // The Python model and the SQL model reading it rebuild too.
+    assert_eq!(
+        got["customer_segments"],
+        pair("build", "upstream_code_changed")
+    );
+    assert_eq!(
+        got["segment_summary"],
+        pair("build", "upstream_code_changed")
+    );
     assert_eq!(
         got["stg_customers"],
         pair("reuse", "unchanged"),
@@ -290,8 +304,8 @@ fn bad_input_is_reported_with_state_error_codes() {
 fn environments_keep_separate_state() {
     let s = Scratch::new("envs");
     s.ok(&["state", "record", "--environment", "dev"]);
-    assert_eq!(s.plan(&["--environment", "dev"])["reuse"], 11);
-    assert_eq!(s.plan(&["--environment", "prod"])["build"], 11);
+    assert_eq!(s.plan(&["--environment", "dev"])["reuse"], 13);
+    assert_eq!(s.plan(&["--environment", "prod"])["build"], 13);
 }
 
 #[test]

@@ -265,6 +265,14 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 | `--run-events` | (`export`) write `COMPLETE` RunEvents instead of JobEvents, for sinks that only accept runs |
 | `--indirect-in-fields` | (`export`) also copy row-shaping inputs into every field, for consumers that ignore the facet's `dataset` array |
 
+Column lists come from the warehouse catalog (`dbt docs generate`). Without one, a
+seed's columns come from its CSV header, which is exactly what dbt loads. The header is
+only used if the file's checksum matches the one dbt recorded, so a changed or missing
+file leaves the columns unknown. Seed changes then reach only the models that read
+the changed columns.
+`ods lineage columns --model <seed or source>` shows where each column goes, hop by
+hop, and `reaches` (in JSON) lists every column it can affect.
+
 How impact is decided, most conservative first:
 - a model whose SQL can't be analyzed (a Python model, `select *` over a relation with
   unknown columns, unsupported syntax) is **opaque**: any change to what it reads makes it run;

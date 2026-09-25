@@ -42,7 +42,14 @@ fn reads_the_fixture_manifest_and_catalog() {
         .iter()
         .filter(|n| n.resource_type == ResourceType::Seed)
         .count();
-    assert_eq!((models, seeds), (8, 3));
+    assert_eq!((models, seeds), (10, 3));
+    let python = manifest
+        .nodes
+        .iter()
+        .find(|n| n.unique_id == "model.jaffle_ods.customer_segments")
+        .unwrap();
+    assert_eq!(python.language.as_deref(), Some("python"));
+    assert_eq!(python.depends_on, ["model.jaffle_ods.customers"]);
 
     let catalog = artifacts.catalog.unwrap();
     assert_eq!(
@@ -285,4 +292,36 @@ fn fixture_constraints_read_from_every_format() {
     assert_eq!(constraints_of(&v1, orders), column_level);
     assert_eq!(constraints_of(&v2_json, orders), column_level);
     assert_eq!(constraints_of(&v2_parquet, orders), vec![]);
+}
+
+#[test]
+fn seed_columns_come_from_the_csv_dbt_loaded() {
+    // dbt 2.0 JSON: no catalog, so the header is the only schema.
+    let manifest = Artifacts::load_with(&v2(), ods_provider_dbt::ArtifactPreference::Json)
+        .unwrap()
+        .manifest;
+    let seed = manifest
+        .nodes
+        .iter()
+        .find(|n| n.unique_id == "seed.jaffle_ods.raw_orders")
+        .unwrap();
+    assert_eq!(
+        seed.file_columns.as_deref(),
+        Some(&["id", "user_id", "order_date", "status"].map(String::from)[..])
+    );
+
+    // A copy of the target directory away from the project: the CSV can't be found, so
+    // the columns stay unknown rather than guessed.
+    let away = std::env::temp_dir().join(format!("ods-seed-away-{}", std::process::id()));
+    std::fs::create_dir_all(&away).unwrap();
+    std::fs::copy(v2().join("manifest.json"), away.join("manifest.json")).unwrap();
+    let manifest = Artifacts::load(&away).unwrap().manifest;
+    std::fs::remove_dir_all(&away).ok();
+    assert!(
+        manifest
+            .nodes
+            .iter()
+            .filter(|n| n.resource_type == ResourceType::Seed)
+            .all(|n| n.file_columns.is_none())
+    );
 }

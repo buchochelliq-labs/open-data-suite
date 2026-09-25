@@ -1288,6 +1288,7 @@ dependencies = [
 name = "ods-provider-dbt"
 version = "0.0.0"
 dependencies = [
+ "csv",
  "ods-core",
  "parquet",
  "serde",
