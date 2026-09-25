@@ -114,7 +114,6 @@ graph LR
   | `contract` | declared column types and constraints |
   | `relation` | the relation it builds, so a plan against another target's state doesn't reuse |
   | `engine` | dbt version and adapter |
-  | `hook_env` | only when a pre- or post-hook, or a macro a hook calls, reads `env_var('NAME')`: a digest of each such variable's current value, never the value itself (#218) |
 - Normalising SQL (#209): the compiled SQL is split into tokens and rejoined with
   single spaces. Comments are dropped, except optimizer hints (`/*+ … */`). Nothing
   else changes: identifiers, keywords and literals keep their case and spelling,
@@ -153,16 +152,22 @@ graph LR
   - The raw text's digest is kept outside the fingerprint (`cosmetic`), so a reused
     node's reason can say "only formatting changed".
 - Hooks (#218): dbt stores pre- and post-hooks unrendered. The hook SQL is in `config`,
-  and the macros hooks call are in `depends_on.macros`, so both are in the fingerprint.
-  What neither shows is the value of `var(...)` or `env_var(...)` read when the hook
-  runs, in the hook itself or in a macro it calls:
-  - `env_var('NAME')` adds `hook_env`, so a new value rebuilds the node. The values are
-    read from the environment ODS runs in, which `ods state run` passes on to dbt.
-  - `var(...)`, a secret (`DBT_ENV_SECRET_*`), or a variable name ODS can't read makes
-    the node incomplete: it is always built, and the reason says why. ODS doesn't
-    resolve var values yet (they come from `dbt_project.yml` and `--vars`).
-  - Project-level `on-run-start`/`on-run-end` hooks run on every dbt invocation, so
-    reuse doesn't skip them.
+  and the macros hooks call are in `depends_on.macros`, so both are fingerprinted. What
+  neither shows is what a hook reads when it runs.
+  - A node with hooks is **always built** if a hook, or a project or package macro the
+    node uses, mentions `var`, `env_var`, `target`, `flags`, `builtins`, `context`,
+    `run_query` or `statement` in any form: called, aliased, indexed or qualified.
+    The reason names the hook or macro. dbt's own macros and the adapter's are part of
+    `engine` and aren't scanned.
+  - No value is read or stored. A digest of an environment value can be guessed back
+    from a short list of candidates, so even that is not persisted (rule 9).
+  - Cost: such a node rebuilds every run, and so do the nodes that read it (they see
+    new data). A follow-up can make them reusable safely, e.g. with a keyed digest kept
+    outside the state store, or by resolving `var` and `target` values.
+  - `invocation_id` and `run_started_at` change every run by design. A hook that only
+    uses them for auditing doesn't block reuse.
+  - Project-level `on-run-start`/`on-run-end` hooks run whenever dbt is invoked. When
+    everything is reused, `ods state run` doesn't invoke dbt, so they don't run.
 - A node that can't be fingerprinted completely is always BUILT. That covers:
   - a model without compiled SQL (after `dbt parse` only), with the reason "run
     `dbt compile`";

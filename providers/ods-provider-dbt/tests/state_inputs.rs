@@ -253,66 +253,69 @@ fn hooked(m: &Manifest, hooks: &[&str]) -> ods_provider_dbt::ManifestNode {
 }
 
 #[test]
-fn hooks_that_read_environment_variables_fingerprint_their_values() {
-    use ods_provider_dbt::fingerprint::fingerprint_with_env;
+fn hooks_that_only_use_this_or_macros_keep_a_fingerprint() {
     let m = manifest();
-    let env = |role: &'static str| move |name: &str| (name == "HOOK_ROLE").then(|| role.to_owned());
+    let grant = hooked(&m, &["grant select on {{ this }} to reporter"]);
+    let a = fingerprint(&m, &grant).unwrap();
+    // The hook SQL is part of the config: changing it changes the fingerprint.
+    let b = fingerprint(&m, &hooked(&m, &["grant select on {{ this }} to admin"])).unwrap();
+    assert_eq!(b.diff(&a).changed, ["config"]);
+}
 
-    // `this` alone: no values to track.
-    let plain = fingerprint_with_env(
-        &m,
-        &hooked(&m, &["grant select on {{ this }} to x"]),
-        &env("a"),
-    )
-    .unwrap();
-    assert!(!plain.components.contains_key("hook_env"));
-
-    let grant = hooked(
-        &m,
-        &["grant select on {{ this }} to {{ env_var('HOOK_ROLE') }}"],
-    );
-    let a = fingerprint_with_env(&m, &grant, &env("analyst")).unwrap();
-    let b = fingerprint_with_env(&m, &grant, &env("admin")).unwrap();
-    assert!(a.components.contains_key("hook_env"));
-    assert_eq!(b.diff(&a).changed, ["hook_env"]);
-    // Only a digest of the value is kept.
-    assert!(!serde_json::to_string(&a).unwrap().contains("analyst"));
+/// Every hook form here reads a value only known at run time (#218 review: each of
+/// these was once reused). All must make the node always build, and nothing about the
+/// values is stored.
+#[test]
+fn hooks_that_read_runtime_values_always_build() {
+    let m = manifest();
+    for hook in [
+        "grant select on {{ this }} to {{ env_var('HOOK_ROLE') }}",
+        "select '{{ env_var(\"HOOK_ROLE\", \"x\") }}'",
+        "select '{{ env_var('HOOK_' ~ 'ROLE') }}'",
+        "{% set e = env_var %}select '{{ e('HOOK_ROLE') }}'",
+        "select '{{ builtins.env_var('HOOK_ROLE') }}'",
+        "select '{{ context['env_var']('HOOK_ROLE') }}'",
+        "select '{{ builtins.var('role', 'x') }}'",
+        "select '{{ var.has_var('role') }}'",
+        "{% set v = var %}select '{{ v('role', 'x') }}'",
+        "grant select on {{ this }} to {{ var('reporting_role') }}",
+        "grant select on {{ this }} to {{ target.user }}",
+        "{% if flags.FULL_REFRESH %}select 1{% endif %}",
+        "{% set r = run_query('select 1') %}select 1",
+    ] {
+        let why = fingerprint(&m, &hooked(&m, &[hook])).unwrap_err();
+        assert!(why.contains("always built"), "{hook}: {why}");
+    }
 }
 
 #[test]
-fn hooks_calling_a_macro_that_reads_the_environment_are_tracked_too() {
-    use ods_provider_dbt::fingerprint::fingerprint_with_env;
+fn macros_a_hooked_node_uses_are_scanned_however_hooks_call_them() {
     let mut m = manifest();
+    // `{{ jaffle_ods.role_grant() }}` and `adapter.dispatch(...)`: dbt lists the macro in
+    // depends_on.macros either way.
     let mut grant = m.macros.values().next().unwrap().clone();
-    grant.sql = "{% macro grant_to_role(rel) %}grant select on {{ rel }} to {{ env_var(\"HOOK_ROLE\", \"x\") }}{% endmacro %}".to_owned();
+    grant.sql =
+        "{% macro role_grant() %}grant select on {{ this }} to {{ env_var('ROLE') }}{% endmacro %}"
+            .to_owned();
     grant.depends_on = Vec::new();
     m.macros
-        .insert("macro.jaffle_ods.grant_to_role".to_owned(), grant);
-    let node = hooked(&m, &["{{ grant_to_role(this) }}"]);
-    let a = fingerprint_with_env(&m, &node, &|_| Some("a".to_owned())).unwrap();
-    let b = fingerprint_with_env(&m, &node, &|_| None).unwrap();
-    assert_eq!(b.diff(&a).changed, ["hook_env"]);
-}
-
-#[test]
-fn hooks_whose_values_ods_cant_see_always_build() {
-    use ods_provider_dbt::fingerprint::fingerprint_with_env;
-    let m = manifest();
-    let env = |_: &str| Some("v".to_owned());
-    for (hook, expect) in [
-        (
-            "grant select on {{ this }} to {{ var('reporting_role') }}",
-            "var(reporting_role)",
-        ),
-        ("select '{{ env_var('DBT_ENV_SECRET_TOKEN') }}'", "secret"),
-        ("select '{{ env_var(name) }}'", "can't name"),
+        .insert("macro.jaffle_ods.role_grant".to_owned(), grant);
+    for hook in [
+        "{{ jaffle_ods.role_grant() }}",
+        "{{ adapter.dispatch('role_grant')() }}",
     ] {
-        let why = fingerprint_with_env(&m, &hooked(&m, &[hook]), &env).unwrap_err();
-        assert!(why.contains(expect), "{hook}: {why}");
+        let mut node = hooked(&m, &[hook]);
+        node.depends_on_macros = vec!["macro.jaffle_ods.role_grant".to_owned()];
+        let why = fingerprint(&m, &node).unwrap_err();
+        assert!(why.contains("macro.jaffle_ods.role_grant"), "{hook}: {why}");
     }
-    // `env_var` isn't mistaken for `var`, and `var` in the model's SQL is fine: it is
-    // rendered into the compiled SQL.
+    // Without hooks, the same macro in the SQL is fine: it is rendered into the
+    // compiled SQL.
+    let mut plain = node(&m, "model.jaffle_ods.orders").clone();
+    plain.depends_on_macros = vec!["macro.jaffle_ods.role_grant".to_owned()];
+    assert!(fingerprint(&m, &plain).is_ok());
+    // `var` in the model's SQL is fine too.
     let mut in_sql = node(&m, "model.jaffle_ods.orders").clone();
     in_sql.raw_code = Some("select {{ var('x', 1) }} as x".to_owned());
-    assert!(fingerprint_with_env(&m, &in_sql, &env).is_ok());
+    assert!(fingerprint(&m, &in_sql).is_ok());
 }

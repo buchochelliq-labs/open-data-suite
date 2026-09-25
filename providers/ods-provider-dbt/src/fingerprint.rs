@@ -13,7 +13,6 @@
 //! | `contract` | declared column types and constraints |
 //! | `relation` | the relation it builds (database, schema, alias) |
 //! | `engine` | dbt version and adapter |
-//! | `hook_env` | a digest of each environment variable a hook reads with `env_var` (only when one does) |
 //!
 //! SQL models and snapshots usually have no `file` component: the compiled SQL, config
 //! and macros are what gets built, so an edit to the file that changes none of them (a
@@ -164,9 +163,6 @@ fn contract_content(node: &ManifestNode) -> String {
     out
 }
 
-/// Environment variables dbt treats as secrets: not even a digest of them is kept.
-const SECRET_ENV_PREFIX: &str = "DBT_ENV_SECRET_";
-
 /// The SQL of a node's pre- and post-hooks, unrendered, as dbt records them.
 fn hook_sqls(node: &ManifestNode) -> Vec<&str> {
     let mut sqls = Vec::new();
@@ -187,142 +183,106 @@ fn hook_sqls(node: &ManifestNode) -> Vec<&str> {
     sqls
 }
 
-/// Whether `text` calls `name(` as a whole word.
-fn calls(text: &str, name: &str) -> bool {
-    text.match_indices(name).any(|(at, _)| {
-        let before = text[..at].chars().next_back();
-        let after = text[at + name.len()..].trim_start();
-        !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
-            && after.starts_with('(')
-    })
-}
+/// Names through which a hook can read what dbt only knows when it runs: variables,
+/// the environment, the target and flags, the Jinja context itself, and query results.
+/// Their values aren't in the manifest, so ODS can't tell whether they changed.
+const RUNTIME_NAMES: [&str; 8] = [
+    "var",
+    "env_var",
+    "builtins",
+    "context",
+    "target",
+    "flags",
+    "run_query",
+    "statement",
+];
 
-/// The first argument of each `name(...)` call in `text`: `Some(literal)` for a quoted
-/// string, `None` for anything else.
-fn call_args(text: &str, name: &str) -> Vec<Option<String>> {
-    let mut args = Vec::new();
-    for (at, _) in text.match_indices(name) {
-        let before = text[..at].chars().next_back();
-        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
-            continue;
+/// The runtime names `text` uses, as whole identifiers, in any form: called, aliased
+/// (`{% set e = env_var %}`), indexed (`context['env_var']`) or qualified
+/// (`builtins.var`).
+fn runtime_names(text: &str) -> BTreeSet<&'static str> {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut found = BTreeSet::new();
+    for name in RUNTIME_NAMES {
+        let used = text.match_indices(name).any(|(at, _)| {
+            let before = text[..at].chars().next_back();
+            let after = text[at + name.len()..].chars().next();
+            !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+        });
+        if used {
+            found.insert(name);
         }
-        let Some(rest) = text[at + name.len()..].trim_start().strip_prefix('(') else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        let literal = rest
-            .chars()
-            .next()
-            .filter(|q| matches!(q, '\'' | '"'))
-            .and_then(|q| {
-                let body = &rest[1..];
-                body.find(q).map(|end| body[..end].to_owned())
-            });
-        args.push(literal);
     }
-    args
+    found
 }
 
-/// What a node's hooks can read that dbt only resolves when they run (#218): the
-/// `env_var` values, as a `hook_env` component, or why they can't be fingerprinted.
+/// Why a node's hooks make it impossible to fingerprint completely, if they do (#218).
 ///
-/// dbt records the macros hooks call in `depends_on.macros` (so their source is in
-/// `macros`) and the hook SQL in the config (so it is in `config`). What neither shows
-/// is the value of `var(...)` and `env_var(...)` in a hook, or in a macro a hook calls.
-fn hook_env_content(
-    manifest: &Manifest,
-    node: &ManifestNode,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> Result<Option<String>, String> {
+/// dbt stores hooks unrendered: their SQL is in the config and the macros they call are
+/// in `depends_on.macros`, so both are fingerprinted. What neither shows is anything a
+/// hook reads when it runs (`var`, `env_var`, `target`, …), in the hook or in a macro
+/// the node uses. Such a node is always built (AGENTS rule 3). No value is read or
+/// stored: even a digest of an environment value could be guessed back.
+///
+/// dbt's own macros and the adapter's are part of the engine (`engine`) and aren't
+/// scanned.
+fn hooks_block_reuse(manifest: &Manifest, node: &ManifestNode) -> Option<String> {
     let hooks = hook_sqls(node);
     if hooks.is_empty() {
-        return Ok(None);
+        return None;
     }
-    // The hooks, and every macro they call, directly or not.
-    let mut texts: Vec<&str> = hooks.clone();
-    let mut stack: Vec<&str> = manifest
-        .macros
-        .keys()
-        .filter(|id| {
-            let name = id.rsplit('.').next().unwrap_or(id);
-            hooks.iter().any(|h| calls(h, name))
-        })
-        .map(String::as_str)
-        .collect();
+    let engine_packages: [String; 2] = [
+        "dbt".to_owned(),
+        format!("dbt_{}", manifest.adapter_type.as_deref().unwrap_or("")),
+    ];
+    let is_engine = |id: &str| {
+        id.split('.')
+            .nth(1)
+            .is_some_and(|pkg| engine_packages.iter().any(|e| e == pkg))
+    };
+    // The hooks, and every project or package macro the node uses, directly or not:
+    // dbt lists the macros hooks call (by name, package-qualified or dispatched) in
+    // `depends_on.macros`.
+    let mut texts: Vec<(String, &str)> =
+        hooks.iter().map(|h| ("its hooks".to_owned(), *h)).collect();
+    let mut stack: Vec<&str> = node.depends_on_macros.iter().map(String::as_str).collect();
     let mut seen = BTreeSet::new();
     while let Some(id) = stack.pop() {
-        if !seen.insert(id) {
+        if !seen.insert(id) || is_engine(id) {
             continue;
         }
         if let Some(m) = manifest.macros.get(id) {
-            texts.push(&m.sql);
+            texts.push((format!("macro `{id}`"), &m.sql));
             stack.extend(m.depends_on.iter().map(String::as_str));
         }
     }
-    let mut names = BTreeSet::new();
-    for text in &texts {
-        if calls(text, "var") {
-            let which = call_args(text, "var")
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "its hooks read `var({which})`, whose value ODS doesn't see yet (#218), so it is always built"
-            ));
-        }
-        for arg in call_args(text, "env_var") {
-            match arg {
-                Some(name) if name.starts_with(SECRET_ENV_PREFIX) => {
-                    return Err(format!(
-                        "its hooks read the secret `{name}`, which ODS doesn't fingerprint, so it is always built"
-                    ));
-                }
-                Some(name) => {
-                    names.insert(name);
-                }
-                None => {
-                    return Err(
-                        "its hooks read an environment variable ODS can't name, so it is always built"
-                            .to_owned(),
-                    );
-                }
-            }
-        }
-    }
-    if names.is_empty() {
-        return Ok(None);
-    }
-    let mut out = String::new();
-    for name in names {
-        // Only a digest of each value is kept (AGENTS rule 9).
-        let value = env(&name).map_or_else(|| "unset".to_owned(), |v| sha256_hex(v.as_bytes()));
-        let _ = writeln!(out, "{name} {value}");
-    }
-    Ok(Some(out))
+    texts.iter().find_map(|(what, text)| {
+        let names = runtime_names(text);
+        (!names.is_empty()).then(|| {
+            format!(
+                "it has hooks, and {what} read{} {} when it runs, which ODS can't see; it is always built (#218)",
+                if what == "its hooks" { "" } else { "s" },
+                names
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    })
 }
 
 /// The fingerprint of a model, seed or snapshot, or why it can't be made completely
-/// (which makes the node always build). Environment variables that hooks read come
-/// from this process's environment, which `ods state run` passes on to dbt.
+/// (which makes the node always build).
 ///
 /// # Errors
 /// Returns a reason when dbt didn't record enough: no file checksum, or no compiled SQL
 /// for a model or snapshot (the manifest came from `dbt parse`); or when its hooks read
-/// values ODS can't see.
+/// values only known when they run.
 pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerprint, String> {
-    fingerprint_with_env(manifest, node, &|name| std::env::var(name).ok())
-}
-
-/// [`fingerprint`], reading environment variables from `env`.
-///
-/// # Errors
-/// As [`fingerprint`].
-pub fn fingerprint_with_env(
-    manifest: &Manifest,
-    node: &ManifestNode,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> Result<Fingerprint, String> {
+    if let Some(why) = hooks_block_reuse(manifest, node) {
+        return Err(why);
+    }
     let mut components: Vec<(&str, String)> = vec![
         (Fingerprint::SCHEME, SCHEME.to_owned()),
         ("config", config_content(node)?),
@@ -338,9 +298,6 @@ pub fn fingerprint_with_env(
             ),
         ),
     ];
-    if let Some(hook_env) = hook_env_content(manifest, node, env)? {
-        components.push(("hook_env", hook_env));
-    }
     let compiled = || {
         node.compiled_code
             .as_deref()
