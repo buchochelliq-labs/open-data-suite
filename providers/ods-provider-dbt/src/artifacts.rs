@@ -195,6 +195,10 @@ struct RawTestMetadata {
 struct RawNode {
     unique_id: String,
     #[serde(default)]
+    original_file_path: Option<String>,
+    #[serde(default)]
+    root_path: Option<String>,
+    #[serde(default)]
     name: Option<String>,
     /// Model versions are numbers or strings.
     #[serde(default)]
@@ -270,6 +274,14 @@ pub struct ManifestNode {
     pub checksum: Option<String>,
     /// Its name, e.g. `orders`.
     pub name: Option<String>,
+    /// Its source file, relative to the project root, e.g. `seeds/raw_orders.csv`.
+    pub original_file_path: Option<String>,
+    /// The project root dbt recorded, if any (older manifests).
+    pub root_path: Option<String>,
+    /// A seed's columns, in order, from the header of its CSV file. Only set when the
+    /// file is found and its SHA-256 matches dbt's checksum, i.e. it is the file dbt
+    /// loaded.
+    pub file_columns: Option<Vec<String>>,
     /// Its model version, e.g. `2`, for versioned models.
     pub version: Option<String>,
     /// Scheduling configuration, as resolved by dbt.
@@ -512,7 +524,8 @@ impl Artifacts {
             let (manifest, catalog) = crate::info_schema::read(&dir, version)?;
             return Ok(Self { manifest, catalog });
         }
-        let manifest = Manifest::read(&json)?;
+        let mut manifest = Manifest::read(&json)?;
+        crate::seeds::attach_columns(&mut manifest, target_dir);
         let catalog_path = target_dir.join("catalog.json");
         let catalog = if catalog_path.is_file() {
             Some(Catalog::read(&catalog_path)?)
@@ -685,6 +698,9 @@ fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
         declared_columns,
         checksum: n.checksum.of_content(),
         name: n.name,
+        original_file_path: n.original_file_path,
+        root_path: n.root_path,
+        file_columns: None,
         version: n.version.and_then(|v| match v {
             serde_json::Value::String(s) => Some(s),
             serde_json::Value::Number(n) => Some(n.to_string()),

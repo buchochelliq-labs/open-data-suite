@@ -90,17 +90,18 @@ succeeded advance.
 
 ```console
 $ ods state plan          # after editing stg_orders and running dbt compile
-decision: 6 to build, 5 to reuse
+decision: 8 to build, 5 to reuse
 
 node                     action  why
-raw_orders               reuse   code and inputs unchanged since run f151be5d…
-stg_customers            reuse   code and inputs unchanged since run f151be5d…
-stg_orders               build   code changed since run f151be5d…: compiled_sql
-order_events             build   upstream code changed: stg_orders will be rebuilt
+raw_orders               reuse   code and inputs unchanged since run d11a1309…
+stg_customers            reuse   code and inputs unchanged since run d11a1309…
+stg_orders               build   code changed since run d11a1309…: compiled_sql
 orders                   build   upstream code changed: stg_orders will be rebuilt
 customers                build   upstream code changed: orders will be rebuilt
+customer_segments        build   upstream code changed: customers will be rebuilt
+segment_summary          build   upstream code changed: customer_segments will be rebuilt
 …
-run: dbt build --select stg_orders order_events orders customer_order_rank customers customers_snapshot_view
+run: dbt build --select stg_orders order_events orders customer_order_rank customers customer_segments customers_snapshot_view segment_summary
 ```
 
 (Output shortened; from the demo project.)

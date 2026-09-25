@@ -114,7 +114,13 @@ workspace itself:
   generic dialect. Unusual syntax can make a model opaque; ODS says so rather than
   guessing.
 - Macros are seen only as the SQL they compile to.
-- Python models are opaque without observed lineage.
+- Python models are opaque without observed lineage: anything they read may affect
+  every column, so they run whenever their inputs change. OpenLineage export still
+  gives them table-level lineage. The demo project has one (`customer_segments`), with a
+  SQL model reading it.
+- Seed columns come from the catalog, or else from the seed's CSV header when it matches
+  dbt's checksum. The Information Schema has no seed checksum, so there the catalog
+  is needed.
 
 Full flags are in the [CLI reference](cli.md#column-level-lineage). The design is in
 [ADR-0008](adr/0008-column-level-lineage.md).

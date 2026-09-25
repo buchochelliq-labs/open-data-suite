@@ -19,6 +19,7 @@ mod artifacts;
 pub mod fingerprint;
 mod info_schema;
 mod runs;
+mod seeds;
 pub mod state_config;
 
 pub use artifacts::{

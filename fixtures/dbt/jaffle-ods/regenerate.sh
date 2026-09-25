@@ -47,7 +47,11 @@ fi
 
 if [[ -n "${DBT_V2:-}" ]]; then
   rm -rf target-v2
-  "$DBT_V2" compile --profiles-dir . --generate-info-schema --target-path target-v2
+  # Compiling the Python model needs dbt's DuckDB driver, which dbt-oss downloads from
+  # its CDN; offline that one node fails. Its compiled code isn't needed (ODS treats
+  # Python models as opaque), so carry on as long as the artifacts were written.
+  "$DBT_V2" compile --profiles-dir . --generate-info-schema --target-path target-v2 || true
+  test -s target-v2/manifest.json
   version="$("$DBT_V2" --version | sed -n 's/^dbt[-a-z]* \([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
   out="artifacts/dbt-${version}"
   rm -rf "$out" && mkdir -p "$out/info_schema/v1"
