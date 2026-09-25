@@ -222,3 +222,11 @@ Modules and providers never depend on each other; the CLI wires concrete provide
 4. Scaffold the Cargo workspace + CI (fmt, clippy `-D warnings`, test, cargo-deny) — `new-crate` skill.
 5. Land `ods-core` graph types (#4) + SDK traits (#2) + capability model (#3) with a fake provider.
 6. Build the fixture dbt project and commit its `manifest.json` for dbt 1.8/1.9/1.10 (#100).
+
+
+### M10 — Advanced Intelligence & Developer Experience (unscheduled)
+Cross-cutting developer intelligence and operational ergonomics that build on the core metadata/evidence platform without changing the committed M0–M9 release train.
+
+#194 `ods drift` · #195 environment parity / `ods env diff` · #196 dead asset detection · #197 lineage confidence/evidence strength · #198 contract compatibility · #199 `ods reproduce` · #200 warehouse query-plan/performance inspection · #201 metadata-aware search · #202 policy-as-code · #203 local metadata daemon/watch mode · #204 portable metadata snapshots · #205 PII/sensitive-data propagation · #206 mutation testing · #207 migration/upgrade assistant · #208 interactive `ods explore`.
+
+This milestone is intentionally unscheduled. Individual capabilities can be pulled forward when they directly unblock an earlier milestone, but the source-of-truth grouping remains M10 until the roadmap is rebaselined.
