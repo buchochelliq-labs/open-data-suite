@@ -139,7 +139,12 @@ fn every_tool_answers_from_the_fixture() {
     assert!(text(&r[5]).starts_with("flowchart"), "{}", text(&r[5]));
     assert_eq!(structured(&r[6])["run"], json!(["model.jaffle_ods.orders"]));
     assert!(text(&r[7]).starts_with("erDiagram"));
-    assert_eq!(structured(&r[7])["tested"], 2, "orders' relationships");
+    assert_eq!(structured(&r[7])["tested"], 1, "orders -> customers");
+    assert_eq!(
+        structured(&r[7])["declared"],
+        1,
+        "customer_order_rank -> orders"
+    );
     assert!(structured(&r[8])["inferred"].as_u64().unwrap() > 0);
     let gaps = structured(&r[9])["suggestions"].as_array().unwrap();
     assert!(

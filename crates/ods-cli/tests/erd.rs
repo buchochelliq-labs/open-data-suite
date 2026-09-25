@@ -92,8 +92,86 @@ fn every_artifact_format_gives_the_same_tested_relationships() {
         "--artifacts",
         "info-schema",
     ]);
-    assert_eq!(v1["tested"], 3);
+    assert_eq!(v1["tested"], 2);
+    assert_eq!(
+        v1["declared"], 1,
+        "customer_order_rank's foreign key constraint"
+    );
     assert_eq!(relationships(&v1), relationships(&v2));
+}
+
+#[test]
+fn primary_and_foreign_key_constraints_are_declared_keys_and_relationships() {
+    let result = json(&[
+        "erd",
+        "generate",
+        "--target-dir",
+        artifacts("dbt-1.10").to_str().unwrap(),
+    ]);
+    // A model-level composite primary key.
+    let rank = primary_key(&result, "customer_order_rank");
+    assert_eq!(
+        rank["columns"],
+        serde_json::json!(["customer_id", "order_seq"])
+    );
+    assert_eq!(rank["basis"], "declared");
+    // A column-level primary key: declared wins over the unique + not_null tests.
+    let orders = primary_key(&result, "orders");
+    assert_eq!(orders["basis"], "declared");
+    // A foreign key written as `expression: "main.orders (order_id)"`, merged with the
+    // relationships test on the same columns.
+    let fk = result["erd"]["relationships"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["from"] == "model.jaffle_ods.customer_order_rank")
+        .unwrap();
+    assert_eq!(fk["to"], "model.jaffle_ods.orders");
+    assert_eq!(fk["basis"], "declared");
+    let evidence = fk["evidence"].to_string();
+    assert!(
+        evidence.contains("constraint foreign_key") && evidence.contains("relationships_"),
+        "{evidence}"
+    );
+    assert_eq!(result["erd"]["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
+fn foreign_keys_in_the_to_syntax_and_unresolvable_ones() {
+    let dir = patched("fk-to", |m| {
+        let rank = &mut m["nodes"]["model.jaffle_ods.customer_order_rank"]["constraints"];
+        rank[1]["expression"] = Value::Null;
+        rank[1]["to"] = "ref('orders')".into();
+        rank[1]["to_columns"] = serde_json::json!(["order_id"]);
+        let orders = &mut m["nodes"]["model.jaffle_ods.orders"];
+        orders["constraints"] = serde_json::json!([{
+            "type": "foreign_key", "columns": ["customer_id"],
+            "expression": "somewhere_else.customers (customer_id)"
+        }]);
+    });
+    let result = json(&["erd", "generate", "--target-dir", dir.to_str().unwrap()]);
+    let declared: Vec<_> = relationships(&result)
+        .into_iter()
+        .filter(|r| r.2 == "declared")
+        .collect();
+    assert_eq!(
+        declared,
+        [(
+            "model.jaffle_ods.customer_order_rank".to_owned(),
+            "model.jaffle_ods.orders".to_owned(),
+            "declared".to_owned()
+        )]
+    );
+    assert!(
+        result["erd"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("somewhere_else.customers")),
+        "a table ODS doesn't know is reported, not guessed: {}",
+        result["erd"]["diagnostics"]
+    );
+    std::fs::remove_dir_all(dir).ok();
 }
 
 #[test]

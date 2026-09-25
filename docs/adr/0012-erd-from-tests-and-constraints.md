@@ -49,6 +49,16 @@ is not lineage, and rules 3 and 4 say a guess must never be presented as fact.
     is a trusted key the cardinality is `unknown`. This is relationship *evidence* taken
     from SQL, not lineage: rule 6 still holds, since a DAG edge alone never makes a
     relationship.
+  - **Constraints** are declared facts, whether column-level or model-level (composite
+    keys). A `foreign_key` names its target with `to: ref(…)`/`source(…)` plus
+    `to_columns`, or with `expression: "schema.table (columns)"`, which is matched
+    against the trailing parts of each entity's warehouse relation. A table that
+    matches no entity, or several, is a diagnostic. dbt 2.0.5's Parquet Information
+    Schema leaves column-level constraints out (`node_columns.constraints` is empty),
+    so those need its `manifest.json`.
+  - **Naming inference ranks trusted keys equally.** A constraint on one table and a
+    test on another don't say which of them `order_id` refers to, so that stays
+    ambiguous rather than picking the declared one.
   - **Filtered tests** (`config.where`) hold for part of a table only, so they are
     skipped with a diagnostic.
   - **Unknown entities or columns** become diagnostics. Nothing is silently dropped.
