@@ -110,7 +110,7 @@ pub(super) fn history_command() -> Command {
     )
 }
 
-fn store_error(error: &ProviderError) -> CliError {
+pub(super) fn store_error(error: &ProviderError) -> CliError {
     let code = if matches!(error, ProviderError::Conflict(_)) {
         codes::STATE_CONFLICT
     } else {
@@ -120,7 +120,7 @@ fn store_error(error: &ProviderError) -> CliError {
 }
 
 /// Runs the store's async API from these synchronous commands.
-fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, CliError> {
+pub(super) fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, CliError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -128,22 +128,31 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, CliErr
     Ok(runtime.block_on(future))
 }
 
+/// Whether to read `dbt source freshness` results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Sources {
+    /// `--sources`, or `<target-dir>/sources.json` if present.
+    AsGiven,
+    /// None: a measurement was attempted and failed, so any file left is out of date.
+    Ignore,
+}
+
 /// What every State command loads: the project as it is now, and where its state is.
-struct Workspace {
-    target_dir: PathBuf,
-    project: Project,
-    scope: StateScope,
-    state_db: PathBuf,
-    sources_file: Option<PathBuf>,
-    sources_taken_at: Option<Timestamp>,
+pub(super) struct Workspace {
+    pub(super) target_dir: PathBuf,
+    pub(super) project: Project,
+    pub(super) scope: StateScope,
+    pub(super) state_db: PathBuf,
+    pub(super) sources_file: Option<PathBuf>,
+    pub(super) sources_taken_at: Option<Timestamp>,
     /// The dbt invocation that wrote the manifest.
-    invocation_id: Option<String>,
+    pub(super) invocation_id: Option<String>,
     /// Sources `dbt source freshness` couldn't measure.
-    source_errors: Vec<String>,
+    pub(super) source_errors: Vec<String>,
 }
 
 impl Workspace {
-    fn load(args: &ArgMatches) -> Result<Self, CliError> {
+    pub(super) fn load(args: &ArgMatches, sources: Sources) -> Result<Self, CliError> {
         let target_dir = PathBuf::from(
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
@@ -157,9 +166,12 @@ impl Workspace {
             CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, e.to_string())
                 .with_hint("run `dbt compile` (or `run`/`build`) first")
         })?;
-        let sources_file = match args.get_one::<String>("sources") {
-            Some(path) => Some(PathBuf::from(path)),
-            None => Some(target_dir.join("sources.json")).filter(|p| p.is_file()),
+        let sources_file = match (sources, args.get_one::<String>("sources")) {
+            (Sources::Ignore, _) => None,
+            (Sources::AsGiven, Some(path)) => Some(PathBuf::from(path)),
+            (Sources::AsGiven, None) => {
+                Some(target_dir.join("sources.json")).filter(|p| p.is_file())
+            }
         };
         let freshness = sources_file
             .as_deref()
@@ -222,13 +234,16 @@ impl Workspace {
         })
     }
 
-    fn open_store(&self) -> Result<SqliteStateStore, CliError> {
+    pub(super) fn open_store(&self) -> Result<SqliteStateStore, CliError> {
         block_on(SqliteStateStore::open(&self.state_db))?.map_err(|e| {
             store_error(&e).with_hint(format!("check `--state-db {}`", self.state_db.display()))
         })
     }
 
-    fn latest(&self, store: &SqliteStateStore) -> Result<Option<StoredSnapshot>, CliError> {
+    pub(super) fn latest(
+        &self,
+        store: &SqliteStateStore,
+    ) -> Result<Option<StoredSnapshot>, CliError> {
         block_on(store.latest(&self.scope))?.map_err(|e| store_error(&e))
     }
 }
@@ -310,7 +325,7 @@ fn node_name(n: &ods_provider_dbt::ManifestNode) -> String {
 }
 
 /// `model.shop.orders` → `orders`; `source.shop.raw.orders` → `raw.orders`.
-fn display_name(id: &str) -> String {
+pub(super) fn display_name(id: &str) -> String {
     let mut parts = id.splitn(3, '.');
     let kind = parts.next().unwrap_or_default();
     let _package = parts.next();
@@ -351,65 +366,83 @@ pub(super) struct PlanReport {
     warnings: Vec<String>,
 }
 
+/// A plan against the latest state, with the warnings that qualify it.
+pub(super) fn plan_against(
+    ws: &Workspace,
+    latest: Option<&StoredSnapshot>,
+    specs: &[String],
+    now: Timestamp,
+) -> Result<(ExecutionPlan, Vec<String>), CliError> {
+    let selected = ods_state::select(&ws.project, specs)
+        .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?;
+    let plan = ods_state::plan(
+        &ws.project,
+        latest.map(|s| (s.id, &s.snapshot)),
+        &selected,
+        now,
+    )
+    .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    let mut warnings = Vec::new();
+    if ws.project.sources.iter().any(|s| s.version.is_none()) && ws.sources_file.is_none() {
+        warnings.push(
+            "no source freshness results: every node reading a source is built. Run `dbt source freshness` before planning."
+                .to_owned(),
+        );
+    }
+    if let (Some(taken), Some(head)) = (ws.sources_taken_at, latest)
+        && !ws.project.sources.is_empty()
+        && taken <= head.snapshot.created_at
+    {
+        warnings.push(format!(
+            "sources.json was measured at {taken}, before the last recorded run ({}): nodes reading sources are built. Run `dbt source freshness` again before planning.",
+            head.snapshot.created_at
+        ));
+    }
+    if !ws.source_errors.is_empty() {
+        warnings.push(format!(
+            "`dbt source freshness` couldn't measure {}",
+            ws.source_errors.join(", ")
+        ));
+    }
+    Ok((plan, warnings))
+}
+
+/// `--select` values.
+pub(super) fn select_specs(args: &ArgMatches) -> Vec<String> {
+    args.get_many::<String>("select")
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+/// The dbt command that builds exactly the plan's BUILD set.
+pub(super) fn dbt_command(plan: &ExecutionPlan) -> Option<String> {
+    let build: Vec<&str> = plan
+        .with_action(PlanAction::Build)
+        .map(|e| e.name.as_str())
+        .collect();
+    (!build.is_empty()).then(|| format!("dbt build --select {}", build.join(" ")))
+}
+
 impl PlanReport {
     pub(super) fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let ws = Workspace::load(args)?;
+        let ws = Workspace::load(args, Sources::AsGiven)?;
         let now = match args.get_one::<String>("now") {
             Some(at) => Timestamp::parse(at)
                 .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?,
             None => Timestamp::now(),
         };
-        let specs: Vec<String> = args
-            .get_many::<String>("select")
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
-        let selected = ods_state::select(&ws.project, &specs)
-            .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?;
         // Planning never writes: an absent database is simply "no state yet".
         let latest = if ws.state_db.is_file() {
             ws.latest(&ws.open_store()?)?
         } else {
             None
         };
-        let plan = ods_state::plan(
-            &ws.project,
-            latest.as_ref().map(|s| (s.id, &s.snapshot)),
-            &selected,
-            now,
-        )
-        .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
-        let build: Vec<&str> = plan
-            .with_action(PlanAction::Build)
-            .map(|e| e.name.as_str())
-            .collect();
-        let mut warnings = Vec::new();
-        if ws.project.sources.iter().any(|s| s.version.is_none()) && ws.sources_file.is_none() {
-            warnings.push(
-                "no sources.json: every node reading a source is built. Run `dbt source freshness` before planning."
-                    .to_owned(),
-            );
-        }
-        if let (Some(taken), Some(head)) = (ws.sources_taken_at, &latest)
-            && !ws.project.sources.is_empty()
-            && taken <= head.snapshot.created_at
-        {
-            warnings.push(format!(
-                "sources.json was measured at {taken}, before the last recorded run ({}): nodes reading sources are built. Run `dbt source freshness` again before planning.",
-                head.snapshot.created_at
-            ));
-        }
-        if !ws.source_errors.is_empty() {
-            warnings.push(format!(
-                "`dbt source freshness` couldn't measure {}",
-                ws.source_errors.join(", ")
-            ));
-        }
+        let (plan, warnings) = plan_against(&ws, latest.as_ref(), &select_specs(args), now)?;
         Ok(Self {
-            dbt_command: (!build.is_empty())
-                .then(|| format!("dbt build --select {}", build.join(" "))),
-            build: build.len(),
+            dbt_command: dbt_command(&plan),
+            build: plan.with_action(PlanAction::Build).count(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
             based_on: latest.map(|s| s.id),
             target_dir: ws.target_dir,
@@ -518,7 +551,7 @@ pub(super) struct RecordReport {
 
 impl RecordReport {
     pub(super) fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let ws = Workspace::load(args)?;
+        let ws = Workspace::load(args, Sources::AsGiven)?;
         let results_path = args
             .get_one::<String>("run-results")
             .map_or_else(|| ws.target_dir.join("run_results.json"), PathBuf::from);
@@ -652,7 +685,7 @@ fn check_recordable(run: &RunResults, manifest_invocation: Option<&str>) -> Resu
     }
 }
 
-fn is_test_or_operation(id: &str) -> bool {
+pub(super) fn is_test_or_operation(id: &str) -> bool {
     ["test.", "unit_test.", "operation.", "analysis."]
         .iter()
         .any(|p| id.starts_with(p))
@@ -734,7 +767,7 @@ impl HistoryReport {
             args.get_one::<String>("state-db")
                 .map_or(DEFAULT_STORE, String::as_str),
         );
-        let ws = Workspace::load(args)?;
+        let ws = Workspace::load(args, Sources::AsGiven)?;
         let limit = args.get_one::<usize>("limit").copied().unwrap_or(20);
         let snapshots = if Path::new(&state_db).is_file() {
             let store = ws.open_store()?;

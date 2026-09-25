@@ -14,7 +14,7 @@
 //! | `MetadataProvider` | #15 | planned |
 //! | [`StateStore`](state_store::StateStore) | #11, #25 | defined (ADR-0013) |
 //! | `FingerprintProvider` | #13 | planned |
-//! | `Executor` | #23 | planned |
+//! | [`Executor`](executor::Executor) | #23, #24 | defined (ADR-0014) |
 //! | `ChangeProvider` | #16 | planned |
 //! | `CloneProvider` | #29 | planned |
 //! | `PolicyProvider` | #9 | planned |
@@ -24,6 +24,7 @@
 //! | `SecretProvider` | #126 | planned |
 //! | `LlmProvider` | #33 | planned |
 
+pub mod executor;
 pub mod lock;
 pub mod observed_lineage;
 pub mod sql_lineage;

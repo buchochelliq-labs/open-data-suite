@@ -70,6 +70,18 @@ impl<'a> Context<'a> {
         present::emit(result, &self.output, self.out).map_err(CliError::from)
     }
 
+    /// Renders the result of a command that failed anyway (e.g. a run whose successes
+    /// were recorded but some nodes failed) and returns the error to exit with. The
+    /// error is reported once: inside the JSON envelope, or on stderr otherwise.
+    ///
+    /// # Errors
+    /// Always: `error`, or the failure to write the output.
+    pub fn emit_failed<T: Present>(&mut self, result: &T, error: CliError) -> Result<(), CliError> {
+        present::emit_with_error(result, &error, &self.output, self.out)?;
+        self.out.flush()?;
+        Err(error.in_envelope())
+    }
+
     /// Raw stdout, for output that is not a result model (e.g. completion scripts).
     pub fn raw_out(&mut self) -> &mut dyn Write {
         self.out

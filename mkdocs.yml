@@ -88,4 +88,5 @@ nav:
       - adr/0011-dbt-state-config-compatibility.md
       - adr/0012-erd-from-tests-and-constraints.md
       - adr/0013-state-snapshots-fingerprints-and-store.md
+      - adr/0014-executor-contract-and-state-run.md
   - Legal and trademarks: legal.md

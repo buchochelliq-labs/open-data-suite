@@ -10,8 +10,9 @@ codes).
 | Command | Status |
 |---|---|
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
+| `ods state run` | available (preview): build only what needs building with dbt, and record what succeeded, see [below](#state-run) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
-| `ods state run\|explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
+| `ods state explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -26,7 +27,7 @@ codes).
 | `ods completions <shell>` | available |
 
 Planned commands already appear in `--help`. They accept any arguments and exit with
-status 3 (`ods state run --select x` reports "not implemented", not a usage error).
+status 3 (`ods state explain --select x` reports "not implemented", not a usage error).
 
 ## Global flags
 
@@ -72,7 +73,9 @@ literally.
 ```
 
 `result` is the command's result model on success and `null` on failure. `hint` is
-omitted when there is none.
+omitted when there is none. One exception: a command whose partial result matters
+reports both. `ods state run` that recorded some nodes but had failures carries its
+report in `result` and the error in `diagnostics`, and exits 1.
 
 Exceptions to the one-document rule:
 - **Usage errors** (bad flags or an unknown command) are detected before the output mode
@@ -114,6 +117,7 @@ meanings get new numbers.
 | `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
 | `ODS-E0402` | Another run recorded state first; plan again and retry. |
 | `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. |
+| `ODS-E0404` | `ods state run`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. |
 
 ## Environment variables
 
@@ -406,6 +410,50 @@ ods state policies --model orders --json
 Defaults: if any model configures `state:` or `build_after`, the project relies on dbt
 State, so models without settings get dbt State's defaults (`45m`, `any`). Otherwise
 ODS rebuilds on any new upstream data (tolerance `0`).
+
+## State: run
+
+`ods state run` does the whole State loop
+([ADR-0014](adr/0014-executor-contract-and-state-run.md)):
+1. `dbt source freshness`, then `dbt compile`, so the plan sees current code and data;
+2. plan against the last successful state, as `ods state plan` does;
+3. `dbt build --select` exactly the nodes that must build, and nothing else;
+4. record the run. Nodes that built and passed their tests advance. Failed nodes, the
+   ones dbt skipped because of them, and nodes whose tests failed keep their last
+   successful state, so they (and their tests) run again next time. If nothing
+   succeeded, nothing is recorded.
+
+```sh
+ods state run                   # first time: builds everything and records it
+ods state run                   # nothing changed: nothing to build, nothing runs
+# … edit a model …
+ods state run                   # builds that model and what depends on it
+ods state run --dry-run         # prepare and plan only; builds and records nothing
+ods state run --select +orders --json
+```
+
+It exits 0 when everything built and every test passed, or when there was nothing to
+build. It exits 1 with `ODS-E0404` when dbt couldn't run or when nodes or tests
+failed; the successes are recorded either way. If recording fails after dbt ran (for
+example, another run recorded first), the report says what dbt did, with outcome
+`not_recorded`. dbt's own output goes to stderr, so
+stdout carries only the report (one JSON document with `--json`).
+
+| Flag | Meaning |
+|---|---|
+| `--select SPEC` | only consider these nodes: `name`, `+name`, `name+`; repeatable |
+| `--mode build\|run` | `build` (default) also runs the selected nodes' tests; `run` doesn't (dbt 1.8+) |
+| `--dry-run` | prepare and plan, but build and record nothing |
+| `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
+| `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
+| `--dbt PROGRAM` | the dbt executable; default `dbt` |
+| `--project-dir`, `--profiles-dir`, `--target` | passed to dbt |
+| `--dbt-output stderr\|capture` | show dbt's output on stderr (default), or capture it and quote the end on failure |
+
+It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
+Don't run other dbt commands against the same target directory while it runs.
+ODS checks that the manifest it records from comes from its own build, and records
+nothing if it doesn't.
 
 ## State: plan, record, history
 
