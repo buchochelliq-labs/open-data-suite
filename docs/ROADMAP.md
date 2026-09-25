@@ -100,7 +100,7 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 | **#17** *(M1 slice)* | Delta change detection, minimal: latest table version + commit timestamp for sources, behind the `relation_versions` capability |
 | #99 | Plugin conformance test suite (State-related contracts) |
 
-**Why data awareness moved into M1:** dbt State (GA Sept 2026, paid service) already
+**Why data awareness moved into M1:** dbt State (launched 2026-06-01, paid service) already
 skips models whose code and upstream data are unchanged. A v0.1.0 that only skips on
 code changes would launch behind it. See
 [`docs/research/dbt-state-comparison.md`](research/dbt-state-comparison.md).

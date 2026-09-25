@@ -10,11 +10,13 @@ undocumented formats.
 
 ## What dbt State is (as of Sept 2026)
 - **What it replaces:** it is the successor to state-aware orchestration, which ran on
-  Fusion in production only. It launched in preview on 2026-06-01 and reached general
-  availability in September 2026.
+  Fusion in production only. dbt's docs date it to 2026-06-01; general availability is
+  reported from that date. (An earlier draft of this note said September; corrected.)
 - **Where it runs:** dbt Core 1.7–2.0, Fusion, the dbt platform and external
   orchestrators, in both development and deployment.
-- **Pricing:** a paid service with a 30-day trial; the dbt platform is not required.
+- **Pricing:** a paid service ($0.094 per table reused per day) with a 30-day trial. It
+  **requires a dbt platform account**, even when jobs run elsewhere, and sends SQL hashes
+  and table timestamps to a single US multi-tenant service.
 - **How it decides each model:**
   1. **Reuse** it if it exists in the target schema, its logic is unchanged, and its
      parents' data is not fresher than its `lag_tolerance`.
@@ -22,8 +24,10 @@ undocumented formats.
      logic and fresh-enough data. This uses zero-copy clone where the warehouse supports
      it, else `CREATE TABLE AS`.
   3. Otherwise **build** it, deferring unselected upstream models.
-- **`lag_tolerance`:** how old upstream data may get before a rebuild. It is measured
-  against the freshness of the underlying data, not the model's last run. The default
+- **`lag_tolerance`:** dbt's docs disagree on what it means. The reference page calls it a
+  minimum interval between rebuilds; the migration page and FAQ compare it with upstream
+  data freshness. ODS splits the two ideas; see
+  [ods-state-strategy.md](ods-state-strategy.md) §4.4. The default
   is **45 minutes**, and it can be a Jinja template, so it can differ per environment.
 - **Freshness through views:** it tracks freshness across the DAG and propagates it
   through models materialised as views.
