@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-# Add "providers/*" when the first provider crate lands (an empty glob fails to load).
-members = ["crates/*"]
+members = ["crates/*", "providers/*"]
 
 [workspace.package]
 version = "0.0.0"
@@ -17,9 +16,11 @@ publish = false
 ods-core = { path = "crates/ods-core" }
 ods-config = { path = "crates/ods-config" }
 ods-sdk = { path = "crates/ods-sdk" }
+ods-provider-fake = { path = "providers/ods-provider-fake" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 insta = "1"
@@ -30,6 +31,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
 thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros"] }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }

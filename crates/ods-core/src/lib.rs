@@ -1,9 +1,15 @@
 //! Provider-neutral semantic graph and domain model for OpenDataSuite.
 //!
 //! `ods-core` sits at the bottom of the dependency graph (ADR-0001): it depends on no other
-//! ODS crate and must never contain warehouse- or runtime-specific logic. The semantic
-//! graph itself is delivered by #4; this crate currently only fixes the conventions every
-//! persisted domain type follows.
+//! ODS crate and must never contain warehouse- or runtime-specific logic. It holds the
+//! capability vocabulary and strategy choice (#3, ADR-0006) and the conventions every
+//! persisted domain type follows. The semantic graph itself is delivered by #4.
+
+pub mod capability;
+pub mod strategy;
+
+pub use capability::{Capability, CapabilitySet, CustomCapability, UnknownCapability};
+pub use strategy::{Choice, ChoiceError, Skipped, Strategy, choose};
 
 use serde::{Deserialize, Serialize};
 

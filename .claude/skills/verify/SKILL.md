@@ -15,6 +15,7 @@ cargo test --workspace --all-features
 cargo deny check 2>/dev/null || echo "cargo-deny not installed (install: cargo install cargo-deny --locked)"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 python3 scripts/check-layering.py
+python3 scripts/check-vendor-neutral.py --self-test && python3 scripts/check-vendor-neutral.py
 ```
 
 Additional checks when relevant:
