@@ -2,12 +2,13 @@
 //!
 //! `ods-core` sits at the bottom of the dependency graph (ADR-0001): it depends on no other
 //! ODS crate and must never contain warehouse- or runtime-specific logic. It holds the
-//! capability vocabulary and strategy choice (#3, ADR-0006) and the conventions every
-//! persisted domain type follows. The semantic graph itself is delivered by #4.
+//! capability vocabulary and strategy choice (#3, ADR-0006), the State domain model
+//! (ADR-0013), and the conventions every persisted domain type follows. The semantic graph itself is delivered by #4.
 
 pub mod capability;
 pub mod freshness;
 pub mod lineage;
+pub mod state;
 pub mod strategy;
 
 pub use capability::{Capability, CapabilitySet, CustomCapability, UnknownCapability};

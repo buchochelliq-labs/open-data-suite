@@ -9,11 +9,13 @@ mod clock;
 mod lock;
 mod observed_lineage;
 mod sql_lineage;
+mod state_store;
 
 pub use clock::FakeClock;
 pub use lock::{FakeLockFactory, FakeLockProvider};
 pub use observed_lineage::FakeObservedLineageSource;
 pub use sql_lineage::FakeSqlLineageAnalyzer;
+pub use state_store::FakeStateStore;
 
 /// The `kind` fakes are registered under in configuration.
 pub const KIND: &str = "fake";
