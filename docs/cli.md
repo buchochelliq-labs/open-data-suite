@@ -476,9 +476,10 @@ A node is **built** when (first match wins):
 1. ODS has no successful build of it;
 2. its code can't be fingerprinted completely (e.g. no compiled SQL: run `dbt compile`);
 3. its fingerprint changed; the plan names the components (`sql`, `file`, `config`,
-   `macros`, `contract`, `relation`, `engine`). A SQL model's `sql` ignores comments,
-   whitespace and keyword case, so a formatting-only edit reuses it, and the reason
-   says "only formatting changed";
+   `macros`, `contract`, `relation`, `engine`). A SQL model's `sql` ignores comments
+   and whitespace, so a formatting-only edit reuses it, and the reason says "only
+   formatting changed". SQL whose meaning could depend on the dialect (e.g. `[...]`,
+   `$`, `#`, backslash escapes) is compared as written;
 4. a parent is built because *its* code changed;
 5. it depends on something ODS doesn't know, declares no inputs at all (seeds aside), or
    its State config has a setting ODS can't honour yet;

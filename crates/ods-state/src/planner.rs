@@ -382,7 +382,7 @@ fn decide_on_data(
         format!("code and inputs unchanged since run {}", before.run_id)
     } else {
         format!(
-            "code and inputs unchanged since run {}; only formatting changed ({}): comments, whitespace or keyword case",
+            "code and inputs unchanged since run {}; only formatting changed ({}): comments or whitespace",
             before.run_id,
             cosmetic.join(", ")
         )

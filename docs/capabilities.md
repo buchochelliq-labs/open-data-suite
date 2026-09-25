@@ -106,7 +106,7 @@ run: dbt build --select stg_orders order_events orders customer_order_rank custo
 
 (Output shortened; from the demo project.)
 
-Comments, whitespace and keyword case don't count as changes: reformatting a model
+Comments and whitespace don't count as changes: reformatting a model
 reuses it, and the plan says only formatting changed.
 
 `ods state run` does all of it: it compiles, plans, runs `dbt build` on exactly the

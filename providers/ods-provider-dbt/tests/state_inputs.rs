@@ -55,10 +55,10 @@ fn formatting_only_edits_keep_the_fingerprint_and_are_recorded_as_cosmetic() {
     let sql = orders.compiled_code.clone().unwrap();
     let base = fingerprint(&m, orders).unwrap();
 
-    // A comment, reindenting and keyword case: same fingerprint, different raw text.
+    // A comment and reindenting: same fingerprint, different raw text.
     let reformatted = format!(
         "-- orders, one row per order\n{}\n/* end */",
-        sql.replace("select", "SELECT").replace('\n', "\n    ")
+        sql.replace('\n', "\n    ")
     );
     let mut edited = with_sql(orders, &reformatted);
     // dbt's checksum of the file changes with any edit; it isn't part of a SQL model's
@@ -71,6 +71,20 @@ fn formatting_only_edits_keep_the_fingerprint_and_are_recorded_as_cosmetic() {
     // A real change is still a change.
     let changed = fingerprint(&m, &with_sql(orders, &format!("{sql} where 1 = 0"))).unwrap();
     assert_eq!(changed.diff(&base).changed, ["sql"]);
+
+    // Keyword case counts: some dialects let keywords be case-sensitive names.
+    let upper = fingerprint(&m, &with_sql(orders, &sql.replace("select", "SELECT"))).unwrap();
+    assert_eq!(upper.diff(&base).changed, ["sql"]);
+
+    // Jinja that runs SQL of its own keeps the file in the fingerprint.
+    let mut side_effect = orders.clone();
+    side_effect.raw_code = Some("{% do run_query('delete from audit') %}\nselect 1".into());
+    assert!(
+        fingerprint(&m, &side_effect)
+            .unwrap()
+            .components
+            .contains_key("file")
+    );
 
     // SQL that can't be normalised safely is hashed as is.
     let dollar = format!("{sql} -- $");

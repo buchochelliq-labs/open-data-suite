@@ -390,13 +390,10 @@ fn real_dbt() {
 
     let model = project.dir.join("models/marts/segment_summary.sql");
     let sql = std::fs::read_to_string(&model).unwrap();
-    // A comment and upper-case keywords: nothing to build (#209).
+    // A comment and reindenting: nothing to build (#209).
     std::fs::write(
         &model,
-        format!(
-            "-- reformatted\n{}",
-            sql.replace("select", "SELECT").replace("from", "FROM")
-        ),
+        format!("-- reformatted\n{}", sql.replace('\n', "\n    ")),
     )
     .unwrap();
     let (code, cosmetic) = real(&[]);

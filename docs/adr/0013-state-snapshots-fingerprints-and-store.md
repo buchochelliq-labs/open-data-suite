@@ -106,8 +106,8 @@ graph LR
   | Component | From |
   |---|---|
   | `scheme` | the fingerprint scheme; when it changes, every node is built once, with a reason saying so |
-  | `sql` | SQL models and snapshots: the compiled SQL (vars, macros and upstream names as rendered), normalised so that comments, whitespace and reserved-keyword case don't count |
-  | `file` | seeds and Python models: dbt's checksum of the CSV or Python file (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint) |
+  | `sql` | SQL models and snapshots: the compiled SQL (vars, macros and upstream names as rendered), normalised so that comments and whitespace don't count |
+  | `file` | dbt's checksum of the file (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint): seeds, Python models, and SQL models whose Jinja runs SQL of its own or whose raw code isn't recorded |
   | `compiled_code` | Python models: the compiled code, as is |
   | `config` | resolved config, canonical JSON, without `tags`, `meta`, `docs`, `state`, `freshness` (policy and metadata don't change what gets built) |
   | `macros` | the source of every macro the node depends on, transitively, plus its materialization and the `generate_*_name` macros |
@@ -115,16 +115,26 @@ graph LR
   | `relation` | the relation it builds, so a plan against another target's state doesn't reuse |
   | `engine` | dbt version and adapter |
 - Normalising SQL (#209): the compiled SQL is split into tokens and rejoined with
-  single spaces. Comments are dropped, except optimizer hints (`/*+ … */`, `--+`).
-  Reserved keywords (`select`, `from`, `join`, …) are lower-cased. Identifiers and
-  literals are kept exactly.
-  - Anything whose meaning depends on the dialect makes it give up and hash the raw
-    text instead: a backslash in a quoted string, `$`, `#`, nested block comments, or
-    an unterminated quote or comment. Formatting then counts, which only ever builds
-    more.
-  - SQL models have no `file` component. The compiled SQL, config and macros are what
-    gets built, so an edit that changes none of them (a comment, a reformat, Jinja that
-    renders the same SQL) reuses.
+  single spaces. Comments are dropped, except optimizer hints (`/*+ … */`). Nothing
+  else changes: identifiers, keywords and literals keep their case and spelling,
+  because some dialects let keyword-like names be case-sensitive.
+  - It is an allow-list. Outside quotes and comments it accepts only ASCII letters,
+    digits, `_`, ASCII whitespace, `( ) , ;` and `= < > + - * / % | : ! .`.
+  - It gives up on everything whose meaning depends on the dialect, and the raw text
+    is hashed instead. Formatting then counts, which only ever builds more. That
+    covers:
+    - `[`, `$`, `#`, `@`, `{` and non-ASCII characters;
+    - a backslash in quotes, a triple quote, or a quote touching a word or another
+      quote (`x'41'`, `N'a'`);
+    - `--` without a following space, `//`, `/*!` and nested block comments;
+    - `.` next to whitespace;
+    - an unterminated quote or comment.
+  - SQL models usually have no `file` component. The compiled SQL, config and macros
+    are what gets built, so an edit that changes none of them (a comment, a reformat,
+    Jinja that renders the same SQL) reuses.
+  - The exception is Jinja that runs SQL the compiled code doesn't show: `{% do %}`,
+    `{% call %}`, `run_query`, `statement` or `adapter.execute`. Such a model, or one
+    whose raw code isn't recorded, keeps `file`.
   - The raw text's digest is kept outside the fingerprint (`cosmetic`), so a reused
     node's reason can say "only formatting changed".
 - A node that can't be fingerprinted completely is always BUILT. That covers:
