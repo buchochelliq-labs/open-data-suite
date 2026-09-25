@@ -15,7 +15,7 @@ codes).
 | `ods ci` | planned: M4 ODS CI (v0.4.0) |
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
-| `ods lineage columns\|impact\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
+| `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
@@ -265,6 +265,57 @@ How impact is decided, most conservative first:
 - a modified or removed column makes a reader run only if it uses that column; added columns
   only reach readers that `select *`;
 - every reader that is *not* affected is listed as skipped, with the changed columns it doesn't use.
+
+### Observed lineage (Unity Catalog)
+
+Databricks Unity Catalog records column lineage for every query it runs:
+- from notebooks, jobs, pipelines and SQL warehouses;
+- including Python and PySpark;
+- in the system table `system.access.column_lineage`, kept for a year.
+
+ODS reads an export of that table, so it needs no workspace connection or credentials.
+It uses the export in two ways:
+
+1. **To check the analyzer:** `ods lineage compare` reports, per model:
+   - which observed edges it predicted (*agrees*);
+   - which predicted edges didn't run (*covers*);
+   - which observed edges it missed (*misses*);
+   - which models have no observed runs.
+
+   Columns a platform reports as feeding a column but ODS classifies as row-shaping
+   (joins, filters, window ordering) count as agreement.
+2. **To fill in models the analyzer can't read**, such as Python models: pass
+   `--observed FILE` to any lineage command. Their lineage appears with confidence
+   `observed`. Observed lineage only covers what ran, so by default impact still treats
+   these models as opaque (they run whenever what they read changes). With
+   `--trust-observed`, impact relies on it and can skip them.
+
+```sql
+-- In a SQL warehouse or notebook; download the result as CSV or JSON.
+SELECT source_table_full_name, source_column_name,
+       target_table_full_name, target_column_name, event_time
+FROM system.access.column_lineage
+WHERE target_table_catalog = 'analytics'          -- your dbt catalog
+  AND event_date >= current_date() - INTERVAL 30 DAYS
+```
+
+```sh
+ods lineage compare --observed column_lineage.csv
+ods lineage impact --column stg_orders.status --observed column_lineage.csv [--trust-observed]
+ods serve --observed column_lineage.csv          # reloads when the export changes too
+```
+
+The export may have any columns in any order, as long as it includes the source and
+target table names (full names, or catalog/schema/name) and column names. Rows without a
+source table (file paths) or target table (plain reads) are skipped. Names are
+normalized like the SQL dialect's identifiers. `.csv`, `.json` (an array) and
+`.ndjson`/`.jsonl` are read. A test fixture in this format is in
+`fixtures/databricks/uc-lineage/`; it is synthetic.
+
+| Flag | Meaning |
+|---|---|
+| `--observed FILE` | (all `lineage` commands and `serve`; required by `compare`) an export of `system.access.column_lineage` |
+| `--trust-observed` | let impact rely on observed lineage for models without static lineage |
 
 ### Hosting the explorer
 

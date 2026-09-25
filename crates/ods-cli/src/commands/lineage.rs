@@ -16,11 +16,13 @@ use ods_core::{ColumnRef, EdgeKind};
 use ods_lineage::export::Endpoint;
 use ods_lineage::openlineage::{EventKind, ExportOptions, IndirectPlacement};
 use ods_lineage::{
-    BuildStats, Change, ColumnChangeKind, ColumnGraph, GraphFilter, Impact, ImpactReason,
-    LineageNode, LineageProject, MemoryCache, NodeKind, build, diff,
+    Agreement, BuildStats, Change, ColumnChangeKind, ColumnGraph, Comparison, GraphFilter, Impact,
+    ImpactReason, LineageNode, LineageProject, MemoryCache, NodeKind, Stitched, build, diff,
 };
+use ods_provider_databricks::UcColumnLineage;
 use ods_provider_dbt::{ArtifactPreference, Artifacts, ResourceType};
 use ods_provider_sqlparser::{SqlDialect, SqlparserAnalyzer};
+use ods_sdk::contracts::observed_lineage::{ObservedLineage, ObservedLineageSource};
 use ods_sdk::contracts::sql_lineage::SqlLineageAnalyzer;
 use serde::Serialize;
 
@@ -53,6 +55,19 @@ pub(super) fn common_args(command: Command) -> Command {
                 .long("dialect")
                 .value_name("DIALECT")
                 .help("SQL dialect; defaults to the manifest's adapter type"),
+        )
+        .arg(
+            Arg::new("observed")
+                .long("observed")
+                .value_name("FILE")
+                .help("Lineage the platform recorded (a Unity Catalog system.access.column_lineage export, .csv or .json): fills in models the analyzer can't read, such as Python models"),
+        )
+        .arg(
+            Arg::new("trust-observed")
+                .long("trust-observed")
+                .action(ArgAction::SetTrue)
+                .requires("observed")
+                .help("Let impact rely on observed lineage for those models, so they can be skipped; it only covers what ran"),
         )
 }
 
@@ -89,6 +104,13 @@ impl Module for Lineage {
                             .help("Compare with another build's target directory and use every difference"),
                     ),
             ))
+            .subcommand(
+                common_args(
+                    Command::new("compare")
+                        .about("Compare static lineage with what the platform observed"),
+                )
+                .mut_arg("observed", |a| a.required(true)),
+            )
             .subcommand(graph_command())
             .subcommand(view_command())
             .subcommand(export_command())
@@ -121,6 +143,7 @@ impl Module for Lineage {
                 };
                 ctx.emit(&report)
             }
+            "compare" => ctx.emit(&CompareReport::build(&loaded)),
             "export" => ctx.emit(&ExportReport::write(&loaded, args)?),
             "graph" => ctx.emit(&GraphReport::write(&loaded, args, false)?),
             "view" => ctx.emit(&GraphReport::write(&loaded, args, true)?),
@@ -259,6 +282,37 @@ pub(super) fn preference(args: &ArgMatches) -> ArtifactPreference {
     }
 }
 
+/// How to read and analyze a project.
+pub(super) struct LoadOptions {
+    pub(super) dialect: Option<String>,
+    pub(super) preference: ArtifactPreference,
+    pub(super) observed: Option<PathBuf>,
+    pub(super) trust_observed: bool,
+}
+
+impl LoadOptions {
+    /// From the arguments added by [`common_args`].
+    pub(super) fn from_args(args: &ArgMatches) -> Self {
+        Self {
+            dialect: args.get_one::<String>("dialect").cloned(),
+            preference: preference(args),
+            observed: args.get_one::<String>("observed").map(PathBuf::from),
+            trust_observed: args.get_flag("trust-observed"),
+        }
+    }
+}
+
+/// Observed lineage applied to a project.
+struct Observed {
+    file: PathBuf,
+    /// Names normalized like the graph's.
+    lineage: ObservedLineage,
+    stitched: Stitched,
+    /// The graph before stitching: diffs between builds must compare what the code
+    /// says, not what happened to run.
+    unstitched: ColumnGraph,
+}
+
 /// A project analyzed end to end.
 pub(super) struct Loaded {
     target_dir: PathBuf,
@@ -270,6 +324,7 @@ pub(super) struct Loaded {
     pub(super) graph: ColumnGraph,
     stats: BuildStats,
     elapsed_ms: u128,
+    observed: Option<Observed>,
 }
 
 impl Loaded {
@@ -278,23 +333,21 @@ impl Loaded {
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        let dialect = args.get_one::<String>("dialect").map(String::as_str);
         Self::from_dir(
             &target_dir,
-            dialect,
-            preference(args),
+            &LoadOptions::from_args(args),
             &MemoryCache::default(),
         )
     }
 
     pub(super) fn from_dir(
         target_dir: &Path,
-        dialect: Option<&str>,
-        preference: ArtifactPreference,
+        options: &LoadOptions,
         cache: &MemoryCache,
     ) -> Result<Self, CliError> {
         let started = Instant::now();
-        let artifacts = Artifacts::load_with(target_dir, preference).map_err(|e| {
+        let dialect = options.dialect.as_deref();
+        let artifacts = Artifacts::load_with(target_dir, options.preference).map_err(|e| {
             CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, e.to_string()).with_hint(
                 "run `dbt compile` (and `dbt docs generate` for warehouse columns) first",
             )
@@ -326,8 +379,23 @@ impl Loaded {
             .iter()
             .map(|n| (n.unique_id.clone(), n.checksum.clone()))
             .collect();
-        let (graph, stats) = build(&project, &analyzer, cache)
+        let (mut graph, stats) = build(&project, &analyzer, cache)
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+        let observed = match &options.observed {
+            Some(file) => {
+                let lineage = read_observed(file, &analyzer)?;
+                let (stitched_graph, stitched) =
+                    graph.with_observed(&lineage, options.trust_observed);
+                let unstitched = std::mem::replace(&mut graph, stitched_graph);
+                Some(Observed {
+                    file: file.clone(),
+                    lineage,
+                    stitched,
+                    unstitched,
+                })
+            }
+            None => None,
+        };
         Ok(Self {
             target_dir: target_dir.to_owned(),
             analyzer,
@@ -336,7 +404,15 @@ impl Loaded {
             graph,
             stats,
             elapsed_ms: started.elapsed().as_millis(),
+            observed,
         })
+    }
+
+    /// The graph as the code alone describes it, without observed lineage.
+    fn static_graph(&self) -> &ColumnGraph {
+        self.observed
+            .as_ref()
+            .map_or(&self.graph, |o| &o.unstitched)
     }
 
     /// Finds a node by `unique_id` or unique name.
@@ -386,6 +462,26 @@ impl Loaded {
     pub(super) fn node_name(&self, id: &str) -> String {
         self.names.get(id).cloned().unwrap_or_else(|| id.to_owned())
     }
+}
+
+/// Reads observed lineage and normalizes its names the way the analyzer normalizes
+/// identifiers, so they match the graph.
+fn read_observed(file: &Path, analyzer: &SqlparserAnalyzer) -> Result<ObservedLineage, CliError> {
+    let failed = |message: String| {
+        CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, message)
+            .with_hint("export system.access.column_lineage as CSV or JSON; see `docs/cli.md`")
+    };
+    let lineage = UcColumnLineage::from_path(file)
+        .and_then(|source| source.observed_lineage())
+        .map_err(|e| failed(e.to_string()))?;
+    Ok(lineage.normalized(
+        &|relation| {
+            analyzer
+                .relation_name(&relation.to_string())
+                .unwrap_or_else(|_| relation.clone())
+        },
+        &|column| analyzer.column_name(column),
+    ))
 }
 
 /// Maps dbt nodes to the neutral lineage project.
@@ -488,6 +584,18 @@ pub(super) struct Summary {
     models_opaque: usize,
     waves: usize,
     elapsed_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed: Option<ObservedSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct ObservedSummary {
+    file: PathBuf,
+    /// Opaque models that took their lineage from it.
+    stitched: Vec<String>,
+    /// Whether impact relies on it.
+    trusted: bool,
 }
 
 impl Summary {
@@ -500,11 +608,16 @@ impl Summary {
             models_opaque: loaded.stats.opaque,
             waves: loaded.stats.waves,
             elapsed_ms: loaded.elapsed_ms,
+            observed: loaded.observed.as_ref().map(|o| ObservedSummary {
+                file: o.file.clone(),
+                stitched: o.stitched.nodes.clone(),
+                trusted: o.stitched.trusted,
+            }),
         }
     }
 
     pub(super) fn view(&self) -> ViewNode {
-        ViewNode::KeyValue(vec![
+        let mut pairs = vec![
             (
                 "artifacts".into(),
                 vec![Span::toned(
@@ -520,7 +633,189 @@ impl Summary {
                     self.models_analyzed, self.models_opaque, self.waves, self.elapsed_ms
                 ))],
             ),
-        ])
+        ];
+        if let Some(observed) = &self.observed {
+            let mut line = vec![Span::toned(observed.file.display().to_string(), Tone::Code)];
+            if !observed.stitched.is_empty() {
+                line.push(Span::plain(format!(
+                    "; lineage for {} opaque model(s) filled in, {}",
+                    observed.stitched.len(),
+                    if observed.trusted {
+                        "trusted by impact"
+                    } else {
+                        "shown only (impact still treats them as opaque)"
+                    }
+                )));
+            }
+            pairs.push(("observed".into(), line));
+        }
+        ViewNode::KeyValue(pairs)
+    }
+}
+
+// ---------------------------------------------------------------- compare
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CompareReport {
+    summary: Summary,
+    records: usize,
+    skipped: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_between: Option<(String, String)>,
+    precision: Option<f64>,
+    recall: Option<f64>,
+    comparison: Comparison,
+}
+
+impl CompareReport {
+    fn build(loaded: &Loaded) -> Self {
+        // `compare` requires --observed, so this is always set.
+        let (lineage, comparison) = match &loaded.observed {
+            Some(observed) => (
+                observed.lineage.clone(),
+                observed.unstitched.compare_observed(&observed.lineage),
+            ),
+            None => (ObservedLineage::default(), Comparison::default()),
+        };
+        Self {
+            summary: Summary::of(loaded),
+            records: lineage.records,
+            skipped: lineage.skipped,
+            observed_between: lineage.observed_between,
+            precision: comparison.precision(),
+            recall: comparison.recall(),
+            comparison,
+        }
+    }
+}
+
+fn percent(value: Option<f64>) -> String {
+    value.map_or_else(|| "n/a".to_owned(), |v| format!("{:.0}%", v * 100.0))
+}
+
+fn agreement_span(agreement: Agreement) -> Span {
+    match agreement {
+        Agreement::Agrees => Span::toned("agrees", Tone::Success),
+        Agreement::Covers => Span::plain("covers (some paths didn't run)"),
+        Agreement::Misses => Span::toned("misses edges", Tone::Warning),
+        Agreement::OpaqueObserved => {
+            Span::toned("opaque; observed lineage available", Tone::Emphasis)
+        }
+        Agreement::NotObserved => Span::toned("not observed", Tone::Muted),
+        _ => Span::plain(format!("{agreement:?}")),
+    }
+}
+
+fn models_table(c: &Comparison) -> ViewNode {
+    ViewNode::Table {
+        title: None,
+        columns: vec![
+            "model".into(),
+            "verdict".into(),
+            "matched".into(),
+            "missed".into(),
+            "not observed".into(),
+        ],
+        rows: c
+            .models
+            .iter()
+            .map(|m| {
+                vec![
+                    vec![Span::toned(m.node.as_str(), Tone::Code)],
+                    vec![agreement_span(m.agreement)],
+                    vec![Span::plain((m.matched + m.matched_indirect).to_string())],
+                    vec![Span::plain(m.missing.len().to_string())],
+                    vec![Span::plain(m.unobserved.len().to_string())],
+                ]
+            })
+            .collect(),
+    }
+}
+
+impl Present for CompareReport {
+    const COMMAND: &'static str = "lineage.compare";
+
+    fn view(&self) -> ViewNode {
+        let c = &self.comparison;
+        let mut blocks = vec![
+            ViewNode::Heading("Static vs observed lineage".into()),
+            self.summary.view(),
+            ViewNode::KeyValue(vec![
+                (
+                    "records".into(),
+                    vec![Span::plain(format!(
+                        "{} read, {} skipped (plain reads, file paths){}",
+                        self.records,
+                        self.skipped,
+                        self.observed_between
+                            .as_ref()
+                            .map(|(a, b)| format!(", {a} .. {b}"))
+                            .unwrap_or_default()
+                    ))],
+                ),
+                (
+                    "edges".into(),
+                    vec![Span::plain(format!(
+                        "{} matched, {} matched as row inputs, {} missed, {} not observed; \
+                         {} target table(s) outside the project",
+                        c.matched, c.matched_indirect, c.missing, c.unobserved, c.outside_project
+                    ))],
+                ),
+                (
+                    "precision".into(),
+                    vec![Span::plain(format!(
+                        "{} of predicted direct edges were observed",
+                        percent(self.precision)
+                    ))],
+                ),
+                (
+                    "recall".into(),
+                    vec![Span::plain(format!(
+                        "{} of observed edges were predicted",
+                        percent(self.recall)
+                    ))],
+                ),
+            ]),
+            models_table(c),
+        ];
+        let missed: Vec<TreeItem> = c
+            .models
+            .iter()
+            .filter(|m| !m.missing.is_empty())
+            .map(|m| TreeItem {
+                label: vec![Span::toned(m.node.as_str(), Tone::Code)],
+                children: m
+                    .missing
+                    .iter()
+                    .map(|e| {
+                        TreeItem::leaf(vec![
+                            Span::toned(e.output.as_str(), Tone::Code),
+                            Span::plain(" ← "),
+                            Span::toned(e.source.to_string(), Tone::Code),
+                            Span::plain(" observed, not predicted"),
+                        ])
+                    })
+                    .collect(),
+            })
+            .collect();
+        if !missed.is_empty() {
+            blocks.push(ViewNode::Heading("Missed by static analysis".into()));
+            blocks.extend(missed.into_iter().map(ViewNode::Tree));
+        }
+        if c.models
+            .iter()
+            .any(|m| m.agreement == Agreement::OpaqueObserved)
+        {
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(
+                    "opaque models with observed lineage can use it: pass --observed to other \
+                     lineage commands (add --trust-observed to let impact skip them)",
+                )],
+            });
+        }
+        ViewNode::Group(blocks)
     }
 }
 
@@ -733,13 +1028,19 @@ impl ImpactReport {
         // as changed: conservative.
         let base = Loaded::from_dir(
             base_dir,
-            Some(head.analyzer.dialect().name()),
-            ArtifactPreference::Auto,
+            &LoadOptions {
+                dialect: Some(head.analyzer.dialect().name().to_owned()),
+                preference: ArtifactPreference::Auto,
+                observed: None,
+                trust_observed: false,
+            },
             &MemoryCache::default(),
         )?;
         let mut changes = Vec::new();
         let mut changed_models = Vec::new();
-        for node in head.graph.nodes() {
+        // What changed is decided from the code; observed lineage only affects how far
+        // the changes reach (in `finish`).
+        for node in head.static_graph().nodes() {
             let before_node = base.graph.node(&node.id);
             let Some(after) = &node.lineage else {
                 // No SQL lineage (seeds, snapshots, Python models): compare dbt's file

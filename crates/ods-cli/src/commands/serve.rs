@@ -10,11 +10,10 @@ use std::time::Duration;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_lineage::{GraphFilter, MemoryCache};
-use ods_provider_dbt::ArtifactPreference;
 use ods_web::{Loader, ServeOptions, Snapshot, WebError};
 use serde::Serialize;
 
-use super::lineage::{Loaded, Summary, common_args, preference};
+use super::lineage::{LoadOptions, Loaded, Summary, common_args};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -75,19 +74,18 @@ impl Module for Serve {
                 .get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        let dialect = matches.get_one::<String>("dialect").cloned();
-        let preference = preference(matches);
+        let load = LoadOptions::from_args(matches);
         // Shared across reloads so only changed models are re-analyzed.
         let cache = Arc::new(MemoryCache::default());
 
         // Load once up front so a bad target directory is a normal CLI error, not a
         // server that never starts. The server then takes this snapshot as its first.
-        let first = Loaded::from_dir(&target_dir, dialect.as_deref(), preference, &cache)?;
+        let first = Loaded::from_dir(&target_dir, &load, &cache)?;
         let summary = Summary::of(&first);
         let initial = Mutex::new(Some(snapshot(&first, &target_dir)));
         drop(first);
 
-        let loader = loader(target_dir.clone(), dialect, preference, cache, initial);
+        let loader = loader(target_dir.clone(), load, cache, initial);
         let host = matches
             .get_one::<IpAddr>("host")
             .copied()
@@ -108,7 +106,9 @@ impl Module for Serve {
             );
         let watching = !matches.get_flag("no-watch");
         if watching {
-            options = options.with_watch(watched(&target_dir), WATCH_EVERY);
+            let mut files = watched(&target_dir);
+            files.extend(matches.get_one::<String>("observed").map(PathBuf::from));
+            options = options.with_watch(files, WATCH_EVERY);
         }
         let base_path = options.base_path().to_owned();
 
@@ -156,8 +156,7 @@ fn snapshot(loaded: &Loaded, target_dir: &Path) -> Snapshot {
 /// reported by the server as text.
 fn loader(
     target_dir: PathBuf,
-    dialect: Option<String>,
-    preference: ArtifactPreference,
+    load: LoadOptions,
     cache: Arc<MemoryCache>,
     initial: Mutex<Option<Snapshot>>,
 ) -> Loader {
@@ -169,8 +168,7 @@ fn loader(
         {
             return Ok(first);
         }
-        let loaded = Loaded::from_dir(&target_dir, dialect.as_deref(), preference, &cache)
-            .map_err(|e| e.to_string())?;
+        let loaded = Loaded::from_dir(&target_dir, &load, &cache).map_err(|e| e.to_string())?;
         Ok(snapshot(&loaded, &target_dir))
     })
 }

@@ -24,6 +24,7 @@ mod diff;
 pub mod export;
 mod graph;
 mod impact;
+mod observed;
 pub mod openlineage;
 mod project;
 
@@ -33,4 +34,5 @@ pub use diff::{Change, ColumnChangeKind, diff};
 pub use export::{GraphDocument, GraphFilter};
 pub use graph::{ColumnGraph, ColumnUse, NodeLineage};
 pub use impact::{Impact, ImpactReason, NodeImpact, Pruned};
+pub use observed::{Agreement, Comparison, EdgeDiff, ModelComparison, Stitched};
 pub use project::{LineageNode, LineageProject, NodeKind};
