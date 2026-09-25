@@ -94,7 +94,7 @@ where
         Err(status) => return status,
     };
     // Global flags captured by a passthrough argument are moved in front of it and the
-    // line is parsed once more, so `ods state plan --json` behaves like
+    // line is parsed once more, so `ods state run --json` behaves like
     // `ods state --json plan` (ADR-0004 §1).
     if let Some(hoisted) = hoist_passthrough_globals(registry, &matches, &args) {
         matches = match parse(&root, &hoisted, io) {
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn planned_command_reports_not_implemented_on_stderr() {
-        let o = invoke(&["state", "plan", "--select", "+orders"]);
+        let o = invoke(&["state", "run", "--select", "+orders"]);
         assert_eq!(o.status, ExitStatus::NotImplemented);
         assert!(o.out.is_empty(), "stdout must stay clean: {}", o.out);
         insta::assert_snapshot!(o.err, @r"
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(help.status, ExitStatus::Success);
         assert!(help.out.contains("Exit status:"), "{}", help.out);
         assert!(
-            help.out.contains("[planned: M1 State MVP (v0.1.0)]"),
+            help.out.contains("[planned: M3 ERD & Usage (v0.3.0)]"),
             "{}",
             help.out
         );
@@ -479,24 +479,24 @@ mod tests {
 
     #[test]
     fn global_flags_after_planned_arguments_still_apply() {
-        let o = invoke(&["state", "plan", "--select", "+orders", "--json"]);
+        let o = invoke(&["state", "run", "--select", "+orders", "--json"]);
         assert_eq!(o.status, ExitStatus::NotImplemented);
         let value: serde_json::Value = serde_json::from_str(&o.out).expect("one JSON document");
         assert_eq!(value["diagnostics"][0]["code"], "ODS-E0003");
         assert!(o.err.is_empty());
 
-        let bad = invoke(&["state", "plan", "-o", "yaml"]);
+        let bad = invoke(&["state", "run", "-o", "yaml"]);
         assert_eq!(
             bad.status,
             ExitStatus::Usage,
             "hoisted flags are still validated"
         );
 
-        let help = invoke(&["state", "plan", "--help"]);
+        let help = invoke(&["state", "run", "--help"]);
         assert_eq!(help.status, ExitStatus::Success);
         assert!(help.out.contains("Usage: ods state"), "{}", help.out);
 
-        let literal = invoke(&["state", "plan", "--", "--json"]);
+        let literal = invoke(&["state", "run", "--", "--json"]);
         assert_eq!(literal.status, ExitStatus::NotImplemented);
         assert!(literal.out.is_empty(), "flags after `--` are literal");
     }

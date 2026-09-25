@@ -10,6 +10,7 @@ mod mcp_tools;
 mod planned;
 mod serve;
 mod state;
+mod state_plan;
 mod version;
 
 pub use completions::Completions;

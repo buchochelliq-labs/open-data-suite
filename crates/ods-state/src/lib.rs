@@ -1,7 +1,8 @@
 //! The State planner: what to build, what to reuse, and why (#18, #20, ADR-0013).
 //!
 //! Everything here is pure and synchronous. The caller describes the project as it is
-//! now ([`Project`]), and passes the last committed [`StateSnapshot`]:
+//! now ([`Project`]), and passes the last committed
+//! [`StateSnapshot`](ods_core::state::StateSnapshot):
 //! - [`plan`] decides, per node, BUILD or REUSE, with reasons and evidence;
 //! - [`record`] turns a finished run into the next snapshot, advancing only the nodes
 //!   that succeeded (AGENTS.md rule 5);

@@ -14,8 +14,8 @@ use parquet::file::reader::SerializedFileReader;
 use parquet::record::Field;
 
 use crate::artifacts::{
-    ArtifactSource, Catalog, DbtConfig, DbtConstraint, DbtError, DbtTest, Manifest, ManifestNode,
-    RawConstraint, ResourceType,
+    ArtifactSource, Catalog, DbtConfig, DbtConstraint, DbtError, DbtMacro, DbtTest, Manifest,
+    ManifestNode, RawConstraint, ResourceType,
 };
 
 /// Information Schema versions this reader understands.
@@ -161,17 +161,36 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
             supported: VERSIONS.to_vec(),
         });
     }
-    let project = read_table(dir, "dbt.project", &["dbt_version", "adapter_type"])?;
-    let (dbt_version, adapter_type) = project
+    let project = read_table(
+        dir,
+        "dbt.project",
+        &["dbt_version", "adapter_type", "project_name"],
+    )?;
+    let (dbt_version, adapter_type, project_name) = project
         .first()
-        .map(|r| (text(r, "dbt_version"), text(r, "adapter_type")))
+        .map(|r| {
+            (
+                text(r, "dbt_version"),
+                text(r, "adapter_type"),
+                text(r, "project_name"),
+            )
+        })
         .unwrap_or_default();
 
     let mut parents = read_parents(dir)?;
     let mut columns = read_columns(dir)?;
 
+    let macros = read_macros(dir, &mut parents)?;
     let mut nodes = read_nodes(dir, &mut parents, &mut columns)?;
     nodes.extend(read_tests(dir, &mut parents)?);
+    // `dbt.edges` links macros like nodes; keep them apart, as the manifest does.
+    for node in &mut nodes {
+        let (macros, others): (Vec<String>, Vec<String>) = std::mem::take(&mut node.depends_on)
+            .into_iter()
+            .partition(|p| p.starts_with("macro."));
+        node.depends_on = others;
+        node.depends_on_macros = macros;
+    }
     nodes.sort_by(|a, b| a.unique_id.cmp(&b.unique_id));
 
     let catalog = (!columns.actual.is_empty()).then(|| {
@@ -192,6 +211,8 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
         catalog
     });
     let manifest = Manifest {
+        project_name,
+        macros,
         schema_version: version,
         dbt_version,
         adapter_type,
@@ -199,6 +220,30 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
         nodes,
     };
     Ok((manifest, catalog))
+}
+
+/// Macros from `dbt.macros`, with the macros each calls (from `dbt.edges`).
+fn read_macros(
+    dir: &Path,
+    parents: &mut BTreeMap<String, Vec<String>>,
+) -> Result<BTreeMap<String, DbtMacro>, DbtError> {
+    let path = dir.join("dbt.macros.parquet");
+    if !path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+    let mut macros = BTreeMap::new();
+    for row in read_table(dir, "dbt.macros", &["unique_id", "macro_sql"])? {
+        let id = required(&row, "unique_id", &path)?;
+        let depends_on = parents.remove(&id).unwrap_or_default();
+        macros.insert(
+            id,
+            DbtMacro {
+                sql: text(&row, "macro_sql").unwrap_or_default(),
+                depends_on,
+            },
+        );
+    }
+    Ok(macros)
 }
 
 /// Parents of every node, from `dbt.edges`. It also links macros and tests; those are
@@ -372,6 +417,7 @@ fn read_nodes(
                 compiled_code,
                 language: text(&row, "node_language"),
                 materialized: text(&row, "materialized"),
+                depends_on_macros: Vec::new(),
                 depends_on: parents.remove(&unique_id).unwrap_or_default(),
                 declared_columns: columns
                     .declared
@@ -443,6 +489,7 @@ fn read_tests(
             language: None,
             materialized: None,
             depends_on: parents.remove(&unique_id).unwrap_or_default(),
+            depends_on_macros: Vec::new(),
             declared_columns: Vec::new(),
             checksum: None,
             config: DbtConfig::default(),

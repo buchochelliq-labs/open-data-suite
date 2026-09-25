@@ -87,4 +87,5 @@ nav:
       - adr/0010-mcp-server.md
       - adr/0011-dbt-state-config-compatibility.md
       - adr/0012-erd-from-tests-and-constraints.md
+      - adr/0013-state-snapshots-fingerprints-and-store.md
   - Legal and trademarks: legal.md

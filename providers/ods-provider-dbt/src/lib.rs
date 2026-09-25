@@ -16,10 +16,13 @@
 //! the same [`Manifest`].
 
 mod artifacts;
+pub mod fingerprint;
 mod info_schema;
+mod runs;
 pub mod state_config;
 
 pub use artifacts::{
     ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtConstraint, DbtError,
-    DbtTest, Manifest, ManifestNode, ResourceType,
+    DbtMacro, DbtTest, Manifest, ManifestNode, ResourceType,
 };
+pub use runs::{NodeResult, RunResults, RunStatus, SourceFreshness};

@@ -265,7 +265,7 @@ fn decide_on_data(
         return build(
             ReasonCode::MissingDataEvidence,
             format!(
-                "no usable data version for {}; run `dbt source freshness` before planning",
+                "no usable data version for {}; measure source freshness before planning",
                 inputs.missing.join(", ")
             ),
         );

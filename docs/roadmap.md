@@ -18,6 +18,7 @@ These work today, on the demo project and on small dbt projects, but are unrelea
 | Entity-relationship diagrams | `ods erd generate` |
 | MCP server for AI agents | `ods mcp` |
 | dbt State configuration reader | `ods state policies` |
+| State planning against recorded dbt runs | `ods state plan`, `record`, `history` |
 
 ## Release train
 
