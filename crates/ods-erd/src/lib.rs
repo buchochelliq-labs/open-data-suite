@@ -50,6 +50,8 @@ pub struct ColumnInput {
     pub name: String,
     /// Its data type, if known.
     pub data_type: Option<String>,
+    /// What it means, if documented.
+    pub description: Option<String>,
 }
 
 impl ColumnInput {
@@ -58,7 +60,15 @@ impl ColumnInput {
         Self {
             name: name.into(),
             data_type,
+            description: None,
         }
+    }
+
+    /// With its documented meaning.
+    #[must_use]
+    pub fn with_description(mut self, description: Option<String>) -> Self {
+        self.description = description;
+        self
     }
 }
 
@@ -75,6 +85,10 @@ pub struct EntityInput {
     pub kind: EntityKind,
     /// Its columns, in order. May be empty if unknown.
     pub columns: Vec<ColumnInput>,
+    /// What one row is, if documented.
+    pub description: Option<String>,
+    /// The fully qualified name to query it by, as the warehouse expects it.
+    pub relation: Option<String>,
 }
 
 impl EntityInput {
@@ -90,7 +104,23 @@ impl EntityInput {
             name: name.into(),
             kind,
             columns,
+            description: None,
+            relation: None,
         }
+    }
+
+    /// With its documented meaning.
+    #[must_use]
+    pub fn with_description(mut self, description: Option<String>) -> Self {
+        self.description = description;
+        self
+    }
+
+    /// With the name to query it by.
+    #[must_use]
+    pub fn with_relation(mut self, relation: Option<String>) -> Self {
+        self.relation = relation;
+        self
     }
 }
 
@@ -101,6 +131,9 @@ impl EntityInput {
 pub enum Basis {
     /// Only a naming convention suggests it.
     Inferred,
+    /// The project's SQL joins on it (`a.x = b.y`); direction and cardinality come from
+    /// the keys on either side.
+    Joined,
     /// A data test asserts it.
     Tested,
     /// A constraint declares it.
@@ -145,6 +178,20 @@ pub enum Fact {
         /// E.g. a constraint.
         evidence: String,
     },
+    /// The project's SQL joins these columns (`left[i] = right[i]`). Which side
+    /// references which is worked out from their keys.
+    Joined {
+        /// One entity id.
+        left: String,
+        /// Its columns.
+        left_columns: Vec<String>,
+        /// The other entity id.
+        right: String,
+        /// Its matching columns.
+        right_columns: Vec<String>,
+        /// E.g. the model whose SQL makes the join.
+        evidence: String,
+    },
     /// Every value of `columns` exists in `to_columns` of `to`.
     ForeignKey {
         /// Entity id holding the reference.
@@ -184,6 +231,8 @@ pub struct Column {
     pub name: String,
     /// Its data type, if known.
     pub data_type: Option<String>,
+    /// What it means, if documented.
+    pub description: Option<String>,
     /// Part of the primary key.
     pub primary_key: bool,
     /// Part of a relationship to another entity.
@@ -203,6 +252,10 @@ pub struct Entity {
     pub name: String,
     /// What it is.
     pub kind: EntityKind,
+    /// What one row is, if documented.
+    pub description: Option<String>,
+    /// The fully qualified name to query it by.
+    pub relation: Option<String>,
     /// Its columns.
     pub columns: Vec<Column>,
     /// The primary key, if one is known.
@@ -220,6 +273,8 @@ pub enum Cardinality {
     ManyToOne,
     /// At most one referencing row per referenced row (the reference is unique).
     OneToOne,
+    /// Neither side is a known key: joining may multiply rows on both sides.
+    Unknown,
 }
 
 /// `from.from_columns` references `to.to_columns`.

@@ -19,6 +19,7 @@ impl Tool for Echo {
     }
 
     fn call(&self, arguments: &Value) -> ToolOutput {
+        assert!(arguments["panic"] != true, "a bug in the tool");
         if arguments["fail"] == true {
             ToolOutput::Error("asked to fail".into())
         } else {
@@ -224,5 +225,61 @@ fn serve_answers_one_line_per_request() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1]["id"], 2);
+}
+
+#[test]
+fn a_panicking_tool_is_an_internal_error_not_a_crash() {
+    let r = call(
+        "tools/call",
+        &json!({"name": "echo", "arguments": {"panic": true}}),
+    );
+    assert_eq!(r["error"]["code"], -32_603);
+    assert_eq!(r["id"], 7);
+    // The server still answers afterwards.
+    let ok = call("tools/call", &json!({"name": "echo", "arguments": {}}));
+    assert_eq!(ok["result"]["isError"], false);
+}
+
+#[test]
+fn responses_are_ignored_and_bad_ids_rejected() {
+    let s = server();
+    assert!(
+        s.handle(&json!({"jsonrpc": "2.0", "id": 3, "result": {}}))
+            .is_none(),
+        "a response is never answered"
+    );
+    let no_method = s.handle(&json!({"jsonrpc": "2.0", "id": 4})).unwrap();
+    assert_eq!(no_method["error"]["code"], -32_600);
+    assert_eq!(no_method["id"], 4);
+    let bad_id = s
+        .handle(&json!({"jsonrpc": "2.0", "id": {"x": 1}, "method": "ping"}))
+        .unwrap();
+    assert_eq!(bad_id["error"]["code"], -32_600);
+    assert_eq!(bad_id["id"], Value::Null);
+}
+
+#[test]
+fn a_failed_resource_read_is_an_internal_error() {
+    assert_eq!(
+        call("resources/read", &json!({"uri": "ods://broken"}))["error"]["code"],
+        -32_603
+    );
+}
+
+#[test]
+fn invalid_utf8_is_one_parse_error_and_serving_continues() {
+    let mut input = b"\xff\xfe\n".to_vec();
+    input.extend_from_slice(br#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#);
+    input.push(b'\n');
+    let mut output = Vec::new();
+    server().serve(input.as_slice(), &mut output).unwrap();
+    let lines: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["error"]["code"], -32_700);
     assert_eq!(lines[1]["id"], 2);
 }

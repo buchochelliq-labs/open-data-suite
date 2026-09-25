@@ -84,6 +84,13 @@ fn config(row: &Row, path: &Path) -> Result<DbtConfig, DbtError> {
     config.loaded_at_query = config
         .loaded_at_query
         .or_else(|| text(row, "loaded_at_query"));
+    if config.unique_key.is_empty()
+        && let Some(key) = text(row, "unique_key").filter(|k| !k.trim().is_empty())
+    {
+        // A JSON list (`["a","b"]`) or a plain name.
+        let value = serde_json::from_str(&key).unwrap_or(serde_json::Value::String(key));
+        config.unique_key = crate::artifacts::unique_key(&value);
+    }
     Ok(config)
 }
 
@@ -223,6 +230,8 @@ struct Columns {
     declared_types: BTreeMap<String, BTreeMap<String, String>>,
     /// Column-level constraints.
     constraints: BTreeMap<String, Vec<DbtConstraint>>,
+    /// Column descriptions.
+    descriptions: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 fn read_columns(dir: &Path) -> Result<Columns, DbtError> {
@@ -238,6 +247,7 @@ fn read_columns(dir: &Path) -> Result<Columns, DbtError> {
             "data_type_actual",
             "data_type_declared",
             "constraints",
+            "description",
         ],
     )? {
         let node = required(&row, "node_unique_id", &path)?;
@@ -253,6 +263,13 @@ fn read_columns(dir: &Path) -> Result<Columns, DbtError> {
                 .entry(node.clone())
                 .or_default()
                 .insert(column.clone(), data_type);
+        }
+        if let Some(description) = text(&row, "description").filter(|d| !d.trim().is_empty()) {
+            columns
+                .descriptions
+                .entry(node.clone())
+                .or_default()
+                .insert(column.clone(), description);
         }
         let column_constraints = constraints(&row, &path, Some(&column))?;
         if !column_constraints.is_empty() {
@@ -322,6 +339,8 @@ fn read_nodes(
                 "loaded_at_field",
                 "loaded_at_query",
                 "constraints",
+                "description",
+                "unique_key",
             ],
         )? {
             if matches!(row.get("enabled"), Some(Field::Bool(false))) {
@@ -371,6 +390,8 @@ fn read_nodes(
                     .declared_types
                     .remove(&unique_id)
                     .unwrap_or_default(),
+                description: text(&row, "description").filter(|d| !d.trim().is_empty()),
+                column_descriptions: columns.descriptions.remove(&unique_id).unwrap_or_default(),
                 unique_id,
             });
         }
@@ -399,6 +420,7 @@ fn read_tests(
             "column_name",
             "node_unique_id",
             "enabled",
+            "where",
         ],
     )? {
         if matches!(row.get("enabled"), Some(Field::Bool(false))) {
@@ -430,9 +452,12 @@ fn read_tests(
                 column_name: text(&row, "column_name"),
                 attached_node: text(&row, "node_unique_id"),
                 arguments,
+                where_clause: text(&row, "where").filter(|w| !w.trim().is_empty()),
             }),
             constraints: Vec::new(),
             declared_types: BTreeMap::new(),
+            description: None,
+            column_descriptions: BTreeMap::new(),
             unique_id,
         });
     }

@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use super::erd::{ErdOptions, ErdReport, project_erd};
 use super::lineage::{LoadOptions, Loaded, Summary, shared_cache};
+use super::mcp_data;
 use crate::app::{Io, run};
 use crate::exit::CliError;
 
@@ -48,6 +49,16 @@ impl Project {
     /// call. Unchanged models come from the shared cache.
     pub(super) fn load(&self) -> Result<Loaded, CliError> {
         Loaded::from_dir(&self.target_dir, &self.load, shared_cache())
+    }
+
+    /// The dbt target directory the server reads.
+    pub(super) fn target_dir(&self) -> &std::path::Path {
+        &self.target_dir
+    }
+
+    /// How models are analyzed (dialect, SQL source).
+    pub(super) fn load_options(&self) -> &LoadOptions {
+        &self.load
     }
 
     fn artifact_args(&self) -> Vec<String> {
@@ -379,11 +390,7 @@ pub(super) fn erd(project: &Project, arguments: &Value) -> ToolOutput {
         Some(other) => return ToolOutput::Error(format!("unknown format `{other}`")),
         None => "mermaid",
     };
-    let erd = match project_erd(
-        &project.target_dir,
-        project.preference,
-        &erd_options(arguments),
-    ) {
+    let erd = match project_erd(&project.target_dir, &project.load, &erd_options(arguments)) {
         Ok(erd) => erd,
         Err(e) => return ToolOutput::Error(error_text(&e)),
     };
@@ -416,7 +423,7 @@ fn test_gaps(project: &Project, arguments: &Value) -> ToolOutput {
         infer: true,
         all: true,
     };
-    let erd = match project_erd(&project.target_dir, project.preference, &options) {
+    let erd = match project_erd(&project.target_dir, &project.load, &options) {
         Ok(erd) => erd,
         Err(e) => return ToolOutput::Error(error_text(&e)),
     };
@@ -545,9 +552,14 @@ fn join_gaps(erd: &Erd, loaded: &Loaded) -> Vec<Value> {
         let Some(entity) = erd.entity(&node.id) else {
             continue;
         };
+        // A guessed primary key is not a test.
+        let key_tested = entity
+            .primary_key
+            .as_ref()
+            .is_some_and(|k| k.basis != Basis::Inferred);
         let tested = entity.columns.iter().any(|c| {
             c.name.eq_ignore_ascii_case(&column.column)
-                && (c.not_null || c.primary_key || c.foreign_key)
+                && (c.not_null || (c.primary_key && key_tested) || c.foreign_key)
         }) || entity.unique_keys.iter().any(|k| {
             k.columns
                 .iter()
@@ -747,6 +759,56 @@ pub(super) fn all(project: &Arc<Project>) -> Vec<Box<dyn Tool>> {
                 ),
             ),
             compare_observed,
+        ),
+        (
+            ToolDefinition::read_only(
+                "ods_find_data",
+                "Find data by meaning",
+                "For people who use the data but don't know the project: find the tables and columns that hold what a question is about, by words in their names and descriptions. Each result says what one row is (its grain).",
+                schema(
+                    &json!({
+                        "query": {"type": "string", "description": "Words from the question, e.g. `customer lifetime value`"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}
+                    }),
+                    &["query"],
+                ),
+            ),
+            mcp_data::find_data,
+        ),
+        (
+            ToolDefinition::read_only(
+                "ods_describe_entity",
+                "Explain a table",
+                "A table explained for a data user: its description and warehouse relation, what one row is (the primary key, possibly several columns), every column with type and description, and which tables it joins to, on which columns, with cardinality and evidence.",
+                schema(
+                    &json!({
+                        "entity": {"type": "string", "description": "Table (model, seed, snapshot or source) name or unique_id"},
+                        "infer": {"type": "boolean", "default": false,
+                                  "description": "Also show relationships guessed from naming (labelled inferred)"}
+                    }),
+                    &["entity"],
+                ),
+            ),
+            mcp_data::describe_entity,
+        ),
+        (
+            ToolDefinition::read_only(
+                "ods_plan_query",
+                "Plan a SQL query",
+                "Join plan and starting SQL for a question over several tables: the most trustworthy join path from the ERD (tested or declared keys first, then joins the project already makes), composite join conditions, and warnings where a join repeats rows or its cardinality is unknown. Use its SQL as the skeleton; add filters and measures using only listed columns.",
+                schema(
+                    &json!({
+                        "entities": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 6,
+                                     "description": "Tables to use; the first is the one whose rows the answer is about"},
+                        "columns": {"type": "array", "items": {"type": "string"},
+                                    "description": "`table.column` to select (default: each table's key)"},
+                        "infer": {"type": "boolean", "default": false,
+                                  "description": "Allow joins guessed from naming when nothing better connects the tables"}
+                    }),
+                    &["entities"],
+                ),
+            ),
+            mcp_data::plan_query,
         ),
     ];
     tools

@@ -66,7 +66,12 @@ fn prints_a_mermaid_diagram_of_tested_keys_and_relationships() {
         "unique reference is 1:1"
     );
     assert!(
-        !out.contains("stg_customers"),
+        out.contains("orders }o--o{ stg_customers : \"customer_id (joined)\""),
+        "a join in the project's SQL is a relationship, with unknown cardinality when \
+         neither side is a tested key: {out}"
+    );
+    assert!(
+        !out.contains("raw_customers"),
         "unconnected entities are left out by default"
     );
 }
@@ -150,4 +155,105 @@ fn select_focuses_and_unknown_models_are_usage_errors() {
 fn other_erd_subcommands_are_still_planned() {
     let (code, _) = ods(&["erd", "inspect"]);
     assert_eq!(code, 3);
+}
+
+/// A copy of the dbt 1.10 fixture with `edit` applied to its manifest.
+fn patched(name: &str, edit: impl FnOnce(&mut Value)) -> PathBuf {
+    let from = artifacts("dbt-1.10");
+    let dir = std::env::temp_dir().join(format!("ods-erd-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["manifest.json", "catalog.json"] {
+        std::fs::copy(from.join(file), dir.join(file)).unwrap();
+    }
+    let path = dir.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    edit(&mut manifest);
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    dir
+}
+
+fn primary_key(result: &Value, entity: &str) -> Value {
+    result["erd"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == entity)
+        .unwrap_or_else(|| panic!("no {entity}"))["primary_key"]
+        .clone()
+}
+
+#[test]
+fn composite_keys_come_from_unique_key_config_and_column_combinations() {
+    let dir = patched("composite", |m| {
+        m["nodes"]["model.jaffle_ods.customer_order_rank"]["config"]["unique_key"] =
+            serde_json::json!(["customer_id", "order_seq"]);
+        // No `not_null` on either column: a unique combination is still the grain.
+        let mut test = m["nodes"]["test.jaffle_ods.unique_stg_orders_order_id.e3b841c71a"].clone();
+        test["unique_id"] = "test.jaffle_ods.combo_stg_customers.1".into();
+        test["name"] = "dbt_utils_unique_combination_of_columns_stg_customers".into();
+        test["column_name"] = Value::Null;
+        test["attached_node"] = "model.jaffle_ods.stg_customers".into();
+        test["depends_on"]["nodes"] = serde_json::json!(["model.jaffle_ods.stg_customers"]);
+        test["refs"] =
+            serde_json::json!([{"name": "stg_customers", "package": null, "version": null}]);
+        test["test_metadata"] = serde_json::json!({
+            "name": "unique_combination_of_columns",
+            "namespace": "dbt_utils",
+            "kwargs": {
+                "combination_of_columns": ["customer_id", "signup_date"],
+                "model": "{{ get_where_subquery(ref('stg_customers')) }}"
+            }
+        });
+        m["nodes"]["test.jaffle_ods.combo_stg_customers.1"] = test;
+    });
+    let result = json(&[
+        "erd",
+        "generate",
+        "--target-dir",
+        dir.to_str().unwrap(),
+        "--all",
+        "--format",
+        "json",
+    ]);
+    let config = primary_key(&result, "customer_order_rank");
+    assert_eq!(
+        config["columns"],
+        serde_json::json!(["customer_id", "order_seq"])
+    );
+    assert_eq!(config["basis"], "declared");
+    let combination = primary_key(&result, "stg_customers");
+    assert_eq!(
+        combination["columns"],
+        serde_json::json!(["customer_id", "signup_date"])
+    );
+    assert_eq!(combination["basis"], "tested");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn filtered_tests_say_nothing_about_keys() {
+    let dir = patched("where", |m| {
+        m["nodes"]["test.jaffle_ods.unique_stg_orders_order_id.e3b841c71a"]["config"]["where"] =
+            "status = 'completed'".into();
+    });
+    let result = json(&[
+        "erd",
+        "generate",
+        "--target-dir",
+        dir.to_str().unwrap(),
+        "--all",
+        "--format",
+        "json",
+    ]);
+    assert!(primary_key(&result, "stg_orders").is_null());
+    assert!(
+        result["erd"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("where")),
+        "{}",
+        result["erd"]["diagnostics"]
+    );
+    std::fs::remove_dir_all(dir).ok();
 }

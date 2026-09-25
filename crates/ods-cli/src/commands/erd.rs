@@ -15,6 +15,7 @@ use ods_provider_dbt::{ArtifactPreference, Artifacts, DbtConstraint, ManifestNod
 use serde::Serialize;
 
 use super::Planned;
+use super::lineage::{LoadOptions, Loaded, shared_cache};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::output::Mode;
@@ -75,6 +76,12 @@ fn generate_command() -> Command {
                 .help("dbt artifacts to read"),
         )
         .arg(
+            Arg::new("dialect")
+                .long("dialect")
+                .value_name("DIALECT")
+                .help("SQL dialect for reading joins; defaults to the manifest's adapter type"),
+        )
+        .arg(
             Arg::new("format")
                 .long("format")
                 .value_name("FORMAT")
@@ -125,18 +132,27 @@ pub(super) struct ErdOptions {
     pub(super) all: bool,
 }
 
-/// Loads artifacts and builds the (filtered) diagram.
+/// Loads artifacts and builds the (filtered) diagram. Joins in the project's SQL are
+/// evidence too, so the project is analyzed; if that fails, the diagram is still drawn
+/// from tests and constraints, with a diagnostic.
 pub(super) fn project_erd(
     target_dir: &std::path::Path,
-    preference: ArtifactPreference,
+    load: &LoadOptions,
     options: &ErdOptions,
 ) -> Result<Erd, CliError> {
-    let artifacts = Artifacts::load_with(target_dir, preference).map_err(|e| {
+    let artifacts = Artifacts::load_with(target_dir, load.preference).map_err(|e| {
         CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, e.to_string()).with_hint(
             "run `dbt parse` or `dbt compile` (and `dbt docs generate` for column types) first",
         )
     })?;
-    let (entities, facts, mut diagnostics) = erd_input(&artifacts);
+    let loaded = Loaded::from_dir(target_dir, load, shared_cache());
+    let (entities, facts, mut diagnostics) = erd_input(&artifacts, loaded.as_ref().ok());
+    if let Err(e) = &loaded {
+        diagnostics.push(format!(
+            "joins in the SQL weren't used as evidence: {}",
+            e.message
+        ));
+    }
     let mut erd = build(
         &entities,
         &facts,
@@ -185,8 +201,13 @@ fn entity_kind(node: &ManifestNode) -> Option<EntityKind> {
     }
 }
 
-/// `ref('orders')`, `ref('pkg', 'orders')`, `source('raw', 'orders')` → the node id.
-fn resolve_reference(text: &str, by_name: &BTreeMap<String, String>) -> Option<String> {
+/// Node ids by display name; `None` where two nodes share a name, so an ambiguous
+/// reference resolves to nothing rather than to the wrong node.
+type ByName = BTreeMap<String, Option<String>>;
+
+/// `ref('orders')`, `ref('pkg', 'orders')`, `ref('orders', v=2)`,
+/// `source('raw', 'orders')` → the node id.
+fn resolve_reference(text: &str, by_name: &ByName) -> Option<String> {
     let text = text.trim();
     let args = |prefix: &str| -> Option<Vec<String>> {
         let inner = text.strip_prefix(prefix)?.trim_start().strip_prefix('(')?;
@@ -200,20 +221,20 @@ fn resolve_reference(text: &str, by_name: &BTreeMap<String, String>) -> Option<S
         )
     };
     if let Some(args) = args("ref") {
-        return by_name.get(args.last()?).cloned();
+        return by_name.get(args.last()?).cloned().flatten();
     }
     if let Some(args) = args("source") {
-        return by_name.get(&args.join(".")).cloned();
+        return by_name.get(&args.join(".")).cloned().flatten();
     }
-    by_name.get(text).cloned()
+    by_name.get(text).cloned().flatten()
 }
 
 /// Entities (models, seeds, snapshots, sources) with their columns, and node ids by
 /// display name for resolving `ref()`/`source()` references.
-fn entities_of(artifacts: &Artifacts) -> (Vec<EntityInput>, BTreeMap<String, String>) {
+fn entities_of(artifacts: &Artifacts) -> (Vec<EntityInput>, ByName) {
     let catalog = artifacts.catalog.as_ref();
     let mut entities = Vec::new();
-    let mut by_name = BTreeMap::new();
+    let mut by_name = ByName::new();
     for node in &artifacts.manifest.nodes {
         let Some(kind) = entity_kind(node) else {
             continue;
@@ -230,29 +251,38 @@ fn entities_of(artifacts: &Artifacts) -> (Vec<EntityInput>, BTreeMap<String, Str
                                 .and_then(|t| t.get(c).cloned())
                                 .or_else(|| node.declared_types.get(c).cloned()),
                         )
+                        .with_description(node.column_descriptions.get(c).cloned())
                     })
                     .collect()
             }
             None => node
                 .declared_columns
                 .iter()
-                .map(|c| ColumnInput::new(c.clone(), node.declared_types.get(c).cloned()))
+                .map(|c| {
+                    ColumnInput::new(c.clone(), node.declared_types.get(c).cloned())
+                        .with_description(node.column_descriptions.get(c).cloned())
+                })
                 .collect(),
         };
         let name = display_name(node);
-        by_name.insert(name.clone(), node.unique_id.clone());
-        entities.push(EntityInput::new(
-            node.unique_id.clone(),
-            name,
-            kind,
-            columns,
-        ));
+        by_name
+            .entry(name.clone())
+            .and_modify(|id| *id = None)
+            .or_insert_with(|| Some(node.unique_id.clone()));
+        entities.push(
+            EntityInput::new(node.unique_id.clone(), name, kind, columns)
+                .with_description(node.description.clone())
+                .with_relation(node.relation_name.clone()),
+        );
     }
     (entities, by_name)
 }
 
 /// Entities, facts and anything that couldn't be mapped.
-fn erd_input(artifacts: &Artifacts) -> (Vec<EntityInput>, Vec<Fact>, Vec<String>) {
+fn erd_input(
+    artifacts: &Artifacts,
+    loaded: Option<&Loaded>,
+) -> (Vec<EntityInput>, Vec<Fact>, Vec<String>) {
     let (entities, by_name) = entities_of(artifacts);
     let known: std::collections::BTreeSet<&str> = entities.iter().map(|e| e.id.as_str()).collect();
     let mut facts = Vec::new();
@@ -262,10 +292,51 @@ fn erd_input(artifacts: &Artifacts) -> (Vec<EntityInput>, Vec<Fact>, Vec<String>
             for constraint in &node.constraints {
                 constraint_facts(node, constraint, &by_name, &mut facts, &mut diagnostics);
             }
+            // Incremental models and snapshots name the key dbt merges on; often
+            // several columns.
+            if !node.config.unique_key.is_empty() {
+                facts.push(Fact::PrimaryKey {
+                    entity: node.unique_id.clone(),
+                    columns: node.config.unique_key.clone(),
+                    basis: Basis::Declared,
+                    evidence: format!("config unique_key on {}", display_name(node)),
+                });
+            }
         }
         test_facts(node, &known, &by_name, &mut facts, &mut diagnostics);
     }
+    if let Some(loaded) = loaded {
+        facts.extend(join_facts(loaded, &known));
+    }
     (entities, facts, diagnostics)
+}
+
+/// Joins the project's SQL makes (`a.x = b.y`), between entities of the diagram.
+fn join_facts(loaded: &Loaded, known: &std::collections::BTreeSet<&str>) -> Vec<Fact> {
+    let mut facts = Vec::new();
+    for node in loaded.graph.nodes() {
+        let Some(lineage) = &node.lineage else {
+            continue;
+        };
+        for join in &lineage.join_keys {
+            let entity = |columns: &[ods_core::ColumnRef]| {
+                let relation = &columns.first()?.relation;
+                let id = loaded.graph.node_for(relation)?.id.clone();
+                known.contains(id.as_str()).then_some(id)
+            };
+            let (Some(left), Some(right)) = (entity(&join.left), entity(&join.right)) else {
+                continue;
+            };
+            facts.push(Fact::Joined {
+                left,
+                left_columns: join.left.iter().map(|c| c.column.clone()).collect(),
+                right,
+                right_columns: join.right.iter().map(|c| c.column.clone()).collect(),
+                evidence: node.id.clone(),
+            });
+        }
+    }
+    facts
 }
 
 /// What a data test asserts about keys: `unique`, `not_null`, `relationships`, and
@@ -273,22 +344,53 @@ fn erd_input(artifacts: &Artifacts) -> (Vec<EntityInput>, Vec<Fact>, Vec<String>
 fn test_facts(
     node: &ManifestNode,
     known: &std::collections::BTreeSet<&str>,
-    by_name: &BTreeMap<String, String>,
+    by_name: &ByName,
     facts: &mut Vec<Fact>,
     diagnostics: &mut Vec<String>,
 ) {
     let Some(test) = &node.test else {
         return;
     };
-    let Some(attached) = test
+    let evidence = node.unique_id.clone();
+    // dbt leaves `attached_node` empty for tests on sources: fall back to the only
+    // entity the test depends on, or to the `ref()`/`source()` it tests.
+    let attached = test
         .attached_node
         .clone()
         .filter(|a| known.contains(a.as_str()))
-    else {
+        .or_else(|| {
+            let deps: Vec<&String> = node
+                .depends_on
+                .iter()
+                .filter(|d| known.contains(d.as_str()))
+                .collect();
+            match deps.as_slice() {
+                [one] => Some((*one).clone()),
+                _ => test.arguments["model"].as_str().and_then(|m| {
+                    let start = m.find("ref(").or_else(|| m.find("source("))?;
+                    let end = start + m[start..].find(')')? + 1;
+                    resolve_reference(&m[start..end], by_name)
+                }),
+            }
+        });
+    let Some(attached) = attached else {
+        if matches!(test.name.as_str(), "unique" | "not_null" | "relationships") {
+            diagnostics.push(format!("{evidence}: can't tell which model it tests"));
+        }
         return;
     };
+    // A filtered test only checks the rows it keeps: not a fact about the table.
+    if let Some(filter) = &test.where_clause {
+        if matches!(test.name.as_str(), "unique" | "not_null" | "relationships")
+            || test.name == "unique_combination_of_columns"
+        {
+            diagnostics.push(format!(
+                "{evidence}: only checks rows where `{filter}`, so it isn't used as a key"
+            ));
+        }
+        return;
+    }
     let column = test.column_name.clone();
-    let evidence = node.unique_id.clone();
     match (test.namespace.as_deref(), test.name.as_str(), column) {
         (None, "unique", Some(column)) => facts.push(Fact::Unique {
             entity: attached,
@@ -350,7 +452,7 @@ fn test_facts(
 fn constraint_facts(
     node: &ManifestNode,
     constraint: &DbtConstraint,
-    by_name: &BTreeMap<String, String>,
+    by_name: &ByName,
     facts: &mut Vec<Fact>,
     diagnostics: &mut Vec<String>,
 ) {
@@ -417,6 +519,7 @@ pub(super) struct ErdReport {
     pub(super) relationships: usize,
     pub(super) declared: usize,
     pub(super) tested: usize,
+    pub(super) joined: usize,
     pub(super) inferred: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) output_file: Option<PathBuf>,
@@ -446,6 +549,7 @@ impl ErdReport {
             relationships: erd.relationships.len(),
             declared: count(Basis::Declared),
             tested: count(Basis::Tested),
+            joined: count(Basis::Joined),
             inferred: count(Basis::Inferred),
             output_file: None,
             rendered,
@@ -478,14 +582,20 @@ fn generate(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
     let format = args
         .get_one::<String>("format")
         .map_or("mermaid", String::as_str);
-    let erd = project_erd(&target_dir, preference, &options)?;
+    let load = LoadOptions {
+        dialect: args.get_one::<String>("dialect").cloned(),
+        preference,
+        observed: None,
+        trust_observed: false,
+    };
+    let erd = project_erd(&target_dir, &load, &options)?;
     let mut report = ErdReport::new(target_dir, format, erd)?;
     if let Some(path) = args.get_one::<String>("output-file") {
         let path = PathBuf::from(path);
         fs::write(&path, &report.rendered).map_err(|e| {
             CliError::new(
                 ExitStatus::Failure,
-                codes::LINEAGE_ARTIFACTS,
+                codes::OUTPUT_WRITE,
                 format!("cannot write `{}`: {e}", path.display()),
             )
         })?;
@@ -518,11 +628,12 @@ impl Present for ErdReport {
                 (
                     "diagram".into(),
                     vec![Span::plain(format!(
-                        "{} entities, {} relationships ({} declared, {} tested, {} inferred)",
+                        "{} entities, {} relationships ({} declared, {} tested, {} joined in SQL, {} inferred)",
                         self.entities,
                         self.relationships,
                         self.declared,
                         self.tested,
+                        self.joined,
                         self.inferred
                     ))],
                 ),

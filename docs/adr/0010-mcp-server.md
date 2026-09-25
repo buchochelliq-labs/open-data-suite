@@ -71,6 +71,9 @@ agents teams already use, before ODS builds its own agent.
   | `ods_list_opaque` | where lineage is unknown, and why |
   | `ods_state_policies` | freshness policies from dbt State configs |
   | `ods_compare_observed` | static lineage against Unity Catalog's recorded lineage |
+  | `ods_find_data` | for data users: tables and columns by meaning, with grain |
+  | `ods_describe_entity` | a table explained: grain, columns, joins with cardinality and evidence |
+  | `ods_plan_query` | the most trustworthy join path and starting SQL, with fan-out warnings |
 
 - **Resources:**
   - `ods://project/summary`;
@@ -80,7 +83,12 @@ agents teams already use, before ODS builds its own agent.
 - **Prompts:**
   - `assess_change_impact`;
   - `review_breaking_changes`;
-  - `add_missing_tests`.
+  - `add_missing_tests`;
+  - `answer_data_question`: find data → describe → plan → SQL, stating grain and
+    assumptions, for someone who doesn't know the project.
+- **Robustness.** A panicking tool returns a JSON-RPC internal error and the server
+  keeps serving; a line that isn't UTF-8 is one parse error; responses sent to the
+  server are ignored; ids must be strings or numbers.
 - **Versioning.**
   - Tool names are stable.
   - Result shapes follow the CLI's JSON (`schema_version` where persisted).

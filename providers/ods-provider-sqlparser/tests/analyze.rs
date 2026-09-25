@@ -494,3 +494,63 @@ fn review_opaque_results_keep_tables_shadowed_by_cte_names() {
     let orders = RelationName::new(["orders"]).unwrap();
     assert!(l.relations_read.contains(&orders));
 }
+
+fn joins(lineage: &QueryLineage) -> Vec<(Vec<ColumnRef>, Vec<ColumnRef>)> {
+    lineage
+        .join_keys
+        .iter()
+        .map(|j| (j.left.clone(), j.right.clone()))
+        .collect()
+}
+
+#[test]
+fn join_keys_are_traced_to_physical_columns() {
+    let lineage = analyze(
+        "with paid as (select order_id, sum(cents) as cents from db.payments group by order_id)
+         select o.id, c.name, p.cents
+         from db.orders o
+         join db.customers as c on o.customer_id = c.id
+         left join paid p on (p.order_id = o.id)",
+    );
+    assert_eq!(
+        joins(&lineage),
+        [
+            (
+                vec![col("customers", "id")],
+                vec![col("orders", "customer_id")]
+            ),
+            (vec![col("orders", "id")], vec![col("payments", "order_id")]),
+        ],
+        "canonical order, through the CTE's group-by key"
+    );
+}
+
+#[test]
+fn composite_and_using_joins_and_what_is_not_a_key() {
+    let composite = analyze(
+        "select 1 from db.orders o join db.payments p
+         on o.id = p.order_id and cast(o.status as string) = p.method and o.amount > 0",
+    );
+    assert_eq!(
+        joins(&composite),
+        [(
+            vec![col("orders", "id"), col("orders", "status")],
+            vec![col("payments", "order_id"), col("payments", "method")]
+        )]
+    );
+    let using = analyze("select 1 from db.orders join db.payments using (id)");
+    assert_eq!(
+        joins(&using),
+        [(vec![col("orders", "id")], vec![col("payments", "id")])]
+    );
+    // Transformed keys and self-joins say nothing about keys.
+    let transformed = analyze(
+        "select 1 from db.orders o join db.customers c on lower(o.status) = c.tier
+         join db.orders o2 on o2.id = o.id",
+    );
+    assert!(
+        transformed.join_keys.is_empty(),
+        "{:?}",
+        transformed.join_keys
+    );
+}

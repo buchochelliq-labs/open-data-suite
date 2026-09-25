@@ -24,6 +24,8 @@ fn labels(erd: &Erd) -> BTreeMap<&str, String> {
     for e in &erd.entities {
         *count.entry(e.name.as_str()).or_default() += 1;
     }
+    // Sanitizing can still collide (`raw.orders` and `raw_orders`): number repeats.
+    let mut used: BTreeMap<String, usize> = BTreeMap::new();
     erd.entities
         .iter()
         .map(|e| {
@@ -32,7 +34,15 @@ fn labels(erd: &Erd) -> BTreeMap<&str, String> {
             } else {
                 &e.name
             };
-            (e.id.as_str(), ident(label))
+            let base = ident(label);
+            let seen = used.entry(base.clone()).or_default();
+            *seen += 1;
+            let label = if *seen == 1 {
+                base
+            } else {
+                format!("{base}_{seen}")
+            };
+            (e.id.as_str(), label)
         })
         .collect()
 }
@@ -45,6 +55,7 @@ fn basis_word(basis: Basis) -> &'static str {
     match basis {
         Basis::Declared => "declared",
         Basis::Tested => "tested",
+        Basis::Joined => "joined",
         Basis::Inferred => "inferred",
     }
 }
@@ -84,19 +95,21 @@ impl Erd {
         }
         for rel in &self.relationships {
             // Mermaid reads `A <left>--<right> B`: left is A's multiplicity, right B's.
-            let left = match rel.cardinality {
-                Cardinality::ManyToOne => "}o",
-                _ => "|o",
+            let one = if rel.optional { "o|" } else { "||" };
+            let (left, right) = match rel.cardinality {
+                Cardinality::OneToOne => ("|o", one),
+                Cardinality::ManyToOne => ("}o", one),
+                // Neither side is a known key: many on both sides.
+                _ => ("}o", "o{"),
             };
-            let right = if rel.optional { "o|" } else { "||" };
             let line = if rel.basis == Basis::Inferred {
                 ".."
             } else {
                 "--"
             };
             let mut label = rel.from_columns.join(", ");
-            if rel.basis == Basis::Inferred {
-                label.push_str(" (inferred)");
+            if matches!(rel.basis, Basis::Inferred | Basis::Joined) {
+                let _ = write!(label, " ({})", basis_word(rel.basis));
             }
             let _ = writeln!(
                 out,
@@ -109,7 +122,8 @@ impl Erd {
         out
     }
 
-    /// Graphviz DOT with one record per entity. Inferred relationships are dashed.
+    /// Graphviz DOT with one record per entity. Inferred relationships are dashed and
+    /// inferred keys marked `PK?`.
     pub fn to_dot(&self) -> String {
         let labels = labels(self);
         let mut out = String::from(
@@ -136,15 +150,20 @@ impl Erd {
                 labels[rel.from.as_str()],
                 labels[rel.to.as_str()],
                 escape(&format!(
-                    "{} → {} ({})",
+                    "{} → {} ({}{})",
                     rel.from_columns.join(", "),
                     rel.to_columns.join(", "),
-                    basis_word(rel.basis)
+                    basis_word(rel.basis),
+                    if rel.cardinality == Cardinality::Unknown {
+                        ", cardinality unknown"
+                    } else {
+                        ""
+                    }
                 )),
-                if rel.cardinality == Cardinality::ManyToOne {
-                    "crow"
-                } else {
+                if rel.cardinality == Cardinality::OneToOne {
                     "tee"
+                } else {
+                    "crow"
                 }
             );
         }
@@ -181,7 +200,11 @@ fn entity_table(entity: &Entity) -> String {
         };
         let mut detail: Vec<String> = column.data_type.iter().map(|t| html(t)).collect();
         if column.primary_key {
-            detail.push("PK".into());
+            let inferred = entity
+                .primary_key
+                .as_ref()
+                .is_some_and(|k| k.basis == Basis::Inferred);
+            detail.push(if inferred { "PK?" } else { "PK" }.into());
         }
         if column.foreign_key {
             detail.push("FK".into());

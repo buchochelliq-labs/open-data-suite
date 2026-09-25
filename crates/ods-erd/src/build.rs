@@ -64,7 +64,33 @@ impl<'a> Index<'a> {
 struct EntityFacts {
     primary: Option<Key>,
     unique: Vec<Key>,
-    not_null: BTreeSet<String>,
+    /// Columns asserted never null, with the evidence.
+    not_null: BTreeMap<String, Vec<String>>,
+}
+
+impl EntityFacts {
+    /// The primary key, unless it is only a guess.
+    fn trusted_primary(&self) -> Option<&Key> {
+        self.primary.as_ref().filter(|k| k.basis != Basis::Inferred)
+    }
+
+    /// Whether `columns` are a declared or tested key (primary or unique).
+    fn has_trusted_key(&self, columns: &[String]) -> bool {
+        self.trusted_primary()
+            .is_some_and(|k| same_columns(&k.columns, columns))
+            || self
+                .unique
+                .iter()
+                .any(|k| k.basis != Basis::Inferred && same_columns(&k.columns, columns))
+    }
+
+    /// Whether the column is declared or tested never null.
+    fn trusted_not_null(&self, column: &str) -> bool {
+        self.not_null.contains_key(column)
+            || self
+                .trusted_primary()
+                .is_some_and(|k| k.columns.iter().any(|c| c == column))
+    }
 }
 
 /// Merges evidence for the same key, keeping the strongest basis.
@@ -98,31 +124,23 @@ pub fn build(entities: &[EntityInput], facts: &[Fact], options: BuildOptions) ->
     let mut per_entity: BTreeMap<String, EntityFacts> = BTreeMap::new();
     let mut foreign: Vec<Relationship> = Vec::new();
 
+    let mut joined = Vec::new();
     apply_facts(
         &index,
         facts,
         &mut per_entity,
         &mut foreign,
+        &mut joined,
         &mut diagnostics,
     );
-
-    // A unique key whose columns are all not-null is a primary key, if none is declared.
-    for facts in per_entity.values_mut() {
-        if facts.primary.is_none()
-            && let Some(position) = facts
-                .unique
-                .iter()
-                .position(|k| k.columns.iter().all(|c| facts.not_null.contains(c)))
-        {
-            let mut key = facts.unique.remove(position);
-            key.evidence
-                .extend(key.columns.iter().map(|c| format!("not null: {c}")));
-            facts.primary = Some(key);
-        }
-    }
-
+    promote_primary_keys(&mut per_entity, &mut diagnostics);
     if options.infer {
-        infer(entities, &mut per_entity, &mut foreign, &mut diagnostics);
+        infer_primary_keys(entities, &mut per_entity);
+    }
+    // Joins take their direction from keys, so they come after every key is known.
+    resolve_joins(joined, &per_entity, &mut foreign);
+    if options.infer {
+        infer_relationships(entities, &per_entity, &mut foreign, &mut diagnostics);
     }
 
     let relationships = finish_relationships(foreign, &per_entity);
@@ -143,6 +161,7 @@ fn apply_facts(
     facts: &[Fact],
     per_entity: &mut BTreeMap<String, EntityFacts>,
     foreign: &mut Vec<Relationship>,
+    joined: &mut Vec<Join>,
     diagnostics: &mut Vec<String>,
 ) {
     for fact in facts {
@@ -170,11 +189,15 @@ fn apply_facts(
                 ..
             } => match index.resolve(entity, std::slice::from_ref(column)) {
                 Ok(mut columns) => {
-                    per_entity
-                        .entry(entity.clone())
-                        .or_default()
-                        .not_null
-                        .extend(columns.pop());
+                    if let Some(column) = columns.pop() {
+                        per_entity
+                            .entry(entity.clone())
+                            .or_default()
+                            .not_null
+                            .entry(column)
+                            .or_default()
+                            .push(evidence.clone());
+                    }
                 }
                 Err(why) => diagnostics.push(format!("{evidence}: {why}")),
             },
@@ -200,40 +223,205 @@ fn apply_facts(
                 }
                 Err(why) => diagnostics.push(format!("{evidence}: {why}")),
             },
-            Fact::ForeignKey {
-                entity,
-                columns,
-                to,
-                to_columns,
-                basis,
-                evidence,
-            } => {
-                let from = index.resolve(entity, columns);
-                let target = index.resolve(to, to_columns);
-                match (from, target) {
-                    (Ok(from_columns), Ok(to_columns))
-                        if from_columns.len() == to_columns.len() =>
-                    {
-                        foreign.push(Relationship {
-                            from: entity.clone(),
-                            from_columns,
-                            to: to.clone(),
-                            to_columns,
-                            cardinality: Cardinality::ManyToOne,
-                            optional: true,
-                            basis: *basis,
-                            evidence: vec![evidence.clone()],
-                        });
-                    }
-                    (Ok(_), Ok(_)) => {
-                        diagnostics.push(format!("{evidence}: column counts differ"));
-                    }
-                    (Err(why), _) | (_, Err(why)) => {
-                        diagnostics.push(format!("{evidence}: {why}"));
-                    }
+            Fact::Joined { .. } | Fact::ForeignKey { .. } => {
+                apply_relationship(index, fact, foreign, joined, diagnostics);
+            }
+        }
+    }
+}
+
+/// Records a join or foreign key, or a diagnostic if it names something unknown.
+fn apply_relationship(
+    index: &Index<'_>,
+    fact: &Fact,
+    foreign: &mut Vec<Relationship>,
+    joined: &mut Vec<Join>,
+    diagnostics: &mut Vec<String>,
+) {
+    match fact {
+        Fact::Joined {
+            left,
+            left_columns,
+            right,
+            right_columns,
+            evidence,
+        } => match (
+            index.resolve(left, left_columns),
+            index.resolve(right, right_columns),
+        ) {
+            (Ok(left_columns), Ok(right_columns))
+                if left_columns.len() == right_columns.len() && left != right =>
+            {
+                joined.push(Join {
+                    left: left.clone(),
+                    left_columns,
+                    right: right.clone(),
+                    right_columns,
+                    evidence: evidence.clone(),
+                });
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(why), _) | (_, Err(why)) => diagnostics.push(format!("{evidence}: {why}")),
+        },
+        Fact::ForeignKey {
+            entity,
+            columns,
+            to,
+            to_columns,
+            basis,
+            evidence,
+        } => {
+            let from = index.resolve(entity, columns);
+            let target = index.resolve(to, to_columns);
+            match (from, target) {
+                (Ok(from_columns), Ok(to_columns)) if from_columns.len() == to_columns.len() => {
+                    foreign.push(Relationship {
+                        from: entity.clone(),
+                        from_columns,
+                        to: to.clone(),
+                        to_columns,
+                        cardinality: Cardinality::ManyToOne,
+                        optional: true,
+                        basis: *basis,
+                        evidence: vec![evidence.clone()],
+                    });
+                }
+                (Ok(_), Ok(_)) => {
+                    diagnostics.push(format!("{evidence}: column counts differ"));
+                }
+                (Err(why), _) | (_, Err(why)) => {
+                    diagnostics.push(format!("{evidence}: {why}"));
                 }
             }
         }
+        _ => {}
+    }
+}
+
+/// A join the SQL makes, with resolved column names.
+struct Join {
+    left: String,
+    left_columns: Vec<String>,
+    right: String,
+    right_columns: Vec<String>,
+    evidence: String,
+}
+
+fn same_columns(a: &[String], b: &[String]) -> bool {
+    let mut a: Vec<String> = a.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let mut b: Vec<String> = b.iter().map(|c| c.to_ascii_lowercase()).collect();
+    a.sort();
+    b.sort();
+    a == b
+}
+
+/// Whether `columns` are a declared or tested key of the entity. Guessed keys never
+/// decide direction or cardinality (AGENTS.md rule 3).
+fn is_key(per_entity: &BTreeMap<String, EntityFacts>, entity: &str, columns: &[String]) -> bool {
+    per_entity
+        .get(entity)
+        .is_some_and(|f| f.has_trusted_key(columns))
+}
+
+/// Without a declared primary key, a unique key becomes it:
+/// - first one whose columns are all not null;
+/// - else the smallest unique *combination* of columns. Composite keys are usually
+///   tested only for uniqueness, and a single-column `unique` test can't express them.
+///
+/// A single column tested only `unique` stays a nullable unique key.
+fn promote_primary_keys(
+    per_entity: &mut BTreeMap<String, EntityFacts>,
+    diagnostics: &mut Vec<String>,
+) {
+    for (entity, facts) in per_entity.iter_mut() {
+        if facts.primary.is_some() {
+            continue;
+        }
+        let qualifying: Vec<usize> = facts
+            .unique
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| k.columns.iter().all(|c| facts.not_null.contains_key(c)))
+            .map(|(i, _)| i)
+            .collect();
+        if qualifying.len() > 1 {
+            diagnostics.push(format!(
+                "{entity}: several unique, not-null keys; the first ({:?}) is used as the primary key",
+                facts.unique[qualifying[0]].columns
+            ));
+        }
+        let not_null = qualifying.first().copied();
+        let composite = || {
+            facts
+                .unique
+                .iter()
+                .enumerate()
+                .filter(|(_, k)| k.columns.len() > 1)
+                .min_by_key(|(_, k)| k.columns.len())
+                .map(|(i, _)| i)
+        };
+        if let Some(position) = not_null {
+            let mut key = facts.unique.remove(position);
+            for column in &key.columns {
+                key.evidence
+                    .extend(facts.not_null.get(column).into_iter().flatten().cloned());
+            }
+            key.evidence.sort();
+            key.evidence.dedup();
+            facts.primary = Some(key);
+        } else if let Some(position) = composite() {
+            let mut key = facts.unique.remove(position);
+            key.evidence
+                .push("unique combination; nullability not tested".to_owned());
+            facts.primary = Some(key);
+        }
+    }
+}
+
+/// Joins become relationships: the side whose columns are a key is referenced (the
+/// "one" side). With keys on neither side, the relationship is kept with
+/// [`Cardinality::Unknown`], so a query writer knows the join may fan out.
+fn resolve_joins(
+    joins: Vec<Join>,
+    per_entity: &BTreeMap<String, EntityFacts>,
+    foreign: &mut Vec<Relationship>,
+) {
+    for join in joins {
+        let right_key = is_key(per_entity, &join.right, &join.right_columns);
+        let left_key = is_key(per_entity, &join.left, &join.left_columns);
+        let (from, from_columns, to, to_columns, cardinality) = match (left_key, right_key) {
+            (_, true) => (
+                join.left,
+                join.left_columns,
+                join.right,
+                join.right_columns,
+                Cardinality::ManyToOne,
+            ),
+            (true, false) => (
+                join.right,
+                join.right_columns,
+                join.left,
+                join.left_columns,
+                Cardinality::ManyToOne,
+            ),
+            (false, false) => (
+                join.left,
+                join.left_columns,
+                join.right,
+                join.right_columns,
+                Cardinality::Unknown,
+            ),
+        };
+        foreign.push(Relationship {
+            from,
+            from_columns,
+            to,
+            to_columns,
+            cardinality,
+            optional: true,
+            basis: Basis::Joined,
+            evidence: vec![format!("joined in {}", join.evidence)],
+        });
     }
 }
 
@@ -247,9 +435,10 @@ fn finish_entities(
         .iter()
         .map(|input| {
             let facts = per_entity.remove(&input.id).unwrap_or_default();
+            // Guessed relationships don't mark columns as foreign keys.
             let fk_columns: BTreeSet<&str> = relationships
                 .iter()
-                .filter(|r| r.from == input.id)
+                .filter(|r| r.from == input.id && r.basis != Basis::Inferred)
                 .flat_map(|r| r.from_columns.iter().map(String::as_str))
                 .collect();
             let pk: BTreeSet<&str> = facts
@@ -261,15 +450,18 @@ fn finish_entities(
                 id: input.id.clone(),
                 name: input.name.clone(),
                 kind: input.kind,
+                description: input.description.clone(),
+                relation: input.relation.clone(),
                 columns: input
                     .columns
                     .iter()
                     .map(|c| Column {
                         name: c.name.clone(),
                         data_type: c.data_type.clone(),
+                        description: c.description.clone(),
                         primary_key: pk.contains(c.name.as_str()),
                         foreign_key: fk_columns.contains(c.name.as_str()),
-                        not_null: facts.not_null.contains(&c.name) || pk.contains(c.name.as_str()),
+                        not_null: facts.trusted_not_null(&c.name),
                     })
                     .collect(),
                 primary_key: facts.primary,
@@ -298,6 +490,10 @@ fn finish_relationships(
         );
         match merged.get_mut(&key) {
             Some(existing) => {
+                // A test or constraint knows more about cardinality than a join does.
+                if existing.cardinality == Cardinality::Unknown {
+                    existing.cardinality = rel.cardinality;
+                }
                 existing.basis = existing.basis.max(rel.basis);
                 existing.evidence.extend(rel.evidence);
                 existing.evidence.sort();
@@ -311,25 +507,21 @@ fn finish_relationships(
     merged
         .into_values()
         .map(|mut rel| {
-            let facts = per_entity.get(&rel.from);
-            let same = |k: &Key| {
-                let mut a = k.columns.clone();
-                a.sort();
-                let mut b = rel.from_columns.clone();
-                b.sort();
-                a == b
-            };
-            let unique = facts
-                .is_some_and(|f| f.primary.as_ref().is_some_and(same) || f.unique.iter().any(same));
-            if unique {
+            let from = per_entity.get(&rel.from);
+            let to_is_key = per_entity
+                .get(&rel.to)
+                .is_some_and(|f| f.has_trusted_key(&rel.to_columns));
+            // Only declared or tested keys decide cardinality and optionality; a
+            // reference to columns not known to be a key may fan out.
+            if rel.basis != Basis::Inferred && !to_is_key {
+                rel.cardinality = Cardinality::Unknown;
+            } else if rel.cardinality != Cardinality::Unknown
+                && from.is_some_and(|f| f.has_trusted_key(&rel.from_columns))
+            {
                 rel.cardinality = Cardinality::OneToOne;
             }
-            rel.optional = !facts.is_some_and(|f| {
-                rel.from_columns.iter().all(|c| {
-                    f.not_null.contains(c)
-                        || f.primary.as_ref().is_some_and(|k| k.columns.contains(c))
-                })
-            });
+            rel.optional =
+                !from.is_some_and(|f| rel.from_columns.iter().all(|c| f.trusted_not_null(c)));
             rel
         })
         .collect()
@@ -362,17 +554,9 @@ fn name_forms(name: &str) -> Vec<String> {
 ///   that as primary key;
 /// - a column `<x>_id` refers to the one entity whose primary key is that column, or
 ///   whose name form is `<x>` with primary key `id`.
-fn infer(
-    entities: &[EntityInput],
-    per_entity: &mut BTreeMap<String, EntityFacts>,
-    foreign: &mut Vec<Relationship>,
-    diagnostics: &mut Vec<String>,
-) {
-    infer_primary_keys(entities, per_entity);
-    infer_relationships(entities, per_entity, foreign, diagnostics);
-}
-
-/// An entity without a known primary key whose column is `id` or `<entity>_id` gets it.
+///
+/// This one does the first: an entity without a known primary key whose column is `id`
+/// or `<entity>_id` gets it.
 fn infer_primary_keys(entities: &[EntityInput], per_entity: &mut BTreeMap<String, EntityFacts>) {
     for entity in entities {
         let facts = per_entity.entry(entity.id.clone()).or_default();

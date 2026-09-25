@@ -92,6 +92,8 @@ fn relationships_get_cardinality_optionality_and_evidence() {
             // A unique reference is one-to-one.
             relationship("shipments", "order_id", "orders", "order_id"),
             unique("shipments", "order_id"),
+            unique("orders", "order_id"),
+            not_null("orders", "order_id"),
         ],
         BuildOptions::default(),
     );
@@ -293,4 +295,168 @@ fn renders_mermaid_dot_and_json() {
     let json: serde_json::Value = serde_json::from_str(&erd.to_json().unwrap()).unwrap();
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["relationships"][0]["basis"], "tested");
+}
+
+fn joined(left: &str, left_columns: &[&str], right: &str, right_columns: &[&str]) -> Fact {
+    Fact::Joined {
+        left: left.into(),
+        left_columns: left_columns.iter().map(|c| (*c).to_owned()).collect(),
+        right: right.into(),
+        right_columns: right_columns.iter().map(|c| (*c).to_owned()).collect(),
+        evidence: "model.p.report".into(),
+    }
+}
+
+#[test]
+fn joins_become_relationships_pointing_at_the_keyed_side() {
+    let erd = build(
+        &shop(),
+        &[
+            unique("customers", "customer_id"),
+            not_null("customers", "customer_id"),
+            // Written either way round, the key decides the direction.
+            joined("customers", &["customer_id"], "orders", &["customer_id"]),
+            // No key on either side: kept, but cardinality is unknown.
+            joined("payments", &["amount"], "orders", &["amount"]),
+        ],
+        BuildOptions::default(),
+    );
+    let to_customers = erd
+        .relationships
+        .iter()
+        .find(|r| r.to == "customers")
+        .unwrap();
+    assert_eq!(
+        (to_customers.from.as_str(), to_customers.basis),
+        ("orders", Basis::Joined)
+    );
+    assert_eq!(to_customers.cardinality, Cardinality::ManyToOne);
+    assert_eq!(to_customers.evidence, ["joined in model.p.report"]);
+    let unknown = erd
+        .relationships
+        .iter()
+        .find(|r| r.from_columns == ["amount"])
+        .unwrap();
+    assert_eq!(unknown.cardinality, Cardinality::Unknown);
+    assert!(erd.to_mermaid().contains("}o--o{"), "{}", erd.to_mermaid());
+}
+
+#[test]
+fn a_test_on_a_joined_pair_wins_and_keeps_both_pieces_of_evidence() {
+    let erd = build(
+        &shop(),
+        &[
+            unique("customers", "customer_id"),
+            not_null("customers", "customer_id"),
+            joined("orders", &["customer_id"], "customers", &["customer_id"]),
+            relationship("orders", "customer_id", "customers", "customer_id"),
+        ],
+        BuildOptions::default(),
+    );
+    assert_eq!(erd.relationships.len(), 1);
+    assert_eq!(erd.relationships[0].basis, Basis::Tested);
+    assert_eq!(erd.relationships[0].evidence.len(), 2);
+}
+
+#[test]
+fn a_unique_combination_is_the_primary_key_even_without_not_null_tests() {
+    let entities = vec![entity("order_lines", &["order_id", "line_no", "sku"])];
+    let erd = build(
+        &entities,
+        &[Fact::Unique {
+            entity: "order_lines".into(),
+            columns: vec!["order_id".into(), "line_no".into()],
+            basis: Basis::Tested,
+            evidence: "unique_combination_of_columns".into(),
+        }],
+        BuildOptions::default(),
+    );
+    let pk = erd
+        .entity("order_lines")
+        .unwrap()
+        .primary_key
+        .clone()
+        .unwrap();
+    assert_eq!(pk.columns, ["order_id", "line_no"]);
+    assert!(
+        pk.evidence
+            .iter()
+            .any(|e| e.contains("nullability not tested"))
+    );
+    // A composite key joins on both columns.
+    let entities = vec![
+        entity("order_lines", &["order_id", "line_no", "sku"]),
+        entity("returns", &["order_id", "line_no", "reason"]),
+    ];
+    let erd = build(
+        &entities,
+        &[
+            Fact::Unique {
+                entity: "order_lines".into(),
+                columns: vec!["order_id".into(), "line_no".into()],
+                basis: Basis::Tested,
+                evidence: "combination".into(),
+            },
+            joined(
+                "returns",
+                &["order_id", "line_no"],
+                "order_lines",
+                &["order_id", "line_no"],
+            ),
+        ],
+        BuildOptions::default(),
+    );
+    assert_eq!(erd.relationships[0].to, "order_lines");
+    assert_eq!(erd.relationships[0].cardinality, Cardinality::ManyToOne);
+}
+
+#[test]
+fn guessed_keys_never_change_what_tests_say() {
+    // `orders.order_id` is only a guessed key; the tested reference to it must not be
+    // presented as one-to-one or required.
+    let erd = build(
+        &shop(),
+        &[relationship("shipments", "order_id", "orders", "order_id")],
+        BuildOptions::default().with_inference(true),
+    );
+    let shipment = erd
+        .relationships
+        .iter()
+        .find(|r| r.from == "shipments")
+        .unwrap();
+    assert_eq!(shipment.basis, Basis::Tested);
+    assert_eq!(shipment.cardinality, Cardinality::Unknown);
+    assert!(shipment.optional);
+    let orders = erd.entity("orders").unwrap();
+    assert_eq!(orders.primary_key.as_ref().unwrap().basis, Basis::Inferred);
+    assert!(
+        !orders.columns[0].not_null,
+        "a guessed key isn't known to be not null"
+    );
+    assert!(erd.to_dot().contains("PK?"));
+}
+
+#[test]
+fn promoted_keys_keep_the_not_null_test_ids() {
+    let erd = build(
+        &shop(),
+        &[
+            unique("customers", "customer_id"),
+            not_null("customers", "customer_id"),
+        ],
+        BuildOptions::default(),
+    );
+    let pk = erd
+        .entity("customers")
+        .unwrap()
+        .primary_key
+        .clone()
+        .unwrap();
+    assert_eq!(
+        pk.evidence,
+        [
+            "not_null_customers_customer_id",
+            "unique_customers_customer_id"
+        ]
+    );
 }

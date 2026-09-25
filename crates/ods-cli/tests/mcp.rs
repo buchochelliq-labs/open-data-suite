@@ -117,7 +117,7 @@ fn every_tool_answers_from_the_fixture() {
         ],
     );
     let tools = r[0]["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 10);
+    assert_eq!(tools.len(), 13);
     assert!(
         tools
             .iter()
@@ -221,9 +221,18 @@ fn resources_and_prompts() {
             json!({"method": "prompts/get",
                    "params": {"name": "assess_change_impact",
                               "arguments": {"change": "drop orders.status"}}}),
+            json!({"method": "prompts/get",
+                   "params": {"name": "answer_data_question",
+                              "arguments": {"question": "who are our best customers?"}}}),
         ],
     );
     assert_eq!(r[0]["result"]["resources"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        r[5]["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .map(|t| t.contains("ods_plan_query")),
+        Some(true)
+    );
     let erd = r[1]["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(erd.starts_with("erDiagram"));
     let node: Value =
@@ -234,4 +243,77 @@ fn resources_and_prompts() {
         .as_str()
         .unwrap();
     assert!(prompt.contains("drop orders.status") && prompt.contains("ods_impact"));
+}
+
+#[test]
+fn data_users_find_tables_by_meaning_and_get_sql() {
+    let target = target();
+    let r = session(
+        &["--target-dir", &target],
+        &[
+            tool("ods_find_data", &json!({"query": "order statistics"})),
+            tool("ods_describe_entity", &json!({"entity": "orders"})),
+            tool(
+                "ods_plan_query",
+                &json!({"entities": ["customers", "orders"],
+                        "columns": ["customers.first_name", "orders.amount"]}),
+            ),
+            tool(
+                "ods_plan_query",
+                &json!({"entities": ["orders"], "columns": ["orders.nope"]}),
+            ),
+            tool(
+                "ods_plan_query",
+                &json!({"entities": ["orders", "raw_customers"]}),
+            ),
+        ],
+    );
+    let found = structured(&r[0]);
+    assert_eq!(
+        found["results"][0]["entity"], "customers",
+        "matched by its description: {found}"
+    );
+    assert_eq!(
+        found["results"][0]["grain"]["columns"],
+        json!(["customer_id"])
+    );
+
+    let orders = structured(&r[1]);
+    assert_eq!(orders["grain"]["statement"], "one row per order_id");
+    let references = orders["references"].as_array().unwrap();
+    assert!(references.iter().any(|r| r["entity"] == "customers"
+        && r["cardinality"] == "many-to-one"
+        && r["basis"] == "tested"));
+    assert!(
+        references
+            .iter()
+            .any(|r| r["entity"] == "stg_customers" && r["basis"] == "joined in the project's SQL"),
+        "joins the project makes are relationships too: {references:?}"
+    );
+
+    let plan = structured(&r[2]);
+    let sql = plan["sql"].as_str().unwrap();
+    assert!(
+        sql.contains("from \"jaffle_ods\".\"main\".\"customers\" as c"),
+        "{sql}"
+    );
+    assert!(sql.contains("on o.customer_id = c.customer_id"), "{sql}");
+    assert!(
+        sql.contains("c.first_name") && sql.contains("o.amount"),
+        "{sql}"
+    );
+    assert_eq!(plan["joins"][0]["repeats_rows"], true);
+    assert!(
+        plan["warnings"][0].as_str().unwrap().contains("Aggregate"),
+        "joining orders onto customers repeats customers: {plan}"
+    );
+
+    assert_eq!(r[3]["result"]["isError"], true);
+    assert!(text(&r[3]).contains("no column `nope`"), "{}", text(&r[3]));
+    assert_eq!(r[4]["result"]["isError"], true);
+    assert!(
+        text(&r[4]).contains("no known relationship"),
+        "{}",
+        text(&r[4])
+    );
 }

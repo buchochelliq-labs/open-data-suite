@@ -100,6 +100,11 @@ struct RawConfig {
     loaded_at_field: Option<String>,
     #[serde(default)]
     loaded_at_query: Option<String>,
+    #[serde(default)]
+    unique_key: Option<serde_json::Value>,
+    /// Tests only: a filter limiting the rows they check.
+    #[serde(default, rename = "where")]
+    where_clause: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -111,6 +116,8 @@ struct RawChecksum {
 #[derive(Debug, Deserialize)]
 struct RawColumn {
     name: String,
+    #[serde(default)]
+    description: Option<String>,
     #[serde(default)]
     data_type: Option<String>,
     #[serde(default)]
@@ -176,6 +183,8 @@ struct RawNode {
     #[serde(default)]
     checksum: RawChecksum,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     test_metadata: Option<RawTestMetadata>,
     #[serde(default)]
     column_name: Option<String>,
@@ -230,6 +239,28 @@ pub struct ManifestNode {
     pub constraints: Vec<DbtConstraint>,
     /// Column data types declared in YAML, by column name.
     pub declared_types: BTreeMap<String, String>,
+    /// The node's documented description, if any.
+    pub description: Option<String>,
+    /// Documented column descriptions, by column name.
+    pub column_descriptions: BTreeMap<String, String>,
+}
+
+/// `unique_key: id` or `unique_key: [a, b]`. Comma-separated strings (`"a, b"`) are an
+/// older spelling of a list.
+pub(crate) fn unique_key(value: &serde_json::Value) -> Vec<String> {
+    let parts: Vec<String> = match value {
+        serde_json::Value::String(text) => text.split(',').map(str::to_owned).collect(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    parts
+        .into_iter()
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// A data test, as declared: `unique`, `not_null`, `relationships`, a package test, …
@@ -246,6 +277,8 @@ pub struct DbtTest {
     pub attached_node: Option<String>,
     /// Its arguments, e.g. `{"to": "ref('customers')", "field": "id"}`.
     pub arguments: serde_json::Value,
+    /// A `where` filter: the test only checks the rows it keeps.
+    pub where_clause: Option<String>,
 }
 
 /// A model contract constraint (`primary_key`, `foreign_key`, `unique`, `not_null`,
@@ -279,6 +312,9 @@ pub struct DbtConfig {
     pub loaded_at_field: Option<String>,
     /// Query returning when a source last received data.
     pub loaded_at_query: Option<String>,
+    /// The `unique_key` of an incremental model or snapshot: the columns dbt merges on,
+    /// one or several.
+    pub unique_key: Vec<String>,
 }
 
 impl DbtConfig {
@@ -292,6 +328,7 @@ impl DbtConfig {
             freshness: value("freshness"),
             loaded_at_field: text("loaded_at_field"),
             loaded_at_query: text("loaded_at_query"),
+            unique_key: config.get("unique_key").map(unique_key).unwrap_or_default(),
         }
     }
 }
@@ -503,8 +540,12 @@ impl Manifest {
                     .map(|c| c.into_constraint(None))
                     .collect();
                 let mut declared_types = BTreeMap::new();
+                let mut column_descriptions = BTreeMap::new();
                 let mut declared_columns = Vec::new();
                 for column in n.columns.into_values() {
+                    if let Some(description) = column.description.filter(|d| !d.trim().is_empty()) {
+                        column_descriptions.insert(column.name.clone(), description);
+                    }
                     constraints.extend(
                         column
                             .constraints
@@ -517,12 +558,18 @@ impl Manifest {
                     declared_columns.push(column.name);
                 }
                 declared_columns.sort();
+                let where_clause = n
+                    .config
+                    .where_clause
+                    .clone()
+                    .filter(|w| !w.trim().is_empty());
                 let test = n.test_metadata.map(|t| DbtTest {
                     name: t.name,
                     namespace: t.namespace,
                     column_name: n.column_name,
                     attached_node: n.attached_node,
                     arguments: t.kwargs,
+                    where_clause,
                 });
                 let node = ManifestNode {
                     unique_id: n.unique_id,
@@ -539,10 +586,18 @@ impl Manifest {
                         freshness: n.config.freshness.filter(|v| !v.is_null()),
                         loaded_at_field: n.config.loaded_at_field.or(n.loaded_at_field),
                         loaded_at_query: n.config.loaded_at_query.or(n.loaded_at_query),
+                        unique_key: n
+                            .config
+                            .unique_key
+                            .as_ref()
+                            .map(unique_key)
+                            .unwrap_or_default(),
                     },
                     test,
                     constraints,
                     declared_types,
+                    description: n.description.filter(|d| !d.trim().is_empty()),
+                    column_descriptions,
                 };
                 (node.unique_id.clone(), node)
             })

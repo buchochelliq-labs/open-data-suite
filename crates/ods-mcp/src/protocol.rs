@@ -16,6 +16,7 @@ const METHOD_NOT_FOUND: i64 = -32_601;
 const INVALID_PARAMS: i64 = -32_602;
 /// MCP's code for an unknown resource.
 const RESOURCE_NOT_FOUND: i64 = -32_002;
+const INTERNAL_ERROR: i64 = -32_603;
 
 /// Who the server is, sent on `initialize`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,12 +105,18 @@ impl Server {
     /// # Errors
     /// Returns an I/O error from reading or writing.
     pub fn serve(&self, input: impl BufRead, output: &mut dyn Write) -> io::Result<()> {
-        for line in input.lines() {
+        for line in input.split(b'\n') {
             let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Some(response) = self.handle_line(&line) {
+            // Invalid UTF-8 is one bad message, not the end of the session.
+            let response = match std::str::from_utf8(&line) {
+                Ok(line) if line.trim().is_empty() => continue,
+                Ok(line) => self.handle_line(line),
+                Err(_) => Some(error_response(
+                    &Value::Null,
+                    &RpcError::new(PARSE_ERROR, "not UTF-8"),
+                )),
+            };
+            if let Some(response) = response {
                 // Serializing a `Value` can't fail.
                 let text = serde_json::to_string(&response).unwrap_or_default();
                 writeln!(output, "{text}")?;
@@ -152,14 +159,25 @@ impl Server {
         };
         let id = object.get("id").cloned();
         let Some(method) = object.get("method").and_then(Value::as_str) else {
-            // A response to something we never sent, or garbage.
-            return id.map(|id| {
-                error_response(&id, &RpcError::new(INVALID_REQUEST, "missing `method`"))
-            });
+            // A response (to a request we never send) is not answered; anything else
+            // without a method is an invalid request.
+            if object.contains_key("result") || object.contains_key("error") {
+                return None;
+            }
+            return Some(error_response(
+                &id.unwrap_or(Value::Null),
+                &RpcError::new(INVALID_REQUEST, "missing `method`"),
+            ));
         };
         let params = object.get("params").cloned().unwrap_or(Value::Null);
         // Notifications (no id) never get a response, even if they fail.
         let id = id?;
+        if !(id.is_string() || id.is_number()) {
+            return Some(error_response(
+                &Value::Null,
+                &RpcError::new(INVALID_REQUEST, "`id` must be a string or a number"),
+            ));
+        }
         let result = self.dispatch(method, &params);
         Some(match result {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
@@ -238,7 +256,13 @@ impl Server {
                 ));
             }
         };
-        Ok(match tool.call(&arguments) {
+        // A bug in one tool must not take the whole server down with it.
+        let output =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool.call(&arguments)))
+                .map_err(|_| {
+                    RpcError::new(INTERNAL_ERROR, format!("tool `{name}` failed unexpectedly"))
+                })?;
+        Ok(match output {
             ToolOutput::Json(value) => {
                 let text = serde_json::to_string_pretty(&value).unwrap_or_default();
                 let mut result = json!({
@@ -284,7 +308,7 @@ impl Server {
                 RESOURCE_NOT_FOUND,
                 format!("no resource `{uri}`"),
             )),
-            Err(ReadError::Failed(message)) => Err(RpcError::new(INVALID_PARAMS, message)),
+            Err(ReadError::Failed(message)) => Err(RpcError::new(INTERNAL_ERROR, message)),
         }
     }
 

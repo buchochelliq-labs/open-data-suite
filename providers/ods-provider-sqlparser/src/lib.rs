@@ -62,7 +62,7 @@ impl SqlLineageAnalyzer for SqlparserAnalyzer {
     fn analyzer_version(&self) -> String {
         // Bump the trailing number whenever analysis results change for the same input,
         // so cached lineage is recomputed.
-        format!("sqlparser-0.63/{}/1", self.dialect.name())
+        format!("sqlparser-0.63/{}/2", self.dialect.name())
     }
 
     fn relation_name(&self, qualified: &str) -> Result<RelationName, ProviderError> {

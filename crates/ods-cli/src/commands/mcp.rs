@@ -39,6 +39,8 @@ columns (`orders.amount=removed`) or another build's target directory.
 - Freshness policies (dbt State configs): `ods_state_policies`.
 - Where lineage is unknown (Python models, unparseable SQL): `ods_list_opaque`.
 
+For someone who uses the data but doesn't know the project, answering a question with SQL: `ods_find_data` (tables and columns by meaning), `ods_describe_entity` (what one row is, the columns, what it joins to), then `ods_plan_query` (join path and SQL skeleton). Write SQL only with the columns and join conditions these tools return; a key may span several columns, so join on all of them. State the grain of the answer and every assumption, and repeat any warning about joins that repeat rows.
+
 Be conservative: an opaque model may use any column it reads, so treat it as impacted. \
 Inferred keys and relationships are suggestions, not facts. Artifacts are re-read on \
 every call, so run `dbt compile` (and `dbt docs generate` for column types) after \
@@ -206,6 +208,16 @@ impl Prompts for ProjectPrompts {
                 )],
             ),
             PromptDefinition::new(
+                "answer_data_question",
+                "Answer a question about the data",
+                "Find the right tables, explain them, and write SQL for a business question, for someone who doesn't know the dbt project",
+                vec![PromptArgument::new(
+                    "question",
+                    "The question, e.g. `which customers spent the most last month?`",
+                    true,
+                )],
+            ),
+            PromptDefinition::new(
                 "add_missing_tests",
                 "Add missing tests",
                 "Find untested keys, relationships and join columns, and propose dbt tests",
@@ -243,6 +255,25 @@ impl Prompts for ProjectPrompts {
                      modified or added, which downstream models it reaches and through \
                      which columns, and whether that is likely to break consumers. Group \
                      the answer by severity and cite the evidence ODS gives."
+                )
+            }),
+            "answer_data_question" => required("question").map(|question| {
+                format!(
+                    "Question about our data: {question}\n\n\
+                     I don't know the dbt project, so use the ODS tools:\n\
+                     1. `ods_find_data` with the question's key words to find candidate tables.\n\
+                     2. `ods_describe_entity` on the best candidates: what one row is (the \
+                     key may be several columns), the columns and their meaning, and what \
+                     each table joins to.\n\
+                     3. `ods_plan_query` with the tables, the one whose rows the answer is \
+                     about first, and the columns you need.\n\
+                     4. Write the final SQL from that plan: keep its joins (every column of \
+                     a composite key), add filters, grouping and measures, and use only \
+                     columns the tools listed. Aggregate before joining where the plan warns \
+                     that a join repeats rows.\n\
+                     5. Explain the answer's grain, the tables used and why, and any \
+                     assumption (e.g. how \"last month\" or \"active\" is defined). If the data \
+                     can't answer the question, say so rather than guessing."
                 )
             }),
             "add_missing_tests" => Ok(format!(

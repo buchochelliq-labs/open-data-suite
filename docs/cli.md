@@ -399,11 +399,22 @@ ODS rebuilds on any new upstream data (tolerance `0`).
 
 `ods erd generate` draws the keys and relationships your project already asserts
 ([ADR-0012](adr/0012-erd-from-tests-and-constraints.md)):
+- a model's `unique_key` config (incremental models, snapshots), including a list of
+  columns, is a declared primary key;
 - `unique` + `not_null` tests make a primary key (`unique` alone is a nullable unique key);
+- `dbt_utils.unique_combination_of_columns` makes a composite key. When nothing else
+  identifies the rows, the smallest such combination is the primary key, even without
+  `not_null` tests (most composite grains are never tested that way);
 - `relationships` tests make references;
-- contract `primary_key` / `foreign_key` constraints are declared keys and references.
+- contract `primary_key` / `foreign_key` constraints are declared keys and references;
+- **joins in the project's own SQL** make references too, so projects without
+  `relationships` tests still get a diagram. `a.x = b.y and a.z = b.w` becomes one
+  composite relationship. Its direction and cardinality come from tested or declared
+  keys; when neither side is one, the cardinality is *unknown* (`}o--o{`), never guessed.
 
-Every key and relationship says whether it is **declared**, **tested** or **inferred**.
+Tests with a `where` filter say nothing about the whole table, so they are skipped with a
+diagnostic. Every key and relationship says whether it is **declared**, **tested**,
+**joined** or **inferred**.
 
 ```sh
 dbt parse && dbt docs generate            # docs generate adds column types
@@ -417,6 +428,7 @@ ods erd generate --infer --format json    # also guess from naming, labelled inf
 |---|---|
 | `--format` | `mermaid` (default), `dot` or `json` |
 | `--select MODEL` | only this model and entities within `--depth` relationships (default 1); repeatable |
+| `--dialect` | SQL dialect used to read joins (default: the project's adapter) |
 | `--infer` | also propose keys (`id`, `<entity>_id`) and references (`<x>_id`) from naming; ambiguous names are reported, not guessed |
 | `--all` | include entities without relationships (hidden by default) |
 | `--output-file PATH` | write the diagram and print a summary instead |
@@ -452,11 +464,22 @@ The JSON form works for Cursor (`.cursor/mcp.json`), VS Code (`.vscode/mcp.json`
 | `ods_list_opaque` | models whose lineage is unknown, and why |
 | `ods_state_policies` | freshness policies from dbt State configs |
 | `ods_compare_observed` | static lineage against Unity Catalog's recorded lineage |
+| `ods_find_data` | for data users: tables and columns by meaning (names and descriptions), with each table's grain |
+| `ods_describe_entity` | a table explained: what one row is, columns, what it joins to and how |
+| `ods_plan_query` | a join path and starting SQL for a question over several tables, with warnings where a join repeats rows |
+
+The last three are for people who use the data but don't know the dbt project. Ask
+"which customers spent the most last month?" and the agent finds the tables, explains
+their grain, and writes SQL from a join plan built only from known keys and
+relationships (all columns of a composite key, never invented columns). Trusted joins
+(tests, constraints) are preferred over joins the project merely makes; guessed joins are
+used only with `infer: true`.
 
 It also serves:
 - resources `ods://project/summary`, `ods://erd`, `ods://lineage/graph` and
   `ods://node/{id}`;
-- prompts `assess_change_impact`, `review_breaking_changes` and `add_missing_tests`.
+- prompts `assess_change_impact`, `review_breaking_changes`, `add_missing_tests` and
+  `answer_data_question`.
 
 Artifacts are re-read on every call, and a cache means only changed models are
 re-analyzed. So run `dbt compile` after editing, and the next answer is current. The
