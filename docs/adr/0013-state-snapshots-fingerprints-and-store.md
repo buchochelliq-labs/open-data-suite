@@ -142,8 +142,11 @@ graph LR
     check is an allow-list: a model's `{{ }}` and `{% %}` may only use `if`, `elif`,
     `else`, `for`, `set` (and their `end` tags), call `ref`, `source`, `config`,
     `var`, `env_var` or `is_incremental`, and read names. Any other call, including a
-    user or package macro, a method call (`adapter.drop_relation(...)`),
-    `{% do %}` or `{% call %}`, could run SQL whose arguments live only in the file.
+    user or package macro, a method call (`adapter.drop_relation(...)`), an indirect
+    call (`(run_query)(…)`, `dbt['x'](…)`), rebinding a pure name
+    (`{% set ref = run_query %}`), `{% do %}` or `{% call %}`, could run SQL whose
+    arguments live only in the file. `(` is only allowed right after a pure name or
+    as grouping.
     Such a model, or one whose raw code isn't recorded, keeps `file`, so for it
     formatting counts again.
   - The raw text's digest is kept outside the fingerprint (`cosmetic`), so a reused

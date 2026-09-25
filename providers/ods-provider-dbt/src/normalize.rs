@@ -82,6 +82,10 @@ pub fn normalize_sql(sql: &str) -> Option<String> {
             if body.contains("/*") || !plain {
                 return None;
             }
+            // A comment is whitespace, and `.` next to whitespace is refused.
+            if (i > 0 && chars[i - 1] == '.') || at(close + 2) == Some('.') {
+                return None;
+            }
             if body.starts_with('+') {
                 tokens.push(format!("/*{body}*/"));
             }
@@ -171,12 +175,82 @@ pub const PURE_TAGS: [&str; 8] = [
     "if", "elif", "else", "endif", "for", "endfor", "set", "endset",
 ];
 
+/// Jinja words before which `(` only groups.
+const GROUPING_KEYWORDS: [&str; 8] = ["if", "elif", "else", "and", "or", "not", "in", "is"];
+
+/// A token inside a Jinja tag or expression.
+enum JinjaToken {
+    /// A name; `dotted` if it follows `.`.
+    Word { word: String, dotted: bool },
+    /// A string literal.
+    Str,
+    /// Any other character.
+    Punct(char),
+}
+
+/// The name a token holds, if it is one.
+fn word(token: &JinjaToken) -> Option<&str> {
+    match token {
+        JinjaToken::Word { word, .. } => Some(word.as_str()),
+        _ => None,
+    }
+}
+
+/// Whether one tag or expression body is pure (see [`jinja_is_pure`]).
+fn body_is_pure(tokens: &[JinjaToken], tag: bool) -> bool {
+    use JinjaToken::{Punct, Str, Word};
+    let first = tokens.first().and_then(word);
+    if tag && !first.is_some_and(|w| PURE_TAGS.contains(&w)) {
+        return false;
+    }
+    // `{% set ref = run_query %}` and `{% for var in [run_query] %}` would make a pure
+    // name impure.
+    if matches!(first, Some("set" | "for")) {
+        let rebinds = tokens[1..]
+            .iter()
+            .take_while(|t| !matches!(t, Punct('=')) && word(t) != Some("in"))
+            .filter_map(word)
+            .any(|w| PURE_CALLS.contains(&w));
+        if rebinds {
+            return false;
+        }
+    }
+    for (k, token) in tokens.iter().enumerate() {
+        if word(token) == Some("adapter") {
+            return false;
+        }
+        if !matches!(token, Punct('(')) {
+            continue;
+        }
+        // A call is only allowed on a bare pure name; `(` after `)`, `]`, a string or
+        // any other name calls something else (`(run_query)(…)`, `dbt['x'](…)`).
+        let allowed = match k.checked_sub(1).map(|p| &tokens[p]) {
+            None => true,
+            Some(Word { word, dotted }) => {
+                !dotted
+                    && (PURE_CALLS.contains(&word.as_str())
+                        || GROUPING_KEYWORDS.contains(&word.as_str()))
+            }
+            Some(Punct(c)) => !matches!(c, ')' | ']'),
+            Some(Str) => false,
+        };
+        if !allowed {
+            return false;
+        }
+    }
+    true
+}
+
 /// Whether all of a model's Jinja only shapes its SQL, so the compiled SQL shows
 /// everything a build runs (#209). It is an allow-list: `{{ }}` and `{% %}` may only
-/// use the [`PURE_TAGS`], call the [`PURE_CALLS`] and read names. Anything else, such
-/// as a user or package macro (`{{ grant_select('x') }}`), `{% do %}`, `{% call %}`,
-/// `run_query` or `adapter.drop_relation(...)`, could run SQL the compiled code doesn't
-/// show, and editing its arguments changes what a build does.
+/// use the [`PURE_TAGS`], call the [`PURE_CALLS`] by name and read names. Anything
+/// else could run SQL the compiled code doesn't show, and editing its arguments
+/// changes what a build does. That includes:
+/// - a user or package macro (`{{ grant_select('x') }}`);
+/// - `{% do %}` and `{% call %}`;
+/// - `run_query` or `adapter.drop_relation(...)`;
+/// - an indirect call (`(run_query)(…)`, `dbt['x'](…)`);
+/// - rebinding a pure name (`{% set ref = run_query %}`).
 pub fn jinja_is_pure(raw: &str) -> bool {
     let chars: Vec<char> = raw.chars().collect();
     let at = |i: usize| chars.get(i).copied();
@@ -195,63 +269,48 @@ pub fn jinja_is_pure(raw: &str) -> bool {
                 continue;
             }
         };
-        let tag = close == '%';
         let mut j = i + 2;
-        let mut words: Vec<(String, bool, bool)> = Vec::new(); // (word, after `.`, called)
-        let mut quote: Option<char> = None;
+        let mut tokens: Vec<JinjaToken> = Vec::new();
         loop {
             let Some(c) = at(j) else {
                 return false; // unterminated
             };
-            if let Some(q) = quote {
-                if c == '\\' {
-                    j += 1;
-                } else if c == q {
-                    quote = None;
-                }
-                j += 1;
-                continue;
-            }
             if c == close && at(j + 1) == Some('}') {
                 break;
             }
-            if close == '#' {
+            if close == '#' || c.is_whitespace() {
                 j += 1;
-                continue;
-            }
-            if c == '\'' || c == '"' {
-                quote = Some(c);
+            } else if c == '\'' || c == '"' {
                 j += 1;
+                loop {
+                    match at(j) {
+                        None => return false,
+                        Some('\\') => j += 2,
+                        Some(q) if q == c => break,
+                        Some(_) => j += 1,
+                    }
+                }
+                j += 1;
+                tokens.push(JinjaToken::Str);
             } else if is_word_char(c) {
                 let start = j;
                 while at(j).is_some_and(is_word_char) {
                     j += 1;
                 }
-                let word: String = chars[start..j].iter().collect();
-                let dotted = start > 0 && chars[start - 1] == '.';
-                let mut k = j;
-                while at(k).is_some_and(char::is_whitespace) {
-                    k += 1;
-                }
-                words.push((word, dotted, at(k) == Some('(')));
+                tokens.push(JinjaToken::Word {
+                    word: chars[start..j].iter().collect(),
+                    dotted: matches!(tokens.last(), Some(JinjaToken::Punct('.'))),
+                });
             } else {
+                // Whitespace control (`{%-`, `-%}`) and operators.
+                if !(matches!(c, '-' | '+') && (j == i + 2 || at(j + 1) == Some(close))) {
+                    tokens.push(JinjaToken::Punct(c));
+                }
                 j += 1;
             }
         }
-        if close != '#' {
-            if tag
-                && !words
-                    .first()
-                    .is_some_and(|(w, _, _)| PURE_TAGS.contains(&w.as_str()))
-            {
-                return false;
-            }
-            let impure = words.iter().any(|(word, dotted, called)| {
-                word == "adapter" || (*called && (*dotted || !PURE_CALLS.contains(&word.as_str())))
-            });
-            if impure {
-                return false;
-            }
+        if close != '#' && !body_is_pure(&tokens, close == '%') {
+            return false;
         }
         i = j + 2;
     }
@@ -364,6 +423,8 @@ mod tests {
             "select 1 -- x\r+ 1\nfrom dual",
             "select 1 /*M! + 1 */ from t",
             "select 'a'\n'b' from t",
+            "select t/**/.a from t",
+            "select t./**/a from t",
         ] {
             assert_eq!(normalize_sql(sql), None, "{sql:?}");
         }
@@ -381,6 +442,8 @@ mod tests {
             "{# {% do run_query('x') %} is only a comment #}\nselect {{ var('v', 1) }}",
             "select '{' as brace, a from t",
             "select {{ \"%}\" }} as s",
+            "{% if (is_incremental() and var('full', false)) or not (x in [1, 2]) %}1{% endif %}",
+            "{%- set n = (var('n', 3) + 1) -%}select {{ n }}",
         ] {
             assert!(jinja_is_pure(pure), "{pure:?}");
         }
@@ -400,6 +463,13 @@ mod tests {
             "{% set x = \"%}\" ~ run_query('delete from a') %}\nselect 1",
             "select {{ unterminated",
             "{% macro m() %}{% endmacro %}",
+            // Third review: indirect calls and rebinding a pure name.
+            "{{ (run_query)('delete from audit where d < 2024') }}",
+            "{{ [run_query][0]('delete from audit') }}",
+            "{{ dbt['truncate_relation'](this) }}",
+            "{% set ref = run_query %}{{ ref('delete from audit') }}",
+            "{% for var in [run_query] %}{{ var('delete from audit') }}{% endfor %}",
+            "{{ this.incorporate(path={'schema': 'x'}) }}",
         ] {
             assert!(!jinja_is_pure(impure), "{impure:?}");
         }
