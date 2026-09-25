@@ -143,7 +143,7 @@ def main():
                "results": [], "elapsed_time": 0, "args": {"which": "compile"}}
         write(os.path.join(target, "run_results.json"), doc)
         return 0
-    if words[:1] != ["build"]:
+    if words[:1] not in (["build"], ["test"]):
         print(f"fake dbt: unsupported command {words}", file=sys.stderr)
         return 2
 
@@ -153,6 +153,17 @@ def main():
               if n["resource_type"] in STATE and any(selects(t, n) for t in options.get("select", []))]
     fail, fail_tests = names("FAKE_DBT_FAIL"), names("FAKE_DBT_FAIL_TEST")
     outcome, results = {}, []
+    if words[:1] == ["test"]:
+        # Tests of the selected nodes (eager indirect selection); nothing is built.
+        for test_id, test in nodes.items():
+            deps = test.get("depends_on", {}).get("nodes", [])
+            if test["resource_type"] == "test" and any(d in chosen for d in deps):
+                status = "fail" if test["name"] in fail_tests else "pass"
+                results.append(result(test_id, status, started))
+        doc = {"metadata": metadata("run-results", 6, invocation, started),
+               "results": results, "elapsed_time": 0, "args": {"which": "test"}}
+        write(os.path.join(target, "run_results.json"), doc)
+        return 1 if any(r["status"] == "fail" for r in results) else 0
     # Parents first, as dbt runs them.
     pending = list(chosen)
     while pending:

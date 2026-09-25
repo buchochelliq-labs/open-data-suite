@@ -15,7 +15,7 @@ mod recorder;
 mod selection;
 
 pub use planner::{PlanError, plan};
-pub use recorder::{Outcome, Recorded, RunResult, record};
+pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use selection::select;
 
 use ods_core::FreshnessPolicy;

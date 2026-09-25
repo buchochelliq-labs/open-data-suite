@@ -90,7 +90,7 @@ impl ExecutorHarness for Harness {
 async fn conforms() {
     let report = run(&Harness::default()).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 7, "{report:?}");
+    assert_eq!(report.passed.len(), 8, "{report:?}");
 }
 
 #[tokio::test]

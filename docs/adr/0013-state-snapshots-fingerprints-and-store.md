@@ -97,6 +97,13 @@ graph LR
   - A newer database is refused, not guessed at.
   - WAL mode lets readers run during a commit.
 
+### Tested builds (#220)
+- `NodeState.tested` (optional, absent in older snapshots) records the run whose checks
+  last passed on the node's current build. A build with its tests passing sets it. A
+  build without tests leaves it unset. A test-only run sets it on success and clears it
+  on failure. It never changes a node's build, and the planner doesn't use it: failing
+  tests don't force a rebuild, they make `ods state test` pick the node up again.
+
 ### Fingerprints (#13)
 - A fingerprint is a map from component name to SHA-256 digest, plus a digest of
   `name\0digest\n` over the sorted components. It is canonical and reproducible, and a

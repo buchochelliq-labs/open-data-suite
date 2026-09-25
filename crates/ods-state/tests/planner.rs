@@ -597,3 +597,43 @@ fn a_new_fingerprint_scheme_rebuilds_once_and_says_why() {
     let why = &messages(&upgraded, &state)["stg_orders"];
     assert!(why.contains("fingerprints code differently"), "{why}");
 }
+
+#[test]
+fn a_build_with_passing_tests_is_tested_and_a_test_run_marks_the_rest() {
+    use ods_state::{TestResult, record_tests};
+    let p = project();
+    let results: Vec<RunResult> = p
+        .nodes
+        .iter()
+        .map(|n| {
+            let r = RunResult::new(&n.id, Outcome::Success, Some(Timestamp::from_unix(T0)));
+            if n.name == "orders" { r.tested() } else { r }
+        })
+        .collect();
+    let built = record(&p, None, &results, "run-1", Timestamp::from_unix(T0), true).snapshot;
+    let tested = |s: &StateSnapshot, name: &str| s.nodes[&format!("model.p.{name}")].is_tested();
+    assert!(tested(&built, "orders"));
+    assert!(!tested(&built, "report"), "built without its tests");
+
+    let recorded = record_tests(
+        (SnapshotId(1), &built),
+        &[
+            TestResult::new("model.p.report", true, None),
+            TestResult::new("model.p.stg_orders", false, None),
+            TestResult::new("model.p.nope", true, None),
+        ],
+        "test-1",
+        Timestamp::from_unix(T0 + 10),
+    );
+    assert_eq!(recorded.passed, ["model.p.report"]);
+    assert_eq!(recorded.failed, ["model.p.stg_orders"]);
+    assert_eq!(recorded.ignored, ["model.p.nope"]);
+    let after = &recorded.snapshot;
+    assert!(tested(after, "report"));
+    assert!(!tested(after, "stg_orders"));
+    // A test run builds nothing: builds are unchanged, so nothing is replanned.
+    assert_eq!(after.nodes["model.p.report"].run_id, "run-1");
+    for (name, decision) in actions(&p, Some(after), T0 + 60) {
+        assert_eq!(decision, reuse(ReasonCode::Unchanged), "{name}");
+    }
+}

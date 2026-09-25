@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use ods_core::CapabilitySet;
 use ods_core::state::Timestamp;
 use ods_sdk::contracts::executor::{
-    ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution, PrepareReport,
-    PrepareRequest,
+    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
+    PrepareReport, PrepareRequest,
 };
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -110,7 +110,10 @@ impl Executor for FakeExecutor {
                 } else if self.failing.contains(&n.id) {
                     (ExecutionStatus::Failed, Some("failed".to_owned()))
                 } else {
-                    inner.built.push(n.id.clone());
+                    // A test run builds nothing.
+                    if request.mode != ExecutionMode::Test {
+                        inner.built.push(n.id.clone());
+                    }
                     (ExecutionStatus::Success, None)
                 };
                 NodeExecution::new(n.id.clone(), status, Some(finished), message)

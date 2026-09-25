@@ -15,7 +15,7 @@ use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{ArtifactPreference, Artifacts};
 use serde::Serialize;
 
-use super::{Planned, state_plan, state_run};
+use super::{Planned, state_plan, state_run, state_test};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -62,6 +62,7 @@ impl Module for State {
                     ),
             )
             .subcommand(state_run::run_command())
+            .subcommand(state_test::test_command())
             .subcommand(state_plan::plan_command())
             .subcommand(state_plan::record_command())
             .subcommand(state_plan::history_command())
@@ -82,6 +83,7 @@ impl Module for State {
         match matches.subcommand() {
             Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args)?),
             Some(("run", args)) => state_run::RunReport::run(args, ctx),
+            Some(("test", args)) => state_test::TestReport::run(args, ctx),
             Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args)?),
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args)?),
             Some(("history", args)) => ctx.emit(&state_plan::HistoryReport::build(args)?),

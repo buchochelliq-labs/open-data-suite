@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ods_core::state::{DataVersion, NodeState, SnapshotId, StateSnapshot, Timestamp};
+use ods_core::state::{DataVersion, NodeState, SnapshotId, StateSnapshot, TestRecord, Timestamp};
 use serde::Serialize;
 
 use crate::Project;
@@ -30,6 +30,9 @@ pub struct RunResult {
     pub outcome: Outcome,
     /// When it finished, if known.
     pub completed_at: Option<Timestamp>,
+    /// Whether its checks ran with it and all passed (e.g. `dbt build`). A build that
+    /// ran without checks leaves the node untested.
+    pub tested: bool,
 }
 
 impl RunResult {
@@ -39,7 +42,15 @@ impl RunResult {
             node: node.into(),
             outcome,
             completed_at,
+            tested: false,
         }
+    }
+
+    /// Marks a successful build whose checks ran and passed.
+    #[must_use]
+    pub fn tested(mut self) -> Self {
+        self.tested = true;
+        self
     }
 }
 
@@ -122,6 +133,12 @@ pub fn record(
                     run_id,
                     inputs,
                 );
+                if result.tested {
+                    state.tested = Some(TestRecord::new(
+                        run_id,
+                        result.completed_at.unwrap_or(finished_at),
+                    ));
+                }
                 state.parents = node
                     .parents
                     .iter()
@@ -154,5 +171,83 @@ pub fn record(
         advanced: advanced.into_iter().collect(),
         kept,
         ignored: ignored.into_iter().collect(),
+    }
+}
+
+/// One node's checks in a test-only run (#220).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TestResult {
+    /// Node id.
+    pub node: String,
+    /// Whether all its checks passed.
+    pub passed: bool,
+    /// When they finished, if known.
+    pub completed_at: Option<Timestamp>,
+}
+
+impl TestResult {
+    /// A result.
+    pub fn new(node: impl Into<String>, passed: bool, completed_at: Option<Timestamp>) -> Self {
+        Self {
+            node: node.into(),
+            passed,
+            completed_at,
+        }
+    }
+}
+
+/// What a test-only run changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct RecordedTests {
+    /// The snapshot to commit.
+    #[serde(skip)]
+    pub snapshot: StateSnapshot,
+    /// Nodes whose checks passed on their current build.
+    pub passed: Vec<String>,
+    /// Nodes whose checks failed: they are untested until they pass.
+    pub failed: Vec<String>,
+    /// Results for nodes ODS has no build of, ignored.
+    pub ignored: Vec<String>,
+}
+
+/// The snapshot after a test-only run: nodes whose checks passed are marked tested,
+/// nodes whose checks failed are marked untested. Builds are unchanged (a test run
+/// builds nothing).
+pub fn record_tests(
+    previous: (SnapshotId, &StateSnapshot),
+    results: &[TestResult],
+    run_id: &str,
+    finished_at: Timestamp,
+) -> RecordedTests {
+    let (id, snapshot) = previous;
+    let mut nodes = snapshot.nodes.clone();
+    let (mut passed, mut failed, mut ignored) = (Vec::new(), Vec::new(), Vec::new());
+    for result in results {
+        let Some(state) = nodes.get_mut(&result.node) else {
+            ignored.push(result.node.clone());
+            continue;
+        };
+        if result.passed {
+            state.tested = Some(TestRecord::new(
+                run_id,
+                result.completed_at.unwrap_or(finished_at),
+            ));
+            passed.push(result.node.clone());
+        } else {
+            state.tested = None;
+            failed.push(result.node.clone());
+        }
+    }
+    passed.sort();
+    failed.sort();
+    ignored.sort();
+    RecordedTests {
+        snapshot: StateSnapshot::new(Some(id), finished_at, run_id, nodes),
+        passed,
+        failed,
+        ignored,
     }
 }

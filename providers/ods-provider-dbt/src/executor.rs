@@ -214,6 +214,45 @@ fn is_check(id: &str) -> bool {
     id.starts_with("test.") || id.starts_with("unit_test.")
 }
 
+/// dbt options ODS sets itself: passed through, they would change which nodes run, or
+/// where the results ODS reads are written.
+const RESERVED_ARGS: [&str; 16] = [
+    "--select",
+    "-s",
+    "--models",
+    "-m",
+    "--exclude",
+    "--selector",
+    "--resource-type",
+    "--resource-types",
+    "--exclude-resource-type",
+    "--exclude-resource-types",
+    "--target-path",
+    "--state",
+    "--defer",
+    "--favor-state",
+    "--full-refresh",
+    "--empty",
+];
+
+fn refuse_engine_args(args: &[String]) -> Result<(), ProviderError> {
+    let reserved: Vec<&str> = args
+        .iter()
+        .filter_map(|a| {
+            let flag = a.split('=').next().unwrap_or(a);
+            RESERVED_ARGS.iter().find(|r| **r == flag).copied()
+        })
+        .collect();
+    if reserved.is_empty() {
+        Ok(())
+    } else {
+        Err(ProviderError::Other(format!(
+            "ODS sets {} itself; pass the matching ODS option instead (e.g. --select, --exclude, --resource-type, --full-refresh, --target-dir)",
+            reserved.join(", ")
+        )))
+    }
+}
+
 /// Hooks and other operations dbt reports alongside the nodes: neither nodes nor checks.
 fn is_operation(id: &str) -> bool {
     id.starts_with("operation.")
@@ -276,6 +315,27 @@ fn outcomes(
             .cloned()
             .collect()
     };
+    // A test run builds nothing: each node's outcome is its checks'.
+    if request.mode == ExecutionMode::Test {
+        let finished = run
+            .generated_at
+            .as_deref()
+            .and_then(|t| Timestamp::parse(t).ok());
+        let nodes = request
+            .nodes
+            .iter()
+            .map(|n| {
+                let failed = failed_on(&n.id);
+                let status = if failed.is_empty() {
+                    ExecutionStatus::Success
+                } else {
+                    ExecutionStatus::Failed
+                };
+                NodeExecution::new(n.id.clone(), status, finished, None).with_checks_failed(failed)
+            })
+            .collect();
+        return (nodes, checks_failed, Vec::new());
+    }
     let nodes = request
         .nodes
         .iter()
@@ -377,8 +437,17 @@ impl Executor for DbtExecutor {
         let selectors = crate::selection::exact_selectors(&manifest, &ids).map_err(|why| {
             ProviderError::Other(format!("can't select exactly the planned nodes: {why}"))
         })?;
-        let mut args = vec!["build".to_owned(), "--select".to_owned()];
+        refuse_engine_args(&request.engine_args)?;
+        let command = if request.mode == ExecutionMode::Test {
+            "test"
+        } else {
+            "build"
+        };
+        let mut args = vec![command.to_owned(), "--select".to_owned()];
         args.extend(selectors);
+        if request.full_refresh && request.mode != ExecutionMode::Test {
+            args.push("--full-refresh".to_owned());
+        }
         if request.mode == ExecutionMode::Run {
             args.extend(
                 [
@@ -391,6 +460,7 @@ impl Executor for DbtExecutor {
             );
         }
         args.extend(self.common_args());
+        args.extend(request.engine_args.iter().cloned());
         let command = self.display(&args);
         let results_path = self.artifact("run_results.json");
         let before = invocation_of(&results_path);

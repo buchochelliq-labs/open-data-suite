@@ -71,7 +71,9 @@ impl Project {
     fn ods(&self, args: &[&str]) -> (i32, Value) {
         let target = self.dir.join("target");
         let db = self.db();
-        let mut all: Vec<&str> = args.to_vec();
+        // ODS's own options go before any `--`: what follows it is for dbt.
+        let split = args.iter().position(|a| *a == "--").unwrap_or(args.len());
+        let mut all: Vec<&str> = args[..split].to_vec();
         all.extend([
             "--target-dir",
             target.to_str().unwrap(),
@@ -79,6 +81,7 @@ impl Project {
             db.to_str().unwrap(),
             "--json",
         ]);
+        all.extend(&args[split..]);
         let out = Command::new(env!("CARGO_BIN_EXE_ods"))
             .args(&all)
             .env_clear()
@@ -111,6 +114,26 @@ impl Project {
         ];
         args.extend(extra);
         self.ods(&args)
+    }
+
+    fn test(&self, extra: &[&str]) -> (i32, Value) {
+        let dbt = fixture("fake-dbt/dbt");
+        let mut args = vec![
+            "state",
+            "test",
+            "--dbt",
+            dbt.to_str().unwrap(),
+            "--dbt-output",
+            "capture",
+        ];
+        args.extend(extra);
+        self.ods(&args)
+    }
+
+    fn test_ok(&self, extra: &[&str]) -> Value {
+        let (code, json) = self.test(extra);
+        assert_eq!(code, 0, "{json:#}");
+        json["result"].clone()
     }
 
     fn run_ok(&self, extra: &[&str]) -> Value {
@@ -236,7 +259,7 @@ fn nothing_is_committed_when_nothing_succeeds() {
 #[test]
 fn a_node_whose_tests_fail_keeps_its_last_state() {
     let project = Project::new("tests").with("FAKE_DBT_FAIL_TEST", "unique_orders_order_id");
-    let (code, json) = project.run(&[]);
+    let (code, json) = project.run(&["--test"]);
     assert_eq!(code, 1, "{json:#}");
     let result = &json["result"];
     assert_eq!(
@@ -254,18 +277,84 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
             .unwrap()
             .contains_key("model.jaffle_ods.orders")
     );
-    let again = project.run(&[]).1;
+    let again = project.run(&["--test"]).1;
     assert!(names(&again["result"]["execution"]["nodes"]).contains(&"orders".to_owned()));
+}
 
-    // `--mode run` leaves tests out.
-    project.change_code("model.jaffle_ods.orders");
-    let result = project.run_ok(&["--mode", "run"]);
+/// #220: a plain run builds without tests; `--test` builds and tests.
+#[test]
+fn a_plain_run_builds_without_tests() {
+    let project = Project::new("no-tests").with("FAKE_DBT_FAIL_TEST", "unique_orders_order_id");
+    let result = project.run_ok(&[]);
+    let command = result["execution"]["command"].as_str().unwrap();
     assert!(
-        result["execution"]["command"]
+        command.contains("--exclude-resource-type test --exclude-resource-type unit_test"),
+        "{command}"
+    );
+    assert_eq!(result["tests"], false);
+    assert_eq!(result["execution"]["checks_failed"], serde_json::json!([]));
+    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 13);
+
+    // What was built without its tests is untested: `ods state test` runs them.
+    let (code, tested) = project.test(&[]);
+    assert_eq!(code, 1, "the failing test fails: {tested:#}");
+    let tested = &tested["result"];
+    assert_eq!(tested["tested"], 13);
+    assert!(
+        tested["execution"]["command"]
             .as_str()
             .unwrap()
-            .contains("--exclude-resource-type test")
+            .starts_with(&format!(
+                "{} test --select",
+                fixture("fake-dbt/dbt").display()
+            ))
     );
+    assert_eq!(names(&tested["record"]["failed"]), ["orders"]);
+    assert_eq!(tested["record"]["passed"].as_array().unwrap().len(), 12);
+
+    // Once fixed, only the node still untested is tested again.
+    let project = project.with("FAKE_DBT_FAIL_TEST", "");
+    let again = project.test_ok(&[]);
+    assert_eq!(again["tested"], 1);
+    assert_eq!(names(&again["record"]["passed"]), ["orders"]);
+    let nothing = project.test_ok(&[]);
+    assert_eq!(nothing["outcome"], "nothing_to_test");
+    // --all tests everything again, and a build with --test marks what it builds tested.
+    assert_eq!(project.test_ok(&["--all"])["tested"], 13);
+    project.change_code("model.jaffle_ods.orders");
+    project.run_ok(&["--test"]);
+    assert_eq!(project.test_ok(&[])["outcome"], "nothing_to_test");
+}
+
+#[test]
+fn exclude_and_resource_type_leave_nodes_to_build() {
+    let project = Project::new("narrow");
+    let result = project.run_ok(&["--resource-type", "seed"]);
+    assert_eq!(
+        names(&result["execution"]["nodes"]),
+        ["raw_customers", "raw_orders", "raw_payments"]
+    );
+    assert_eq!(result["left_out"].as_array().unwrap().len(), 10);
+    // The models are still to build; excluding one leaves it (and it only) out.
+    let result = project.run_ok(&["--exclude", "segment_summary"]);
+    assert_eq!(result["execution"]["nodes"].as_array().unwrap().len(), 9);
+    assert_eq!(names(&result["left_out"]), ["segment_summary"]);
+    let last = project.run_ok(&[]);
+    assert_eq!(names(&last["execution"]["nodes"]), ["segment_summary"]);
+}
+
+#[test]
+fn full_refresh_and_dbt_args_are_passed_through_and_selection_args_refused() {
+    let project = Project::new("passthrough");
+    let result = project.run_ok(&["--full-refresh", "--", "--threads", "8"]);
+    let command = result["execution"]["command"].as_str().unwrap();
+    assert!(command.contains("--full-refresh"), "{command}");
+    assert!(command.ends_with("--threads 8"), "{command}");
+    project.change_code("model.jaffle_ods.orders");
+    let (code, json) = project.run(&["--", "--select", "orders"]);
+    assert_eq!(code, 1, "{json:#}");
+    let message = json["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("--select"), "{message}");
 }
 
 #[test]
@@ -370,10 +459,10 @@ fn real_dbt() {
     )
     .unwrap();
     let dbt = dbt.to_str().unwrap().to_owned();
-    let real = |extra: &[&str]| {
+    let dbt_cmd = |command: &'static str, extra: &[&str]| {
         let mut args = vec![
             "state",
-            "run",
+            command,
             "--dbt",
             &dbt,
             "--profiles-dir",
@@ -384,6 +473,7 @@ fn real_dbt() {
         args.extend(extra);
         project.ods(&args)
     };
+    let real = |extra: &[&str]| dbt_cmd("run", extra);
     let (code, first) = real(&[]);
     assert_eq!(code, 0, "{first:#}");
     assert_eq!(
@@ -396,6 +486,15 @@ fn real_dbt() {
     let (code, again) = real(&[]);
     assert_eq!(code, 0, "{again:#}");
     assert_eq!(again["result"]["outcome"], "nothing_to_build");
+
+    // The run built without tests (#220); `ods state test` runs them with `dbt test`.
+    let test = |extra: &[&str]| dbt_cmd("test", extra);
+    let (code, tested) = test(&[]);
+    assert_eq!(code, 0, "{tested:#}");
+    assert_eq!(tested["result"]["tested"], 14, "{tested:#}");
+    let (code, tested) = test(&[]);
+    assert_eq!(code, 0, "{tested:#}");
+    assert_eq!(tested["result"]["outcome"], "nothing_to_test");
 
     let model = project.dir.join("models/marts/segment_summary.sql");
     let sql = std::fs::read_to_string(&model).unwrap();
@@ -437,7 +536,7 @@ fn real_dbt() {
     let (code, broken) = real(&[]);
     assert_eq!(code, 1, "{broken:#}");
     assert!(broken["result"]["record"]["snapshot"].is_null());
-    assert_eq!(project.history().len(), 2);
+    assert_eq!(project.history().len(), 3, "run, test, run");
 }
 
 fn copy(from: &Path, to: &Path) {

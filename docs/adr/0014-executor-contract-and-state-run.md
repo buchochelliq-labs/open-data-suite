@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
-- **Issues:** #23 (dbt execution provider), #24 (`ods state run`), #211 (exact selection)
+- **Issues:** #23 (dbt execution provider), #24 (`ods state run`), #211 (exact selection), #220 (run/test modes)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -124,6 +124,21 @@ doesn't have that API. The CLI is the stable interface.
 A run that didn't fully succeed exits 1 with `ODS-E0404`, after recording its successes.
 In JSON mode its envelope carries both the result and the error diagnostic: the report
 is what the caller needs to see which nodes failed.
+
+### Run and test modes (#220), contract 0.2
+- `ExecutionMode::Test` runs only the requested nodes' checks and builds nothing. A
+  node's outcome is its checks': it succeeds when they all pass (or it has none).
+- `ExecutionRequest::full_refresh` and `engine_args` pass options through. An executor
+  refuses engine arguments that would change which nodes run, or where results are
+  written. For dbt that means `--select`/`-s`, `--models`, `--exclude`, `--selector`,
+  `--resource-type(s)`, `--exclude-resource-type(s)`, `--target-path`, `--state`,
+  `--defer`, `--favor-state`, `--full-refresh` (use the ODS flag) and `--empty`.
+- `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
+  snapshots the plan needs. `--test` builds and tests, like `dbt build`.
+- `ods state test` tests what was built but not yet tested (`--all`: everything), with
+  `dbt test` and exact selection, and records the results. It builds nothing.
+- `--exclude` and `--resource-type` narrow the BUILD set. What they leave out keeps its
+  last state, stays "to build", and is listed as `left_out`.
 
 ## Consequences
 - Positive: `ods state run` is the M1 flow end to end. The flow is tested without dbt

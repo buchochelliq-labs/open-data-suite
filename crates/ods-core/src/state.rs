@@ -392,6 +392,38 @@ pub struct NodeState {
     /// the parent's current run instead of clocks, which can disagree across machines.
     #[serde(default)]
     pub parents: BTreeMap<String, String>,
+    /// The last time this build's checks (e.g. dbt tests) all passed. `None` when they
+    /// haven't run since it was built, or failed (#220).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tested: Option<TestRecord>,
+}
+
+/// Checks that passed on a node's build (#220).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct TestRecord {
+    /// The run that ran the checks: the build itself, or a later test run.
+    pub run_id: String,
+    /// When they finished.
+    pub at: Timestamp,
+}
+
+impl TestRecord {
+    /// A record of checks that passed.
+    pub fn new(run_id: impl Into<String>, at: Timestamp) -> Self {
+        Self {
+            run_id: run_id.into(),
+            at,
+        }
+    }
+}
+
+impl NodeState {
+    /// Whether its current build's checks have passed.
+    pub fn is_tested(&self) -> bool {
+        self.tested.is_some()
+    }
 }
 
 impl NodeState {
@@ -408,6 +440,7 @@ impl NodeState {
             run_id: run_id.into(),
             inputs,
             parents: BTreeMap::new(),
+            tested: None,
         }
     }
 }

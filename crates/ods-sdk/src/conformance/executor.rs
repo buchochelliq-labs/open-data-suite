@@ -178,6 +178,23 @@ async fn prepare_builds_nothing(harness: &dyn ExecutorHarness) {
     assert_built(harness, case, &[]).await;
 }
 
+async fn a_test_run_builds_nothing(harness: &dyn ExecutorHarness) {
+    let case = "a_test_run_builds_nothing";
+    let executor = harness.executor().await;
+    let nodes = harness.buildable();
+    let report = executor
+        .execute(&ExecutionRequest::new(nodes.clone(), ExecutionMode::Test))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let reported: Vec<String> = report.nodes.iter().map(|n| n.node.clone()).collect();
+    assert_eq!(
+        reported,
+        ids(&nodes),
+        "{case}: every node reported once, in order"
+    );
+    assert_built(harness, case, &[]).await;
+}
+
 /// Runs every case. Panics with the case name on the first failure.
 pub async fn run(harness: &dyn ExecutorHarness) -> Report {
     let mut report = Report::default();
@@ -205,5 +222,7 @@ pub async fn run(harness: &dyn ExecutorHarness) -> Report {
     report.passed.push("run_ids_are_unique");
     prepare_builds_nothing(harness).await;
     report.passed.push("prepare_builds_nothing");
+    a_test_run_builds_nothing(harness).await;
+    report.passed.push("a_test_run_builds_nothing");
     report
 }
