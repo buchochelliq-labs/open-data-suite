@@ -3,7 +3,11 @@
 A Rust-first, provider-neutral control plane for analytics engineering. It starts with dbt
 and Databricks, and every decision it makes can be explained.
 
-> **Status:** pre-alpha, still being planned. Nothing is usable yet.
+> **Status:** very experimental, pre-alpha. There is no release yet. Column-level lineage,
+> ERDs and an MCP server work as previews; everything may change.
+>
+> **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
+> `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
 
 | Module | What it does | Target |
 |---|---|---|

@@ -166,10 +166,10 @@ width = 100
 
 [providers.warehouse]
 kind = "databricks"
-settings = { host = "prod.cloud.databricks.com", token = { secret = "env:DATABRICKS_TOKEN" } }
+settings = { host = "dbc-prod-example.cloud.databricks.com", token = { secret = "env:DATABRICKS_TOKEN" } }
 
 [profiles.dev.providers.warehouse.settings]
-host = "dev.cloud.databricks.com"
+host = "dbc-dev-example.cloud.databricks.com"
 
 [profiles.ci.output]
 format = "json"
@@ -209,7 +209,7 @@ format = "json"
 ```text
 key                                 value                         source
 output.width                        120                           local file ./.ods/local.toml
-providers.warehouse.settings.host   "dev.cloud.databricks.com"    profile `dev` in project file ./ods.toml
+providers.warehouse.settings.host   "dbc-dev-example.cloud.databricks.com"    profile `dev` in project file ./ods.toml
 providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file ./ods.toml
 ```
 
@@ -345,7 +345,7 @@ open pages reload. If a reload fails, the last good graph stays up and the error
 in `/api/version`.
 
 It listens on loopback by default and then only answers requests for `localhost`,
-`127.0.0.1` or `[::1]`, which stops DNS-rebinding attacks from web pages. There is no
+`127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
 authentication yet (#97): with `--host` anything other than loopback, put it behind a
 proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
 `/api/version` hides local paths and error text (they go to the server log). Responses
@@ -437,9 +437,10 @@ ods erd generate --infer --format json    # also guess from naming, labelled inf
 
 `ods mcp` serves the ODS engines to AI agents over the Model Context Protocol, on stdio
 ([ADR-0010](adr/0010-mcp-server.md)). The server is read-only and local:
-- no login, no network, no telemetry;
+- it needs no login, makes no outbound network connections and collects no telemetry;
 - no tool writes files, runs dbt or queries a warehouse;
-- every tool is marked read-only, so clients can auto-approve it.
+- every tool is annotated read-only; whether to auto-approve it is up to you and your
+  client.
 
 ```sh
 claude mcp add ods -- ods mcp --target-dir target          # Claude Code

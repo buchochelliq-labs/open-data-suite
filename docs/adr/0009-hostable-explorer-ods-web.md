@@ -13,9 +13,8 @@
   this column is removed?";
 - it goes stale as soon as the artifacts change.
 
-dbt's answer is the metadata browser in dbt Platform (login, hosted, paid). dbt v2's docs
-are a DuckDB-WASM single-page app over the proprietary `dbt-index`
-([metadata UX strategy](../research/metadata-ux-strategy.md)).
+Hosted metadata browsers exist in commercial platforms. We want a page anyone can host
+themselves, with no login.
 
 We want the same page to work in three ways, with no build toolchain and no login:
 1. **Standalone:** one offline file, as today.
@@ -74,7 +73,7 @@ dependency-free.
   Breaking changes bump the API version. Additive fields don't.
 - **Safe by default:**
   - binds `127.0.0.1`, and on loopback accepts only `Host: localhost`, `127.0.0.1` or
-    `[::1]` (421 otherwise), so a web page can't reach it through DNS rebinding;
+    `[::1]` (421 otherwise), to mitigate DNS-rebinding attacks from web pages;
     `--allow-host` names a reverse proxy's host;
   - beyond loopback, `/api/version` omits local paths and error text;
   - impact on a modified or removed column that the node doesn't have is a 400, never
@@ -124,4 +123,3 @@ dependency-free.
 - [ADR-0001](0001-monorepo-architecture-and-module-boundaries.md) layering,
   [ADR-0003](0003-cli-presentation-boundary.md) presentation boundary,
   [ADR-0008](0008-column-level-lineage.md) column lineage and the `GraphDocument`.
-- [`docs/research/metadata-ux-strategy.md`](../research/metadata-ux-strategy.md) (PR #163).

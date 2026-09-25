@@ -12,15 +12,12 @@ Column-level lineage (CLL) answers the question State and CI keep asking: **when
 columns change, which downstream models must run, and why?** Model-level lineage
 over-rebuilds. A column nobody reads still triggers every consumer.
 
-Today CLL for dbt is behind a paywall. The research is in
-[`docs/research/sources/column-lineage.md`](../research/sources/column-lineage.md).
-- **dbt Catalog's CLL** needs an Enterprise plan. It covers SELECT only (no joins or
-  filters), and it errors on Python models.
-- **dbt v2's open code** ("dbt OSS", Apache-2.0) ships only the CLL *types*. The code
-  itself says the provider that computes lineage is proprietary (`dbt-index`). The
-  Parquet file `dbt.column_lineage` is only written by the proprietary `dbt` binary,
-  with a login and `--static-analysis strict`.
-- **SQLMesh** keeps CLL-based plan pruning in its paid cloud.
+ODS needs column-level lineage that it can compute locally from public dbt artifacts,
+that records joins and filters as well as selected columns, and that it can export in
+an open format. When this ADR was written (September 2026), the column-lineage
+features we found in other tools' public documentation were part of hosted or
+commercial offerings, or needed their own binaries. See each vendor's current
+documentation for what they offer today.
 
 We want CLL that is open, fast, conservative, and exportable to any catalog.
 
@@ -34,10 +31,10 @@ We want CLL that is open, fast, conservative, and exportable to any catalog.
   - OpenLineage's own Rust lineage library uses it.
   - It is syntax only, so we write the scope resolution ourselves.
 - *`polyglot-sql`, MIT (a Rust port of sqlglot).* It has lineage built in, but it is
-  young, has non-deterministic ordering, and costs about 2.3 ms per column. Kept as a
-  possible test oracle.
-- *Depend on dbt v2 crates.* They aren't published, they pull in DataFusion and the whole
-  dbt workspace, and the lineage part isn't open anyway.
+  young, and in our tests (September 2026) its output ordering wasn't deterministic and
+  it took about 2.3 ms per column. Kept as a possible test oracle.
+- *Depend on dbt v2 crates.* They aren't published to crates.io, and they pull in
+  DataFusion and the whole dbt workspace.
 
 ### Output format
 - **Our own neutral model, exported as the OpenLineage `ColumnLineageDatasetFacet` 1-2-0
@@ -98,7 +95,7 @@ about.
 **Readers.** A node reads what its SQL reads **plus everything it declares** (dbt
 `depends_on`, with ephemeral models replaced by their own dependencies).
 
-**Impact never under-reports:**
+**Impact is designed not to under-report:**
 - **Opaque readers:** a node with no usable lineage is impacted by any change to what it
   declares. That covers nodes without SQL (seeds with upstreams, snapshots, Python
   models), opaque ones, and nodes that declare a relation their SQL never reads (e.g. a
@@ -162,14 +159,11 @@ Pruned readers are always reported, with the changed columns they don't use (rul
   dbt-oss leaves `compiled_code` empty there, so compiled SQL is read from
   `target/compiled/<package>/<original_file_path>`. Warehouse column lists come from
   `node_columns` rows with `data_type_actual`. The fixture proves all three inputs (dbt
-  1.10 JSON, v2 JSON, v2 Parquet) produce identical lineage. So is importing Fusion's
-  `dbt.column_lineage` Parquet, when a user has it, as a cross-checked second source:
-  its `direct`/`indirect`/`scan` kinds map onto our edge kinds, and a disagreement
-  lowers confidence.
+  1.10 JSON, v2 JSON, v2 Parquet) produce identical lineage.
 
 ## Consequences
 - **Positive:**
-  - Open CLL that also covers joins, filters and windows, which dbt's paid version doesn't.
+  - Open CLL that records joins, filters and windows as indirect edges.
   - Useful straight away to State (#31: column-aware invalidation) and CI (#75, #84:
     selective runs with evidence).
   - Any catalog can ingest it through OpenLineage.
@@ -185,16 +179,15 @@ Pruned readers are always reported, with the changed columns they don't use (rul
   - A `LineageSink` contract, plus OpenMetadata and DataHub sinks (#92).
   - Persist the cache in the state store (#25).
   - Share cached results instead of deep-copying them (`Arc`), to cut warm-rebuild time.
-  - A v2 Parquet artifact reader, and import of Fusion lineage.
+  - A v2 Parquet artifact reader.
   - Emit the experimental OpenLineage `LineageFacet` 1-0-0 once consumers support it.
   - Masking detection (`hash`, `count`).
   - Wire impact into the State planner (#20) and the CI planner (#84).
 
 ## References
-- `docs/research/sources/column-lineage.md`, `docs/research/ods-state-strategy.md` §4.8
 - sqlglot `lineage.py` (MIT) and SQLMesh (Apache-2.0), for the algorithm; DataHub `sqlglot_lineage.py` (Apache-2.0), for confidence
 - OpenLineage `ColumnLineageDatasetFacet` 1-2-0 and the naming spec
-- dbt v2 (`dbt-labs/dbt`, Apache-2.0): `dbt-lineage-core`, `dbt-metadata-parquet/src/cll_epoch.rs`, read for format and positioning only
+- dbt v2's published artifact formats (the Parquet Information Schema), from its Apache-2.0 repository
 
 ## Addendum (2026-09-25): observed lineage
 

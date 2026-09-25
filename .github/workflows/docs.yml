@@ -1,0 +1,66 @@
+name: Docs
+
+# Builds the documentation site on every pull request that touches it, and publishes it
+# to GitHub Pages only from `main`, i.e. after the pull request has been reviewed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - "overrides/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+      - "fixtures/dbt/**"
+      - "crates/ods-web/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-docs.txt
+      - name: Build the site
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: mkdocs build --strict
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate the live lineage demo from the fixture project
+        run: |
+          cargo run --quiet -p ods-cli -- lineage view \
+            --target-dir fixtures/dbt/jaffle-ods/artifacts/dbt-1.10 \
+            --site site/demo/lineage
+          test -s site/demo/lineage/index.html
+          test -s site/demo/lineage/graph.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    # Add required reviewers to this environment (Settings → Environments) to make
+    # every publication wait for a human approval.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
