@@ -7,8 +7,8 @@
 
 ## Context
 Agents and people need to know which columns identify rows and which point at other
-entities. They need this to write joins, tests and documentation. dbt has no ERD. dbt
-projects already *assert* keys through data tests and model contracts:
+entities. They need this to write joins, tests and documentation. dbt Core's artifacts
+don't include an entity-relationship diagram, but dbt projects already *assert* keys through data tests and model contracts:
 - `unique` and `not_null`;
 - `relationships`;
 - `dbt_utils.unique_combination_of_columns`;
@@ -32,8 +32,9 @@ is not lineage, and rules 3 and 4 say a guess must never be presented as fact.
       (`unique_combination_of_columns`) becomes the primary key, with evidence saying
       nullability is untested. Composite grains are rarely tested column by column, and
       a single-column `unique` can't express them.
-    - A single-column `unique` alone stays a nullable unique key. (dbt v2's own
-      `primary_key` column counts `unique` alone as a primary key; we don't.)
+    - A single-column `unique` alone stays a nullable unique key. (In the dbt v2
+      version we tested, September 2026, its `primary_key` column counted `unique`
+      alone as a primary key; we don't.)
     - A foreign key is one-to-one when its columns are unique, and optional unless
       they're not-null.
     - Only declared and tested keys decide cardinality, optionality and not-null. A

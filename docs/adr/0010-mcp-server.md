@@ -7,15 +7,13 @@
 
 ## Context
 AI coding agents (Claude Code, Cursor, VS Code, Codex) reach tools through the Model
-Context Protocol (MCP). dbt Labs' `dbt-mcp` has 62 tools
-([`docs/research/mcp-strategy.md`](../research/mcp-strategy.md)). Most of them need a dbt
-Platform account. Its column-lineage tools need the proprietary LSP or the Platform. It
-mixes read tools with commands that build models or run SQL.
+Context Protocol (MCP). Other dbt MCP servers exist, including dbt Labs' `dbt-mcp`.
+ODS's goal is narrower: a server that works only from local artifacts, needs no
+account, and exposes only read-only tools.
 
 ODS already has the engines an agent needs to be *right*: column lineage and impact,
-observed lineage, dbt State policies, and now an ERD (ADR-0012). The agent strategy
-([`docs/research/agent-strategy.md`](../research/agent-strategy.md)) puts them in the
-agents teams already use, before ODS builds its own agent.
+observed lineage, dbt State policies, and now an ERD (ADR-0012). Our agent strategy
+puts them in the agents teams already use, before ODS builds its own agent.
 
 ## Options considered
 - **`rmcp` (the official Rust SDK, Apache-2.0).**
@@ -98,7 +96,7 @@ agents teams already use, before ODS builds its own agent.
 ## Consequences
 - Positive:
   - any MCP client gets column lineage, impact, ERD and State answers with no account;
-  - the tools can be auto-approved, since none of them writes;
+  - every tool is annotated read-only; whether to auto-approve is up to the client and its user;
   - one JSON contract across the CLI, HTTP API and MCP.
 - Negative / trade-offs:
   - We maintain the protocol layer ourselves (small, and covered by tests).
@@ -109,4 +107,4 @@ agents teams already use, before ODS builds its own agent.
   - #173, a skills pack that calls these tools;
   - an MCP App resource for the explorer page (ADR-0009);
   - `/mcp` on `ods serve`;
-  - an eval set comparing answers with `dbt-mcp`.
+  - an internal evaluation set for answer quality.

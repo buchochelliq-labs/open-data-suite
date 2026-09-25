@@ -1,0 +1,90 @@
+site_name: OpenDataSuite (ODS)
+site_description: >-
+  An experimental, open-source, provider-neutral toolkit for analytics engineering:
+  column-level lineage, impact analysis, ERDs and an MCP server for dbt projects.
+site_url: https://buchochelliq-labs.github.io/open-data-suite/
+repo_url: https://github.com/buchochelliq-labs/open-data-suite
+repo_name: open-data-suite
+edit_uri: edit/main/docs/
+copyright: >-
+  OpenDataSuite contributors. Experimental software, provided "as is" without warranty.
+  See the Legal and trademarks page.
+
+docs_dir: docs
+# Working notes and competitive research are for contributors, not the public site.
+exclude_docs: |
+  research/
+  adr/0000-template.md
+
+theme:
+  name: material
+  custom_dir: overrides
+  # System fonts: no requests to Google Fonts.
+  font: false
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle: {icon: material/weather-sunny, name: Light mode}
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  # The lineage demo (demo/lineage/) is generated into the built site, not docs/.
+  unrecognized_links: info
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Column-level lineage: lineage.md
+  - More capabilities: capabilities.md
+  - CLI reference: cli.md
+  - Principles: principles.md
+  - Architecture: architecture.md
+  - Roadmap:
+      - Overview: roadmap.md
+      - Full plan: ROADMAP.md
+  - Decisions (ADRs):
+      - adr/README.md
+      - adr/0001-monorepo-architecture-and-module-boundaries.md
+      - adr/0002-rust-first-backend-and-technology-stack.md
+      - adr/0003-cli-presentation-boundary.md
+      - adr/0004-cli-framework-and-exit-codes.md
+      - adr/0005-configuration-and-profiles.md
+      - adr/0006-plugin-sdk-and-capabilities.md
+      - adr/0008-column-level-lineage.md
+      - adr/0009-hostable-explorer-ods-web.md
+      - adr/0010-mcp-server.md
+      - adr/0011-dbt-state-config-compatibility.md
+      - adr/0012-erd-from-tests-and-constraints.md
+  - Legal and trademarks: legal.md
