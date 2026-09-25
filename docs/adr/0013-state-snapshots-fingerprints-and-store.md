@@ -107,7 +107,7 @@ graph LR
   |---|---|
   | `scheme` | the fingerprint scheme; when it changes, every node is built once, with a reason saying so |
   | `sql` | SQL models and snapshots: the compiled SQL (vars, macros and upstream names as rendered), normalised so that comments and whitespace don't count |
-  | `file` | dbt's checksum of the file (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint): seeds, Python models, and SQL models whose Jinja runs SQL of its own or whose raw code isn't recorded |
+  | `file` | dbt's checksum of the file (a path-only checksum, e.g. for seeds over 1 MiB, is not a fingerprint): seeds, Python models, and SQL models whose Jinja isn't pure (see below) or whose raw code isn't recorded |
   | `compiled_code` | Python models: the compiled code, as is |
   | `config` | resolved config, canonical JSON, without `tags`, `meta`, `docs`, `state`, `freshness` (policy and metadata don't change what gets built) |
   | `macros` | the source of every macro the node depends on, transitively, plus its materialization and the `generate_*_name` macros |
@@ -126,15 +126,26 @@ graph LR
     - `[`, `$`, `#`, `@`, `{` and non-ASCII characters;
     - a backslash in quotes, a triple quote, or a quote touching a word or another
       quote (`x'41'`, `N'a'`);
-    - `--` without a following space, `//`, `/*!` and nested block comments;
+    - `--` without a following space, `//`, a block comment starting with anything
+      but whitespace, `*`, `-`, `=` or a `+` hint (so `/*!` and `/*M!`), nested block
+      comments, and a `\r` not followed by `\n`;
+    - two literals separated only by whitespace;
     - `.` next to whitespace;
     - an unterminated quote or comment.
+  - Accepted: whitespace that only decides between success and a syntax error, e.g.
+    `count (*)` in MySQL without `IGNORE_SPACE`. Such an edit is reused; the error
+    shows on the next real change. No different data is built.
   - SQL models usually have no `file` component. The compiled SQL, config and macros
     are what gets built, so an edit that changes none of them (a comment, a reformat,
     Jinja that renders the same SQL) reuses.
-  - The exception is Jinja that runs SQL the compiled code doesn't show: `{% do %}`,
-    `{% call %}`, `run_query`, `statement` or `adapter.execute`. Such a model, or one
-    whose raw code isn't recorded, keeps `file`.
+  - The exception is Jinja that could run SQL the compiled code doesn't show. The
+    check is an allow-list: a model's `{{ }}` and `{% %}` may only use `if`, `elif`,
+    `else`, `for`, `set` (and their `end` tags), call `ref`, `source`, `config`,
+    `var`, `env_var` or `is_incremental`, and read names. Any other call, including a
+    user or package macro, a method call (`adapter.drop_relation(...)`),
+    `{% do %}` or `{% call %}`, could run SQL whose arguments live only in the file.
+    Such a model, or one whose raw code isn't recorded, keeps `file`, so for it
+    formatting counts again.
   - The raw text's digest is kept outside the fingerprint (`cosmetic`), so a reused
     node's reason can say "only formatting changed".
 - A node that can't be fingerprinted completely is always BUILT. That covers:

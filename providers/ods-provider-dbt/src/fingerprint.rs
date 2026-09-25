@@ -6,7 +6,7 @@
 //! |---|---|
 //! | `scheme` | [`SCHEME`]: changes whenever this table does |
 //! | `sql` | SQL models and snapshots: the compiled SQL, [normalised](crate::normalize) so formatting doesn't count |
-//! | `file` | dbt's checksum of the source file: seeds, Python models, and SQL models whose Jinja can run SQL the compiled code doesn't show (or whose raw code isn't recorded) |
+//! | `file` | dbt's checksum of the source file: seeds, Python models, and SQL models whose Jinja isn't [pure](crate::normalize::jinja_is_pure) (or whose raw code isn't recorded) |
 //! | `compiled_code` | Python models: the compiled code, as is |
 //! | `config` | the resolved config, minus settings that don't change what gets built |
 //! | `macros` | every macro it calls, directly or not, plus its materialization and the `generate_*_name` macros that place it |
@@ -17,8 +17,9 @@
 //! SQL models and snapshots usually have no `file` component: the compiled SQL, config
 //! and macros are what gets built, so an edit to the file that changes none of them (a
 //! comment, a reformat, Jinja that renders the same SQL) doesn't rebuild the model. The
-//! exception is Jinja that runs SQL itself (`{% do %}`, `run_query`, …): what it runs
-//! isn't in the compiled SQL, so the file still counts.
+//! exception is Jinja that could run SQL itself: anything beyond `ref`, `source`,
+//! `config`, `var`, `is_incremental`, `if`/`for`/`set`. What that runs isn't in the
+//! compiled SQL, so the file still counts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -26,7 +27,7 @@ use std::fmt::Write as _;
 use ods_core::state::{Fingerprint, sha256_hex};
 use serde_json::Value;
 
-use crate::normalize::{has_hidden_side_effects, normalize_sql};
+use crate::normalize::{jinja_is_pure, normalize_sql};
 use crate::{Manifest, ManifestNode, ResourceType};
 
 /// The fingerprint scheme. Bump it whenever a component's meaning changes, so snapshots
@@ -212,7 +213,7 @@ pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerpri
         // Unnormalisable SQL is hashed as is: formatting then counts, which only ever
         // rebuilds more.
         components.push(("sql", normalize_sql(sql).unwrap_or_else(|| sql.to_owned())));
-        if node.raw_code.as_deref().is_none_or(has_hidden_side_effects) {
+        if !node.raw_code.as_deref().is_some_and(jinja_is_pure) {
             components.push(("file", file()?));
         }
         return Ok(Fingerprint::from_content(components).with_cosmetic("sql", sql));

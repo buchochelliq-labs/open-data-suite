@@ -15,7 +15,12 @@
 //!   (`x'41'`, `N'a'`, `'a'"b"`: prefixed or adjacent literals mean different things by
 //!   dialect);
 //! - `--` not followed by whitespace (MySQL only treats `-- ` as a comment), `//`
-//!   (a Snowflake comment), `/*!` (MySQL runs it), nested block comments;
+//!   (a Snowflake comment), a block comment starting with anything but whitespace,
+//!   `*`, `-`, `=` or a `+` hint (`/*!` and `/*M!` run in MySQL and MariaDB), nested
+//!   block comments, and a `\r` not followed by `\n` (MySQL doesn't end a comment
+//!   there);
+//! - two literals separated only by whitespace (whether a newline joins them depends
+//!   on the dialect);
 //! - `.` next to whitespace;
 //! - an unterminated quote or comment.
 //!
@@ -44,6 +49,10 @@ fn is_operator_char(c: char) -> bool {
 pub fn normalize_sql(sql: &str) -> Option<String> {
     let chars: Vec<char> = sql.chars().collect();
     let at = |i: usize| chars.get(i).copied();
+    // A lone `\r` ends a line comment in some dialects and not in others (MySQL).
+    if (0..chars.len()).any(|i| chars[i] == '\r' && at(i + 1) != Some('\n')) {
+        return None;
+    }
     let mut tokens: Vec<String> = Vec::new();
     let mut i = 0;
     while let Some(c) = at(i) {
@@ -65,7 +74,12 @@ pub fn normalize_sql(sql: &str) -> Option<String> {
             let close = (body_start..chars.len().saturating_sub(1))
                 .find(|&j| chars[j] == '*' && chars[j + 1] == '/')?;
             let body: String = chars[body_start..close].iter().collect();
-            if body.contains("/*") || body.starts_with('!') {
+            // Only plain comments and hints: `/*!` and `/*M!` run in MySQL and MariaDB.
+            let plain = body
+                .chars()
+                .next()
+                .is_none_or(|c| is_space(c) || matches!(c, '*' | '+' | '-' | '='));
+            if body.contains("/*") || !plain {
                 return None;
             }
             if body.starts_with('+') {
@@ -90,6 +104,11 @@ pub fn normalize_sql(sql: &str) -> Option<String> {
                 }
             }
             if touches(at(j + 1)) {
+                return None;
+            }
+            // `'a'\n'b'` is one literal in Postgres and `'a' 'b'` an error: only the
+            // whitespace between them decides.
+            if tokens.last().is_some_and(|t| t.starts_with(is_quote)) {
                 return None;
             }
             tokens.push(chars[i..=j].iter().collect());
@@ -136,41 +155,107 @@ pub fn normalize_sql(sql: &str) -> Option<String> {
     Some(tokens.join(" "))
 }
 
-/// Whether a model's Jinja can run SQL that its compiled code doesn't show (`{% do %}`,
-/// `{% call statement %}`, `run_query`, `adapter.execute`). Such a model's file must
-/// stay in its fingerprint: editing that code changes what a build does.
-pub fn has_hidden_side_effects(raw: &str) -> bool {
-    let mut rest = raw;
-    while let Some(open) = rest.find(['{']) {
-        let after = &rest[open + 1..];
-        let close = match after.chars().next() {
-            Some('%') => "%}",
-            Some('{') => "}}",
+/// Jinja calls that only render SQL or read settings: what they do is in the compiled
+/// SQL or the config.
+pub const PURE_CALLS: [&str; 6] = [
+    "ref",
+    "source",
+    "config",
+    "var",
+    "env_var",
+    "is_incremental",
+];
+
+/// Jinja tags that only choose or repeat text.
+pub const PURE_TAGS: [&str; 8] = [
+    "if", "elif", "else", "endif", "for", "endfor", "set", "endset",
+];
+
+/// Whether all of a model's Jinja only shapes its SQL, so the compiled SQL shows
+/// everything a build runs (#209). It is an allow-list: `{{ }}` and `{% %}` may only
+/// use the [`PURE_TAGS`], call the [`PURE_CALLS`] and read names. Anything else, such
+/// as a user or package macro (`{{ grant_select('x') }}`), `{% do %}`, `{% call %}`,
+/// `run_query` or `adapter.drop_relation(...)`, could run SQL the compiled code doesn't
+/// show, and editing its arguments changes what a build does.
+pub fn jinja_is_pure(raw: &str) -> bool {
+    let chars: Vec<char> = raw.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '{' {
+            i += 1;
+            continue;
+        }
+        let close = match at(i + 1) {
+            Some('{') => '}',
+            Some('%') => '%',
+            Some('#') => '#',
             _ => {
-                rest = after;
+                i += 1;
                 continue;
             }
         };
-        let body_start = &after[1..];
-        let Some(end) = body_start.find(close) else {
-            return true;
-        };
-        let body = &body_start[..end];
-        let first = body
-            .trim_start_matches(['-', '+'])
-            .split(|c: char| !is_word_char(c))
-            .find(|w| !w.is_empty());
-        if (close == "%}" && matches!(first, Some("do" | "call")))
-            || body.contains("run_query")
-            || body.contains("statement")
-            || body.contains("execute(")
-            || body.contains("execute (")
-        {
-            return true;
+        let tag = close == '%';
+        let mut j = i + 2;
+        let mut words: Vec<(String, bool, bool)> = Vec::new(); // (word, after `.`, called)
+        let mut quote: Option<char> = None;
+        loop {
+            let Some(c) = at(j) else {
+                return false; // unterminated
+            };
+            if let Some(q) = quote {
+                if c == '\\' {
+                    j += 1;
+                } else if c == q {
+                    quote = None;
+                }
+                j += 1;
+                continue;
+            }
+            if c == close && at(j + 1) == Some('}') {
+                break;
+            }
+            if close == '#' {
+                j += 1;
+                continue;
+            }
+            if c == '\'' || c == '"' {
+                quote = Some(c);
+                j += 1;
+            } else if is_word_char(c) {
+                let start = j;
+                while at(j).is_some_and(is_word_char) {
+                    j += 1;
+                }
+                let word: String = chars[start..j].iter().collect();
+                let dotted = start > 0 && chars[start - 1] == '.';
+                let mut k = j;
+                while at(k).is_some_and(char::is_whitespace) {
+                    k += 1;
+                }
+                words.push((word, dotted, at(k) == Some('(')));
+            } else {
+                j += 1;
+            }
         }
-        rest = &body_start[end + close.len()..];
+        if close != '#' {
+            if tag
+                && !words
+                    .first()
+                    .is_some_and(|(w, _, _)| PURE_TAGS.contains(&w.as_str()))
+            {
+                return false;
+            }
+            let impure = words.iter().any(|(word, dotted, called)| {
+                word == "adapter" || (*called && (*dotted || !PURE_CALLS.contains(&word.as_str())))
+            });
+            if impure {
+                return false;
+            }
+        }
+        i = j + 2;
     }
-    false
+    true
 }
 
 #[cfg(test)]
@@ -225,6 +310,7 @@ mod tests {
         );
         differ("select a - -1 from t", "select a -- 1\nfrom t");
         differ("select 'a''b' from t", "select 'a' 'b' from t");
+        differ("select 'a'\n'b' from t", "select 'a' 'b' from t");
         differ("select 1 as Both from t", "select 1 as both from t");
     }
 
@@ -274,6 +360,10 @@ mod tests {
             "select a\u{A0}b from t",
             // `.` next to whitespace.
             "select t . a from t",
+            // Second review: a lone `\r`, MariaDB executable comments, adjacent literals.
+            "select 1 -- x\r+ 1\nfrom dual",
+            "select 1 /*M! + 1 */ from t",
+            "select 'a'\n'b' from t",
         ] {
             assert_eq!(normalize_sql(sql), None, "{sql:?}");
         }
@@ -282,24 +372,36 @@ mod tests {
     }
 
     #[test]
-    fn jinja_that_runs_sql_is_detected() {
-        assert!(has_hidden_side_effects(
-            "{% do run_query('delete from audit') %}\nselect 1"
-        ));
-        assert!(has_hidden_side_effects("{%- do log('x') -%}\nselect 1"));
-        assert!(has_hidden_side_effects(
-            "{% call statement('x', fetch_result=True) %}select 1{% endcall %}"
-        ));
-        assert!(has_hidden_side_effects(
-            "{% set r = run_query('select 1') %}"
-        ));
-        assert!(has_hidden_side_effects(
-            "{{ adapter.execute('grant ...') }}"
-        ));
-        assert!(has_hidden_side_effects("select {{ unterminated"));
-        assert!(!has_hidden_side_effects(
-            "{{ config(materialized='table') }}\n{% if execute %}\nselect {{ ref('a') }}\n{% endif %}"
-        ));
-        assert!(!has_hidden_side_effects("select '{' as brace, a from t"));
+    fn only_pure_jinja_lets_the_file_go() {
+        for pure in [
+            "select 1",
+            "{{ config(materialized='table', post_hook='grant select') }}\nselect * from {{ ref('a') }}",
+            "{% if is_incremental() %}where x > (select max(x) from {{ this }}){% endif %}",
+            "{%- set cols = ['a', 'b'] -%}\nselect {% for c in cols %}{{ c }}{% endfor %} from {{ source('s', 't') }}",
+            "{# {% do run_query('x') %} is only a comment #}\nselect {{ var('v', 1) }}",
+            "select '{' as brace, a from t",
+            "select {{ \"%}\" }} as s",
+        ] {
+            assert!(jinja_is_pure(pure), "{pure:?}");
+        }
+        for impure in [
+            "{% do run_query('delete from audit') %}\nselect 1",
+            "{%- do log('x') -%}\nselect 1",
+            "{% call statement('x', fetch_result=True) %}select 1{% endcall %}",
+            "{% set r = run_query('select 1') %}",
+            "{{ adapter.execute('grant ...') }}",
+            // User and package macros, and adapter methods (#209 review).
+            "{{ grant_select('reporter') }}\nselect 1",
+            "{%- set _ = cleanup('audit_2024') %}\nselect 1",
+            "{{ adapter.drop_relation(api.Relation.create(schema='s', identifier='old')) }}\nselect 1",
+            "{{ adapter.truncate_relation(this) }}\nselect 1",
+            "select {{ dbt_utils.star(ref('a')) }}",
+            // A closing delimiter inside a string doesn't end the tag.
+            "{% set x = \"%}\" ~ run_query('delete from a') %}\nselect 1",
+            "select {{ unterminated",
+            "{% macro m() %}{% endmacro %}",
+        ] {
+            assert!(!jinja_is_pure(impure), "{impure:?}");
+        }
     }
 }
