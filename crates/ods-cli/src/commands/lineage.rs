@@ -31,7 +31,7 @@ use crate::present::{Level, Present, Span, Tone, TreeItem, ViewNode};
 /// `ods lineage`.
 pub struct Lineage;
 
-fn common_args(command: Command) -> Command {
+pub(super) fn common_args(command: Command) -> Command {
     command
         .arg(
             Arg::new("target-dir")
@@ -166,7 +166,15 @@ fn view_command() -> Command {
                 Arg::new("open")
                     .long("open")
                     .action(ArgAction::SetTrue)
+                    .conflicts_with("site")
                     .help("Open the page in the default browser"),
+            )
+            .arg(
+                Arg::new("site")
+                    .long("site")
+                    .value_name("DIR")
+                    .conflicts_with("output-file")
+                    .help("Write a static site (index.html + graph.json) to host on any web server instead"),
             ),
     ))
 }
@@ -242,35 +250,44 @@ fn focus_args(command: Command) -> Command {
         )
 }
 
+/// The `--artifacts` choice.
+pub(super) fn preference(args: &ArgMatches) -> ArtifactPreference {
+    match args.get_one::<String>("artifacts").map(String::as_str) {
+        Some("json") => ArtifactPreference::Json,
+        Some("info-schema") => ArtifactPreference::InfoSchema,
+        _ => ArtifactPreference::Auto,
+    }
+}
+
 /// A project analyzed end to end.
-struct Loaded {
+pub(super) struct Loaded {
     target_dir: PathBuf,
     analyzer: SqlparserAnalyzer,
     /// dbt `unique_id` → node name, for friendly lookups.
     names: BTreeMap<String, String>,
     /// dbt `unique_id` → source file checksum, to detect changes to nodes without lineage.
     checksums: BTreeMap<String, Option<String>>,
-    graph: ColumnGraph,
+    pub(super) graph: ColumnGraph,
     stats: BuildStats,
     elapsed_ms: u128,
 }
 
 impl Loaded {
-    fn load(args: &ArgMatches) -> Result<Self, CliError> {
+    pub(super) fn load(args: &ArgMatches) -> Result<Self, CliError> {
         let target_dir = PathBuf::from(
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
         let dialect = args.get_one::<String>("dialect").map(String::as_str);
-        let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
-            Some("json") => ArtifactPreference::Json,
-            Some("info-schema") => ArtifactPreference::InfoSchema,
-            _ => ArtifactPreference::Auto,
-        };
-        Self::from_dir(&target_dir, dialect, preference, &MemoryCache::default())
+        Self::from_dir(
+            &target_dir,
+            dialect,
+            preference(args),
+            &MemoryCache::default(),
+        )
     }
 
-    fn from_dir(
+    pub(super) fn from_dir(
         target_dir: &Path,
         dialect: Option<&str>,
         preference: ArtifactPreference,
@@ -366,7 +383,7 @@ impl Loaded {
         }
     }
 
-    fn node_name(&self, id: &str) -> String {
+    pub(super) fn node_name(&self, id: &str) -> String {
         self.names.get(id).cloned().unwrap_or_else(|| id.to_owned())
     }
 }
@@ -463,7 +480,7 @@ fn edge_name(edge: EdgeKind) -> String {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-struct Summary {
+pub(super) struct Summary {
     target_dir: PathBuf,
     dialect: &'static str,
     analyzer: String,
@@ -474,7 +491,7 @@ struct Summary {
 }
 
 impl Summary {
-    fn of(loaded: &Loaded) -> Self {
+    pub(super) fn of(loaded: &Loaded) -> Self {
         Self {
             target_dir: loaded.target_dir.clone(),
             dialect: loaded.analyzer.dialect().name(),
@@ -486,7 +503,7 @@ impl Summary {
         }
     }
 
-    fn view(&self) -> ViewNode {
+    pub(super) fn view(&self) -> ViewNode {
         ViewNode::KeyValue(vec![
             (
                 "artifacts".into(),
@@ -1045,10 +1062,6 @@ fn now_rfc3339() -> String {
 
 // ---------------------------------------------------------------- graph and view
 
-/// The offline viewer page; the graph JSON replaces the placeholder.
-const VIEWER: &str = include_str!("../../assets/lineage-viewer.html");
-const VIEWER_PLACEHOLDER: &str = "/*__ODS_GRAPH__*/";
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct GraphReport {
@@ -1079,16 +1092,12 @@ impl GraphReport {
                 .cloned()
                 .unwrap_or_else(|| "json".into())
         };
+        if viewer && let Some(dir) = args.get_one::<String>("site") {
+            return Self::site(loaded, &document, Path::new(dir));
+        }
         let text = match format.as_str() {
-            "html" => {
-                // `<` is escaped so the JSON can't close the <script> element it lives in.
-                let json = serde_json::to_string(&document)
-                    .map_err(|e| {
-                        CliError::new(ExitStatus::Failure, codes::INTERNAL, e.to_string())
-                    })?
-                    .replace('<', "\\u003c");
-                VIEWER.replacen(VIEWER_PLACEHOLDER, &json, 1)
-            }
+            "html" => ods_web::standalone_page(&document)
+                .map_err(|e| CliError::new(ExitStatus::Failure, codes::INTERNAL, e.to_string()))?,
             "json" => serde_json::to_string_pretty(&document)
                 .map_err(|e| CliError::new(ExitStatus::Failure, codes::INTERNAL, e.to_string()))?,
             "dot" => document.to_dot(false),
@@ -1116,6 +1125,34 @@ impl GraphReport {
             node_edges: document.node_edges.len(),
             column_edges: document.column_edges.len(),
             opened,
+        })
+    }
+}
+
+impl GraphReport {
+    fn site(
+        loaded: &Loaded,
+        document: &ods_lineage::GraphDocument,
+        dir: &Path,
+    ) -> Result<Self, CliError> {
+        let files = ods_web::export_site(document, dir).map_err(|e| {
+            CliError::new(
+                ExitStatus::Failure,
+                codes::LINEAGE_ARTIFACTS,
+                format!("cannot write the site to `{}`: {e}", dir.display()),
+            )
+        })?;
+        Ok(Self {
+            summary: Summary::of(loaded),
+            format: "site".to_owned(),
+            output_file: files
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| dir.join("index.html")),
+            nodes: document.nodes.len(),
+            node_edges: document.node_edges.len(),
+            column_edges: document.column_edges.len(),
+            opened: false,
         })
     }
 }
@@ -1152,6 +1189,16 @@ impl Present for GraphReport {
                     "open {} in a browser; it works offline",
                     self.output_file.display()
                 ))],
+            });
+        }
+        if self.format == "site" {
+            // Browsers refuse to fetch graph.json from file:// pages, so say how to host it.
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(
+                    "serve the directory with any static web server; \
+                     browsers won't load graph.json from a file:// page",
+                )],
             });
         }
         ViewNode::Group(blocks)

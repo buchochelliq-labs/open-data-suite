@@ -16,6 +16,7 @@ codes).
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
 | `ods lineage columns\|impact\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
+| `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -105,6 +106,7 @@ meanings get new numbers.
 | `ODS-E0201` | dbt artifacts are missing, unreadable or an unsupported version, or lineage output can't be written. |
 | `ODS-E0202` | The project graph is inconsistent (duplicate ids or relations, or a dependency cycle). |
 | `ODS-E0203` | A model, column, change kind or dialect named on the command line doesn't exist. |
+| `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
 
 ## Environment variables
 
@@ -264,3 +266,43 @@ How impact is decided, most conservative first:
   only reach readers that `select *`;
 - every reader that is *not* affected is listed as skipped, with the changed columns it doesn't use.
 
+### Hosting the explorer
+
+The same page ships three ways ([ADR-0009](adr/0009-hostable-explorer-ods-web.md)):
+
+```sh
+ods lineage view                              # one offline file, graph embedded
+ods lineage view --site public/lineage        # static site: index.html + graph.json
+ods serve                                     # http://127.0.0.1:8765/, live reload
+ods serve --host 0.0.0.0 --port 8080 --base-path /lineage   # behind a reverse proxy
+```
+
+A static site can go on any static web server (S3, GitHub Pages, nginx). Browsers won't
+fetch `graph.json` from a `file://` page, so use `ods lineage view` for local files.
+
+`ods serve` analyzes the project once, then serves:
+- the explorer, which adds a *What if this changes?* panel that runs impact on the server;
+- a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
+  `/api/impact?node=&column=&kind=` and `/healthz`.
+
+It checks `manifest.json`, `catalog.json` and the Information Schema every second. When
+they change (e.g. after `dbt compile`) it re-analyzes only the models that changed, and
+open pages reload. If a reload fails, the last good graph stays up and the error appears
+in `/api/version`.
+
+It listens on loopback by default and then only answers requests for `localhost`,
+`127.0.0.1` or `[::1]`, which stops DNS-rebinding attacks from web pages. There is no
+authentication yet (#97): with `--host` anything other than loopback, put it behind a
+proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
+`/api/version` hides local paths and error text (they go to the server log). Responses
+carry a strict Content-Security-Policy, and nothing is written. `--base-path` accepts
+plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
+
+| Flag | Meaning |
+|---|---|
+| `--host ADDR` | (`serve`) address to listen on; default `127.0.0.1` |
+| `--port PORT` | (`serve`) default `8765`; `0` picks a free port (the URL is printed) |
+| `--base-path PATH` | (`serve`) URL prefix, e.g. `/lineage`; the page is served at `/lineage/` |
+| `--allow-host NAME` | (`serve`) also accept this `Host` name, e.g. the one your reverse proxy forwards; repeatable |
+| `--no-watch` | (`serve`) don't reload when artifacts change |
+| `--site DIR` | (`lineage view`) write a static site instead of one file |

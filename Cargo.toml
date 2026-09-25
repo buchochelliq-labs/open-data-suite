@@ -17,12 +17,15 @@ ods-core = { path = "crates/ods-core" }
 ods-config = { path = "crates/ods-config" }
 ods-sdk = { path = "crates/ods-sdk" }
 ods-lineage = { path = "crates/ods-lineage" }
+ods-web = { path = "crates/ods-web" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
+# HTTP server for the hostable explorer; confined to ods-web (ADR-0009).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"

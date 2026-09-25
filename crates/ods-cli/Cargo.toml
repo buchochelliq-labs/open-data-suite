@@ -21,6 +21,7 @@ ods-lineage.workspace = true
 ods-provider-dbt.workspace = true
 ods-provider-sqlparser.workspace = true
 ods-sdk.workspace = true
+ods-web.workspace = true
 rs-rich.workspace = true
 serde.workspace = true
 serde_json.workspace = true

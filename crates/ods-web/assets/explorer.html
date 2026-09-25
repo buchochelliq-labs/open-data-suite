@@ -1,13 +1,17 @@
 <!doctype html>
 <!--
-  ODS lineage viewer (ADR-0008). A single self-contained file: no network, no external
-  scripts, works offline. It renders a GraphDocument (schema_version 1) embedded below.
-  The VS Code extension (#107) reuses this page in a webview with the same JSON contract.
+  ODS lineage explorer (ADR-0008, ADR-0009). No external scripts or styles. It renders a
+  GraphDocument (schema_version 1): embedded below (offline single file), fetched from
+  graph.json (static site), or from the ods serve API (with live reload and impact
+  queries). The VS Code extension (#107) reuses this page with the same JSON contract.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Where the graph comes from: "embedded" (below), "graph.json" (static site) or "api" (ods serve). -->
+<meta name="ods-source" content="__ODS_SOURCE__">
+<meta name="ods-generation" content="__ODS_GENERATION__">
 <title>ODS lineage</title>
 <style>
   :root {
@@ -102,8 +106,20 @@
 <script type="application/json" id="ods-graph">/*__ODS_GRAPH__*/</script>
 <script>
 "use strict";
-(function () {
-  const doc = JSON.parse(document.getElementById("ods-graph").textContent);
+(async function () {
+  const source = document.querySelector('meta[name="ods-source"]').content;
+  // Relative to the page's directory, so it works under any base path.
+  const baseUrl = location.pathname.replace(/[^/]*$/, "");
+  const embedded = document.getElementById("ods-graph").textContent.trim();
+  let doc;
+  try {
+    doc = embedded && !embedded.startsWith("/*") ? JSON.parse(embedded)
+      : await (await fetch(baseUrl + (source === "api" ? "api/graph" : "graph.json"))).json();
+  } catch (err) {
+    document.getElementById("details").textContent = "Could not load the lineage graph: " + err;
+    return;
+  }
+  const api = source === "api";
   const SVG = "http://www.w3.org/2000/svg";
   const W = 230, HEAD = 26, ROW = 19, GAPX = 110, GAPY = 26;
   const byId = new Map(doc.nodes.map(n => [n.id, n]));
@@ -368,7 +384,9 @@
       h("h3", `Downstream columns (${state.down.size}) — would change`, null, d);
       const down = h("ul", null, null, d);
       for (const k of [...state.down].sort()) { const [nn, cc] = k.split("\u0000"); linkItem(down, `${nameOf(nn)}.${cc}`, nn, cc); }
+      impactButton(d, node, column);
     } else {
+      impactButton(d, node, null);
       h("h3", `Columns (${n.columns.length})`, null, d);
       const cols = h("ul", null, null, d);
       for (const c of n.columns) linkItem(cols, c, node, c);
@@ -379,6 +397,51 @@
       const down = h("ul", null, null, d);
       for (const id of [...state.down].sort()) linkItem(down, nameOf(id), id, null);
     }
+  }
+
+  // ---------- impact (served mode only): which models must run if this changes
+  function impactButton(d, node, column) {
+    if (!api) return;
+    h("h3", "What if this changes?", null, d);
+    const row = h("div", null, null, d);
+    const kinds = column == null ? [["rows", "its rows change"]] : [["modified", "modified"], ["removed", "removed"]];
+    const out = h("div", null, null, d);
+    for (const [kind, label] of kinds) {
+      const b = h("button", label, null, row);
+      b.style.marginRight = "6px";
+      b.addEventListener("click", async () => {
+        const q = new URLSearchParams({ node });
+        if (column != null) { q.set("column", column); q.set("kind", kind); }
+        out.replaceChildren(h("div", "…", "kv"));
+        try {
+          const r = await (await fetch(baseUrl + "api/impact?" + q)).json();
+          out.replaceChildren();
+          const nodes = Object.keys(r.impact.nodes).sort();
+          h("div", `${nodes.length} model(s) must run · ${new Set(r.impact.pruned.map(p => p.node)).size} skipped`, "kv", out);
+          const ul = h("ul", null, null, out);
+          for (const id of nodes) {
+            const imp = r.impact.nodes[id];
+            linkItem(ul, (byId.get(id) || { name: id }).name, id, null,
+              imp.rows_changed ? "all rows may change" : (imp.changed_columns || []).join(", "));
+          }
+        } catch (err) { out.replaceChildren(h("div", "impact failed: " + err, "warn")); }
+      });
+    }
+  }
+
+  // ---------- live reload (served mode only)
+  if (api) {
+    // The generation this page was rendered from, so a reload before the first poll
+    // isn't missed.
+    let generation = Number(document.querySelector('meta[name="ods-generation"]').content) || null;
+    setInterval(async () => {
+      try {
+        const v = await (await fetch(baseUrl + "api/version")).json();
+        if (generation !== null && v.generation !== generation) location.reload();
+        generation = v.generation;
+        document.getElementById("stats").title = v.last_error ? "reload failed: " + v.last_error : "live" + (v.source ? ": " + v.source : "");
+      } catch (_) { /* server restarting; try again */ }
+    }, 3000);
   }
 
   // ---------- pan and zoom
