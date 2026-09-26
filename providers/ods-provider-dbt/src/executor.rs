@@ -764,12 +764,18 @@ const RELATION_CHECK_DIR: &str = "ods-relation-check";
 impl RelationInspector for DbtExecutor {
     async fn inspect(&self, nodes: &[RequestedNode]) -> Result<RelationReport, ProviderError> {
         self.refuse_env()?;
-        // The nodes as the plan saw them, to tell which ones the query covers.
-        let manifest = crate::Manifest::read(&self.artifact("manifest.json")).map_err(|e| {
-            ProviderError::Other(format!("can't read the manifest to check relations: {e}"))
-        })?;
-        let checkable = crate::relations::checkable(&manifest);
         let target = self.target_path().join(RELATION_CHECK_DIR);
+        // dbt writes the manifest it checked here: one left by an earlier check must
+        // never pass for this one's.
+        let checked_manifest = target.join("manifest.json");
+        if let Err(e) = std::fs::remove_file(&checked_manifest)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(ProviderError::Other(format!(
+                "can't clear `{}` for the relation check: {e}",
+                checked_manifest.display()
+            )));
+        }
         // A best effort: dbt parses from scratch without it, just more slowly.
         if std::fs::create_dir_all(&target).is_ok() {
             let _ = std::fs::copy(
@@ -801,20 +807,27 @@ impl RelationInspector for DbtExecutor {
         let found = crate::relations::parse(&stdout).map_err(|why| {
             ProviderError::Other(format!("the relation check (`dbt show`) failed: {why}"))
         })?;
-        // dbt saw another project than the plan did: none of its answers can be trusted.
-        if found.checked != checkable.len() {
+        // Which nodes dbt checked: those of the project as it parsed it, which may not be
+        // the plan's (e.g. a model renamed since the compile). A node it didn't check is
+        // unknown, never present.
+        let manifest = crate::Manifest::read(&checked_manifest).map_err(|e| {
+            ProviderError::Other(format!(
+                "the relation check (`dbt show`) wrote no readable manifest: {e}"
+            ))
+        })?;
+        let checked = crate::relations::checkable(&manifest);
+        if found.checked != checked.len() {
             return Err(ProviderError::Other(format!(
-                "the relation check saw {} relations, the manifest has {}: \
-                 did the project change?",
+                "the relation check saw {} relations, its manifest has {}",
                 found.checked,
-                checkable.len()
+                checked.len()
             )));
         }
         let nodes = nodes
             .iter()
             .map(|n| {
-                let presence = if !checkable.contains(n.id.as_str()) {
-                    RelationPresence::Unknown("not a node with a relation".to_owned())
+                let presence = if !checked.contains(n.id.as_str()) {
+                    RelationPresence::Unknown("dbt didn't check it".to_owned())
                 } else if found.missing.contains(&n.id) {
                     RelationPresence::Missing
                 } else {

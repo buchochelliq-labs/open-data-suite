@@ -134,7 +134,7 @@ def rebuilt(ids):
             f.writelines(i + "\n" for i in sorted(gone))
 
 
-def show(options, manifest):
+def show(options, manifest, target):
     """Only ODS's relation check: one ShowNode event, as `--log-format json` prints it."""
     query = (options.get("inline") or [""])[0]
     if "ods_relation_check" not in query:
@@ -143,6 +143,8 @@ def show(options, manifest):
     if os.environ.get("FAKE_DBT_SHOW_FAIL"):
         print(json.dumps({"data": {"exc": "can't connect"}, "info": {"name": "MainEncounteredError"}}))
         return 2
+    # Like dbt, it writes the manifest of the project it parsed.
+    write(os.path.join(target, "manifest.json"), manifest)
     checked = [i for i, n in manifest["nodes"].items()
                if n["resource_type"] in STATE and n["config"].get("materialized") != "ephemeral"]
     gone = sorted(set(checked) & dropped())
@@ -173,7 +175,7 @@ def main():
     manifest["metadata"]["generated_at"] = now()
 
     if words[:1] == ["show"]:
-        return show(options, manifest)
+        return show(options, manifest, target)
 
     if words[:2] == ["source", "freshness"]:
         # Like dbt, it rewrites the manifest, and without compiled SQL.

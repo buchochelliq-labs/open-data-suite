@@ -580,6 +580,51 @@ fn reuse_candidates_are_what_would_be_reused_unchecked() {
 }
 
 #[test]
+fn once_relations_are_checked_an_unchecked_one_is_never_reused() {
+    let p = project();
+    let state = built(&p);
+    let plan = ods_state::plan_with(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+        PlanOptions::default().relations_checked(),
+    )
+    .unwrap();
+    for entry in &plan.entries {
+        assert_eq!(entry.action, PlanAction::Build, "{}", entry.name);
+    }
+    assert_eq!(
+        plan.entries[0].reasons[0].code,
+        ReasonCode::RelationUnverified
+    );
+}
+
+#[test]
+fn reuse_candidates_ignore_a_full_refresh() {
+    // A full refresh depends on the selection, so candidates are planned without it:
+    // a reader of a full-refreshed node may still be reused when that node isn't
+    // selected, and must be checked.
+    let mut p = project();
+    p.nodes[0] = p.nodes[0].clone().full_refresh_rebuilds();
+    let state = built(&p);
+    let at = Timestamp::from_unix(T0 + 60);
+    let plain = reuse_candidates(
+        &p,
+        Some((SnapshotId(1), &state)),
+        at,
+        PlanOptions::default(),
+    );
+    let refreshed = reuse_candidates(
+        &p,
+        Some((SnapshotId(1), &state)),
+        at,
+        PlanOptions::default().full_refresh(),
+    );
+    assert_eq!(plain.unwrap(), refreshed.unwrap());
+}
+
+#[test]
 fn a_source_version_measured_before_the_last_build_is_not_evidence() {
     let p = project();
     let snapshot = built(&p);

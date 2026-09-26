@@ -18,7 +18,8 @@ Constraints:
 - Rule 9: ODS must not hold warehouse credentials just to ask this.
 - Cost: one extra dbt call per run at most, however many nodes there are. A dbt call
   costs seconds (parsing, connecting).
-- Rule 8 (clean-room): nothing may be written into the user's project.
+- Nothing may be written into the user's project. The check only writes dbt's own
+  artifacts, to a directory of its own under the target path.
 
 ## Options considered
 ### Option A: a method on `Executor`
@@ -35,8 +36,8 @@ A small read-only contract, advertised as the `relation_existence` capability.
 
 ### How dbt answers: `dbt show --inline` (chosen) vs `dbt run-operation`
 - `run-operation` only runs a named macro from the project or its packages. ODS would
-  have to write a macro into the user's project (rule 8), and its answer would have to
-  be scraped from log output.
+  have to write a macro into the user's project, and its answer would have to be
+  scraped from log output.
 - `dbt show --inline "<jinja>" --output json --log-format json --limit 1` runs a query
   ODS supplies.
   - Its Jinja loops over `graph.nodes`, taking the models, seeds and snapshots that
@@ -71,9 +72,13 @@ A small read-only contract, advertised as the `relation_existence` capability.
    - Its `relation_exists` evidence is `exact` when checked, and `none` when not.
    - This is decided before its children are planned. Neither code is a code change,
      so readers see new upstream data and their lag and quorum rules apply.
-   - `reuse_candidates` returns the nodes a plan would reuse without any facts, over
-     the whole project so selection never changes a decision. Facts only turn REUSE
-     into BUILD, so checking those once is enough.
+   - `reuse_candidates` returns the nodes a plan would reuse without any facts. It
+     covers the whole project and plans it without a full refresh (which depends on
+     the selection and only adds builds), so it is a superset of what any selection
+     reuses. Facts only turn REUSE into BUILD, so checking those once is enough.
+   - Once relations were checked (`PlanOptions::relations_checked`), a node that would
+     be reused but wasn't checked is BUILT as `relation_unverified`. Nothing is reused
+     on trust by accident.
 3. **CLI.** `ods state run|seed|snapshot|build|compile`, including `--dry-run` and
    `--no-compile`, check the candidates before planning.
    - There is no call when there is nothing to reuse, e.g. on a first run.
@@ -85,8 +90,12 @@ A small read-only contract, advertised as the `relation_existence` capability.
    - `dbt show` writes its artifacts to `<target>/ods-relation-check/`, so the plan's
      `manifest.json` and `run_results.json` are never overwritten.
      `partial_parse.msgpack` is copied there first so parsing stays fast.
-   - If the relation count dbt reports differs from the count in the plan's manifest,
-     the check fails: dbt saw another project.
+   - Which nodes were checked comes from the `manifest.json` that `dbt show` itself
+     wrote, not from the plan's. dbt parses the project again, so a node it no longer
+     has (e.g. renamed since the compile) is `unknown`, never `present`. A count that
+     disagrees with that manifest fails the check.
+   - An executor without the capability is warned about: its reuse trusts the
+     recorded build.
 
 ## Consequences
 - Positive:

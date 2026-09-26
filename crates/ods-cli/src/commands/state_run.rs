@@ -573,14 +573,17 @@ fn step_count(args: &ArgMatches, builds: bool) -> usize {
 /// Checks that the nodes the plan would reuse are still in the warehouse, and records
 /// the answers on them, so the plan builds the ones that aren't (#230). One query for
 /// all of them; none when there is nothing to reuse. If the check fails, they are all
-/// built: missing evidence never means reuse (AGENTS.md rule 3).
+/// built: missing evidence never means reuse (AGENTS.md rule 3). Returns `options`
+/// for the plan, saying whether relations were checked, so it builds any node that
+/// wasn't.
 fn check_relations<I: RelationInspector + ?Sized>(
     project: &mut ods_state::Project,
     latest: Option<&StoredSnapshot>,
     inspector: &I,
+    now: Timestamp,
     options: ods_state::PlanOptions,
     warnings: &mut Vec<String>,
-) -> Result<(), CliError> {
+) -> Result<ods_state::PlanOptions, CliError> {
     let strategies = [
         Strategy::new("warehouse_check", [Capability::RelationExistence], true),
         Strategy::fallback("trust_recorded_build", false),
@@ -589,18 +592,17 @@ fn check_relations<I: RelationInspector + ?Sized>(
         .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
     if !choice.chosen.value {
         // Reuse then says in its evidence that nothing checked the relation.
-        tracing::debug!("the executor can't check relations: reuse trusts the recorded build");
-        return Ok(());
+        warnings.push(
+            "the executor can't check that reused tables are still in the warehouse: reuse trusts the last recorded build"
+                .to_owned(),
+        );
+        return Ok(options);
     }
-    let candidates = ods_state::reuse_candidates(
-        project,
-        latest.map(|s| (s.id, &s.snapshot)),
-        Timestamp::now(),
-        options,
-    )
-    .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    let candidates =
+        ods_state::reuse_candidates(project, latest.map(|s| (s.id, &s.snapshot)), now, options)
+            .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
     if candidates.is_empty() {
-        return Ok(());
+        return Ok(options);
     }
     let names: BTreeMap<&str, &str> = project
         .nodes
@@ -611,27 +613,31 @@ fn check_relations<I: RelationInspector + ?Sized>(
         .iter()
         .map(|id| RequestedNode::new(id.clone(), names.get(id.as_str()).copied().unwrap_or(id)))
         .collect();
-    let mut facts: BTreeMap<String, RelationFact> = match block_on(inspector.inspect(&requested))? {
-        Ok(report) => report
-            .nodes
-            .into_iter()
-            .map(|(id, presence)| {
+    let mut facts: BTreeMap<String, RelationFact> = BTreeMap::new();
+    match block_on(inspector.inspect(&requested))? {
+        Ok(report) => {
+            for (id, presence) in report.nodes {
                 let fact = match presence {
                     RelationPresence::Present { kind } => RelationFact::Present(kind),
                     RelationPresence::Missing => RelationFact::Missing,
                     RelationPresence::Unknown(why) => RelationFact::Unverified(why),
                     _ => RelationFact::Unverified("an answer ODS doesn't understand".to_owned()),
                 };
-                (id, fact)
-            })
-            .collect(),
+                // Two answers for one node: trust neither.
+                if facts.insert(id.clone(), fact).is_some() {
+                    facts.insert(
+                        id,
+                        RelationFact::Unverified("the check answered twice".to_owned()),
+                    );
+                }
+            }
+        }
         Err(e) => {
             warnings.push(format!(
                 "couldn't check that the tables of the nodes ODS would reuse are still in the warehouse, so they are built: {e}"
             ));
-            BTreeMap::new()
         }
-    };
+    }
     let candidates: BTreeSet<String> = candidates.into_iter().collect();
     for node in &mut project.nodes {
         if candidates.contains(&node.id) {
@@ -640,7 +646,7 @@ fn check_relations<I: RelationInspector + ?Sized>(
             });
         }
     }
-    Ok(())
+    Ok(options.relations_checked())
 }
 
 /// Each node's checks digest.
@@ -981,20 +987,18 @@ impl RunReport {
             Some(store) => ws.latest(store)?,
             None => None,
         };
-        check_relations(
+        // One clock for the check and the plan, so they agree on what is due.
+        let now = Timestamp::now();
+        let options = check_relations(
             &mut ws.project,
             latest.as_ref(),
             &executor,
+            now,
             plan_options(args),
             &mut warnings,
         )?;
-        let (plan, plan_warnings) = plan_against(
-            &ws,
-            latest.as_ref(),
-            &select_specs(args),
-            Timestamp::now(),
-            plan_options(args),
-        )?;
+        let (plan, plan_warnings) =
+            plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;
         warnings.extend(plan_warnings);
         let types = if builds {
             build_types(kind, args)

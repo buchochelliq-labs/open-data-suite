@@ -418,6 +418,10 @@ pub struct PlanOptions {
     /// ([`Node::full_refresh_rebuilds`]) are built even if unchanged. Their readers see
     /// new data, as after any rebuild.
     pub full_refresh: bool,
+    /// Relations were checked (#230): a node that would be reused but wasn't checked
+    /// ([`RelationFact::Unchecked`]) is built, as unverified, rather than reused on
+    /// trust.
+    pub relations_checked: bool,
 }
 
 impl PlanOptions {
@@ -427,12 +431,27 @@ impl PlanOptions {
         self.full_refresh = true;
         self
     }
+
+    /// Says relations were checked, so an unchecked one is never reused.
+    #[must_use]
+    pub fn relations_checked(mut self) -> Self {
+        self.relations_checked = true;
+        self
+    }
 }
 
 /// Records what is known about a reused node's relation, and returns why it must be
 /// built instead, if it must.
-fn relation_check(node: &Node, evidence: &mut Vec<Evidence>) -> Option<Reason> {
+fn relation_check(node: &Node, checked: bool, evidence: &mut Vec<Evidence>) -> Option<Reason> {
     let (value, exactness, reason) = match &node.relation {
+        RelationFact::Unchecked if checked => (
+            None,
+            Exactness::None,
+            Some(Reason::new(
+                ReasonCode::RelationUnverified,
+                "couldn't check that its table is still in the warehouse: it wasn't checked",
+            )),
+        ),
         RelationFact::Unchecked => (None, Exactness::None, None),
         RelationFact::Present(kind) => (
             Some(kind.clone().unwrap_or_else(|| "present".to_owned())),
@@ -466,8 +485,9 @@ fn relation_check(node: &Node, evidence: &mut Vec<Evidence>) -> Option<Reason> {
 }
 
 /// The nodes a plan would reuse if their relations are all still there: the ones worth
-/// checking (#230). It covers the whole project, whatever is selected, as selection
-/// never changes a decision. Relation facts only ever turn a reuse into a build, so
+/// checking (#230). It covers the whole project, and plans it without a full refresh,
+/// which only adds builds and depends on the selection: so it is a superset of what
+/// any selection reuses. Relation facts only ever turn a reuse into a build, so
 /// checking these once is enough.
 ///
 /// # Errors
@@ -483,6 +503,9 @@ pub fn reuse_candidates(
         node.relation = RelationFact::Unchecked;
     }
     let all = unchecked.nodes.iter().map(|n| n.id.clone()).collect();
+    let mut options = options;
+    options.full_refresh = false;
+    options.relations_checked = false;
     Ok(plan_with(&unchecked, previous, &all, now, options)?
         .entries
         .into_iter()
@@ -539,9 +562,10 @@ pub fn plan_with(
         // shown to be, is built (#230). Decided before children look at it, so they
         // see the rebuild.
         let (action, reasons) = if action == PlanAction::Reuse {
-            relation_check(node, &mut evidence).map_or((action, reasons), |reason| {
-                (PlanAction::Build, vec![reason])
-            })
+            relation_check(node, options.relations_checked, &mut evidence)
+                .map_or((action, reasons), |reason| {
+                    (PlanAction::Build, vec![reason])
+                })
         } else {
             (action, reasons)
         };

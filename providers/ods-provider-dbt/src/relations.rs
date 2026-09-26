@@ -40,7 +40,8 @@ pub(crate) struct Found {
     pub missing: BTreeSet<String>,
 }
 
-/// The nodes in `manifest` that [`QUERY`] checks, the same way it picks them.
+/// The nodes in `manifest` that [`QUERY`] checks, the same way it picks them. Read
+/// from the manifest the `dbt show` itself wrote, it says which nodes were checked.
 pub(crate) fn checkable(manifest: &Manifest) -> BTreeSet<&str> {
     manifest
         .nodes

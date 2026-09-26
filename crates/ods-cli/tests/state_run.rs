@@ -854,6 +854,22 @@ fn a_dropped_relation_is_rebuilt_with_its_reason() {
     assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
 }
 
+/// A full refresh depends on the selection: a reader of a node it would rebuild is
+/// still reused when that node isn't selected, so it is checked like any other.
+#[test]
+fn a_full_refresh_selection_still_checks_what_it_reuses() {
+    let project = Project::new("dropped-full-refresh");
+    let dropped = project.dir.join("dropped");
+    let project = project.with("FAKE_DBT_DROPPED", dropped.to_str().unwrap());
+    project.set_config("model.jaffle_ods.orders", "materialized", "incremental");
+    project.run_ok(&[]);
+    std::fs::write(&dropped, "model.jaffle_ods.customer_order_rank\n").unwrap();
+    let planned = project.run_ok(&["--dry-run", "--full-refresh", "-s", "customer_order_rank"]);
+    let rank = entry(&planned, "customer_order_rank");
+    assert_eq!(rank["action"], "build", "{rank:#}");
+    assert_eq!(rank["reasons"][0]["code"], "relation_missing", "{rank:#}");
+}
+
 /// If the warehouse can't be asked, nothing is reused on trust: every candidate is
 /// built, and the run says why.
 #[test]
