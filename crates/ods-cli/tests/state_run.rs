@@ -620,11 +620,10 @@ fn full_refresh_rebuilds_what_it_changes() {
         why("orders").1,
         "full refresh requested: rebuilt from scratch"
     );
-    // Its readers see new data, and say where from.
-    assert!(
-        why("stg_orders").1.contains("raw_orders (full refresh)"),
-        "{:?}",
-        why("stg_orders")
+    // Its readers are rebuilt too, and say where from.
+    assert_eq!(
+        why("stg_orders").1,
+        "upstream full refresh: raw_orders will be rebuilt from scratch"
     );
     // An incremental model that opts out is only built for its new upstream data.
     assert!(
