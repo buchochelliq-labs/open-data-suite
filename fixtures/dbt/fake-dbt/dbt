@@ -147,14 +147,20 @@ def main():
                "results": [], "elapsed_time": 0, "args": {"which": "compile"}}
         write(os.path.join(target, "run_results.json"), doc)
         return 0
-    if words[:1] not in (["build"], ["test"]):
+    # `run`, `seed` and `snapshot` build only their own resource type, and never tests.
+    only = {"run": "model", "seed": "seed", "snapshot": "snapshot"}
+    if words[:1] not in (["build"], ["test"]) and words[0] not in only:
         print(f"fake dbt: unsupported command {words}", file=sys.stderr)
         return 2
 
     excluded = set(options.get("exclude-resource-type", []))
+    if words[0] in only:
+        excluded.add("test")
     nodes = manifest["nodes"]
     chosen = [i for i, n in nodes.items()
-              if n["resource_type"] in STATE and any(selects(t, n) for t in options.get("select", []))]
+              if n["resource_type"] in STATE
+              and n["resource_type"] == only.get(words[0], n["resource_type"])
+              and any(selects(t, n) for t in options.get("select", []))]
     fail, fail_tests = names("FAKE_DBT_FAIL"), names("FAKE_DBT_FAIL_TEST")
     skip_tests = names("FAKE_DBT_SKIP_TEST")
 
@@ -209,7 +215,7 @@ def main():
             for node_id in built:
                 f.write(node_id + "\n")
     doc = {"metadata": metadata("run-results", 6, invocation, started),
-           "results": results, "elapsed_time": 0, "args": {"which": "build"}}
+           "results": results, "elapsed_time": 0, "args": {"which": words[0]}}
     write(os.path.join(target, "run_results.json"), doc)
     failed = any(r["status"] in ("error", "fail") for r in results)
     return 1 if failed else 0

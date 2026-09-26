@@ -166,7 +166,7 @@ impl TestReport {
             .filter(|n| all || !n.is_tested(&latest.snapshot.nodes[&n.id]))
             .map(|n| (n.id.clone(), n.name.clone(), n.kind.clone()))
             .collect();
-        let (requested, left_out) = narrow(args, &ws.project, candidates)?;
+        let (requested, left_out) = narrow(args, &ws.project, candidates, &[], "ods state test")?;
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),

@@ -105,45 +105,137 @@ pub(super) fn dbt_options(command: Command) -> Command {
         )
 }
 
-/// `ods state run`'s own arguments.
-pub(super) fn run_command() -> Command {
-    dbt_options(common(
-        Command::new("run").about(
-            "Build only what needs building (models, seeds, snapshots) with dbt, and record what succeeded",
-        ),
-    ))
-    .arg(
+/// The `ods state` commands that build (or only prepare), each named after the dbt
+/// command it runs, so dbt users find what they expect (#229, ADR-0015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    /// `dbt source freshness` + `dbt compile`, then the plan. Builds nothing.
+    Compile,
+    /// `dbt run`: models.
+    Run,
+    /// `dbt seed`: seeds.
+    Seed,
+    /// `dbt snapshot`: snapshots.
+    Snapshot,
+    /// `dbt build`: models, seeds and snapshots, with their tests.
+    Build,
+}
+
+impl Kind {
+    /// Every kind, in `--help` order.
+    pub(super) const ALL: [Self; 5] = [
+        Self::Compile,
+        Self::Run,
+        Self::Seed,
+        Self::Snapshot,
+        Self::Build,
+    ];
+
+    /// The kind named `name`, if any.
+    pub(super) fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    /// The subcommand, and the dbt command it matches.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Compile => "compile",
+            Self::Run => "run",
+            Self::Seed => "seed",
+            Self::Snapshot => "snapshot",
+            Self::Build => "build",
+        }
+    }
+
+    fn about(self) -> &'static str {
+        match self {
+            Self::Compile => {
+                "Measure sources and compile with dbt, then show what would be built and why; builds nothing"
+            }
+            Self::Run => {
+                "Build the models that need building (`dbt run`), and record what succeeded"
+            }
+            Self::Seed => {
+                "Load the seeds that need loading (`dbt seed`), and record what succeeded"
+            }
+            Self::Snapshot => {
+                "Take the snapshots that need taking (`dbt snapshot`), and record what succeeded"
+            }
+            Self::Build => {
+                "Build and test what needs building: models, seeds and snapshots (`dbt build`), and record what succeeded"
+            }
+        }
+    }
+
+    /// The resource types it builds; `None` for `compile`, which builds nothing.
+    fn types(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Compile => None,
+            Self::Run => Some(&["model"]),
+            Self::Seed => Some(&["seed"]),
+            Self::Snapshot => Some(&["snapshot"]),
+            Self::Build => Some(&["model", "seed", "snapshot"]),
+        }
+    }
+
+    /// The `ods state` command that builds nodes of `kind`, to suggest.
+    fn command_for(kind: &str) -> &'static str {
+        match kind {
+            "seed" => "ods state seed",
+            "snapshot" => "ods state snapshot",
+            _ => "ods state run",
+        }
+    }
+}
+
+/// An `ods state` command that builds, with its own arguments.
+pub(super) fn build_command(kind: Kind) -> Command {
+    let mut command = dbt_options(common(Command::new(kind.name()).about(kind.about()))).arg(
+        Arg::new("no-source-freshness")
+            .long("no-source-freshness")
+            .action(ArgAction::SetTrue)
+            .help(
+                "Don't run `dbt source freshness` first; use --sources or an existing sources.json",
+            ),
+    );
+    if kind == Kind::Compile {
+        return command;
+    }
+    command = command.arg(
         Arg::new("dry-run")
             .long("dry-run")
             .action(ArgAction::SetTrue)
             .help("Prepare and plan, but build and record nothing"),
-    )
-    .arg(
-        Arg::new("test")
-            .long("test")
-            .action(ArgAction::SetTrue)
-            .help("Also run the built nodes' tests, like `dbt build`; a node whose tests fail keeps its last state"),
-    )
-    .arg(
-        Arg::new("full-refresh")
-            .long("full-refresh")
-            .action(ArgAction::SetTrue)
-            .help("dbt's --full-refresh for the nodes being built"),
-    )
-    .arg(
-        Arg::new("resource-type")
-            .long("resource-type")
-            .value_name("TYPE")
-            .value_parser(["model", "seed", "snapshot"])
-            .action(ArgAction::Append)
-            .help("Only build nodes of this type; the others stay to build; repeatable"),
-    )
-    .arg(
-        Arg::new("no-source-freshness")
-            .long("no-source-freshness")
-            .action(ArgAction::SetTrue)
-            .help("Don't run `dbt source freshness` first; use --sources or an existing sources.json"),
-    )
+    );
+    // `dbt snapshot` has no --full-refresh: a snapshot's history is the point.
+    if kind != Kind::Snapshot {
+        command = command.arg(
+            Arg::new("full-refresh")
+                .long("full-refresh")
+                .action(ArgAction::SetTrue)
+                .help("dbt's --full-refresh for the nodes being built"),
+        );
+    }
+    if kind == Kind::Build {
+        command = command
+            .arg(
+                Arg::new("resource-type")
+                    .long("resource-type")
+                    .value_name("TYPE")
+                    .value_parser(["model", "seed", "snapshot"])
+                    .action(ArgAction::Append)
+                    .help("Only build nodes of this type; the others stay to build; repeatable"),
+            )
+            .arg(
+                Arg::new("exclude-resource-type")
+                    .long("exclude-resource-type")
+                    .value_name("TYPE")
+                    .value_parser(["model", "seed", "snapshot", "test"])
+                    .action(ArgAction::Append)
+                    .help("Leave this type out: `test` builds without tests (unit tests too); a node type stays to build; repeatable"),
+            );
+    }
+    command
 }
 
 /// Nodes the plan would build that this run leaves out, and why.
@@ -160,6 +252,8 @@ pub(super) fn narrow(
     args: &ArgMatches,
     project: &ods_state::Project,
     entries: Vec<(String, String, String)>,
+    types: &[String],
+    command: &str,
 ) -> Result<(Vec<RequestedNode>, Vec<LeftOut>), CliError> {
     let exclude_specs: Vec<String> = args
         .get_many::<String>("exclude")
@@ -173,13 +267,6 @@ pub(super) fn narrow(
         ods_state::select(project, &exclude_specs)
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?
     };
-    let types: Vec<&String> = args
-        .try_get_many::<String>("resource-type")
-        .ok()
-        .flatten()
-        .into_iter()
-        .flatten()
-        .collect();
     let mut requested = Vec::new();
     let mut left_out = Vec::new();
     for (id, name, kind) in entries {
@@ -188,16 +275,17 @@ pub(super) fn narrow(
                 node: id,
                 reason: "excluded with --exclude".to_owned(),
             });
-        } else if !types.is_empty() && !types.iter().any(|t| **t == kind) {
+        } else if !types.is_empty() && !types.contains(&kind) {
             left_out.push(LeftOut {
                 node: id,
                 reason: format!(
-                    "a {kind}, and only {} were asked for",
+                    "a {kind}: `{command}` builds {} only; use `{}` or `ods state build`",
                     types
                         .iter()
                         .map(|t| format!("{t}s"))
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(", "),
+                    Kind::command_for(&kind)
                 ),
             });
         } else {
@@ -274,13 +362,17 @@ impl Steps {
                 "dbt source freshness: how new each source's data is".to_owned()
             }
             DbtStep::Compile => "dbt compile: the code as it is now, for the plan".to_owned(),
-            DbtStep::Build { nodes, tests } => format!(
-                "dbt build: {}{}",
+            DbtStep::Build {
+                command,
+                nodes,
+                tests,
+            } => format!(
+                "dbt {command}: {}{}",
                 count(nodes, "node"),
-                if tests {
-                    " and their tests"
-                } else {
-                    ", without tests"
+                match (command, tests) {
+                    (_, true) => " and their tests",
+                    ("build", false) => ", without tests",
+                    _ => "",
                 }
             ),
             DbtStep::Test { nodes } => format!("dbt test: the tests of {}", count(nodes, "node")),
@@ -365,9 +457,75 @@ fn reason_label(code: ReasonCode) -> &'static str {
     }
 }
 
-/// Whether this run tests what it builds (`--test`).
-fn execution_tested(args: &ArgMatches) -> bool {
-    args.get_flag("test")
+/// Warnings for nodes this run leaves unbuilt although nodes it builds read them, e.g.
+/// a changed seed under `ods state run`: dbt builds the readers against the seed's
+/// current table, and says nothing (#229).
+fn unbuilt_parents(
+    project: &ods_state::Project,
+    plan: &ExecutionPlan,
+    requested: &[RequestedNode],
+    left_out: &[LeftOut],
+    kind: Kind,
+) -> Vec<String> {
+    let requested: BTreeSet<&str> = requested.iter().map(|n| n.id.as_str()).collect();
+    left_out
+        .iter()
+        .filter_map(|l| {
+            let readers: Vec<&str> = project
+                .nodes
+                .iter()
+                .filter(|n| requested.contains(n.id.as_str()) && n.parents.contains(&l.node))
+                .map(|n| n.name.as_str())
+                .collect();
+            if readers.is_empty() {
+                return None;
+            }
+            let entry = plan.entries.iter().find(|e| e.node == l.node)?;
+            let why = entry.reasons.first().map_or("it needs building", |r| r.message.as_str());
+            Some(format!(
+                "`{}` ({}) needs building ({why}), but `ods state {}` leaves it out: {} will read its current table. Run `{}` or `ods state build` too",
+                entry.name,
+                entry.kind,
+                kind.name(),
+                readers.join(", "),
+                Kind::command_for(&entry.kind),
+            ))
+        })
+        .collect()
+}
+
+/// Values of a repeatable option, if the command has it.
+fn values(args: &ArgMatches, id: &str) -> Vec<String> {
+    args.try_get_many::<String>(id)
+        .ok()
+        .flatten()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+/// The resource types this run builds: the command's, narrowed by `--resource-type`
+/// and `--exclude-resource-type`.
+fn build_types(kind: Kind, args: &ArgMatches) -> Vec<String> {
+    let asked = values(args, "resource-type");
+    let excluded = values(args, "exclude-resource-type");
+    kind.types()
+        .unwrap_or_default()
+        .iter()
+        .filter(|t| asked.is_empty() || asked.iter().any(|a| a == *t))
+        .filter(|t| !excluded.iter().any(|e| e == *t))
+        .map(|t| (*t).to_owned())
+        .collect()
+}
+
+/// Whether this run tests what it builds: `build` does, like `dbt build`, unless
+/// `--exclude-resource-type test`.
+fn execution_tested(kind: Kind, args: &ArgMatches) -> bool {
+    kind == Kind::Build
+        && !values(args, "exclude-resource-type")
+            .iter()
+            .any(|e| e == "test")
 }
 
 /// `1 node`, `2 nodes`.
@@ -424,6 +582,7 @@ fn prepare(
 /// built. Only successes advance; if none did, nothing is committed.
 fn record(
     args: &ArgMatches,
+    tested: bool,
     sources: Sources,
     execution: &ExecutionReport,
     latest: Option<&StoredSnapshot>,
@@ -438,7 +597,6 @@ fn record(
         )
         .with_hint("don't run other dbt commands against the same target directory during `ods state run`"));
     }
-    let tested = execution_tested(args);
     let results: Vec<RunResult> = execution
         .nodes
         .iter()
@@ -520,6 +678,8 @@ fn execution_error(error: &ProviderError) -> CliError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum RunOutcome {
+    /// `ods state compile`: prepared and planned only.
+    Compiled,
     /// `--dry-run`: planned only.
     DryRun,
     /// Everything could be reused; nothing ran.
@@ -573,8 +733,12 @@ pub(super) struct RunReport {
 
 impl RunReport {
     /// Runs the whole flow and emits the report.
-    pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let (report, record_error) = Self::build(args, ctx.progress)?;
+    pub(super) fn run(
+        kind: Kind,
+        args: &ArgMatches,
+        ctx: &mut Context<'_>,
+    ) -> Result<(), CliError> {
+        let (report, record_error) = Self::build(kind, args, ctx.progress)?;
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);
         }
@@ -611,6 +775,7 @@ impl RunReport {
     /// Runs the flow. A failure to record after dbt ran comes back with the report, so
     /// the caller still sees what dbt did.
     fn build(
+        kind: Kind,
         args: &ArgMatches,
         progress: ProgressSettings,
     ) -> Result<(Self, Option<CliError>), CliError> {
@@ -620,7 +785,11 @@ impl RunReport {
         );
         let compiles = !args.get_flag("no-compile");
         let measures = compiles && !args.get_flag("no-source-freshness");
-        let steps = Steps::new(progress, usize::from(measures) + usize::from(compiles) + 1);
+        let builds = kind != Kind::Compile;
+        let steps = Steps::new(
+            progress,
+            usize::from(measures) + usize::from(compiles) + usize::from(builds),
+        );
         let executor = steps.attach(executor(args, &target_dir));
         let mut warnings = Vec::new();
 
@@ -629,7 +798,8 @@ impl RunReport {
 
         // 2. Plan.
         let ws = Workspace::load(args, sources)?;
-        let dry_run = args.get_flag("dry-run");
+        let dry_run = !builds || args.get_flag("dry-run");
+        let tested = execution_tested(kind, args);
         let store = if dry_run && !ws.state_db.is_file() {
             None
         } else {
@@ -642,13 +812,29 @@ impl RunReport {
         let (plan, plan_warnings) =
             plan_against(&ws, latest.as_ref(), &select_specs(args), Timestamp::now())?;
         warnings.extend(plan_warnings);
+        let types = if builds {
+            build_types(kind, args)
+        } else {
+            Vec::new()
+        };
         let (requested, left_out) = narrow(
             args,
             &ws.project,
             plan.with_action(PlanAction::Build)
                 .map(|e| (e.node.clone(), e.name.clone(), e.kind.clone()))
                 .collect(),
+            &types,
+            &format!("ods state {}", kind.name()),
         )?;
+        if builds {
+            warnings.extend(unbuilt_parents(
+                &ws.project,
+                &plan,
+                &requested,
+                &left_out,
+                kind,
+            ));
+        }
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
@@ -656,7 +842,7 @@ impl RunReport {
             outcome: RunOutcome::DryRun,
             build: requested.len(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
-            tests: execution_tested(args),
+            tests: tested,
             left_out,
             prepared,
             plan,
@@ -668,6 +854,11 @@ impl RunReport {
         for note in plan_notes(&report) {
             steps.note(&note);
         }
+        if !builds {
+            steps.note("compiled: nothing is built or recorded");
+            report.outcome = RunOutcome::Compiled;
+            return Ok((report, None));
+        }
         if dry_run {
             steps.note("dry run: nothing is built or recorded");
             return Ok((report, None));
@@ -678,42 +869,59 @@ impl RunReport {
             return Ok((report, None));
         };
 
+        report.execute(args, &executor, requested, sources, latest.as_ref(), &store)
+    }
+
+    /// Steps 3 and 4: build the requested nodes with dbt, then record the run. A
+    /// failure to record comes back with the report, so the caller still sees what dbt
+    /// did.
+    fn execute(
+        mut self,
+        args: &ArgMatches,
+        executor: &DbtExecutor,
+        requested: Vec<RequestedNode>,
+        sources: Sources,
+        latest: Option<&StoredSnapshot>,
+        store: &SqliteStateStore,
+    ) -> Result<(Self, Option<CliError>), CliError> {
         // 3. Execute.
-        let mode = if execution_tested(args) {
+        let mode = if self.tests {
             ExecutionMode::Build
         } else {
             ExecutionMode::Run
         };
         let request = ExecutionRequest::new(requested, mode)
-            .with_full_refresh(args.get_flag("full-refresh"))
+            .with_full_refresh(
+                args.try_get_one::<bool>("full-refresh").ok().flatten() == Some(&true),
+            )
             .with_engine_args(dbt_args(args));
         let execution = block_on(executor.execute(&request))?.map_err(|e| {
             execution_error(&e)
                 .with_hint("nothing was recorded; the last successful state is unchanged")
         })?;
         if !execution.unrequested.is_empty() {
-            report.warnings.push(format!(
+            self.warnings.push(format!(
                 "dbt also built {}, which weren't requested (the project changed after it was compiled?); they weren't recorded and will be built next run",
                 execution.unrequested.iter().map(|n| display_name(n)).collect::<Vec<_>>().join(", ")
             ));
         }
 
         // 4. Record.
-        let recorded = record(args, sources, &execution, latest.as_ref(), &store);
-        report.execution = Some(execution);
+        let recorded = record(args, self.tests, sources, &execution, latest, store);
+        self.execution = Some(execution);
         Ok(match recorded {
             Ok(record) => {
-                report.outcome = if report.execution.as_ref().is_some_and(|e| e.succeeded) {
+                self.outcome = if self.execution.as_ref().is_some_and(|e| e.succeeded) {
                     RunOutcome::Succeeded
                 } else {
                     RunOutcome::Failed
                 };
-                report.record = Some(record);
-                (report, None)
+                self.record = Some(record);
+                (self, None)
             }
             Err(error) => {
-                report.outcome = RunOutcome::NotRecorded;
-                (report, Some(error))
+                self.outcome = RunOutcome::NotRecorded;
+                (self, Some(error))
             }
         })
     }
@@ -754,6 +962,7 @@ impl RunReport {
         summary.push((
             "outcome".into(),
             vec![match self.outcome {
+                RunOutcome::Compiled => Span::plain("compiled: nothing built or recorded"),
                 RunOutcome::DryRun => Span::plain("dry run: nothing built or recorded"),
                 RunOutcome::NothingToBuild => {
                     Span::toned("nothing to build: everything is reused", Tone::Success)

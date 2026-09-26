@@ -186,11 +186,27 @@ async fn run_mode_leaves_out_tests() {
         .await
         .unwrap();
     assert!(report.succeeded, "{report:?}");
+    // Only models: `dbt run`, which never runs tests (#229).
+    let command = report.command.unwrap();
+    assert!(command.contains(" run --select "), "{command}");
+
+    // Mixed types: `dbt build` without tests.
+    let report = executor
+        .execute(&ExecutionRequest::new(
+            vec![
+                RequestedNode::new("seed.jaffle_ods.raw_orders", "raw_orders"),
+                RequestedNode::new("model.jaffle_ods.orders", "orders"),
+            ],
+            ExecutionMode::Run,
+        ))
+        .await
+        .unwrap();
+    assert!(report.succeeded, "{report:?}");
+    let command = report.command.unwrap();
+    assert!(command.contains(" build --select "), "{command}");
     assert!(
-        report
-            .command
-            .unwrap()
-            .contains("--exclude-resource-type test")
+        command.contains("--exclude-resource-type test"),
+        "{command}"
     );
 }
 

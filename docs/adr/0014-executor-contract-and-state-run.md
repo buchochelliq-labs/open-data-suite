@@ -156,6 +156,11 @@ is what the caller needs to see which nodes failed.
   would make a build something ODS can't record as the real thing.
 - `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
   snapshots the plan needs. `--test` builds and tests, like `dbt build`.
+  *Amended (#229):* the build commands are named after dbt's: `ods state run` (models,
+  `dbt run`), `seed`, `snapshot`, and `build` (models, seeds and snapshots with their
+  tests, `dbt build`; `--exclude-resource-type test` without). `ods state compile`
+  prepares and plans only. `--test` is gone. The executor runs `dbt run`, `seed` or
+  `snapshot` when every requested node is of that one type, and `build` otherwise.
 - `ods state test` tests what was built but not yet tested (`--all`: everything), with
   `dbt test` and exact selection, and records the results. It builds nothing.
 - `--exclude` and `--resource-type` narrow the BUILD set. What they leave out keeps its

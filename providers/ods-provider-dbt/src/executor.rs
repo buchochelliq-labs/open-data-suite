@@ -53,8 +53,11 @@ pub enum DbtStep {
     SourceFreshness,
     /// `dbt compile`: the compiled SQL fingerprints need.
     Compile,
-    /// `dbt build` of `nodes` nodes, with or without their tests.
+    /// A dbt command that builds `nodes` nodes: `build`, or `run`, `seed` or
+    /// `snapshot` when they are all models, seeds or snapshots.
     Build {
+        /// The dbt command, e.g. `run`.
+        command: &'static str,
         /// How many nodes are selected.
         nodes: usize,
         /// Whether their tests run too.
@@ -424,6 +427,28 @@ impl DbtExecutor {
     }
 }
 
+/// The dbt command for `mode` and the requested nodes: `test` for a test run; without
+/// tests, `run`, `seed` or `snapshot` when every node is of that one type, so dbt's
+/// own output reads as a user expects; otherwise `build`.
+fn dbt_command(mode: ExecutionMode, manifest: &crate::Manifest, ids: &[String]) -> &'static str {
+    match mode {
+        ExecutionMode::Test => return "test",
+        ExecutionMode::Build => return "build",
+        _ => {}
+    }
+    let kinds: BTreeSet<crate::ResourceType> = ids
+        .iter()
+        .filter_map(|id| manifest.nodes.iter().find(|n| &n.unique_id == id))
+        .map(|n| n.resource_type)
+        .collect();
+    match kinds.iter().collect::<Vec<_>>().as_slice() {
+        [crate::ResourceType::Model] => "run",
+        [crate::ResourceType::Seed] => "seed",
+        [crate::ResourceType::Snapshot] => "snapshot",
+        _ => "build",
+    }
+}
+
 /// Hooks and other operations dbt reports alongside the nodes: neither nodes nor checks.
 fn is_operation(id: &str) -> bool {
     id.starts_with("operation.")
@@ -745,17 +770,15 @@ impl Executor for DbtExecutor {
         })?;
         refuse_engine_args(&request.engine_args)?;
         self.refuse_env()?;
-        let command = if request.mode == ExecutionMode::Test {
-            "test"
-        } else {
-            "build"
-        };
-        let mut args = vec![command.to_owned(), "--select".to_owned()];
+        let dbt_command = dbt_command(request.mode, &manifest, &ids);
+        let mut args = vec![dbt_command.to_owned(), "--select".to_owned()];
         args.extend(selectors);
-        if request.full_refresh && request.mode != ExecutionMode::Test {
+        // `dbt snapshot` has no --full-refresh: a snapshot's history is the point.
+        if request.full_refresh && !matches!(dbt_command, "test" | "snapshot") {
             args.push("--full-refresh".to_owned());
         }
-        if request.mode == ExecutionMode::Run {
+        // Only `build` would run tests alongside; the others never do.
+        if request.mode == ExecutionMode::Run && dbt_command == "build" {
             args.extend(
                 [
                     "--exclude-resource-type",
@@ -777,6 +800,7 @@ impl Executor for DbtExecutor {
             }
         } else {
             DbtStep::Build {
+                command: dbt_command,
                 nodes: request.nodes.len(),
                 tests: request.mode == ExecutionMode::Build,
             }
