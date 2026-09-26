@@ -121,11 +121,24 @@ impl Project {
         )
     }
 
+    /// `ods state build` without tests (what `ods state run` did before #229), or with
+    /// them when `extra` holds `--test`.
     fn run(&self, extra: &[&str]) -> (i32, Value) {
+        let tests = extra.contains(&"--test");
+        let mut rest: Vec<&str> = extra.iter().copied().filter(|a| *a != "--test").collect();
+        if !tests {
+            let split = rest.iter().position(|a| *a == "--").unwrap_or(rest.len());
+            rest.splice(split..split, ["--exclude-resource-type", "test"]);
+        }
+        self.command("build", &rest)
+    }
+
+    /// `ods state <command>` against the fake dbt.
+    fn command(&self, command: &str, extra: &[&str]) -> (i32, Value) {
         let dbt = fixture("fake-dbt/dbt");
         let mut args = vec![
             "state",
-            "run",
+            command,
             "--dbt",
             dbt.to_str().unwrap(),
             "--dbt-output",
@@ -320,8 +333,14 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
 fn dbt_output_streams_to_stderr() {
     let project = Project::new("dbt-output");
     let dbt = fixture("fake-dbt/dbt");
-    let (code, json, stderr) =
-        project.ods_with_stderr(&["state", "run", "--dbt", dbt.to_str().unwrap()]);
+    let (code, json, stderr) = project.ods_with_stderr(&[
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
     assert_eq!(code, 0, "{json:#}");
     // ODS says which dbt command runs, and why, just before dbt's own output (#220).
     let expected = [
@@ -343,20 +362,41 @@ fn dbt_output_streams_to_stderr() {
             .unwrap_or_else(|| panic!("{line:?} missing or out of order in stderr:\n{stderr}"));
         rest = &rest[at + line.len()..];
     }
-    let (_, _, again) = project.ods_with_stderr(&["state", "run", "--dbt", dbt.to_str().unwrap()]);
+    let (_, _, again) = project.ods_with_stderr(&[
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
     assert!(
         again.contains("ods ▸ nothing to build, so dbt doesn't run again"),
         "{again}"
     );
-    let (_, _, quiet) =
-        project.ods_with_stderr(&["-q", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    let (_, _, quiet) = project.ods_with_stderr(&[
+        "-q",
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
     assert!(!quiet.contains("ods ▸"), "-q hides progress: {quiet}");
 
     // Logs: none by default; -v says what ODS runs and records, -vv why, per node.
     assert!(!stderr.contains("running dbt"), "{stderr}");
     project.change_code("model.jaffle_ods.orders");
-    let (_, _, info) =
-        project.ods_with_stderr(&["-v", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    let (_, _, info) = project.ods_with_stderr(&[
+        "-v",
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
     assert!(info.contains("ods ▸   code changed: orders"), "{info}");
     for text in ["running dbt", "dbt finished", "recording the run"] {
         assert!(info.contains(text), "{text} missing at -v:\n{info}");
@@ -436,6 +476,99 @@ fn only_tests_that_ran_mark_a_build_tested_and_changed_tests_run_again() {
     project.change_test("test.jaffle_ods.unique_orders_order_id.fed79b3a6e");
     let again = project.test_ok(&[]);
     assert_eq!(names(&again["record"]["passed"]), ["orders"]);
+}
+
+/// #229: each `ods state` command runs the dbt command it's named after, and builds
+/// only its own resource type.
+#[test]
+fn each_command_runs_its_dbt_namesake() {
+    let project = Project::new("commands");
+    let command = |json: &Value| json["execution"]["command"].as_str().unwrap().to_owned();
+    let dbt = fixture("fake-dbt/dbt").display().to_string();
+
+    // compile: freshness and compile, then the plan; nothing is built or recorded.
+    let (code, compiled) = project.command("compile", &[]);
+    assert_eq!(code, 0, "{compiled:#}");
+    assert_eq!(compiled["result"]["outcome"], "compiled");
+    assert_eq!(compiled["result"]["build"], 13);
+    assert!(compiled["result"].get("execution").is_none());
+    assert!(project.history().is_empty());
+
+    // run: models only, with `dbt run`; the seeds they read are left out, and it says so.
+    let (code, ran) = project.command("run", &[]);
+    assert_eq!(code, 0, "{ran:#}");
+    let ran = &ran["result"];
+    assert!(
+        command(ran).starts_with(&format!("{dbt} run --select ")),
+        "{}",
+        command(ran)
+    );
+    assert!(
+        !command(ran).contains("--exclude-resource-type"),
+        "{}",
+        command(ran)
+    );
+    assert_eq!(ran["execution"]["nodes"].as_array().unwrap().len(), 10);
+    assert_eq!(
+        names(&ran["left_out"]),
+        ["raw_customers", "raw_orders", "raw_payments"]
+    );
+    assert!(
+        ran["left_out"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("use `ods state seed`"),
+        "{ran:#}"
+    );
+    let warnings = ran["warnings"].to_string();
+    assert!(
+        warnings.contains("`raw_orders` (seed) needs building") && warnings.contains("stg_orders"),
+        "{warnings}"
+    );
+
+    // seed: seeds only, with `dbt seed`.
+    let seeded = project.command("seed", &[]).1;
+    let seeded = &seeded["result"];
+    assert!(
+        command(seeded).starts_with(&format!("{dbt} seed --select ")),
+        "{}",
+        command(seeded)
+    );
+    assert_eq!(
+        names(&seeded["execution"]["nodes"]),
+        ["raw_customers", "raw_orders", "raw_payments"]
+    );
+
+    // build: everything left, with its tests, like `dbt build`.
+    let (code, built) = project.command("build", &[]);
+    assert_eq!(code, 0, "{built:#}");
+    let built = &built["result"];
+    assert_eq!(built["tests"], true);
+    assert!(
+        command(built).starts_with(&format!("{dbt} build --select ")),
+        "{}",
+        command(built)
+    );
+    assert!(
+        !command(built).contains("--exclude-resource-type"),
+        "{}",
+        command(built)
+    );
+    assert!(
+        built["execution"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["checks_passed"].as_array().is_some_and(|c| !c.is_empty())),
+        "tests ran: {built:#}"
+    );
+    // `--test` is gone: `build` tests, `--exclude-resource-type test` doesn't.
+    let status = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--test"])
+        .output()
+        .unwrap()
+        .status;
+    assert_eq!(status.code(), Some(2), "an unknown flag is a usage error");
 }
 
 /// #220: a plain run builds without tests; `--test` builds and tests.
@@ -589,14 +722,9 @@ fn when_dbt_cannot_run_nothing_is_recorded() {
     assert!(project.history().is_empty());
 }
 
-/// The same flow against real dbt and `DuckDB`, on a copy of the demo project. Set
-/// `ODS_TEST_DBT` to a dbt executable with `dbt-duckdb` installed.
-#[test]
-fn real_dbt() {
-    let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
-        eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
-        return;
-    };
+/// A copy of the demo project for real dbt, with a folder named like a model (#211):
+/// `fqn:…segment_summary` alone would also select the model in it.
+fn real_project() -> Project {
     let project = Project::new("real").with("DBT_SEND_ANONYMOUS_USAGE_STATS", "false");
     let root = fixture("jaffle-ods");
     for entry in [
@@ -608,8 +736,6 @@ fn real_dbt() {
     ] {
         copy(&root.join(entry), &project.dir.join(entry));
     }
-    // A folder named like a model (#211): `fqn:…segment_summary` alone would also
-    // select the model in it.
     let nested = project.dir.join("models/marts/segment_summary");
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
@@ -617,6 +743,18 @@ fn real_dbt() {
         "select count(*) as n from {{ ref('raw_orders') }}\n",
     )
     .unwrap();
+    project
+}
+
+/// The same flow against real dbt and `DuckDB`, on a copy of the demo project. Set
+/// `ODS_TEST_DBT` to a dbt executable with `dbt-duckdb` installed.
+#[test]
+fn real_dbt() {
+    let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
+        eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
+        return;
+    };
+    let project = real_project();
     let dbt = dbt.to_str().unwrap().to_owned();
     let dbt_cmd = |command: &'static str, extra: &[&str]| {
         let mut args = vec![
@@ -633,16 +771,30 @@ fn real_dbt() {
         project.ods(&args)
     };
     let real = |extra: &[&str]| dbt_cmd("run", extra);
-    let (code, first) = real(&[]);
-    assert_eq!(code, 0, "{first:#}");
-    assert_eq!(
-        first["result"]["record"]["advanced"]
+    let advanced = |json: &Value| {
+        json["result"]["record"]["advanced"]
             .as_array()
             .unwrap()
-            .len(),
-        14
-    );
-    let (code, again) = real(&[]);
+            .len()
+    };
+    let ran = |json: &Value| {
+        json["result"]["execution"]["command"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    // Each command runs its dbt namesake (#229): seeds first, as with dbt on a fresh
+    // database, then the models that read them.
+    let (code, seeded) = dbt_cmd("seed", &[]);
+    assert_eq!(code, 0, "{seeded:#}");
+    assert_eq!(advanced(&seeded), 3);
+    assert!(ran(&seeded).contains(" seed --select "), "{}", ran(&seeded));
+    let (code, first) = real(&[]);
+    assert_eq!(code, 0, "{first:#}");
+    assert_eq!(advanced(&first), 11, "10 models and the extra one");
+    assert!(ran(&first).contains(" run --select "), "{}", ran(&first));
+    let (code, again) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
     assert_eq!(code, 0, "{again:#}");
     assert_eq!(again["result"]["outcome"], "nothing_to_build");
 
@@ -698,7 +850,7 @@ fn real_dbt() {
     let (code, broken) = real(&[]);
     assert_eq!(code, 1, "{broken:#}");
     assert!(broken["result"]["record"]["snapshot"].is_null());
-    assert_eq!(project.history().len(), 3, "run, test, run");
+    assert_eq!(project.history().len(), 4, "seed, run, test, run");
 }
 
 fn copy(from: &Path, to: &Path) {

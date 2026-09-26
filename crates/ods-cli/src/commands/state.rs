@@ -61,7 +61,7 @@ impl Module for State {
                             .help("Only this model (name or unique_id)"),
                     ),
             )
-            .subcommand(state_run::run_command())
+            .subcommands(state_run::Kind::ALL.map(state_run::build_command))
             .subcommand(state_test::test_command())
             .subcommand(state_plan::plan_command())
             .subcommand(state_plan::record_command())
@@ -82,7 +82,11 @@ impl Module for State {
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         match matches.subcommand() {
             Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args)?),
-            Some(("run", args)) => state_run::RunReport::run(args, ctx),
+            Some((name, args))
+                if let Some(kind) = state_run::Kind::ALL.into_iter().find(|k| k.name() == name) =>
+            {
+                state_run::RunReport::run(kind, args, ctx)
+            }
             Some(("test", args)) => state_test::TestReport::run(args, ctx),
             Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args)?),
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args)?),

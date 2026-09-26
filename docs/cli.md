@@ -10,7 +10,7 @@ codes).
 | Command | Status |
 |---|---|
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
-| `ods state run` | available (preview): build only what needs building with dbt, and record what succeeded, see [below](#state-run) |
+| `ods state compile\|run\|seed\|snapshot\|build` | available (preview): each runs the dbt command it's named after, on only what needs building, and records what succeeded, see [below](#state-run) |
 | `ods state test` | available (preview): test what was built but not yet tested, see [below](#state-test) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
@@ -119,7 +119,7 @@ meanings get new numbers.
 | `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
 | `ODS-E0402` | Another run recorded state first; plan again and retry. |
 | `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. |
-| `ODS-E0404` | `ods state run`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. |
+| `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. |
 
 ## Environment variables
 
@@ -415,31 +415,45 @@ ODS rebuilds on any new upstream data (tolerance `0`).
 
 ## State: run
 
-`ods state run` does the whole State loop
-([ADR-0014](adr/0014-executor-contract-and-state-run.md)):
+Each of these commands does the whole State loop
+([ADR-0014](adr/0014-executor-contract-and-state-run.md)) and is named after the dbt
+command it runs (#229, [ADR-0015](adr/0015-cli-compatibility-front-ends.md)):
+
+| Command | dbt commands | Builds |
+|---|---|---|
+| `ods state compile` | `source freshness`, `compile` | nothing: shows the plan |
+| `ods state run` | `run` | models |
+| `ods state seed` | `seed` | seeds |
+| `ods state snapshot` | `snapshot` | snapshots |
+| `ods state build` | `build` | models, seeds and snapshots, **with their tests** |
+
+The loop:
 1. `dbt source freshness`, then `dbt compile`, so the plan sees current code and data;
 2. plan against the last successful state, as `ods state plan` does;
-3. build exactly the nodes that must build (models, seeds and snapshots), and nothing
-   else, **without tests** by default: like `dbt run`, plus the seeds and snapshots the
-   plan needs. `--test` also runs their tests, like `dbt build`. Each node
-   is selected by its full `fqn:` and resource type; its file narrows the selection
-   when a folder shares its name. A node that can't be selected exactly stops the run
-   before dbt starts;
-4. record the run. Nodes that built advance: without `--test` they are marked
-   untested, and with it, tested. Failed nodes, the ones dbt skipped because of them,
-   and (with `--test`) nodes whose tests failed keep their last successful state, so
-   they run again next time. If nothing succeeded, nothing is recorded.
+3. build exactly the nodes that must build, of the command's resource types, and
+   nothing else. Each node is selected by its full `fqn:` and resource type; its file
+   narrows the selection when a folder shares its name. A node that can't be selected
+   exactly stops the run before dbt starts. Nodes of other types that need building
+   are left out and stay to build. If a node being built reads one of them (e.g. a
+   changed seed under `ods state run`), ODS warns that it reads the current table, as
+   dbt would;
+4. record the run. Nodes that built advance: after `build`, with their tests, they are
+   marked tested; otherwise untested. Failed nodes, the ones dbt skipped because of
+   them, and nodes whose tests failed keep their last successful state, so they run
+   again next time. If nothing succeeded, nothing is recorded.
 
 ```sh
-ods state run                   # first time: builds everything and records it
-ods state run                   # nothing changed: nothing to build, nothing runs
+ods state compile                # what would build, and why; builds nothing
+ods state seed                   # load the seeds that changed
+ods state run                    # build the models that need it (`dbt run`)
+ods state build                  # build and test everything that needs it (`dbt build`)
+ods state build --exclude-resource-type test   # the same, without tests
 # … edit a model …
-ods state run                   # builds that model and what depends on it
-ods state run --dry-run         # prepare and plan only; builds and records nothing
-ods state run --select +orders --json
-ods state run --test            # build and test what changed, like `dbt build`
-ods state run --resource-type seed --exclude big_model
-ods state run --full-refresh -- --threads 8   # anything after `--` goes to dbt
+ods state run                    # builds that model and what depends on it
+ods state run --dry-run          # prepare and plan only; builds and records nothing
+ods state run -s +orders --json
+ods state build --resource-type seed --exclude big_model
+ods state run --full-refresh -- --threads 8    # anything after `--` goes to dbt
 ```
 
 It exits 0 when everything built and every test passed, or when there was nothing to
@@ -451,13 +465,13 @@ stdout carries only the report (one JSON document with `--json`).
 
 | Flag | Meaning |
 |---|---|
-| `--select SPEC` | only consider these nodes: `name`, `+name`, `name+`; repeatable |
-| `--test` | also run the built nodes' tests (`dbt build`); without it, tests and unit tests are left out (dbt 1.8+) |
+| `-s`, `--select SPEC` | only consider these nodes: `name`, `+name`, `name+`; repeatable |
 | `--exclude SPEC` | leave these nodes out (same syntax as `--select`); they keep their last state and stay to build; repeatable |
-| `--resource-type model\|seed\|snapshot` | only build nodes of these types; the others stay to build; repeatable |
-| `--full-refresh` | dbt's `--full-refresh` for the nodes being built |
+| `--resource-type model\|seed\|snapshot` | `build` only: only build nodes of these types; the others stay to build; repeatable |
+| `--exclude-resource-type model\|seed\|snapshot\|test` | `build` only: leave this type out; `test` builds without tests (and unit tests, dbt 1.8+); repeatable |
+| `--full-refresh` | dbt's `--full-refresh` for the nodes being built (not on `snapshot`: dbt has none for it) |
 | `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Only options about how dbt runs and logs are accepted: `--threads`, `--log-level`, `--log-format`, `--log-path`, `--printer-width`, `--warn-error`, `--warn-error-options`, `--fail-fast`/`-x`, `--debug`/`-d`, `--quiet`/`-q`, `--(no-)use-colors`, `--(no-)partial-parse`, `--store-failures` and the like. Anything else (selection, target, project, vars, `--empty`, `--sample`, …) is refused: use the ODS option where there is one. A run also refuses to start when `DBT_EMPTY`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE` (or `DBT_DEFER_TO_STATE`, `DBT_FAVOR_STATE_MODE`) is set |
-| `--dry-run` | prepare and plan, but build and record nothing |
+| `--dry-run` | prepare and plan, but build and record nothing (`compile` always does just that) |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
 | `--dbt PROGRAM` | the dbt executable; default `dbt` |
@@ -473,7 +487,7 @@ each starting with dbt's usual `Running with dbt=…` banner:
 |---|---|---|---|
 | 1 | `dbt source freshness` | measure source data, so nodes reading changed sources build | `--no-source-freshness`, `--no-compile` |
 | 2 | `dbt compile` | compiled SQL for every node, which the fingerprints need | `--no-compile` |
-| 3 | `dbt build --select … [--exclude-resource-type test --exclude-resource-type unit_test]` | build exactly the plan's BUILD set | `--dry-run`, or nothing to build |
+| 3 | the command's namesake with `--select …`: `dbt run`, `seed`, `snapshot` or `build` (`build --exclude-resource-type test --exclude-resource-type unit_test` without tests) | build exactly the plan's BUILD set | `compile`, `--dry-run`, or nothing to build |
 
 `ods state test` runs 1 and 2 the same way, then `dbt test --select …`.
 
@@ -529,11 +543,11 @@ nothing if it doesn't.
 ## State: test
 
 `ods state test` runs the tests of what ODS built but hasn't tested since, without
-building anything. That covers nodes built by a plain `ods state run`, or whose tests
-failed last time.
+building anything. That covers nodes built by `ods state run`, `seed` or `snapshot`,
+or by `build --exclude-resource-type test`, and nodes whose tests failed last time.
 
 ```sh
-ods state run                   # build what changed, no tests
+ods state run                   # build the models that changed (`dbt run`: no tests)
 ods state test                  # test what that built (`dbt test`, selected exactly)
 ods state test --all            # test everything ODS has a build of
 ods state test --select +orders -- --threads 8
@@ -553,8 +567,8 @@ and the command exits 1 with `ODS-E0404`. Builds are unchanged: failing tests do
 make a node rebuild unless its code or data changes. A rebuild that fails, or whose
 tests fail, clears the node's tested mark, since the warehouse may now hold that
 build. Tests check what is in the warehouse now, with the tests as they are now.
-It takes `--select`, `--exclude`, `--no-compile`, the dbt options and `-- DBT_ARGS` as
-`ods state run` does, plus `--all`.
+It takes `-s`/`--select`, `--exclude`, `--no-compile`, the dbt options and `-- DBT_ARGS`
+as `ods state run` does, plus `--all`.
 
 ## State: plan, record, history
 
