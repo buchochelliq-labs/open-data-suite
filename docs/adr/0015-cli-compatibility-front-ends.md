@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-26
-- **Issues:** #220 (run/test modes, where this came up); follow-ups listed below
+- **Issues:** #220 (where this came up), #224, #225, #226
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -177,14 +177,13 @@ graph LR
     both.
   - A SQLMesh front-end is not available until a SQLMesh provider exists.
 - Follow-up issues:
-  - dbt selector parity in the native CLI: `-s`, `--selector` YAML, methods, graph
-    depth, `@`, set operations; neutral node attributes from providers (M1 or M2).
-  - `ods dbt` front-end: command mapping, refusals, `--ods-bypass`, dbt exit codes,
-    pass-through of unchanged commands, parity tests against real dbt (M2).
-  - Running as `dbt`: argv[0] dispatch and self-exclusion when finding the real dbt
-    (M2, with #212 distribution).
-  - "Coming from dbt" guide in the docs (with the front-end).
-  - SQLMesh project provider, then the `ods sqlmesh` front-end (M8).
+  - #224: dbt selector parity in the native CLI: `-s`, `--selector` YAML, methods,
+    graph depth, `@`, set operations; neutral node attributes from providers (M2).
+  - #225: the `ods dbt` front-end: command mapping, refusals, `--ods-bypass`, dbt
+    exit codes, pass-through of unchanged commands, running as `dbt` (argv[0], with
+    self-exclusion), parity tests against real dbt, a "Coming from dbt" guide (M2,
+    alongside #212 distribution).
+  - #226: a SQLMesh project provider, then the `ods sqlmesh` front-end (M8).
 
 ## References
 - ADR-0003 (presentation boundary), ADR-0004 (CLI framework, exit codes), ADR-0005

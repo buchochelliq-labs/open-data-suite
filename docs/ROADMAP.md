@@ -108,6 +108,7 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 | #209 | Formatting-insensitive SQL fingerprints: comment/whitespace edits reuse |
 | #214 | `ods.toml` settings for `ods state run` (dbt path, dirs, target, environment) |
 | **#220** | `ods state run` without tests by default; `--test`, `ods state test`, `--full-refresh`, `--resource-type`, `--exclude`, dbt args after `--` |
+| **#227** | State scope includes the dbt target; dbt settings read from the environment (`DBT_TARGET`, `DBT_PROFILE`, `DBT_FULL_REFRESH`) are honoured or refused |
 | #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
 
 **Why data awareness moved into M1:** skipping only on code changes still rebuilds
@@ -126,7 +127,7 @@ watermark/partition triggers, WAIT decisions, clone/defer, distributed locking, 
 The M1 slices keep #17 and #19 open; their remainder ships in M2.
 
 ### M2 — Databricks & data-aware State (→ v0.2.0)
-| #15 Databricks/UC metadata provider · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) · #210 `ods state savings` (builds skipped, time/cost avoided) · #215 public benchmark of `ods state run` · #221 reuse hooked models safely (keyed digests of run-time values) |
+| #15 Databricks/UC metadata provider · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) · #210 `ods state savings` (builds skipped, time/cost avoided) · #215 public benchmark of `ods state run` · #221 reuse hooked models safely (keyed digests of run-time values) · #224 dbt selector parity (`-s`, `--selector`, methods, graph operators; ADR-0015) · #225 `ods dbt …` front-end, also run as `dbt` (ADR-0015) |
 
 ### M3 — ERD & Usage (→ v0.3.0)
 | #172 ODS metadata index (queryable lineage/State/ERD/usage) · #60 ERD domain model · #61 dbt ERD provider · #62 relationship inference · #63 render/export · #65 `ods erd` CLI · #55 Usage domain & UsageProvider · #56 Unity Catalog usage provider · #59 `ods usage` CLI · #66 warehouse-native ERD providers (stretch) · #64 interactive ERD web view (stretch) |
@@ -154,7 +155,7 @@ proposes:
 #86 Mesh resolver · #89 registry/contracts · #90 change propagation · #91 cross-platform mapping · #95 server mode · #96 REST API · #97 RBAC/OIDC · #98 audit log · #106 language bindings · #102 docs site · #124 multi-repo discovery.
 
 ### M8 — Ecosystem integrations & operations (unscheduled)
-#92 OpenMetadata · #93 Elementary · #94 MetricFlow · #111–#113 cost & optimisation · #117 health scoring · #118 observability store · #119 alert routing · #120 deployment/promotion · #121 package governance · #122 ownership/SLA governance · #125 snapshot/SCD review · #114 dev env cloning · #115 dev sampling.
+#92 OpenMetadata · #93 Elementary · #94 MetricFlow · #111–#113 cost & optimisation · #117 health scoring · #118 observability store · #119 alert routing · #120 deployment/promotion · #121 package governance · #122 ownership/SLA governance · #125 snapshot/SCD review · #114 dev env cloning · #115 dev sampling · #226 SQLMesh project provider and `ods sqlmesh` front-end (ADR-0015).
 
 ### M9 — ods-synthetic (unscheduled)
 #127 module & ADR · #147 engine contract · #129 profiling · #130 planner · #131 ERD-aware generation · #132 dbt constraints · #133 statistical engine · #134 copula engine · #135 rule/Faker engine · #136 SDV adapter · #137 engine selection · #148 sensitive-column policy · #139 privacy-risk eval · #141 quality eval · #142 validate with dbt tests · #143 writers · #144 CLI · #146 realistic mode · #150 row counts · #151 edge-case mode · #152 ods-dev integration · #153 ods-ci integration · #154 usage-prioritised fidelity · #155 explainability · #156 benchmarks · #149 differential privacy · #157 licensing & privacy docs.
