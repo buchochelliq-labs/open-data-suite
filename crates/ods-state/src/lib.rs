@@ -14,7 +14,7 @@ mod planner;
 mod recorder;
 mod selection;
 
-pub use planner::{PlanError, plan};
+pub use planner::{PlanError, PlanOptions, plan, plan_with};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use selection::select;
 
@@ -44,6 +44,9 @@ pub struct Node {
     /// with other checks isn't tested (#220). `None` when it has none, or they can't be
     /// identified: it is then never tested.
     pub checks: Option<String>,
+    /// A full refresh builds it differently from a normal build (e.g. an incremental
+    /// model rebuilt from scratch), so a full-refresh run builds it even if unchanged.
+    pub full_refresh_rebuilds: bool,
 }
 
 impl Node {
@@ -65,7 +68,15 @@ impl Node {
             policy,
             self_contained: false,
             checks: None,
+            full_refresh_rebuilds: false,
         }
+    }
+
+    /// Marks it as built differently by a full refresh.
+    #[must_use]
+    pub fn full_refresh_rebuilds(mut self) -> Self {
+        self.full_refresh_rebuilds = true;
+        self
     }
 
     /// Sets the digest of its checks.

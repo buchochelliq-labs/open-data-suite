@@ -728,3 +728,55 @@ fn a_failed_build_clears_the_tested_mark_it_kept() {
     .snapshot;
     assert!(skipped.nodes["model.p.orders"].tested.is_some());
 }
+
+#[test]
+fn a_full_refresh_rebuilds_the_selected_nodes_it_changes_and_their_readers() {
+    use ods_state::{PlanOptions, plan_with};
+    // `orders` is incremental: a full refresh rebuilds it from scratch.
+    let mut p = project();
+    let orders = p.nodes.iter().position(|n| n.name == "orders").unwrap();
+    p.nodes[orders] = p.nodes[orders].clone().full_refresh_rebuilds();
+    let state = built(&p);
+    let planned = |selected: &BTreeSet<String>| {
+        plan_with(
+            &p,
+            Some((SnapshotId(1), &state)),
+            selected,
+            Timestamp::from_unix(T0 + 60),
+            PlanOptions::default().full_refresh(),
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| {
+            (
+                e.name,
+                (e.action, e.reasons[0].code, e.reasons[0].message.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>()
+    };
+    let all = planned(&all(&p));
+    assert_eq!(
+        (all["orders"].0, all["orders"].1),
+        (PlanAction::Build, ReasonCode::FullRefreshRequested)
+    );
+    // Its reader sees new data, and says where from.
+    assert_eq!(all["report"].0, PlanAction::Build);
+    assert!(
+        all["report"].2.contains("orders (full refresh)"),
+        "{}",
+        all["report"].2
+    );
+    // Nodes a full refresh doesn't change (tables, views) are still reused.
+    assert_eq!(all["stg_orders"].0, PlanAction::Reuse);
+    // Only selected nodes are forced.
+    let others: BTreeSet<String> = ["model.p.stg_orders".to_owned()].into();
+    assert_eq!(planned(&others)["stg_orders"].0, PlanAction::Reuse);
+    let unforced = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(
+        unforced["orders"],
+        reuse(ReasonCode::Unchanged),
+        "without the option"
+    );
+}

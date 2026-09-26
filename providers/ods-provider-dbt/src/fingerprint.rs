@@ -373,7 +373,7 @@ fn check_macros_content(manifest: &Manifest, test: &ManifestNode) -> Result<Stri
 }
 
 /// The scheme [`checks_digest`] uses; changing it makes every node untested once.
-pub const CHECKS_SCHEME: &str = "dbt-checks/2";
+pub const CHECKS_SCHEME: &str = "dbt-checks/3";
 
 /// The checks that cover `node`: the data tests and unit tests that read it, which
 /// `dbt test`/`dbt build` run with it by default.
@@ -422,13 +422,17 @@ pub fn checks_digest(manifest: &Manifest, node: &str) -> Option<String> {
             if let Some(t) = &test.test {
                 canonical_json(&t.arguments, &mut arguments);
             }
+            // The compiled SQL too, so values rendered into the test (e.g. `var()`)
+            // count. `dbt compile` writes it for every test; other commands only for the
+            // tests they ran, so recording uses the plan's digests (#229).
             format!(
-                "config {}\nmacros {}\ncode {}\narguments {}\ndepends_on {}\n",
+                "config {}\nmacros {}\ncode {}\narguments {}\ndepends_on {}\ncompiled {}\n",
                 config_content(test).ok()?,
                 check_macros_content(manifest, test).ok()?,
                 test.raw_code.as_deref().unwrap_or(""),
                 arguments,
                 test.depends_on.join(","),
+                test.compiled_code.as_deref().unwrap_or(""),
             )
         } else {
             let unit = manifest.unit_tests.iter().find(|t| t.unique_id == id)?;

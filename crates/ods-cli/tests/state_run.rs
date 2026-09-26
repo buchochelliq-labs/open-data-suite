@@ -64,6 +64,14 @@ impl Project {
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
 
+    /// Sets a node's config key in the fake dbt's manifest, as editing its model would.
+    fn set_config(&self, node: &str, key: &str, value: impl Into<Value>) {
+        let path = self.dir.join("base/manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["nodes"][node]["config"][key] = value.into();
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+
     /// Edits a data test's definition, as changing its arguments in YAML would.
     fn change_test(&self, test: &str) {
         let path = self.dir.join("base/manifest.json");
@@ -571,6 +579,110 @@ fn each_command_runs_its_dbt_namesake() {
     assert_eq!(status.code(), Some(2), "an unknown flag is a usage error");
 }
 
+/// #229: `--full-refresh` rebuilds the selected incremental models and seeds even if
+/// unchanged, as dbt's does, and their readers with them; tables, views and nodes
+/// with `full_refresh: false` follow the plan.
+#[test]
+fn full_refresh_rebuilds_what_it_changes() {
+    let project = Project::new("full-refresh");
+    project.set_config("model.jaffle_ods.orders", "materialized", "incremental");
+    project.set_config("model.jaffle_ods.customers", "materialized", "incremental");
+    project.set_config("model.jaffle_ods.customers", "full_refresh", false);
+    project.run_ok(&[]);
+
+    let result = project.run_ok(&["--full-refresh", "-s", "raw_orders+"]);
+    let why = |name: &str| {
+        result["plan"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == name)
+            .map(|e| {
+                (
+                    e["action"].clone(),
+                    e["reasons"][0]["message"].as_str().unwrap().to_owned(),
+                )
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        why("raw_orders").1,
+        "full refresh requested: rebuilt from scratch"
+    );
+    assert_eq!(
+        why("orders").1,
+        "full refresh requested: rebuilt from scratch"
+    );
+    // Its readers see new data, and say where from.
+    assert!(
+        why("stg_orders").1.contains("raw_orders (full refresh)"),
+        "{:?}",
+        why("stg_orders")
+    );
+    // An incremental model that opts out is only built for its new upstream data.
+    assert!(
+        !why("customers").1.contains("full refresh requested"),
+        "{:?}",
+        why("customers")
+    );
+    let command = result["execution"]["command"].as_str().unwrap();
+    assert!(command.contains("--full-refresh"), "{command}");
+    // Without it, nothing needs building.
+    assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
+}
+
+/// #229: `--vars` goes to every dbt command ODS runs, so the plan and the build see
+/// the same values; with `--no-compile`, artifacts compiled with other vars are named.
+#[test]
+fn vars_reach_every_dbt_command() {
+    let project = Project::new("vars");
+    let dbt = fixture("fake-dbt/dbt");
+    let (code, json, stderr) = project.ods_with_stderr(&[
+        "-v",
+        "state",
+        "build",
+        "--vars",
+        r#"{"region": "eu"}"#,
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{json:#}");
+    let commands: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.contains("running dbt"))
+        .collect();
+    assert_eq!(commands.len(), 3, "{stderr}");
+    for line in commands {
+        assert!(
+            line.contains(r#"--vars {"region": "eu"}"#)
+                || line.contains(r#"--vars '{"region": "eu"}'"#),
+            "{line}"
+        );
+    }
+    // Compiled with `region: eu`; planning from those artifacts with other vars is flagged.
+    let (_, other) = project.command("run", &["--no-compile", "--vars", r#"{"region": "us"}"#]);
+    assert!(
+        other["result"]["warnings"]
+            .to_string()
+            .contains("compiled with vars"),
+        "{other:#}"
+    );
+    let (_, same) = project.command("run", &["--no-compile", "--vars", r#"{"region": "eu"}"#]);
+    assert!(
+        !same["result"]["warnings"]
+            .to_string()
+            .contains("compiled with vars"),
+        "{same:#}"
+    );
+    let (_, none) = project.command("run", &["--no-compile"]);
+    assert!(
+        none["result"]["warnings"]
+            .to_string()
+            .contains("compiled with vars"),
+        "{none:#}"
+    );
+}
+
 /// #220: a plain run builds without tests; `--test` builds and tests.
 #[test]
 fn a_plain_run_builds_without_tests() {
@@ -851,6 +963,55 @@ fn real_dbt() {
     assert_eq!(code, 1, "{broken:#}");
     assert!(broken["result"]["record"]["snapshot"].is_null());
     assert_eq!(project.history().len(), 4, "seed, run, test, run");
+
+    std::fs::write(&model, &sql).unwrap();
+}
+
+/// `ods state <command>` against real dbt in `project`.
+fn real_cmd(project: &Project, dbt: &str, command: &str, extra: &[&str]) -> (i32, Value) {
+    let mut args = vec![
+        "state",
+        command,
+        "--dbt",
+        dbt,
+        "--profiles-dir",
+        ".",
+        "--dbt-output",
+        "capture",
+    ];
+    args.extend(extra);
+    project.ods(&args)
+}
+
+/// What `build` tests stays tested (#229), now that the checks' fingerprints include
+/// the tests' compiled SQL, against real dbt and `DuckDB`.
+#[test]
+fn real_dbt_build_then_test() {
+    let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
+        eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
+        return;
+    };
+    let dbt = dbt.to_str().unwrap().to_owned();
+    let project = real_project();
+    for command in ["seed", "run", "test"] {
+        let (code, json) = real_cmd(&project, &dbt, command, &[]);
+        assert_eq!(code, 0, "{command}: {json:#}");
+    }
+    // A view with tests: DuckDB can't replace a table that a view reads, which a full
+    // refresh of `raw_orders+` would, with plain dbt too.
+    let staging = project.dir.join("models/staging/stg_orders.sql");
+    let staged = std::fs::read_to_string(&staging).unwrap();
+    std::fs::write(&staging, format!("{}\nwhere 1 = 1\n", staged.trim_end())).unwrap();
+    let (code, rebuilt) = real_cmd(&project, &dbt, "build", &["-s", "stg_orders"]);
+    assert_eq!(code, 0, "{rebuilt:#}");
+    assert_eq!(
+        names(&rebuilt["result"]["execution"]["nodes"]),
+        ["stg_orders"]
+    );
+    assert_eq!(rebuilt["result"]["tests"], true);
+    let (code, tested) = real_cmd(&project, &dbt, "test", &[]);
+    assert_eq!(code, 0, "{tested:#}");
+    assert_eq!(tested["result"]["outcome"], "nothing_to_test", "{tested:#}");
 }
 
 fn copy(from: &Path, to: &Path) {

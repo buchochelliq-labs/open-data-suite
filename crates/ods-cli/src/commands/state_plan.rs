@@ -287,6 +287,17 @@ fn plan_nodes(
                     .unwrap_or_else(ods_core::FreshnessPolicy::conservative),
             )
             .with_checks(checks_digest(manifest, &n.unique_id));
+            // dbt's --full-refresh rebuilds incremental models from scratch and reloads
+            // seeds, unless the node opts out with `full_refresh: false`. Snapshots are
+            // never full-refreshed: their history is the point.
+            let refreshable = (n.resource_type == ResourceType::Seed
+                || n.materialized.as_deref() == Some("incremental"))
+                && n.config.raw.get("full_refresh") != Some(&serde_json::Value::Bool(false));
+            let node = if refreshable {
+                node.full_refresh_rebuilds()
+            } else {
+                node
+            };
             // A seed's rows are its file: nothing else feeds it.
             if n.resource_type == ResourceType::Seed {
                 node.self_contained()
@@ -373,14 +384,16 @@ pub(super) fn plan_against(
     latest: Option<&StoredSnapshot>,
     specs: &[String],
     now: Timestamp,
+    options: ods_state::PlanOptions,
 ) -> Result<(ExecutionPlan, Vec<String>), CliError> {
     let selected = ods_state::select(&ws.project, specs)
         .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?;
-    let plan = ods_state::plan(
+    let plan = ods_state::plan_with(
         &ws.project,
         latest.map(|s| (s.id, &s.snapshot)),
         &selected,
         now,
+        options,
     )
     .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
     for entry in &plan.entries {
@@ -448,7 +461,13 @@ impl PlanReport {
         } else {
             None
         };
-        let (plan, warnings) = plan_against(&ws, latest.as_ref(), &select_specs(args), now)?;
+        let (plan, warnings) = plan_against(
+            &ws,
+            latest.as_ref(),
+            &select_specs(args),
+            now,
+            ods_state::PlanOptions::default(),
+        )?;
         Ok(Self {
             dbt_command: dbt_command(&plan),
             build: plan.with_action(PlanAction::Build).count(),

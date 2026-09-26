@@ -124,8 +124,10 @@ In detail:
    - Commands ODS doesn't change (`deps`, `debug`, `parse`, `compile`, `docs`, `ls`,
      `run-operation`, `show`, …): run the real dbt with the same arguments, unchanged.
    - Flags ODS can't honour in a recorded run (`--defer`, `--state`, `--empty`,
-     `--sample`, `--event-time-*`, and `--vars` while vars aren't part of the state
-     scope; see ADR-0014) are refused with the reason. `--ods-bypass` runs the real dbt unchanged
+     `--sample`, `--event-time-*`; see ADR-0014) are refused with the reason.
+     `--vars` is accepted and passed to every dbt command ODS runs, so plan, build and
+     record see the same values; their effect is in the compiled SQL, which is
+     fingerprinted (amended in #229: vars don't need to be part of the state scope). `--ods-bypass` runs the real dbt unchanged
      and records nothing, as an escape hatch during adoption.
    - Exit codes follow dbt's in this mode (0 success, 1 a node or test failed, 2 dbt or
      ODS couldn't run), so CI steps keep their meaning. This amends ADR-0004 for the

@@ -83,6 +83,7 @@ pub struct DbtExecutor {
     target: Option<String>,
     env: BTreeMap<String, String>,
     output: DbtOutput,
+    vars: Option<String>,
     on_step: Option<StepHook>,
 }
 
@@ -97,6 +98,7 @@ impl std::fmt::Debug for DbtExecutor {
             .field("target", &self.target)
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("output", &self.output)
+            .field("vars", &self.vars)
             .field("on_step", &self.on_step.is_some())
             .finish()
     }
@@ -113,6 +115,7 @@ impl DbtExecutor {
             target: None,
             env: BTreeMap::new(),
             output: DbtOutput::default(),
+            vars: None,
             on_step: None,
         }
     }
@@ -152,6 +155,14 @@ impl DbtExecutor {
         self
     }
 
+    /// dbt's `--vars`, passed to every dbt command, so what is planned, built and
+    /// recorded all see the same values.
+    #[must_use]
+    pub fn vars(mut self, vars: impl Into<String>) -> Self {
+        self.vars = Some(vars.into());
+        self
+    }
+
     /// Calls `hook` before each dbt command, e.g. to say which one runs and why.
     #[must_use]
     pub fn on_step(mut self, hook: impl Fn(DbtStep) + Send + Sync + 'static) -> Self {
@@ -185,6 +196,9 @@ impl DbtExecutor {
         }
         if let Some(target) = &self.target {
             args.extend(["--target".to_owned(), target.clone()]);
+        }
+        if let Some(vars) = &self.vars {
+            args.extend(["--vars".to_owned(), vars.clone()]);
         }
         args
     }
@@ -387,7 +401,7 @@ fn refuse_engine_args(args: &[String]) -> Result<(), ProviderError> {
         return Ok(());
     }
     Err(ProviderError::Other(format!(
-        "can't pass {} to dbt: only options that don't change which nodes run, where, or what their results mean are passed through ({}, {}, and -x, -d, -q). Use the matching ODS option instead where there is one (e.g. --select, --exclude, --resource-type, --full-refresh, --target, --project-dir)",
+        "can't pass {} to dbt: only options that don't change which nodes run, where, or what their results mean are passed through ({}, {}, and -x, -d, -q). Use the matching ODS option instead where there is one (e.g. --select, --exclude, --resource-type, --full-refresh, --target, --project-dir, --vars)",
         refused.join(", "),
         PASSTHROUGH_OPTIONS.join(", "),
         PASSTHROUGH_FLAGS
