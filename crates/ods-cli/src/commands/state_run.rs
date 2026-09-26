@@ -131,6 +131,11 @@ impl Kind {
         Self::Build,
     ];
 
+    /// The kind named `name`, if any.
+    pub(super) fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+
     /// The subcommand, and the dbt command it matches.
     pub(super) fn name(self) -> &'static str {
         match self {

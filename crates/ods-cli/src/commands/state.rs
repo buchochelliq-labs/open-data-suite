@@ -80,13 +80,13 @@ impl Module for State {
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
+        if let Some((name, args)) = matches.subcommand()
+            && let Some(kind) = state_run::Kind::named(name)
+        {
+            return state_run::RunReport::run(kind, args, ctx);
+        }
         match matches.subcommand() {
             Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args)?),
-            Some((name, args))
-                if let Some(kind) = state_run::Kind::ALL.into_iter().find(|k| k.name() == name) =>
-            {
-                state_run::RunReport::run(kind, args, ctx)
-            }
             Some(("test", args)) => state_test::TestReport::run(args, ctx),
             Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args)?),
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args)?),
