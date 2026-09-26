@@ -122,7 +122,8 @@ impl TestReport {
     fn build(args: &ArgMatches, progress: ProgressSettings) -> Result<Self, CliError> {
         let target_dir = super::state_plan::target_dir(args);
         let compiles = !args.get_flag("no-compile");
-        let steps = Steps::new(progress, usize::from(compiles) + 1);
+        // The target check, the compile, and the test.
+        let steps = Steps::new(progress, usize::from(compiles) + 2);
         let executor = steps.attach(executor(args, &target_dir));
         let mut warnings = Vec::new();
         let dbt = super::state_run::check_settings(args, &executor, &target_dir, &mut warnings)?;
@@ -132,6 +133,7 @@ impl TestReport {
                     .with_hint("fix the project so `dbt compile` succeeds, or use --no-compile")
             })?;
         }
+        let target = super::state_run::identify(&executor)?;
         let ws = Workspace::load(args, Sources::AsGiven)?;
         let no_state = || {
             CliError::new(
@@ -148,6 +150,9 @@ impl TestReport {
         }
         let store = ws.open_store()?;
         let latest = ws.latest(&store)?.ok_or_else(no_state)?;
+        // Builds in another target aren't this target's to vouch for (#227).
+        let (latest, _) = super::state_run::in_target(Some(latest), &target, &mut warnings);
+        let latest = latest.ok_or_else(no_state)?;
 
         // What to test: built by ODS, in the selection, with checks, and not tested
         // with the checks it has now unless --all. A node without checks has nothing

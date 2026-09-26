@@ -402,15 +402,17 @@ fn dbt_output_streams_to_stderr() {
     assert_eq!(code, 0, "{json:#}");
     // ODS says which dbt command runs, and why, just before dbt's own output (#220).
     let expected = [
-        "ods ▸ 1/3 dbt source freshness: how new each source's data is",
+        "ods ▸ 1/4 dbt source freshness: how new each source's data is",
         "fake dbt: source freshness",
-        "ods ▸ 2/3 dbt compile: the code as it is now, for the plan",
+        "ods ▸ 2/4 dbt compile: the code as it is now, for the plan",
         "fake dbt: compile",
+        // Its answer is read, not shown.
+        "ods ▸ 3/4 dbt compile --inline: which target dbt builds in",
         "ods ▸ plan: 13 to build, 0 to reuse",
         // What builds, by reason; long lists are cut short.
         "ods ▸   not built by ODS yet: raw_customers, ",
         " and 5 more",
-        "ods ▸ 3/3 dbt build: 13 nodes, without tests",
+        "ods ▸ 4/4 dbt build: 13 nodes, without tests",
         "fake dbt: build",
     ];
     let mut rest = stderr.as_str();
@@ -435,7 +437,7 @@ fn dbt_output_streams_to_stderr() {
     // With state, what would be reused is checked first, in one dbt call (#230).
     assert!(
         again.contains(
-            "ods ▸ 3/4 dbt show: are the tables of 13 nodes ODS would reuse still there?"
+            "ods ▸ 4/5 dbt show: are the tables of 13 nodes ODS would reuse still there?"
         ),
         "{again}"
     );
@@ -708,7 +710,8 @@ fn vars_reach_every_dbt_command() {
         .lines()
         .filter(|l| l.contains("running dbt"))
         .collect();
-    assert_eq!(commands.len(), 3, "{stderr}");
+    // Freshness, compile, the target check and the build.
+    assert_eq!(commands.len(), 4, "{stderr}");
     for line in commands {
         assert!(
             line.contains(r#"--vars {"region": "eu"}"#)
@@ -987,7 +990,8 @@ fn when_dbt_cannot_run_nothing_is_recorded() {
     );
     assert!(!project.db().exists() || project.history().is_empty());
 
-    // With artifacts already there, planning works and the build itself fails.
+    // With artifacts already there, the target check fails: dbt can't say where it
+    // would build, so nothing is planned against any state.
     let target = project.dir.join("target");
     std::fs::create_dir_all(&target).unwrap();
     std::fs::copy(
@@ -1001,7 +1005,7 @@ fn when_dbt_cannot_run_nothing_is_recorded() {
         json["diagnostics"][0]["message"]
             .as_str()
             .unwrap()
-            .contains("wrote no run results"),
+            .contains("which target it builds in"),
         "{json:#}"
     );
     assert!(project.history().is_empty());
@@ -1482,4 +1486,105 @@ fn help_hides_the_values_of_dbt_variables() {
     assert!(help.contains("DBT_TARGET"), "{help}");
     assert!(!help.contains("prod-secret-name"), "{help}");
     assert!(!help.contains("DBT_FULL_REFRESH=true"), "{help}");
+}
+
+fn reasons(result: &Value) -> Vec<String> {
+    let mut codes: Vec<String> = result["plan"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["reasons"][0]["code"].as_str().unwrap().to_owned())
+        .collect();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+/// #227: state is kept per dbt target, and a build is only reused in the target it
+/// went to.
+#[test]
+fn state_is_kept_per_target() {
+    let project = Project::new("targets");
+    // `--target` names the environment, so each target has its own state.
+    let prod = project.run_ok(&["--target", "prod"]);
+    assert_eq!(prod["scope"], "jaffle_ods/prod");
+    assert_eq!(prod["target"]["name"], "prod");
+    assert_eq!(prod["target"]["location"], "fake-host");
+    let dev = project.run_ok(&[]);
+    assert_eq!(dev["scope"], "jaffle_ods/default");
+    assert_eq!(dev["build"], 13, "prod's builds don't count in dev");
+    assert_eq!(
+        project.run_ok(&["--target", "prod"])["outcome"],
+        "nothing_to_build"
+    );
+    // An explicit environment wins.
+    let shared = project.run_ok(&["--target", "prod", "--environment", "shared"]);
+    assert_eq!(shared["scope"], "jaffle_ods/shared");
+
+    // The same name on another host is another target: nothing is reused, and the
+    // run says why.
+    let moved = project.with("FAKE_DBT_TARGET_HOST", "other-host");
+    let result = moved.run_ok(&["--target", "prod"]);
+    assert_eq!(result["build"], 13);
+    assert_eq!(reasons(&result), ["target_changed"]);
+    assert!(
+        result["warnings"]
+            .to_string()
+            .contains("was built in target prod (jaffle_ods, fake, fake-host, jaffle_ods)"),
+        "{result:#}"
+    );
+    // Recorded there, it is reused there.
+    assert_eq!(
+        moved.run_ok(&["--target", "prod"])["outcome"],
+        "nothing_to_build"
+    );
+    // And a test run back on the first host doesn't vouch for the other's builds.
+    let back = moved.with("FAKE_DBT_TARGET_HOST", "fake-host");
+    let (code, json) = back.test(&["--target", "prod", "--no-compile"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["outcome"], "nothing_to_test");
+    assert!(
+        json["result"]["warnings"].to_string().contains("not prod"),
+        "{json:#}"
+    );
+}
+
+/// #227: state recorded before targets were, or by `ods state record` alone, doesn't
+/// say where it was built: nothing in it is reused, once.
+#[test]
+fn state_without_a_target_is_rebuilt_once() {
+    let project = Project::new("untargeted");
+    let target = project.dir.join("target");
+    // A dbt build ODS didn't run, recorded afterwards.
+    let out = Command::new(fixture("fake-dbt/dbt"))
+        .args([
+            "build",
+            "--select",
+            "fqn:jaffle_ods",
+            "--exclude-resource-type",
+            "test",
+            "--target-path",
+            target.to_str().unwrap(),
+        ])
+        .envs(project.env.iter().map(|(k, v)| (k, v)))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (code, json) = project.ods(&["state", "record"]);
+    assert_eq!(code, 0, "{json:#}");
+
+    let result = project.run_ok(&[]);
+    assert_eq!(result["build"], 13);
+    assert_eq!(reasons(&result), ["target_changed"]);
+    assert!(
+        result["warnings"]
+            .to_string()
+            .contains("doesn't say which target it was built in"),
+        "{result:#}"
+    );
+    assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
 }

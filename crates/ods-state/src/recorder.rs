@@ -180,7 +180,9 @@ pub fn record(
         }
     }
     Recorded {
-        snapshot: StateSnapshot::new(previous.map(|(id, _)| id), finished_at, run_id, nodes),
+        // Built where the previous state was, unless the caller knows better.
+        snapshot: StateSnapshot::new(previous.map(|(id, _)| id), finished_at, run_id, nodes)
+            .with_target(previous.and_then(|(_, s)| s.target.clone())),
         advanced: advanced.into_iter().collect(),
         kept,
         ignored: ignored.into_iter().collect(),
@@ -277,7 +279,8 @@ pub fn record_tests(
     failed.sort();
     ignored.sort();
     RecordedTests {
-        snapshot: StateSnapshot::new(Some(id), finished_at, run_id, nodes),
+        snapshot: StateSnapshot::new(Some(id), finished_at, run_id, nodes)
+            .with_target(snapshot.target.clone()),
         passed,
         failed,
         ignored,

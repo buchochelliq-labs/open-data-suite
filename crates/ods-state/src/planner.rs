@@ -422,6 +422,9 @@ pub struct PlanOptions {
     /// ([`RelationFact::Unchecked`]) is built, as unverified, rather than reused on
     /// trust.
     pub relations_checked: bool,
+    /// The recorded state was built in another target (#227): the caller plans
+    /// without it, and nodes say why they build.
+    pub target_changed: bool,
 }
 
 impl PlanOptions {
@@ -429,6 +432,13 @@ impl PlanOptions {
     #[must_use]
     pub fn full_refresh(mut self) -> Self {
         self.full_refresh = true;
+        self
+    }
+
+    /// Says the recorded state was built in another target.
+    #[must_use]
+    pub fn target_changed(mut self) -> Self {
+        self.target_changed = true;
         self
     }
 
@@ -546,18 +556,33 @@ pub fn plan_with(
     for (node, depth) in ordered {
         let mut evidence = Vec::new();
         let mut changed_components = Vec::new();
-        let (action, reasons) =
-            if options.full_refresh && node.full_refresh_rebuilds && selected.contains(&node.id) {
-                (
-                    PlanAction::Build,
-                    vec![Reason::new(
-                        ReasonCode::FullRefreshRequested,
-                        "full refresh requested: rebuilt from scratch",
-                    )],
-                )
-            } else {
-                decide(node, &context, now, &mut evidence, &mut changed_components)
-            };
+        let (action, reasons) = if options.full_refresh
+            && node.full_refresh_rebuilds
+            && selected.contains(&node.id)
+        {
+            (
+                PlanAction::Build,
+                vec![Reason::new(
+                    ReasonCode::FullRefreshRequested,
+                    "full refresh requested: rebuilt from scratch",
+                )],
+            )
+        } else {
+            match decide(node, &context, now, &mut evidence, &mut changed_components) {
+                (PlanAction::Build, reasons)
+                    if options.target_changed && reasons[0].code == ReasonCode::NeverBuilt =>
+                {
+                    (
+                        PlanAction::Build,
+                        vec![Reason::new(
+                            ReasonCode::TargetChanged,
+                            "ODS's state for this environment was built in another target, so nothing in it is reused",
+                        )],
+                    )
+                }
+                decision => decision,
+            }
+        };
         // Reuse vouches for a build that is still there: one that isn't, or can't be
         // shown to be, is built (#230). Decided before children look at it, so they
         // see the rebuild.

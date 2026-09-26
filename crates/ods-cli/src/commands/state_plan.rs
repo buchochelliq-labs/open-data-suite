@@ -63,8 +63,15 @@ pub(super) fn common(command: Command) -> Command {
             Arg::new("environment")
                 .long("environment")
                 .value_name("NAME")
-                .default_value("default")
-                .help("Keep separate state per environment, e.g. dev and prod"),
+                .help("Keep separate state per environment, e.g. dev and prod [default: the dbt target, else `default`]"),
+        )
+        .arg(
+            Arg::new("target")
+                .long("target")
+                .value_name("NAME")
+                .env("DBT_TARGET")
+                .hide_env_values(true)
+                .help("dbt's --target (the profile output to use); also the default environment"),
         )
         .arg(Arg::new("sources").long("sources").value_name("PATH").help(
             "`dbt source freshness` results [default: <target-dir>/sources.json, if present]",
@@ -220,8 +227,10 @@ impl Workspace {
             )
             .with_hint("use artifacts from dbt 1.7 or later (their metadata has `project_name`)")
         })?;
+        // Separate state per dbt target, unless told otherwise (#227).
         let environment = args
             .get_one::<String>("environment")
+            .or_else(|| args.get_one::<String>("target"))
             .map_or("default", String::as_str);
         let scope = StateScope::new(&project_name, environment)
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?;
