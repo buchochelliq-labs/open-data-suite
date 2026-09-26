@@ -363,11 +363,19 @@ fn dbt_output_streams_to_stderr() {
     }
     assert!(!info.contains("planned"), "{info}");
     project.change_code("model.jaffle_ods.orders");
-    let (_, _, debug) =
-        project.ods_with_stderr(&["-vv", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    let (_, _, debug) = project.ods_with_stderr(&[
+        "--log-level",
+        "debug",
+        "state",
+        "run",
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
     for text in ["planned", "dbt result", "dbt settings"] {
-        assert!(debug.contains(text), "{text} missing at -vv:\n{debug}");
+        assert!(debug.contains(text), "{text} missing at debug:\n{debug}");
     }
+    // Library logs (e.g. the state store's SQL) wait for trace.
+    assert!(!debug.contains("db.statement"), "{debug}");
     let (_, _, captured) = project.ods_with_stderr(&[
         "state",
         "run",

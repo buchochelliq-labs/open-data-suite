@@ -42,6 +42,7 @@ literally.
 | `--json` | shorthand for `--output json` | |
 | `--color` | `auto`, `always`, `never` | `auto` |
 | `--width` | columns (≥ 20) | terminal width, or 100 when not a terminal |
+| `--log-level` | `off`, `error`, `warn`, `info`, `debug`, `trace`; conflicts with `-v`/`-q` and overrides `ODS_LOG` | `warn` |
 | `-v`, `--verbose` | repeatable: `-v` info, `-vv` debug, `-vvv` trace | warnings only |
 | `-q`, `--quiet` | errors only; conflicts with `-v` | |
 | `--profile` | configuration profile | `ODS_PROFILE`, then `default_profile` |
@@ -124,7 +125,7 @@ meanings get new numbers.
 
 | Variable | Effect |
 |---|---|
-| `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`. |
+| `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`; `--log-level` overrides it. |
 | `ODS_PROFILE` | Configuration profile to use; `--profile` overrides it. |
 | `ODS__SECTION__KEY` | Sets a configuration key, e.g. `ODS__OUTPUT__WIDTH=120`. |
 | `NO_COLOR` | Any non-empty value disables colour when `--color auto`. `--color always` overrides it. |
@@ -505,16 +506,17 @@ each starting with dbt's usual `Running with dbt=…` banner:
 - **dbt's own files** are written as usual: `logs/dbt.log` in the project (dbt's debug
   log), and `manifest.json`, `run_results.json` and `sources.json` in the target
   directory. ODS reads those artifacts; it keeps its state in `.ods/state.db`.
-- ODS writes no log file of its own. Its logs go to stderr, at the level `-v`/`-q` or
-  `ODS_LOG` set:
+- ODS writes no log file of its own. Its logs go to stderr, at the level set by
+  `--log-level`, `ODS_LOG`, `-v`/`-q` or `log.level` in the configuration (e.g.
+  `ODS__LOG__LEVEL=debug`), in that order:
 
   | Level | Shows |
   |---|---|
-  | default (`warn`) | the step lines and warnings |
-  | `-v` (`info`) | each dbt command line ODS runs, its exit code and time, and what was recorded |
-  | `-vv` (`debug`) | also each node's plan decision and why, dbt's result per node (tests passed, failed, didn't run), and nodes that kept their last state |
-  | `-vvv` (`trace`) | also libraries' logs, e.g. every statement the state store runs |
-  | `-q` (`error`) | errors only: no step lines |
+  | `warn` (default) | the step lines and warnings |
+  | `info` (`-v`) | each dbt command line ODS runs, its exit code and time, and what was recorded |
+  | `debug` (`-vv`) | also each node's plan decision and why, dbt's result per node (tests passed, failed, didn't run), and nodes that kept their last state |
+  | `trace` (`-vvv`) | also libraries' logs, e.g. every statement the state store runs |
+  | `error` (`-q`), `off` | errors only (or nothing): no step lines |
 
   dbt's own verbosity is dbt's: pass it through, e.g. `-- --debug` or
   `-- --log-level debug`. dbt also writes its debug log to `logs/dbt.log`.

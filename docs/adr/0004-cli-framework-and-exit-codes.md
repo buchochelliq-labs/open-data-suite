@@ -113,6 +113,9 @@ Rendering:
 - The level defaults to `warn`: `-v` gives info, `-vv` debug and `-vvv` trace, and
   `-q` gives errors only. `ODS_LOG` (`off|error|warn|info|debug|trace`) overrides the
   flags for debugging in CI.
+- *Amended (#220):* `--log-level <off|error|warn|info|debug|trace>` names a level on
+  the command line. It conflicts with `-v`/`-q` and overrides `ODS_LOG`: a level
+  named for this one command is the most specific wish.
 - Log colour follows the stderr terminal and the same `--color` / `NO_COLOR` /
   `TERM=dumb` rules as results.
 
