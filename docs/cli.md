@@ -655,7 +655,8 @@ it ran.
 |---|---|
 | `--state-db PATH` | SQLite state database; default `.ods/state.db` (created by `record`) |
 | `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir` (relative to where ODS runs; ODS passes dbt an absolute path), else `DBT_TARGET_PATH` (relative to the project, as dbt reads it), else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else `.`). `ods state policies` reads the same place; `ods lineage`, `erd`, `serve` and `mcp` still default to `./target` |
-| `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default `default` |
+| `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default: the dbt target (`--target`, else `DBT_TARGET`), else `default` |
+| `--target NAME` | dbt's `--target`; on `plan`, `record` and `history` too, so they find the same state |
 | `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |
 | `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |
 | `--run-results PATH` | (`record`) default `<target-dir>/run_results.json` |
@@ -663,6 +664,22 @@ it ran.
 
 State is kept per project and environment as immutable snapshots. A record that races
 another fails with `ODS-E0402` and writes nothing.
+
+Builds are only reused in the dbt target they went to (#227, ADR-0017). The commands
+that run dbt ask it which target it builds in (one `dbt compile --inline` of the
+target's name, profile, adapter type, host or account and database; never a
+credential) and record that in each snapshot. When it differs from the recorded one
+(same target name on another host, another profile, or state recorded before ODS
+kept targets), nothing in the recorded state is reused: everything builds, with the
+reason `target changed`, and the run says which targets differ. A host, account or
+path is shown without anything that could be a credential (a user, a query string),
+and compared by a digest. `ods state test` refuses to test another target's builds.
+`ods state plan` doesn't run dbt: it shows the target the state was recorded in as not
+checked (use `ods state compile` for a checked plan). State recorded under another
+target name than `--target` is planned with nothing reused; state without a target is
+planned as recorded, with a note.
+`ods state record` doesn't know where the dbt build it records went, so it records no
+target: the next run rebuilds once.
 
 ## Entity-relationship diagrams
 

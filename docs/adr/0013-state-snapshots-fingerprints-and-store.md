@@ -89,6 +89,9 @@ graph LR
   successful state of what failed.
 - A **scope** is `<project>/<environment>`. The default store is `.ods/state.db`, and
   the default environment is `default`.
+  *Amended by [ADR-0017](0017-state-per-target.md) (#227):* the default environment is
+  the dbt target when one is given, and each snapshot records a non-secret target
+  identity (schema 1.1); a build is only reused in the target it went to.
 - **Versioning:**
   - Documents carry `schema_version` 1.0; readers accept the same major with an equal or
     older minor (`SchemaVersion::can_read`).

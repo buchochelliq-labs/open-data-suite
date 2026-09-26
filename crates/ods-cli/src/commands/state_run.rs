@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, SnapshotId, Timestamp};
+use ods_core::state::{
+    ExecutionPlan, PlanAction, ReasonCode, SnapshotId, TargetIdentity, Timestamp,
+};
 use ods_core::{Capability, Strategy, choose};
 use ods_provider_dbt::RunResults;
 use ods_provider_dbt::executor::{DbtExecutor, DbtOutput, DbtStep};
@@ -91,14 +93,7 @@ pub(super) fn dbt_options(command: Command) -> Command {
                 .hide_env_values(true)
                 .help("dbt's --profile: the profile in profiles.yml to use instead of the project's (ODS's own --profile picks its configuration)"),
         )
-        .arg(
-            Arg::new("target")
-                .long("target")
-                .value_name("NAME")
-                .env("DBT_TARGET")
-                .hide_env_values(true)
-                .help("dbt's --target (the profile output to use)"),
-        )
+
         .arg(
             Arg::new("vars")
                 .long("vars")
@@ -505,6 +500,7 @@ impl Steps {
                 }
             ),
             DbtStep::Test { nodes } => format!("dbt test: the tests of {}", count(nodes, "node")),
+            DbtStep::Identify => "dbt compile --inline: which target dbt builds in".to_owned(),
             DbtStep::RelationCheck { nodes } => format!(
                 "dbt show: are the tables of {} ODS would reuse still there?",
                 count(nodes, "node")
@@ -590,6 +586,7 @@ fn reason_label(code: ReasonCode) -> &'static str {
         ReasonCode::UpstreamFullRefresh => "upstream full refresh",
         ReasonCode::RelationMissing => "not in the warehouse",
         ReasonCode::RelationUnverified => "couldn't check the warehouse",
+        ReasonCode::TargetChanged => "target changed",
         _ => "other",
     }
 }
@@ -671,6 +668,63 @@ fn plan_options(args: &ArgMatches) -> ods_state::PlanOptions {
     }
 }
 
+/// Which target dbt builds in (#227): asked of dbt, so it is the target every dbt
+/// command here uses.
+pub(super) fn identify(executor: &DbtExecutor) -> Result<TargetIdentity, CliError> {
+    let target = block_on(executor.identify())?.map_err(|e| {
+        execution_error(&e).with_hint(
+            "ODS keeps state per target, so it needs dbt to render the profile; check `dbt debug`",
+        )
+    })?;
+    tracing::info!(target = %target, "dbt target");
+    Ok(target)
+}
+
+/// The target a run builds in. A run that records needs it; one that doesn't (a dry
+/// run, `compile`) plans as if in an unknown target, reusing nothing.
+fn target_for(
+    executor: &DbtExecutor,
+    dry_run: bool,
+    warnings: &mut Vec<String>,
+) -> Result<Option<TargetIdentity>, CliError> {
+    match identify(executor) {
+        Ok(target) => Ok(Some(target)),
+        Err(e) if dry_run => {
+            warnings.push(format!("{e}; planned as if nothing were built yet"));
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The recorded state to plan against in `target`: `latest` if it was built there;
+/// otherwise none of its builds count (#227), though the next snapshot still follows
+/// it. Returns whether the target changed, and says so in `warnings`.
+pub(super) fn in_target(
+    latest: Option<StoredSnapshot>,
+    target: Option<&TargetIdentity>,
+    warnings: &mut Vec<String>,
+) -> (Option<StoredSnapshot>, bool) {
+    let Some(latest) = latest else {
+        return (None, false);
+    };
+    if target.is_some() && latest.snapshot.target.as_ref() == target {
+        return (Some(latest), false);
+    }
+    warnings.push(match (&latest.snapshot.target, target) {
+        (Some(before), Some(target)) => format!(
+            "the recorded state was built in target {before}, not {target}: nothing in it is reused"
+        ),
+        (None, _) => "the recorded state doesn't say which target it was built in (it predates ODS recording targets, or was recorded with `ods state record`): nothing in it is reused".to_owned(),
+        (Some(before), None) => format!(
+            "the recorded state was built in target {before}, and which target dbt builds in now is unknown: nothing in it is reused"
+        ),
+    });
+    let mut empty = latest.snapshot.clone();
+    empty.nodes.clear();
+    (Some(StoredSnapshot::new(latest.id, empty)), true)
+}
+
 /// How many dbt commands a run will make if it builds.
 fn step_count(args: &ArgMatches, builds: bool) -> usize {
     let compiles = !args.get_flag("no-compile");
@@ -680,10 +734,11 @@ fn step_count(args: &ArgMatches, builds: bool) -> usize {
     let checks = args
         .get_one::<String>("state-db")
         .is_some_and(|db| Path::new(db).is_file());
-    [measures, compiles, checks, builds]
+    // The target check always runs.
+    1 + [measures, compiles, checks, builds]
         .into_iter()
         .map(usize::from)
-        .sum()
+        .sum::<usize>()
 }
 
 /// Checks that the nodes the plan would reuse are still in the warehouse, and records
@@ -870,7 +925,7 @@ fn record(
     tested: bool,
     sources: Sources,
     execution: &ExecutionReport,
-    latest: Option<&StoredSnapshot>,
+    (latest, target): (Option<&StoredSnapshot>, Option<&TargetIdentity>),
     store: &SqliteStateStore,
     planned_checks: &BTreeMap<String, Option<String>>,
 ) -> Result<RunRecord, CliError> {
@@ -921,7 +976,7 @@ fn record(
         // Strictly before: timestamps are to the second.
         (Some(taken), Some(started)) if taken < started
     );
-    let recorded = ods_state::record(
+    let mut recorded = ods_state::record(
         &built.project,
         latest.map(|s| (s.id, &s.snapshot)),
         &results,
@@ -929,6 +984,7 @@ fn record(
         execution.finished_at,
         sources_recorded,
     );
+    recorded.snapshot.target = target.cloned();
     tracing::info!(
         run = %execution.run_id,
         advanced = recorded.advanced.len(),
@@ -1024,6 +1080,9 @@ pub(super) struct RunReport {
     warnings: Vec<String>,
     /// The dbt settings in effect, and where each came from.
     dbt: Vec<DbtSetting>,
+    /// The target dbt builds in, if dbt could say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<TargetIdentity>,
     #[serde(skip)]
     has_sources: bool,
     /// Each node's checks digest when planned, for recording.
@@ -1086,12 +1145,13 @@ impl RunReport {
         let mut warnings = Vec::new();
         let dbt = check_settings(args, &executor, &target_dir, &mut warnings)?;
 
-        // 1. Prepare.
+        // 1. Prepare: the code as it is, and the target dbt builds in.
         let (prepared, sources) = prepare(args, &executor, &mut warnings)?;
+        let dry_run = !builds || args.get_flag("dry-run");
+        let target = target_for(&executor, dry_run, &mut warnings)?;
 
         // 2. Plan.
         let mut ws = Workspace::load(args, sources)?;
-        let dry_run = !builds || args.get_flag("dry-run");
         let tested = execution_tested(kind, args);
         let store = if dry_run && !ws.state_db.is_file() {
             None
@@ -1102,6 +1162,7 @@ impl RunReport {
             Some(store) => ws.latest(store)?,
             None => None,
         };
+        let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
         // One clock for the check and the plan, so they agree on what is due.
         let now = Timestamp::now();
         let options = check_relations(
@@ -1109,7 +1170,11 @@ impl RunReport {
             latest.as_ref(),
             &executor,
             now,
-            plan_options(args),
+            if target_changed {
+                plan_options(args).target_changed()
+            } else {
+                plan_options(args)
+            },
             &mut warnings,
         )?;
         let (plan, plan_warnings) =
@@ -1153,6 +1218,7 @@ impl RunReport {
             record: None,
             warnings,
             dbt,
+            target,
             has_sources: !ws.project.sources.is_empty(),
             planned_checks: checks_by_node(&ws.project),
         };
@@ -1215,7 +1281,7 @@ impl RunReport {
             self.tests,
             sources,
             &execution,
-            latest,
+            (latest, self.target.as_ref()),
             store,
             &self.planned_checks,
         );
@@ -1268,6 +1334,14 @@ impl RunReport {
             ),
         ];
         summary.push(("dbt".into(), vec![Span::plain(settings_line(&self.dbt))]));
+        summary.push((
+            "target".into(),
+            vec![Span::plain(
+                self.target
+                    .as_ref()
+                    .map_or_else(|| "unknown".to_owned(), ToString::to_string),
+            )],
+        ));
         if let Some(command) = self.execution.as_ref().and_then(|e| e.command.as_deref()) {
             summary.push(("ran".into(), vec![Span::toned(command, Tone::Code)]));
         }

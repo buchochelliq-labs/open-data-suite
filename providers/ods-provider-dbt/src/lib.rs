@@ -26,6 +26,7 @@ mod seeds;
 pub mod selection;
 pub mod settings;
 pub mod state_config;
+mod target;
 
 pub use artifacts::{
     ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtConstraint, DbtError,

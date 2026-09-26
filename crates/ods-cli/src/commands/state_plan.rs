@@ -63,8 +63,15 @@ pub(super) fn common(command: Command) -> Command {
             Arg::new("environment")
                 .long("environment")
                 .value_name("NAME")
-                .default_value("default")
-                .help("Keep separate state per environment, e.g. dev and prod"),
+                .help("Keep separate state per environment, e.g. dev and prod [default: the dbt target, else `default`]"),
+        )
+        .arg(
+            Arg::new("target")
+                .long("target")
+                .value_name("NAME")
+                .env("DBT_TARGET")
+                .hide_env_values(true)
+                .help("dbt's --target (the profile output to use); also the default environment"),
         )
         .arg(Arg::new("sources").long("sources").value_name("PATH").help(
             "`dbt source freshness` results [default: <target-dir>/sources.json, if present]",
@@ -220,8 +227,10 @@ impl Workspace {
             )
             .with_hint("use artifacts from dbt 1.7 or later (their metadata has `project_name`)")
         })?;
+        // Separate state per dbt target, unless told otherwise (#227).
         let environment = args
             .get_one::<String>("environment")
+            .or_else(|| args.get_one::<String>("target"))
             .map_or("default", String::as_str);
         let scope = StateScope::new(&project_name, environment)
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?;
@@ -396,6 +405,10 @@ pub(super) struct PlanReport {
     state_db: PathBuf,
     scope: String,
     based_on: Option<SnapshotId>,
+    /// The target the recorded state was built in, as recorded: `plan` doesn't run
+    /// dbt, so it isn't checked against the target dbt would build in now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recorded_target: Option<ods_core::state::TargetIdentity>,
     sources_file: Option<PathBuf>,
     build: usize,
     reuse: usize,
@@ -489,18 +502,44 @@ impl PlanReport {
         } else {
             None
         };
-        let (plan, warnings) = plan_against(
-            &ws,
-            latest.as_ref(),
-            &select_specs(args),
-            now,
-            ods_state::PlanOptions::default(),
-        )?;
+        // `plan` doesn't run dbt, so it can't ask which target dbt builds in (#227):
+        // state recorded under another target name than --target is planned as `run`
+        // would plan it, with none of it reused; state that doesn't name one (recorded
+        // with `ods state record`) is planned as recorded, and the plan says so.
+        let recorded_target = latest.as_ref().and_then(|l| l.snapshot.target.clone());
+        let mut notes = Vec::new();
+        let other = match (&recorded_target, args.get_one::<String>("target")) {
+            (None, _) if latest.is_some() => {
+                notes.push("the recorded state doesn't say which target it was built in: reuse assumes dbt still builds in the same one (`ods state run` checks, and rebuilds if it can't tell)".to_owned());
+                None
+            }
+            (Some(recorded), Some(given)) if &recorded.name != given => Some(format!(
+                "the recorded state was built in target {recorded}, not {given}: nothing in it is reused"
+            )),
+            _ => None,
+        };
+        let options = ods_state::PlanOptions::default();
+        let (latest, options) = match (latest, other) {
+            (Some(latest), Some(note)) => {
+                notes.push(note);
+                let mut empty = latest.snapshot.clone();
+                empty.nodes.clear();
+                (
+                    Some(StoredSnapshot::new(latest.id, empty)),
+                    options.target_changed(),
+                )
+            }
+            (latest, _) => (latest, options),
+        };
+        let (plan, mut warnings) =
+            plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;
+        warnings.extend(notes);
         Ok(Self {
             dbt_command: dbt_command(&plan),
             build: plan.with_action(PlanAction::Build).count(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
             based_on: latest.map(|s| s.id),
+            recorded_target,
             target_dir: ws.target_dir,
             state_db: ws.state_db,
             scope: ws.scope.to_string(),
@@ -527,6 +566,13 @@ impl Present for PlanReport {
                     vec![Span::plain(self.based_on.map_or_else(
                         || "no recorded state: everything is built".to_owned(),
                         |id| format!("snapshot {id} in {}", self.state_db.display()),
+                    ))],
+                ),
+                (
+                    "recorded in".into(),
+                    vec![Span::plain(self.recorded_target.as_ref().map_or_else(
+                        || "no target recorded".to_owned(),
+                        |t| format!("target {t} (not checked: `ods state compile` asks dbt)"),
                     ))],
                 ),
                 (
