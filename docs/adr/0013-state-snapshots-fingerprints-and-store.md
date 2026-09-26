@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
-- **Issues:** #11 (state model), #13 (fingerprints; formatting-insensitive SQL #209), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store)
+- **Issues:** #11 (state model), #13 (fingerprints; formatting-insensitive SQL #209; hooks #218), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -172,6 +172,23 @@ graph LR
     formatting counts again.
   - The raw text's digest is kept outside the fingerprint (`cosmetic`), so a reused
     node's reason can say "only formatting changed".
+- Hooks (#218): dbt stores pre- and post-hooks unrendered. The hook SQL is in `config`,
+  and the macros hooks call are in `depends_on.macros`, so both are fingerprinted. What
+  neither shows is what a hook reads when it runs.
+  - A node with hooks is **always built** if a hook, or a project or package macro the
+    node uses, mentions `var`, `env_var`, `target`, `flags`, `builtins`, `context`,
+    `run_query` or `statement` in any form: called, aliased, indexed or qualified.
+    The reason names the hook or macro. dbt's own macros and the adapter's are part of
+    `engine` and aren't scanned.
+  - No value is read or stored. A digest of an environment value can be guessed back
+    from a short list of candidates, so even that is not persisted (rule 9).
+  - Cost: such a node rebuilds every run, and so do the nodes that read it (they see
+    new data). A follow-up can make them reusable safely, e.g. with a keyed digest kept
+    outside the state store, or by resolving `var` and `target` values.
+  - `invocation_id` and `run_started_at` change every run by design. A hook that only
+    uses them for auditing doesn't block reuse.
+  - Project-level `on-run-start`/`on-run-end` hooks run whenever dbt is invoked. When
+    everything is reused, `ods state run` doesn't invoke dbt, so they don't run.
 - A node that can't be fingerprinted completely is always BUILT. That covers:
   - a model without compiled SQL (after `dbt parse` only), with the reason "run
     `dbt compile`";
