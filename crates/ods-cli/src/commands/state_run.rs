@@ -12,11 +12,16 @@
 //!    The commit is a compare-and-swap on the state read in step 2, so a concurrent
 //!    run can't be overwritten.
 
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use ods_core::state::{ExecutionPlan, PlanAction, SnapshotId, Timestamp};
-use ods_provider_dbt::executor::{DbtExecutor, DbtOutput};
+use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, SnapshotId, Timestamp};
+use ods_provider_dbt::executor::{DbtExecutor, DbtOutput, DbtStep};
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, PrepareReport,
@@ -31,23 +36,82 @@ use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, plan_against, select_specs, store_error,
 };
 use crate::exit::{CliError, ExitStatus, codes};
-use crate::module::Context;
+use crate::module::{Context, ProgressSettings};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
+
+/// Options shared by the commands that run dbt (`run`, `test`).
+pub(super) fn dbt_options(command: Command) -> Command {
+    command
+        .arg(
+            Arg::new("select")
+                .long("select")
+                .short('s')
+                .value_name("SPEC")
+                .action(ArgAction::Append)
+                .help("Only consider these nodes: `name`, `+name` (with ancestors), `name+` (with descendants); repeatable"),
+        )
+        .arg(
+            Arg::new("exclude")
+                .long("exclude")
+                .value_name("SPEC")
+                .action(ArgAction::Append)
+                .help("Leave these nodes out (same syntax as --select); they keep their last state; repeatable"),
+        )
+        .arg(
+            Arg::new("no-compile")
+                .long("no-compile")
+                .action(ArgAction::SetTrue)
+                .help("Use the artifacts already in the target directory instead of running `dbt compile` first. Sources aren't measured either: only --sources is read"),
+        )
+        .arg(
+            Arg::new("dbt")
+                .long("dbt")
+                .value_name("PROGRAM")
+                .default_value("dbt")
+                .help("The dbt executable"),
+        )
+        .arg(
+            Arg::new("project-dir")
+                .long("project-dir")
+                .value_name("DIR")
+                .help("dbt's --project-dir"),
+        )
+        .arg(
+            Arg::new("profiles-dir")
+                .long("profiles-dir")
+                .value_name("DIR")
+                .help("dbt's --profiles-dir"),
+        )
+        .arg(
+            Arg::new("target")
+                .long("target")
+                .value_name("NAME")
+                .help("dbt's --target (the profile output to use)"),
+        )
+        .arg(
+            Arg::new("dbt-output")
+                .long("dbt-output")
+                .value_name("WHERE")
+                .value_parser(["stderr", "capture"])
+                .default_value("stderr")
+                .help("Where dbt's own output goes: shown on stderr, or captured and shown only on failure"),
+        )
+        .arg(
+            Arg::new("dbt-args")
+                .value_name("DBT_ARGS")
+                .num_args(0..)
+                .last(true)
+                .help("After `--`: options passed to dbt as they are, e.g. `-- --threads 8`. Selection and artifact options are refused"),
+        )
+}
 
 /// `ods state run`'s own arguments.
 pub(super) fn run_command() -> Command {
-    common(
-        Command::new("run")
-            .about("Build only what needs building, with dbt, and record what succeeded"),
-    )
-    .arg(
-        Arg::new("select")
-            .long("select")
-            .short('s')
-            .value_name("SPEC")
-            .action(ArgAction::Append)
-            .help("Only consider these nodes: `name`, `+name` (with ancestors), `name+` (with descendants); repeatable"),
-    )
+    dbt_options(common(
+        Command::new("run").about(
+            "Build only what needs building (models, seeds, snapshots) with dbt, and record what succeeded",
+        ),
+    ))
     .arg(
         Arg::new("dry-run")
             .long("dry-run")
@@ -55,18 +119,24 @@ pub(super) fn run_command() -> Command {
             .help("Prepare and plan, but build and record nothing"),
     )
     .arg(
-        Arg::new("mode")
-            .long("mode")
-            .value_name("MODE")
-            .value_parser(["build", "run"])
-            .default_value("build")
-            .help("`build` runs the selected nodes' tests too; `run` doesn't (dbt 1.8+)"),
+        Arg::new("test")
+            .long("test")
+            .action(ArgAction::SetTrue)
+            .help("Also run the built nodes' tests, like `dbt build`; a node whose tests fail keeps its last state"),
     )
     .arg(
-        Arg::new("no-compile")
-            .long("no-compile")
+        Arg::new("full-refresh")
+            .long("full-refresh")
             .action(ArgAction::SetTrue)
-            .help("Plan from the artifacts already in the target directory instead of running `dbt compile` first. Sources aren't measured either: only --sources is read"),
+            .help("dbt's --full-refresh for the nodes being built"),
+    )
+    .arg(
+        Arg::new("resource-type")
+            .long("resource-type")
+            .value_name("TYPE")
+            .value_parser(["model", "seed", "snapshot"])
+            .action(ArgAction::Append)
+            .help("Only build nodes of this type; the others stay to build; repeatable"),
     )
     .arg(
         Arg::new("no-source-freshness")
@@ -74,42 +144,79 @@ pub(super) fn run_command() -> Command {
             .action(ArgAction::SetTrue)
             .help("Don't run `dbt source freshness` first; use --sources or an existing sources.json"),
     )
-    .arg(
-        Arg::new("dbt")
-            .long("dbt")
-            .value_name("PROGRAM")
-            .default_value("dbt")
-            .help("The dbt executable"),
-    )
-    .arg(
-        Arg::new("project-dir")
-            .long("project-dir")
-            .value_name("DIR")
-            .help("dbt's --project-dir"),
-    )
-    .arg(
-        Arg::new("profiles-dir")
-            .long("profiles-dir")
-            .value_name("DIR")
-            .help("dbt's --profiles-dir"),
-    )
-    .arg(
-        Arg::new("target")
-            .long("target")
-            .value_name("NAME")
-            .help("dbt's --target (the profile output to use)"),
-    )
-    .arg(
-        Arg::new("dbt-output")
-            .long("dbt-output")
-            .value_name("WHERE")
-            .value_parser(["stderr", "capture"])
-            .default_value("stderr")
-            .help("Where dbt's own output goes: shown on stderr, or captured and shown only on failure"),
-    )
 }
 
-fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
+/// Nodes the plan would build that this run leaves out, and why.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct LeftOut {
+    pub(super) node: String,
+    pub(super) reason: String,
+}
+
+/// Splits the plan's BUILD set into what this run builds and what `--exclude` and
+/// `--resource-type` leave out.
+pub(super) fn narrow(
+    args: &ArgMatches,
+    project: &ods_state::Project,
+    entries: Vec<(String, String, String)>,
+) -> Result<(Vec<RequestedNode>, Vec<LeftOut>), CliError> {
+    let exclude_specs: Vec<String> = args
+        .get_many::<String>("exclude")
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let excluded = if exclude_specs.is_empty() {
+        std::collections::BTreeSet::new()
+    } else {
+        ods_state::select(project, &exclude_specs)
+            .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?
+    };
+    let types: Vec<&String> = args
+        .try_get_many::<String>("resource-type")
+        .ok()
+        .flatten()
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut requested = Vec::new();
+    let mut left_out = Vec::new();
+    for (id, name, kind) in entries {
+        if excluded.contains(&id) {
+            left_out.push(LeftOut {
+                node: id,
+                reason: "excluded with --exclude".to_owned(),
+            });
+        } else if !types.is_empty() && !types.iter().any(|t| **t == kind) {
+            left_out.push(LeftOut {
+                node: id,
+                reason: format!(
+                    "a {kind}, and only {} were asked for",
+                    types
+                        .iter()
+                        .map(|t| format!("{t}s"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        } else {
+            requested.push(RequestedNode::new(id, name));
+        }
+    }
+    Ok((requested, left_out))
+}
+
+/// Options after `--`, for dbt.
+pub(super) fn dbt_args(args: &ArgMatches) -> Vec<String> {
+    args.get_many::<String>("dbt-args")
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+pub(super) fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
     let mut executor = DbtExecutor::new(
         args.get_one::<String>("dbt").map_or("dbt", String::as_str),
         target_dir,
@@ -131,6 +238,136 @@ fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
         executor = executor.target(target);
     }
     executor
+}
+
+/// Progress lines on stderr between dbt's own output (#220): which dbt command runs,
+/// and why. dbt starts each command with the same banner, so without them the steps
+/// look alike. They go to the process's stderr, where dbt writes, so they interleave
+/// with it in order.
+#[derive(Debug, Clone)]
+pub(super) struct Steps {
+    settings: ProgressSettings,
+    done: Arc<AtomicUsize>,
+    total: usize,
+}
+
+impl Steps {
+    /// Numbered out of `total`: the dbt commands this run will make if it builds.
+    pub(super) fn new(settings: ProgressSettings, total: usize) -> Self {
+        Self {
+            settings,
+            done: Arc::default(),
+            total,
+        }
+    }
+
+    /// A note that isn't a dbt command, e.g. the plan.
+    pub(super) fn note(&self, text: &str) {
+        self.line(None, text);
+    }
+
+    /// The dbt command about to run.
+    pub(super) fn step(&self, step: DbtStep) {
+        let n = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+        let text = match step {
+            DbtStep::SourceFreshness => {
+                "dbt source freshness: how new each source's data is".to_owned()
+            }
+            DbtStep::Compile => "dbt compile: the code as it is now, for the plan".to_owned(),
+            DbtStep::Build { nodes, tests } => format!(
+                "dbt build: {}{}",
+                count(nodes, "node"),
+                if tests {
+                    " and their tests"
+                } else {
+                    ", without tests"
+                }
+            ),
+            DbtStep::Test { nodes } => format!("dbt test: the tests of {}", count(nodes, "node")),
+            _ => "dbt".to_owned(),
+        };
+        self.line(Some(n), &text);
+    }
+
+    fn line(&self, n: Option<usize>, text: &str) {
+        if !self.settings.enabled {
+            return;
+        }
+        let number = n.map_or_else(String::new, |n| format!("{n}/{} ", self.total.max(n)));
+        let line = if self.settings.ansi {
+            format!("\x1b[1;36mods ▸\x1b[0m \x1b[1m{number}\x1b[0m{text}\n")
+        } else {
+            format!("ods ▸ {number}{text}\n")
+        };
+        // Best effort: progress must never fail the command.
+        let _ = std::io::stderr().write_all(line.as_bytes());
+    }
+
+    /// Makes `executor` announce each dbt command here.
+    pub(super) fn attach(&self, executor: DbtExecutor) -> DbtExecutor {
+        let steps = self.clone();
+        executor.on_step(move |step| steps.step(step))
+    }
+}
+
+/// Names listed per reason before the rest are counted.
+const NAMES_PER_REASON: usize = 8;
+
+/// The plan: a summary line, then what builds grouped by its main reason. Reused nodes
+/// are only counted: in a large project they are most of it (`-vv` names them).
+fn plan_notes(report: &RunReport) -> Vec<String> {
+    let mut summary = format!("plan: {} to build, {} to reuse", report.build, report.reuse);
+    if !report.left_out.is_empty() {
+        let _ = write!(summary, ", {} left out", report.left_out.len());
+    }
+    let left_out: BTreeSet<&str> = report.left_out.iter().map(|l| l.node.as_str()).collect();
+    // In plan order, so groups and names read upstream first.
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+    for entry in report.plan.with_action(PlanAction::Build) {
+        if left_out.contains(entry.node.as_str()) {
+            continue;
+        }
+        let why = entry
+            .reasons
+            .first()
+            .map_or("other", |r| reason_label(r.code));
+        match groups.iter_mut().find(|(label, _)| *label == why) {
+            Some((_, names)) => names.push(&entry.name),
+            None => groups.push((why, vec![&entry.name])),
+        }
+    }
+    let mut notes = vec![summary];
+    for (why, names) in groups {
+        let mut line = format!(
+            "  {why}: {}",
+            names[..names.len().min(NAMES_PER_REASON)].join(", ")
+        );
+        if names.len() > NAMES_PER_REASON {
+            let _ = write!(line, " and {} more", names.len() - NAMES_PER_REASON);
+        }
+        notes.push(line);
+    }
+    notes
+}
+
+/// A few words for why a node builds.
+fn reason_label(code: ReasonCode) -> &'static str {
+    match code {
+        ReasonCode::NeverBuilt => "not built by ODS yet",
+        ReasonCode::CodeChanged => "code changed",
+        ReasonCode::UpstreamCodeChanged => "upstream code changed",
+        ReasonCode::NewUpstreamData => "new upstream data",
+        ReasonCode::MissingDataEvidence => "source data version unknown",
+        ReasonCode::CodeEvidenceIncomplete => "code can't be fully fingerprinted",
+        ReasonCode::UnknownDependency => "depends on something ODS can't see",
+        ReasonCode::PolicyBlocksReuse => "its policy never reuses it",
+        _ => "other",
+    }
+}
+
+/// Whether this run tests what it builds (`--test`).
+fn execution_tested(args: &ArgMatches) -> bool {
+    args.get_flag("test")
 }
 
 /// `1 node`, `2 nodes`.
@@ -201,11 +438,12 @@ fn record(
         )
         .with_hint("don't run other dbt commands against the same target directory during `ods state run`"));
     }
+    let tested = execution_tested(args);
     let results: Vec<RunResult> = execution
         .nodes
         .iter()
         .map(|n| {
-            RunResult::new(
+            let result = RunResult::new(
                 n.node.clone(),
                 match n.status {
                     // Built but not validated: keep the last validated state, so the
@@ -216,7 +454,13 @@ fn record(
                     _ => Outcome::Failed,
                 },
                 n.completed_at,
-            )
+            );
+            // Built with its tests, and they passed.
+            if tested && n.fully_checked() {
+                result.tested()
+            } else {
+                result
+            }
         })
         .collect();
     let sources_recorded = matches!(
@@ -232,6 +476,15 @@ fn record(
         execution.finished_at,
         sources_recorded,
     );
+    tracing::info!(
+        run = %execution.run_id,
+        advanced = recorded.advanced.len(),
+        kept = recorded.kept.len(),
+        "recording the run"
+    );
+    for (node, why) in &recorded.kept {
+        tracing::debug!(node = %node, why = %why, "kept its last state");
+    }
     let snapshot = if recorded.advanced.is_empty() {
         None
     } else {
@@ -300,6 +553,11 @@ pub(super) struct RunReport {
     outcome: RunOutcome,
     build: usize,
     reuse: usize,
+    /// Whether the built nodes' tests ran too (`--test`).
+    tests: bool,
+    /// Nodes to build that this run left out (`--exclude`, `--resource-type`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    left_out: Vec<LeftOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prepared: Option<PrepareReport>,
     plan: ExecutionPlan,
@@ -316,7 +574,7 @@ pub(super) struct RunReport {
 impl RunReport {
     /// Runs the whole flow and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let (report, record_error) = Self::build(args)?;
+        let (report, record_error) = Self::build(args, ctx.progress)?;
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);
         }
@@ -352,12 +610,18 @@ impl RunReport {
 
     /// Runs the flow. A failure to record after dbt ran comes back with the report, so
     /// the caller still sees what dbt did.
-    fn build(args: &ArgMatches) -> Result<(Self, Option<CliError>), CliError> {
+    fn build(
+        args: &ArgMatches,
+        progress: ProgressSettings,
+    ) -> Result<(Self, Option<CliError>), CliError> {
         let target_dir = PathBuf::from(
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        let executor = executor(args, &target_dir);
+        let compiles = !args.get_flag("no-compile");
+        let measures = compiles && !args.get_flag("no-source-freshness");
+        let steps = Steps::new(progress, usize::from(measures) + usize::from(compiles) + 1);
+        let executor = steps.attach(executor(args, &target_dir));
         let mut warnings = Vec::new();
 
         // 1. Prepare.
@@ -378,10 +642,13 @@ impl RunReport {
         let (plan, plan_warnings) =
             plan_against(&ws, latest.as_ref(), &select_specs(args), Timestamp::now())?;
         warnings.extend(plan_warnings);
-        let requested: Vec<RequestedNode> = plan
-            .with_action(PlanAction::Build)
-            .map(|e| RequestedNode::new(e.node.clone(), e.name.clone()))
-            .collect();
+        let (requested, left_out) = narrow(
+            args,
+            &ws.project,
+            plan.with_action(PlanAction::Build)
+                .map(|e| (e.node.clone(), e.name.clone(), e.kind.clone()))
+                .collect(),
+        )?;
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
@@ -389,6 +656,8 @@ impl RunReport {
             outcome: RunOutcome::DryRun,
             build: requested.len(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
+            tests: execution_tested(args),
+            left_out,
             prepared,
             plan,
             execution: None,
@@ -396,25 +665,32 @@ impl RunReport {
             warnings,
             has_sources: !ws.project.sources.is_empty(),
         };
+        for note in plan_notes(&report) {
+            steps.note(&note);
+        }
         if dry_run {
+            steps.note("dry run: nothing is built or recorded");
             return Ok((report, None));
         }
         let (Some(store), false) = (store, requested.is_empty()) else {
+            steps.note("nothing to build, so dbt doesn't run again");
             report.outcome = RunOutcome::NothingToBuild;
             return Ok((report, None));
         };
 
         // 3. Execute.
-        let mode = if args.get_one::<String>("mode").map(String::as_str) == Some("run") {
-            ExecutionMode::Run
-        } else {
+        let mode = if execution_tested(args) {
             ExecutionMode::Build
+        } else {
+            ExecutionMode::Run
         };
-        let execution = block_on(executor.execute(&ExecutionRequest::new(requested, mode)))?
-            .map_err(|e| {
-                execution_error(&e)
-                    .with_hint("nothing was recorded; the last successful state is unchanged")
-            })?;
+        let request = ExecutionRequest::new(requested, mode)
+            .with_full_refresh(args.get_flag("full-refresh"))
+            .with_engine_args(dbt_args(args));
+        let execution = block_on(executor.execute(&request))?.map_err(|e| {
+            execution_error(&e)
+                .with_hint("nothing was recorded; the last successful state is unchanged")
+        })?;
         if !execution.unrequested.is_empty() {
             report.warnings.push(format!(
                 "dbt also built {}, which weren't requested (the project changed after it was compiled?); they weren't recorded and will be built next run",
@@ -460,8 +736,15 @@ impl RunReport {
             (
                 "plan".into(),
                 vec![Span::plain(format!(
-                    "{} to build, {} to reuse",
-                    self.build, self.reuse
+                    "{} to build{}, {} to reuse{}",
+                    self.build,
+                    if self.tests { " and test" } else { "" },
+                    self.reuse,
+                    if self.left_out.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} left out", self.left_out.len())
+                    }
                 ))],
             ),
         ];
@@ -562,6 +845,19 @@ impl RunReport {
 
     fn notices(&self) -> Vec<ViewNode> {
         let mut blocks = Vec::new();
+        if !self.left_out.is_empty() {
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(format!(
+                    "left out, still to build: {}",
+                    self.left_out
+                        .iter()
+                        .map(|l| format!("{} ({})", display_name(&l.node), l.reason))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))],
+            });
+        }
         if let Some(execution) = &self.execution
             && !execution.checks_failed.is_empty()
         {

@@ -15,11 +15,11 @@ mod recorder;
 mod selection;
 
 pub use planner::{PlanError, plan};
-pub use recorder::{Outcome, Recorded, RunResult, record};
+pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use selection::select;
 
 use ods_core::FreshnessPolicy;
-use ods_core::state::{DataVersion, Fingerprint, Timestamp};
+use ods_core::state::{DataVersion, Fingerprint, NodeState, Timestamp};
 
 /// A node ODS plans: a model, seed or snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,10 @@ pub struct Node {
     /// Its output depends only on its own code (e.g. a file of static rows), so having
     /// no parents doesn't leave its data unexplained.
     pub self_contained: bool,
+    /// The digest of its checks (e.g. dbt tests) as they are now, so a build tested
+    /// with other checks isn't tested (#220). `None` when it has none, or they can't be
+    /// identified: it is then never tested.
+    pub checks: Option<String>,
 }
 
 impl Node {
@@ -60,7 +64,20 @@ impl Node {
             fingerprint,
             policy,
             self_contained: false,
+            checks: None,
         }
+    }
+
+    /// Sets the digest of its checks.
+    #[must_use]
+    pub fn with_checks(mut self, checks: Option<String>) -> Self {
+        self.checks = checks;
+        self
+    }
+
+    /// Whether `state`, its recorded build, passed the checks it has now.
+    pub fn is_tested(&self, state: &NodeState) -> bool {
+        state.is_tested_with(self.checks.as_deref())
     }
 
     /// Marks the node's output as depending only on its own code.

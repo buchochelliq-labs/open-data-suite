@@ -2,12 +2,48 @@
 //!
 //! Logs never go to stdout, so they cannot corrupt command results or the JSON envelope.
 
-use clap::{ArgAction, Args};
+use clap::{ArgAction, Args, ValueEnum};
 use tracing::level_filters::LevelFilter;
+use tracing_subscriber::filter::Targets;
+use tracing_subscriber::layer::SubscriberExt as _;
+
+/// A log level named on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Level {
+    /// No logs, and no progress lines.
+    Off,
+    /// Errors only, and no progress lines.
+    Error,
+    /// Warnings (the default).
+    Warn,
+    /// Also what ODS runs and records.
+    Info,
+    /// Also each decision and why.
+    Debug,
+    /// Also libraries' own logs.
+    Trace,
+}
+
+impl From<Level> for LevelFilter {
+    fn from(level: Level) -> Self {
+        match level {
+            Level::Off => Self::OFF,
+            Level::Error => Self::ERROR,
+            Level::Warn => Self::WARN,
+            Level::Info => Self::INFO,
+            Level::Debug => Self::DEBUG,
+            Level::Trace => Self::TRACE,
+        }
+    }
+}
 
 /// Verbosity flags accepted by every command.
 #[derive(Debug, Clone, Args)]
 pub struct LogArgs {
+    /// Log level on stderr
+    #[arg(long, global = true, value_name = "LEVEL", conflicts_with_all = ["verbose", "quiet"])]
+    log_level: Option<Level>,
+
     /// More log output on stderr (-v info, -vv debug, -vvv trace)
     #[arg(short = 'v', long, global = true, action = ArgAction::Count, conflicts_with = "quiet")]
     verbose: u8,
@@ -18,8 +54,10 @@ pub struct LogArgs {
 }
 
 impl LogArgs {
-    /// Resolves the log level: `ODS_LOG` (`env`) beats `-v`/`-q`, which beat the
-    /// configured `log.level` (`config`), which beats the `warn` default (ADR-0005 §2).
+    /// Resolves the log level: `--log-level` beats `ODS_LOG` (`env`), which beats
+    /// `-v`/`-q`, which beat the configured `log.level` (`config`), which beats the
+    /// `warn` default (ADR-0005 §2). A level named on the command line is the most
+    /// specific wish.
     ///
     /// # Errors
     /// Returns the offending value if `ODS_LOG` is not a known level.
@@ -28,6 +66,9 @@ impl LogArgs {
         env: Option<&str>,
         config: Option<LevelFilter>,
     ) -> Result<LevelFilter, String> {
+        if let Some(level) = self.log_level {
+            return Ok(level.into());
+        }
         if let Some(value) = env.map(str::trim).filter(|v| !v.is_empty()) {
             return match value.to_ascii_lowercase().as_str() {
                 "off" => Ok(LevelFilter::OFF),
@@ -50,14 +91,27 @@ impl LogArgs {
 }
 
 /// Installs the global stderr subscriber. A second call (e.g. in tests) is a no-op.
+///
+/// Libraries' own logs (e.g. every SQL statement the state store runs) only show at
+/// `trace`: at `debug`, ODS's own decisions should be readable.
 pub fn init(level: LevelFilter, ansi: bool) {
-    let _ = tracing_subscriber::fmt()
+    let libraries = if level == LevelFilter::TRACE {
+        LevelFilter::TRACE
+    } else {
+        level.min(LevelFilter::WARN)
+    };
+    let targets = Targets::new()
+        .with_default(libraries)
+        .with_target("ods", level);
+    let subscriber = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_max_level(level)
         .with_ansi(ansi)
         .with_target(false)
         .without_time()
-        .try_init();
+        .finish()
+        .with(targets);
+    let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
 /// Converts a configured level to a filter.
@@ -127,5 +181,27 @@ mod tests {
     #[test]
     fn verbose_and_quiet_conflict() {
         assert!(TestCli::try_parse_from(["ods", "-v", "-q"]).is_err());
+        assert!(TestCli::try_parse_from(["ods", "--log-level", "debug", "-v"]).is_err());
+        assert!(TestCli::try_parse_from(["ods", "--log-level", "loud"]).is_err());
+    }
+
+    #[test]
+    fn log_level_names_a_level_and_beats_everything_else() {
+        assert_eq!(
+            level(&["--log-level", "debug"], None),
+            Ok(LevelFilter::DEBUG)
+        );
+        assert_eq!(level(&["--log-level=off"], None), Ok(LevelFilter::OFF));
+        assert_eq!(
+            level(&["--log-level", "trace"], Some("error")),
+            Ok(LevelFilter::TRACE),
+            "beats ODS_LOG"
+        );
+        let cli = TestCli::try_parse_from(["ods", "--log-level", "info"]).unwrap();
+        assert_eq!(
+            cli.log.level(None, Some(LevelFilter::DEBUG)),
+            Ok(LevelFilter::INFO),
+            "beats log.level"
+        );
     }
 }

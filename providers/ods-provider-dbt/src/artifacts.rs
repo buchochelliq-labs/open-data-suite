@@ -249,6 +249,9 @@ struct RawManifest {
     sources: BTreeMap<String, RawNode>,
     #[serde(default)]
     macros: BTreeMap<String, RawMacro>,
+    /// dbt 1.8+. Kept whole: their fixtures are their definition.
+    #[serde(default)]
+    unit_tests: BTreeMap<String, serde_json::Value>,
 }
 
 /// A node from the manifest (model, seed, snapshot, source, test, …).
@@ -452,6 +455,20 @@ pub struct Manifest {
     pub macros: BTreeMap<String, DbtMacro>,
     /// Enabled nodes and sources, sorted by id.
     pub nodes: Vec<ManifestNode>,
+    /// Enabled unit tests (dbt 1.8+), sorted by id.
+    pub unit_tests: Vec<DbtUnitTest>,
+}
+
+/// A unit test: fixed inputs and the rows a model must produce from them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtUnitTest {
+    /// dbt's `unique_id`, e.g. `unit_test.jaffle.orders.test_totals`.
+    pub unique_id: String,
+    /// The nodes it reads, from `depends_on.nodes`: the model under test first.
+    pub depends_on: Vec<String>,
+    /// Its whole manifest entry, for fingerprints.
+    pub definition: serde_json::Value,
 }
 
 /// Column lists from `catalog.json`, in warehouse order, by node id.
@@ -656,6 +673,26 @@ impl Manifest {
                 })
                 .collect(),
             nodes: nodes.into_values().collect(),
+            unit_tests: raw
+                .unit_tests
+                .into_iter()
+                .filter(|(_, t)| {
+                    t.pointer("/config/enabled") != Some(&serde_json::Value::Bool(false))
+                })
+                .map(|(id, definition)| DbtUnitTest {
+                    depends_on: definition
+                        .pointer("/depends_on/nodes")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|n| n.as_str().map(str::to_owned))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    unique_id: id,
+                    definition,
+                })
+                .collect(),
         })
     }
 }

@@ -8,7 +8,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{
     DataVersion, Exactness, ExecutionPlan, PlanAction, SnapshotId, StateSnapshot, Timestamp,
 };
-use ods_provider_dbt::fingerprint::fingerprint;
+use ods_provider_dbt::fingerprint::{checks_digest, fingerprint};
 use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{
     ArtifactPreference, Artifacts, ResourceType, RunResults, RunStatus, SourceFreshness,
@@ -285,7 +285,8 @@ fn plan_nodes(
                     .get(&n.unique_id)
                     .cloned()
                     .unwrap_or_else(ods_core::FreshnessPolicy::conservative),
-            );
+            )
+            .with_checks(checks_digest(manifest, &n.unique_id));
             // A seed's rows are its file: nothing else feeds it.
             if n.resource_type == ResourceType::Seed {
                 node.self_contained()
@@ -382,6 +383,14 @@ pub(super) fn plan_against(
         now,
     )
     .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    for entry in &plan.entries {
+        tracing::debug!(
+            node = %entry.name,
+            action = ?entry.action,
+            why = entry.reasons.first().map_or("", |r| r.message.as_str()),
+            "planned"
+        );
+    }
     let mut warnings = Vec::new();
     if ws.project.sources.iter().any(|s| s.version.is_none()) && ws.sources_file.is_none() {
         warnings.push(

@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use ods_core::CapabilitySet;
@@ -44,6 +45,31 @@ pub enum DbtOutput {
     Capture,
 }
 
+/// A dbt command the executor is about to run, for callers that show progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DbtStep {
+    /// `dbt source freshness`: how new each source's data is.
+    SourceFreshness,
+    /// `dbt compile`: the compiled SQL fingerprints need.
+    Compile,
+    /// `dbt build` of `nodes` nodes, with or without their tests.
+    Build {
+        /// How many nodes are selected.
+        nodes: usize,
+        /// Whether their tests run too.
+        tests: bool,
+    },
+    /// `dbt test` of `nodes` nodes' tests.
+    Test {
+        /// How many nodes' tests are selected.
+        nodes: usize,
+    },
+}
+
+/// Called before each dbt command runs.
+pub type StepHook = Arc<dyn Fn(DbtStep) + Send + Sync>;
+
 /// Runs the dbt CLI.
 #[derive(Clone)]
 pub struct DbtExecutor {
@@ -54,6 +80,7 @@ pub struct DbtExecutor {
     target: Option<String>,
     env: BTreeMap<String, String>,
     output: DbtOutput,
+    on_step: Option<StepHook>,
 }
 
 // Environment values can be credentials: show only their names.
@@ -67,6 +94,7 @@ impl std::fmt::Debug for DbtExecutor {
             .field("target", &self.target)
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("output", &self.output)
+            .field("on_step", &self.on_step.is_some())
             .finish()
     }
 }
@@ -82,6 +110,7 @@ impl DbtExecutor {
             target: None,
             env: BTreeMap::new(),
             output: DbtOutput::default(),
+            on_step: None,
         }
     }
 
@@ -118,6 +147,19 @@ impl DbtExecutor {
     pub fn output(mut self, output: DbtOutput) -> Self {
         self.output = output;
         self
+    }
+
+    /// Calls `hook` before each dbt command, e.g. to say which one runs and why.
+    #[must_use]
+    pub fn on_step(mut self, hook: impl Fn(DbtStep) + Send + Sync + 'static) -> Self {
+        self.on_step = Some(Arc::new(hook));
+        self
+    }
+
+    fn step(&self, step: DbtStep) {
+        if let Some(hook) = &self.on_step {
+            hook(step);
+        }
     }
 
     /// The target path as dbt must see it: absolute, since dbt resolves a relative one
@@ -177,9 +219,27 @@ impl DbtExecutor {
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
             }
         }
-        let output = command.output().await.map_err(|e| {
-            ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
-        })?;
+        // Names only: values can be credentials (AGENTS.md rule 9).
+        tracing::info!(command = %self.display(args), "running dbt");
+        tracing::debug!(env = ?self.env.keys().collect::<Vec<_>>(), output = ?self.output, "dbt settings");
+        let started = std::time::Instant::now();
+        // Not `Command::output()`: tokio's always pipes stdout and stderr, which would
+        // swallow dbt's output in `DbtOutput::Stderr` mode.
+        let output = command
+            .spawn()
+            .map_err(|e| {
+                ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
+            })?
+            .wait_with_output()
+            .await
+            .map_err(|e| {
+                ProviderError::Other(format!("`{}` failed: {e}", self.program.display()))
+            })?;
+        tracing::info!(
+            exit = ?output.status.code(),
+            seconds = started.elapsed().as_secs_f64(),
+            "dbt finished"
+        );
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         let lines: Vec<&str> = text.lines().collect();
@@ -214,24 +274,327 @@ fn is_check(id: &str) -> bool {
     id.starts_with("test.") || id.starts_with("unit_test.")
 }
 
+/// dbt options that may be passed through (after `--`): they change how dbt runs or
+/// logs, never which nodes run, against what, or what their results mean. Anything else
+/// is refused: an option ODS doesn't know could select nodes, point at another
+/// warehouse, or build something that isn't the real thing.
+const PASSTHROUGH_FLAGS: [&str; 30] = [
+    "--fail-fast",
+    "--no-fail-fast",
+    "--debug",
+    "--no-debug",
+    "--quiet",
+    "--no-quiet",
+    "--use-colors",
+    "--no-use-colors",
+    "--use-colors-file",
+    "--no-use-colors-file",
+    "--partial-parse",
+    "--no-partial-parse",
+    "--static-parser",
+    "--no-static-parser",
+    "--version-check",
+    "--no-version-check",
+    "--print",
+    "--no-print",
+    "--warn-error",
+    "--no-warn-error",
+    "--store-failures",
+    "--no-store-failures",
+    "--show-resource-report",
+    "--no-show-resource-report",
+    "--introspect",
+    "--no-introspect",
+    "--cache-selected-only",
+    "--no-cache-selected-only",
+    "--send-anonymous-usage-stats",
+    "--no-send-anonymous-usage-stats",
+];
+
+/// Pass-through options that take a value, as `--opt value` or `--opt=value`.
+const PASSTHROUGH_OPTIONS: [&str; 9] = [
+    "--threads",
+    "--log-level",
+    "--log-level-file",
+    "--log-format",
+    "--log-format-file",
+    "--log-path",
+    "--log-file-max-bytes",
+    "--printer-width",
+    "--warn-error-options",
+];
+
+/// Short pass-through flags (`-x` fail fast, `-d` debug, `-q` quiet), alone or bundled.
+const PASSTHROUGH_SHORT: [char; 3] = ['x', 'd', 'q'];
+
+/// dbt settings read from the environment that, like the refused options, make a build
+/// something other than the real thing (empty, sampled, one time window) or read
+/// relations ODS didn't build.
+const REFUSED_ENV: [&str; 8] = [
+    "DBT_EMPTY",
+    "DBT_SAMPLE",
+    "DBT_EVENT_TIME_START",
+    "DBT_EVENT_TIME_END",
+    "DBT_DEFER",
+    "DBT_FAVOR_STATE",
+    // Deprecated spellings dbt still maps to the two above.
+    "DBT_DEFER_TO_STATE",
+    "DBT_FAVOR_STATE_MODE",
+];
+
+/// The arguments in `args` that may not be passed through.
+fn refused_args(args: &[String]) -> Vec<String> {
+    let mut refused = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            let name = format!("--{name}");
+            if PASSTHROUGH_FLAGS.contains(&name.as_str()) && value.is_none() {
+                continue;
+            }
+            if PASSTHROUGH_OPTIONS.contains(&name.as_str())
+                && (value.is_some() || args.next().is_some())
+            {
+                continue;
+            }
+            // Its value, if it takes one, isn't worth naming too.
+            if value.is_none() {
+                let mut peek = args.clone();
+                if peek.next().is_some_and(|v| !v.starts_with('-')) {
+                    args = peek;
+                }
+            }
+            refused.push(name);
+        } else if !arg
+            .strip_prefix('-')
+            .is_some_and(|c| !c.is_empty() && c.chars().all(|c| PASSTHROUGH_SHORT.contains(&c)))
+        {
+            refused.push(arg.clone());
+        }
+    }
+    refused
+}
+
+fn refuse_engine_args(args: &[String]) -> Result<(), ProviderError> {
+    let refused = refused_args(args);
+    if refused.is_empty() {
+        return Ok(());
+    }
+    Err(ProviderError::Other(format!(
+        "can't pass {} to dbt: only options that don't change which nodes run, where, or what their results mean are passed through ({}, {}, and -x, -d, -q). Use the matching ODS option instead where there is one (e.g. --select, --exclude, --resource-type, --full-refresh, --target, --project-dir)",
+        refused.join(", "),
+        PASSTHROUGH_OPTIONS.join(", "),
+        PASSTHROUGH_FLAGS
+            .iter()
+            .filter(|f| !f.starts_with("--no-"))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", "),
+    )))
+}
+
+impl DbtExecutor {
+    /// Refuses to run when dbt would read a setting that makes builds not the real
+    /// thing from the environment.
+    fn refuse_env(&self) -> Result<(), ProviderError> {
+        let set: Vec<&str> = REFUSED_ENV
+            .into_iter()
+            .filter(|key| {
+                let value = self
+                    .env
+                    .get(*key)
+                    .cloned()
+                    .or_else(|| std::env::var(key).ok());
+                value.is_some_and(|v| {
+                    !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false")
+                })
+            })
+            .collect();
+        if set.is_empty() {
+            Ok(())
+        } else {
+            Err(ProviderError::Other(format!(
+                "{} set in the environment: dbt would build something ODS can't record as a real build; unset it",
+                set.join(", ")
+            )))
+        }
+    }
+}
+
 /// Hooks and other operations dbt reports alongside the nodes: neither nodes nor checks.
 fn is_operation(id: &str) -> bool {
     id.starts_with("operation.")
 }
 
-/// For each failed check, the nodes it checks, from the manifest this run wrote.
-/// `None` if the manifest can't be read, so the caller can assume the worst.
-fn checked_nodes(manifest: &Path, checks: &[String]) -> Option<BTreeMap<String, Vec<String>>> {
-    let manifest = crate::Manifest::read(manifest).ok()?;
-    let wanted: BTreeSet<&str> = checks.iter().map(String::as_str).collect();
+/// Every check the manifest this run wrote knows (data tests and unit tests), with
+/// the nodes it reads. `None` if that manifest can't be read or is from another
+/// invocation, so the caller assumes the worst.
+fn check_coverage(manifest: &Path, run: &RunResults) -> Option<BTreeMap<String, Vec<String>>> {
+    let Ok(manifest) = crate::Manifest::read(manifest) else {
+        tracing::info!("can't read the run's manifest: no test pass counts");
+        return None;
+    };
+    if manifest.invocation_id.is_none() || manifest.invocation_id != run.invocation_id {
+        tracing::info!(
+            manifest = ?manifest.invocation_id,
+            run = ?run.invocation_id,
+            "the manifest isn't from this run: no test pass counts"
+        );
+        return None;
+    }
     Some(
         manifest
             .nodes
             .iter()
-            .filter(|n| wanted.contains(n.unique_id.as_str()))
+            .filter(|n| n.resource_type == crate::ResourceType::Test)
             .map(|n| (n.unique_id.clone(), n.depends_on.clone()))
+            .chain(
+                manifest
+                    .unit_tests
+                    .iter()
+                    .map(|t| (t.unique_id.clone(), t.depends_on.clone())),
+            )
             .collect(),
     )
+}
+
+/// The checks in `run` (not requested nodes) whose status matches.
+fn checks_where(
+    run: &RunResults,
+    requested: &BTreeSet<&str>,
+    status: impl Fn(RunStatus) -> bool,
+) -> Vec<String> {
+    run.results
+        .iter()
+        .filter(|r| {
+            is_check(&r.unique_id) && !requested.contains(r.unique_id.as_str()) && status(r.status)
+        })
+        .map(|r| r.unique_id.clone())
+        .collect()
+}
+
+/// The checks in one run's results, and which nodes each covers.
+struct Checks<'r> {
+    mode: ExecutionMode,
+    failed: Vec<String>,
+    skipped: Vec<String>,
+    passed: Vec<String>,
+    /// Every result id in the run.
+    ran: BTreeSet<&'r str>,
+    coverage: Option<BTreeMap<String, Vec<String>>>,
+}
+
+impl<'r> Checks<'r> {
+    fn new(request: &ExecutionRequest, run: &'r RunResults, manifest: &Path) -> Self {
+        let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
+        Self {
+            mode: request.mode,
+            failed: checks_where(run, &requested, |s| {
+                s != RunStatus::Success && s != RunStatus::Skipped
+            }),
+            skipped: checks_where(run, &requested, |s| s == RunStatus::Skipped),
+            passed: checks_where(run, &requested, |s| s == RunStatus::Success),
+            ran: run.results.iter().map(|r| r.unique_id.as_str()).collect(),
+            coverage: check_coverage(manifest, run),
+        }
+    }
+
+    /// A failed or skipped check the manifest doesn't place could cover anything.
+    fn may_cover(&self, check: &str, node: &str) -> bool {
+        self.coverage.as_ref().is_none_or(|c| {
+            c.get(check)
+                .is_none_or(|deps| deps.iter().any(|d| d == node))
+        })
+    }
+
+    /// A pass only counts for the nodes the manifest says it checks.
+    fn covers(&self, check: &str, node: &str) -> bool {
+        self.coverage.as_ref().is_some_and(|c| {
+            c.get(check)
+                .is_some_and(|deps| deps.iter().any(|d| d == node))
+        })
+    }
+
+    fn failed_on(&self, node: &str) -> Vec<String> {
+        self.failed
+            .iter()
+            .filter(|c| self.may_cover(c, node))
+            .cloned()
+            .collect()
+    }
+
+    fn passed_on(&self, node: &str) -> Vec<String> {
+        self.passed
+            .iter()
+            .filter(|c| self.covers(c, node))
+            .cloned()
+            .collect()
+    }
+
+    /// Checks on the node that didn't run count as skipped: stopped early, deselected
+    /// (e.g. by indirect selection) or missing from the results, they tested nothing.
+    fn skipped_on(&self, node: &str) -> Vec<String> {
+        let mut skipped: BTreeSet<String> = self
+            .skipped
+            .iter()
+            .filter(|c| self.may_cover(c, node))
+            .cloned()
+            .collect();
+        if self.mode != ExecutionMode::Run
+            && let Some(coverage) = &self.coverage
+        {
+            skipped.extend(
+                coverage
+                    .iter()
+                    .filter(|(check, deps)| {
+                        deps.iter().any(|d| d == node) && !self.ran.contains(check.as_str())
+                    })
+                    .map(|(check, _)| check.clone()),
+            );
+        }
+        skipped.into_iter().collect()
+    }
+}
+
+/// In a test run nothing is built: each node's outcome is its checks'.
+fn test_outcomes(
+    request: &ExecutionRequest,
+    run: &RunResults,
+    checks: &Checks<'_>,
+) -> Vec<NodeExecution> {
+    let finished = run
+        .generated_at
+        .as_deref()
+        .and_then(|t| Timestamp::parse(t).ok());
+    request
+        .nodes
+        .iter()
+        .map(|n| {
+            let failed = checks.failed_on(&n.id);
+            let skipped = checks.skipped_on(&n.id);
+            let passed = checks.passed_on(&n.id);
+            // Only checks that ran and passed vouch for a build.
+            let (status, message) = if !failed.is_empty() {
+                (ExecutionStatus::Failed, None)
+            } else if !skipped.is_empty() {
+                (ExecutionStatus::Skipped, None)
+            } else if passed.is_empty() {
+                (
+                    ExecutionStatus::Skipped,
+                    Some("no checks ran on it".to_owned()),
+                )
+            } else {
+                (ExecutionStatus::Success, None)
+            };
+            NodeExecution::new(n.id.clone(), status, finished, message)
+                .with_checks_failed(failed)
+                .with_checks_skipped(skipped)
+                .with_checks_passed(passed)
+        })
+        .collect()
 }
 
 /// Each requested node's outcome, the failed checks, and the nodes built unrequested.
@@ -240,42 +603,39 @@ fn outcomes(
     run: &RunResults,
     manifest: &Path,
 ) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
+    let checks = Checks::new(request, run, manifest);
+    let (nodes, failed, unrequested) = node_outcomes(request, run, checks);
+    for n in &nodes {
+        tracing::debug!(
+            node = %n.node,
+            status = ?n.status,
+            checks_passed = ?n.checks_passed,
+            checks_failed = ?n.checks_failed,
+            checks_skipped = ?n.checks_skipped,
+            "dbt result"
+        );
+    }
+    (nodes, failed, unrequested)
+}
+
+fn node_outcomes(
+    request: &ExecutionRequest,
+    run: &RunResults,
+    checks: Checks<'_>,
+) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
+    if request.mode == ExecutionMode::Test {
+        return (
+            test_outcomes(request, run, &checks),
+            checks.failed,
+            Vec::new(),
+        );
+    }
     let by_id: BTreeMap<&str, &crate::runs::NodeResult> = run
         .results
         .iter()
         .map(|r| (r.unique_id.as_str(), r))
         .collect();
     let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
-    let checks_failed: Vec<String> = run
-        .results
-        .iter()
-        .filter(|r| {
-            is_check(&r.unique_id)
-                && !requested.contains(r.unique_id.as_str())
-                && r.status != RunStatus::Success
-                && r.status != RunStatus::Skipped
-        })
-        .map(|r| r.unique_id.clone())
-        .collect();
-    let covers = if checks_failed.is_empty() {
-        Some(BTreeMap::new())
-    } else {
-        checked_nodes(manifest, &checks_failed)
-    };
-    let failed_on = |node: &str| -> Vec<String> {
-        checks_failed
-            .iter()
-            .filter(|c| {
-                covers.as_ref().is_none_or(|covers| {
-                    // A check the manifest doesn't know could cover anything.
-                    covers
-                        .get(*c)
-                        .is_none_or(|deps| deps.iter().any(|d| d == node))
-                })
-            })
-            .cloned()
-            .collect()
-    };
     let nodes = request
         .nodes
         .iter()
@@ -292,7 +652,9 @@ fn outcomes(
                     .and_then(|t| Timestamp::parse(t).ok()),
                 Some(r.raw_status.clone()),
             )
-            .with_checks_failed(failed_on(&n.id)),
+            .with_checks_failed(checks.failed_on(&n.id))
+            .with_checks_skipped(checks.skipped_on(&n.id))
+            .with_checks_passed(checks.passed_on(&n.id)),
             None => NodeExecution::new(
                 n.id.clone(),
                 ExecutionStatus::Skipped,
@@ -312,7 +674,7 @@ fn outcomes(
         })
         .map(|r| r.unique_id.clone())
         .collect();
-    (nodes, checks_failed, unrequested)
+    (nodes, checks.failed, unrequested)
 }
 
 impl Provider for DbtExecutor {
@@ -324,6 +686,8 @@ impl Provider for DbtExecutor {
 #[async_trait]
 impl Executor for DbtExecutor {
     async fn prepare(&self, request: &PrepareRequest) -> Result<PrepareReport, ProviderError> {
+        // Up front, so the reason isn't lost in whatever dbt makes of it.
+        self.refuse_env()?;
         // Freshness first: every dbt command rewrites `manifest.json`, and only
         // `compile`'s carries the compiled SQL fingerprints need.
         let mut warnings = Vec::new();
@@ -333,6 +697,7 @@ impl Executor for DbtExecutor {
             let before = sources_invocation_of(&sources);
             let mut args = vec!["source".to_owned(), "freshness".to_owned()];
             args.extend(self.common_args());
+            self.step(DbtStep::SourceFreshness);
             let (ok, _) = self.invoke(&args).await?;
             let after = sources_invocation_of(&sources);
             // A file from an earlier invocation says nothing about the data now.
@@ -350,6 +715,7 @@ impl Executor for DbtExecutor {
         }
         let mut args = vec!["compile".to_owned()];
         args.extend(self.common_args());
+        self.step(DbtStep::Compile);
         let (ok, tail) = self.invoke(&args).await?;
         if !ok {
             return Err(Self::failure(
@@ -377,8 +743,18 @@ impl Executor for DbtExecutor {
         let selectors = crate::selection::exact_selectors(&manifest, &ids).map_err(|why| {
             ProviderError::Other(format!("can't select exactly the planned nodes: {why}"))
         })?;
-        let mut args = vec!["build".to_owned(), "--select".to_owned()];
+        refuse_engine_args(&request.engine_args)?;
+        self.refuse_env()?;
+        let command = if request.mode == ExecutionMode::Test {
+            "test"
+        } else {
+            "build"
+        };
+        let mut args = vec![command.to_owned(), "--select".to_owned()];
         args.extend(selectors);
+        if request.full_refresh && request.mode != ExecutionMode::Test {
+            args.push("--full-refresh".to_owned());
+        }
         if request.mode == ExecutionMode::Run {
             args.extend(
                 [
@@ -391,9 +767,20 @@ impl Executor for DbtExecutor {
             );
         }
         args.extend(self.common_args());
+        args.extend(request.engine_args.iter().cloned());
         let command = self.display(&args);
         let results_path = self.artifact("run_results.json");
         let before = invocation_of(&results_path);
+        self.step(if request.mode == ExecutionMode::Test {
+            DbtStep::Test {
+                nodes: request.nodes.len(),
+            }
+        } else {
+            DbtStep::Build {
+                nodes: request.nodes.len(),
+                tests: request.mode == ExecutionMode::Build,
+            }
+        });
         let (ok, tail) = self.invoke(&args).await?;
         let run = match RunResults::read(&results_path) {
             Ok(run) if run.invocation_id.is_some() && run.invocation_id != before => run,
@@ -423,5 +810,61 @@ impl Executor for DbtExecutor {
         .with_unrequested(unrequested)
         .with_command(command);
         Ok(if ok { report } else { report.failed() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(args: &[&str]) -> bool {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        refuse_engine_args(&args).is_err()
+    }
+
+    #[test]
+    fn only_known_harmless_engine_args_are_passed_through() {
+        for args in [
+            &["--select", "x"][..],
+            &["--select=x"],
+            &["-s", "x"],
+            &["-sx"],
+            &["-m", "x"],
+            &["--model", "x"],
+            &["--target", "prod"],
+            &["-tprod"],
+            &["-f"],
+            &["-xf"],
+            &["--vars", "{a: 1}"],
+            &["--no-write-json"],
+            &["--sample=3 days"],
+            &["--event-time-start", "2024-01-01"],
+            &["--indirect-selection=empty"],
+            &["--project-dir", "elsewhere"],
+            &["--profile", "other"],
+            &["--defer-state", "prod"],
+            &["--fail-fast=x"],
+            &["--threads"],
+            &["orders"],
+            &["-"],
+        ] {
+            assert!(refused(args), "{args:?}");
+        }
+        for args in [
+            &["--threads", "4"][..],
+            &["--threads=4"],
+            &["-x"],
+            &["-xq"],
+            &["--fail-fast"],
+            &["--debug"],
+            &["--store-failures"],
+            &["--log-level", "debug", "--no-use-colors"],
+        ] {
+            assert!(!refused(args), "{args:?}");
+        }
+        let named =
+            |args: &[&str]| refused_args(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+        assert_eq!(named(&["--select", "x", "--threads", "2"]), ["--select"]);
+        assert_eq!(named(&["-s", "x"]), ["-s", "x"]);
     }
 }

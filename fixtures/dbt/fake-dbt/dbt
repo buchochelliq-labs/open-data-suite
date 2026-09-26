@@ -8,9 +8,11 @@ the way dbt would. Environment:
   FAKE_DBT_BASE  directory with the base manifest.json [default: ../jaffle-ods/artifacts/dbt-1.10-build]
   FAKE_DBT_FAIL  comma-separated node names that fail to build
   FAKE_DBT_FAIL_TEST  comma-separated test names that fail
+  FAKE_DBT_SKIP_TEST  comma-separated test names reported as skipped (as after --fail-fast)
   FAKE_DBT_LOG   file to append the ids of built nodes to, one per line
   FAKE_DBT_EXIT  exit with this status after writing nothing (e.g. a connection failure)
   FAKE_DBT_KEEP_MANIFEST  `build` leaves manifest.json alone (as if another command wrote it)
+  FAKE_DBT_NO_TESTS  `test` runs no tests and succeeds (as with `--indirect-selection empty`)
 """
 
 import datetime
@@ -121,6 +123,8 @@ def main():
         return int(os.environ["FAKE_DBT_EXIT"])
     target = (options.get("target-path") or ["target"])[0]
     invocation, started = str(uuid.uuid4()), now()
+    # Like dbt, it logs to stdout as it runs.
+    print(f"fake dbt: {' '.join(words)}", flush=True)
     with open(os.path.join(BASE, "manifest.json")) as f:
         manifest = json.load(f)
     manifest["metadata"]["invocation_id"] = invocation
@@ -143,7 +147,7 @@ def main():
                "results": [], "elapsed_time": 0, "args": {"which": "compile"}}
         write(os.path.join(target, "run_results.json"), doc)
         return 0
-    if words[:1] != ["build"]:
+    if words[:1] not in (["build"], ["test"]):
         print(f"fake dbt: unsupported command {words}", file=sys.stderr)
         return 2
 
@@ -152,7 +156,26 @@ def main():
     chosen = [i for i, n in nodes.items()
               if n["resource_type"] in STATE and any(selects(t, n) for t in options.get("select", []))]
     fail, fail_tests = names("FAKE_DBT_FAIL"), names("FAKE_DBT_FAIL_TEST")
+    skip_tests = names("FAKE_DBT_SKIP_TEST")
+
+    def test_status(test):
+        if test["name"] in skip_tests:
+            return "skipped"
+        return "fail" if test["name"] in fail_tests else "pass"
+
     outcome, results = {}, []
+    if words[:1] == ["test"]:
+        # Tests of the selected nodes (eager indirect selection); nothing is built.
+        for test_id, test in nodes.items():
+            deps = test.get("depends_on", {}).get("nodes", [])
+            if os.environ.get("FAKE_DBT_NO_TESTS"):
+                break
+            if test["resource_type"] == "test" and any(d in chosen for d in deps):
+                results.append(result(test_id, test_status(test), started))
+        doc = {"metadata": metadata("run-results", 6, invocation, started),
+               "results": results, "elapsed_time": 0, "args": {"which": "test"}}
+        write(os.path.join(target, "run_results.json"), doc)
+        return 1 if any(r["status"] == "fail" for r in results) else 0
     # Parents first, as dbt runs them.
     pending = list(chosen)
     while pending:
@@ -179,7 +202,7 @@ def main():
             deps = test.get("depends_on", {}).get("nodes", [])
             if test["resource_type"] == "test" and deps and all(d in outcome for d in deps):
                 ok = all(outcome[d] == "success" for d in deps)
-                status = "skipped" if not ok else ("fail" if test["name"] in fail_tests else "pass")
+                status = test_status(test) if ok else "skipped"
                 results.append(result(test_id, status, started))
     if os.environ.get("FAKE_DBT_LOG"):
         with open(os.environ["FAKE_DBT_LOG"], "a") as f:

@@ -97,6 +97,27 @@ graph LR
   - A newer database is refused, not guessed at.
   - WAL mode lets readers run during a commit.
 
+### Tested builds (#220)
+- `NodeState.tested` (optional, absent in older snapshots) records the run whose checks
+  last passed on the node's current build. A build with its tests passing sets it. A
+  build without tests leaves it unset. A test-only run sets it on success and clears it
+  on failure. It never changes a node's build, and the planner doesn't use it: failing
+  tests don't force a rebuild, they make `ods state test` pick the node up again.
+- It also records `checks`, a digest of the node's checks (for dbt: every data test
+  and unit test that reads it, with their definitions: arguments, SQL, config and
+  the project and package macros they call; dbt's and the adapter's own macros are
+  covered by the dbt version and adapter, since dbt lists different ones depending on
+  the command that wrote the manifest). A build counts as tested only against the checks it has now: adding,
+  removing or editing one makes it untested. Records without a digest (written before
+  it existed) don't count. A node with no checks is never tested: nothing vouches for
+  it, and `ods state test` has nothing to run for it.
+- A build of the node that ran and failed (or whose tests failed) clears it on the
+  kept state: the warehouse may hold that newer build, which nothing has validated.
+- A test-only run checks what is in the warehouse now, with the tests as they are now.
+  ODS can't tell whether the relation still holds the recorded build (someone else may
+  have rebuilt it), so "tested" means "the relation passed these checks after this
+  build was recorded", not a proof about the recorded build's exact rows.
+
 ### Fingerprints (#13)
 - A fingerprint is a map from component name to SHA-256 digest, plus a digest of
   `name\0digest\n` over the sorted components. It is canonical and reproducible, and a

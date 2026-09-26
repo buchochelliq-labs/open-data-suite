@@ -25,6 +25,12 @@ pub trait ExecutorHarness: Send + Sync {
     /// The ids of the nodes built since the last [`executor`](Self::executor) call, or
     /// `None` if the harness can't observe builds (which skips those checks).
     async fn built(&self) -> Option<Vec<String>>;
+
+    /// A buildable node with checks that pass, and one without checks, if the harness
+    /// can arrange them; `None` skips the case that needs them.
+    fn checked_and_unchecked(&self) -> Option<(RequestedNode, RequestedNode)> {
+        None
+    }
 }
 
 fn ids(nodes: &[RequestedNode]) -> Vec<String> {
@@ -178,6 +184,59 @@ async fn prepare_builds_nothing(harness: &dyn ExecutorHarness) {
     assert_built(harness, case, &[]).await;
 }
 
+async fn a_test_run_builds_nothing(harness: &dyn ExecutorHarness) {
+    let case = "a_test_run_builds_nothing";
+    let executor = harness.executor().await;
+    let nodes = harness.buildable();
+    let report = executor
+        .execute(&ExecutionRequest::new(nodes.clone(), ExecutionMode::Test))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let reported: Vec<String> = report.nodes.iter().map(|n| n.node.clone()).collect();
+    assert_eq!(
+        reported,
+        ids(&nodes),
+        "{case}: every node reported once, in order"
+    );
+    assert_built(harness, case, &[]).await;
+}
+
+/// Only checks that ran and passed vouch for a node: a test run of a node without
+/// checks doesn't fully check it (#220).
+async fn only_checks_that_ran_vouch_for_a_node(
+    harness: &dyn ExecutorHarness,
+    checked: RequestedNode,
+    unchecked: RequestedNode,
+) {
+    let case = "only_checks_that_ran_vouch_for_a_node";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(&ExecutionRequest::new(
+            vec![checked.clone(), unchecked.clone()],
+            ExecutionMode::Test,
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let of = |id: &str| {
+        report
+            .nodes
+            .iter()
+            .find(|n| n.node == id)
+            .unwrap_or_else(|| panic!("{case}: {id} not reported"))
+    };
+    let checked = of(&checked.id);
+    assert!(
+        checked.fully_checked() && !checked.checks_passed.is_empty(),
+        "{case}: a node whose checks passed is fully checked and lists them: {checked:?}"
+    );
+    let unchecked = of(&unchecked.id);
+    assert!(
+        !unchecked.fully_checked() && unchecked.status != ExecutionStatus::Success,
+        "{case}: a node without checks isn't tested: {unchecked:?}"
+    );
+    assert_built(harness, case, &[]).await;
+}
+
 /// Runs every case. Panics with the case name on the first failure.
 pub async fn run(harness: &dyn ExecutorHarness) -> Report {
     let mut report = Report::default();
@@ -205,5 +264,17 @@ pub async fn run(harness: &dyn ExecutorHarness) -> Report {
     report.passed.push("run_ids_are_unique");
     prepare_builds_nothing(harness).await;
     report.passed.push("prepare_builds_nothing");
+    a_test_run_builds_nothing(harness).await;
+    report.passed.push("a_test_run_builds_nothing");
+    match harness.checked_and_unchecked() {
+        Some((checked, unchecked)) => {
+            only_checks_that_ran_vouch_for_a_node(harness, checked, unchecked).await;
+            report.passed.push("only_checks_that_ran_vouch_for_a_node");
+        }
+        None => report.skipped.push((
+            "only_checks_that_ran_vouch_for_a_node",
+            "the harness can't arrange a node with checks and one without".to_owned(),
+        )),
+    }
     report
 }

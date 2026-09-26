@@ -75,6 +75,13 @@ impl ExecutorHarness for Harness {
         ))
     }
 
+    fn checked_and_unchecked(&self) -> Option<(RequestedNode, RequestedNode)> {
+        Some((
+            RequestedNode::new("model.jaffle_ods.customers", "customers"),
+            RequestedNode::new("seed.jaffle_ods.raw_orders", "raw_orders"),
+        ))
+    }
+
     async fn built(&self) -> Option<Vec<String>> {
         let dir = self
             .dir
@@ -90,7 +97,7 @@ impl ExecutorHarness for Harness {
 async fn conforms() {
     let report = run(&Harness::default()).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 7, "{report:?}");
+    assert_eq!(report.passed.len(), 9, "{report:?}");
 }
 
 #[tokio::test]

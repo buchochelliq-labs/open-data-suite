@@ -84,7 +84,8 @@ setting it inside a profile or through `ODS__DEFAULT_PROFILE` could never take e
 it is an error.
 
 Logging keeps ADR-0004's order and slots the configured level below the flags:
-`ODS_LOG`, then `-v`/`-q`, then `log.level`, then `warn`.
+`--log-level` (added in #220), then `ODS_LOG`, then `-v`/`-q`, then `log.level`, then
+`warn`.
 
 ### 3. Schema
 The typed schema lives in `ods-config` (a foundation crate, per ADR-0001):

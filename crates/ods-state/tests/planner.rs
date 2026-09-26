@@ -597,3 +597,134 @@ fn a_new_fingerprint_scheme_rebuilds_once_and_says_why() {
     let why = &messages(&upgraded, &state)["stg_orders"];
     assert!(why.contains("fingerprints code differently"), "{why}");
 }
+
+#[test]
+fn a_build_with_passing_tests_is_tested_and_a_test_run_marks_the_rest() {
+    use ods_state::{TestResult, record_tests};
+    // Every node has checks except `lonely`.
+    let mut p = project();
+    for n in &mut p.nodes {
+        if n.name != "lonely" {
+            n.checks = Some(format!("checks-{}", n.name));
+        }
+    }
+    let results: Vec<RunResult> = p
+        .nodes
+        .iter()
+        .map(|n| {
+            let r = RunResult::new(&n.id, Outcome::Success, Some(Timestamp::from_unix(T0)));
+            if matches!(n.name.as_str(), "orders" | "lonely") {
+                r.tested()
+            } else {
+                r
+            }
+        })
+        .collect();
+    let built = record(&p, None, &results, "run-1", Timestamp::from_unix(T0), true).snapshot;
+    let tested = |p: &Project, s: &StateSnapshot, name: &str| {
+        let id = format!("model.p.{name}");
+        let node = p.nodes.iter().find(|n| n.id == id).unwrap();
+        node.is_tested(&s.nodes[&id])
+    };
+    assert!(tested(&p, &built, "orders"));
+    assert!(!tested(&p, &built, "report"), "built without its tests");
+    assert!(
+        !tested(&p, &built, "lonely"),
+        "no checks: nothing vouches for it"
+    );
+
+    let recorded = record_tests(
+        &p,
+        (SnapshotId(1), &built),
+        &[
+            TestResult::new("model.p.report", true, None),
+            TestResult::new("model.p.stg_orders", false, None),
+            TestResult::new("model.p.lonely", true, None),
+            TestResult::new("model.p.nope", true, None),
+        ],
+        "test-1",
+        Timestamp::from_unix(T0 + 10),
+    );
+    assert_eq!(recorded.passed, ["model.p.report"]);
+    assert_eq!(recorded.failed, ["model.p.stg_orders"]);
+    assert_eq!(recorded.ignored, ["model.p.lonely", "model.p.nope"]);
+    let after = &recorded.snapshot;
+    assert!(tested(&p, after, "report"));
+    assert!(!tested(&p, after, "stg_orders"));
+    assert!(!tested(&p, after, "lonely"));
+    // A test run builds nothing: builds are unchanged, so nothing is replanned.
+    assert_eq!(after.nodes["model.p.report"].run_id, "run-1");
+    for (name, decision) in actions(&p, Some(after), T0 + 60) {
+        assert_eq!(decision, reuse(ReasonCode::Unchanged), "{name}");
+    }
+
+    // Changing a node's checks makes its build untested again (M2).
+    let mut changed = p.clone();
+    changed
+        .nodes
+        .iter_mut()
+        .find(|n| n.name == "report")
+        .unwrap()
+        .checks = Some("checks-report-v2".to_owned());
+    assert!(!tested(&changed, after, "report"));
+    // Records from before checks were fingerprinted don't count.
+    let mut old = after.clone();
+    old.nodes
+        .get_mut("model.p.report")
+        .unwrap()
+        .tested
+        .as_mut()
+        .unwrap()
+        .checks = None;
+    assert!(!tested(&p, &old, "report"));
+}
+
+#[test]
+fn a_failed_build_clears_the_tested_mark_it_kept() {
+    let mut p = project();
+    for n in &mut p.nodes {
+        n.checks = Some("checks".to_owned());
+    }
+    let all = |outcome, tested: bool| -> Vec<RunResult> {
+        p.nodes
+            .iter()
+            .map(|n| {
+                let r = RunResult::new(&n.id, outcome, Some(Timestamp::from_unix(T0)));
+                if tested { r.tested() } else { r }
+            })
+            .collect()
+    };
+    let first = record(
+        &p,
+        None,
+        &all(Outcome::Success, true),
+        "run-1",
+        Timestamp::from_unix(T0),
+        true,
+    )
+    .snapshot;
+    assert!(first.nodes["model.p.orders"].tested.is_some());
+    // Its build ran again but failed (or its tests did): the kept build may be gone.
+    let failed = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &all(Outcome::Failed, false),
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert_eq!(failed.nodes["model.p.orders"].run_id, "run-1");
+    assert!(failed.nodes["model.p.orders"].tested.is_none());
+    // Skipped: nothing ran, so nothing changed.
+    let skipped = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &all(Outcome::Skipped, false),
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert!(skipped.nodes["model.p.orders"].tested.is_some());
+}

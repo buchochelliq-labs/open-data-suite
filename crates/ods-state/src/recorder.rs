@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ods_core::state::{DataVersion, NodeState, SnapshotId, StateSnapshot, Timestamp};
+use ods_core::state::{DataVersion, NodeState, SnapshotId, StateSnapshot, TestRecord, Timestamp};
 use serde::Serialize;
 
 use crate::Project;
@@ -30,6 +30,9 @@ pub struct RunResult {
     pub outcome: Outcome,
     /// When it finished, if known.
     pub completed_at: Option<Timestamp>,
+    /// Whether its checks ran with it and all passed (e.g. `dbt build`). A build that
+    /// ran without checks leaves the node untested.
+    pub tested: bool,
 }
 
 impl RunResult {
@@ -39,7 +42,15 @@ impl RunResult {
             node: node.into(),
             outcome,
             completed_at,
+            tested: false,
         }
+    }
+
+    /// Marks a successful build whose checks ran and passed.
+    #[must_use]
+    pub fn tested(mut self) -> Self {
+        self.tested = true;
+        self
     }
 }
 
@@ -122,6 +133,14 @@ pub fn record(
                     run_id,
                     inputs,
                 );
+                // Tested only against the checks it has now; with none, nothing is.
+                if let (true, Some(checks)) = (result.tested, &node.checks) {
+                    state.tested = Some(TestRecord::new(
+                        run_id,
+                        result.completed_at.unwrap_or(finished_at),
+                        checks.clone(),
+                    ));
+                }
                 state.parents = node
                     .parents
                     .iter()
@@ -132,6 +151,10 @@ pub fn record(
                 advanced.insert(node.id.clone());
             }
             (Outcome::Success, Err(why)) => {
+                // It was rebuilt, so the kept state's checks no longer vouch for it.
+                if let Some(state) = nodes.get_mut(&node.id) {
+                    state.tested = None;
+                }
                 kept.insert(
                     node.id.clone(),
                     format!("succeeded, but its code can't be fingerprinted: {why}"),
@@ -142,6 +165,13 @@ pub fn record(
                     Outcome::Failed => "failed",
                     _ => "was skipped",
                 };
+                // A failed build (or one whose checks failed) may have replaced what
+                // the kept state describes, so its checks no longer vouch for anything.
+                if outcome == Outcome::Failed
+                    && let Some(state) = nodes.get_mut(&node.id)
+                {
+                    state.tested = None;
+                }
                 kept.insert(
                     node.id.clone(),
                     format!("{word}; its last successful state is kept"),
@@ -154,5 +184,102 @@ pub fn record(
         advanced: advanced.into_iter().collect(),
         kept,
         ignored: ignored.into_iter().collect(),
+    }
+}
+
+/// One node's checks in a test-only run (#220).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TestResult {
+    /// Node id.
+    pub node: String,
+    /// Whether all its checks passed.
+    pub passed: bool,
+    /// When they finished, if known.
+    pub completed_at: Option<Timestamp>,
+}
+
+impl TestResult {
+    /// A result.
+    pub fn new(node: impl Into<String>, passed: bool, completed_at: Option<Timestamp>) -> Self {
+        Self {
+            node: node.into(),
+            passed,
+            completed_at,
+        }
+    }
+}
+
+/// What a test-only run changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct RecordedTests {
+    /// The snapshot to commit.
+    #[serde(skip)]
+    pub snapshot: StateSnapshot,
+    /// Nodes whose checks passed on their current build.
+    pub passed: Vec<String>,
+    /// Nodes whose checks failed: they are untested until they pass.
+    pub failed: Vec<String>,
+    /// Results for nodes ODS has no build of, or whose checks it can't identify,
+    /// ignored: they stay untested.
+    pub ignored: Vec<String>,
+}
+
+/// The snapshot after a test-only run: nodes whose checks passed are marked tested,
+/// nodes whose checks failed are marked untested. Builds are unchanged (a test run
+/// builds nothing).
+pub fn record_tests(
+    project: &Project,
+    previous: (SnapshotId, &StateSnapshot),
+    results: &[TestResult],
+    run_id: &str,
+    finished_at: Timestamp,
+) -> RecordedTests {
+    let (id, snapshot) = previous;
+    let mut nodes = snapshot.nodes.clone();
+    let checks: BTreeMap<&str, Option<&str>> = project
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.checks.as_deref()))
+        .collect();
+    let (mut passed, mut failed, mut ignored) = (Vec::new(), Vec::new(), Vec::new());
+    for result in results {
+        let (Some(state), Some(node_checks)) = (
+            nodes.get_mut(&result.node),
+            checks.get(result.node.as_str()),
+        ) else {
+            ignored.push(result.node.clone());
+            continue;
+        };
+        match (result.passed, node_checks) {
+            (true, Some(c)) => {
+                state.tested = Some(TestRecord::new(
+                    run_id,
+                    result.completed_at.unwrap_or(finished_at),
+                    *c,
+                ));
+                passed.push(result.node.clone());
+            }
+            // Nothing identifies the checks that passed: they vouch for nothing.
+            (true, None) => {
+                state.tested = None;
+                ignored.push(result.node.clone());
+            }
+            (false, _) => {
+                state.tested = None;
+                failed.push(result.node.clone());
+            }
+        }
+    }
+    passed.sort();
+    failed.sort();
+    ignored.sort();
+    RecordedTests {
+        snapshot: StateSnapshot::new(Some(id), finished_at, run_id, nodes),
+        passed,
+        failed,
+        ignored,
     }
 }
