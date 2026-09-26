@@ -90,4 +90,5 @@ nav:
       - adr/0013-state-snapshots-fingerprints-and-store.md
       - adr/0014-executor-contract-and-state-run.md
       - adr/0015-cli-compatibility-front-ends.md
+      - adr/0016-relation-existence-before-reuse.md
   - Legal and trademarks: legal.md
