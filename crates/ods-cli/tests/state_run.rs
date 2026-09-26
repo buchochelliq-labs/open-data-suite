@@ -382,6 +382,13 @@ fn dbt_output_streams_to_stderr() {
         again.contains("ods ▸ nothing to build, so dbt doesn't run again"),
         "{again}"
     );
+    // With state, what would be reused is checked first, in one dbt call (#230).
+    assert!(
+        again.contains(
+            "ods ▸ 3/4 dbt show: are the tables of 13 nodes ODS would reuse still there?"
+        ),
+        "{again}"
+    );
     let (_, _, quiet) = project.ods_with_stderr(&[
         "-q",
         "state",
@@ -779,6 +786,122 @@ fn a_run_that_cant_be_recorded_still_reports_what_dbt_did() {
     assert!(project.history().is_empty());
 }
 
+fn entry<'v>(result: &'v Value, name: &str) -> &'v Value {
+    result["plan"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == name)
+        .unwrap_or_else(|| panic!("{name} isn't planned: {result:#}"))
+}
+
+/// #230: a node whose table was dropped isn't reused, however unchanged it is; one dbt
+/// call checks every node that would be.
+#[test]
+fn a_dropped_relation_is_rebuilt_with_its_reason() {
+    let project = Project::new("dropped");
+    let dropped = project.dir.join("dropped");
+    let calls = project.dir.join("calls");
+    let project = project
+        .with("FAKE_DBT_DROPPED", dropped.to_str().unwrap())
+        .with("FAKE_DBT_CALLS", calls.to_str().unwrap());
+    project.run_ok(&[]);
+    let calls_made = || std::fs::read_to_string(&calls).unwrap_or_default();
+    // Nothing to reuse on a first run, so nothing to check.
+    assert!(!calls_made().contains("show"), "{}", calls_made());
+
+    std::fs::write(&dropped, "model.jaffle_ods.stg_payments\n").unwrap();
+    std::fs::remove_file(&calls).unwrap();
+    let planned = project.run_ok(&["--dry-run"]);
+    assert_eq!(calls_made().matches("show").count(), 1, "{}", calls_made());
+    let payments = entry(&planned, "stg_payments");
+    assert_eq!(payments["action"], "build");
+    assert_eq!(payments["reasons"][0]["code"], "relation_missing");
+    assert_eq!(
+        payments["reasons"][0]["message"],
+        "its table isn't in the warehouse"
+    );
+    let evidence = payments["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "relation_exists")
+        .unwrap();
+    assert_eq!(evidence["value"], "missing");
+    assert_eq!(evidence["exactness"], "exact");
+    // What still exists is reused, and says it was checked.
+    let raw = entry(&planned, "raw_orders");
+    assert_eq!(raw["action"], "reuse");
+    assert!(
+        raw["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "relation_exists" && e["exactness"] == "exact"),
+        "{raw:#}"
+    );
+    // Its readers see new data, as after any rebuild.
+    assert_eq!(
+        entry(&planned, "orders")["reasons"][0]["code"],
+        "new_upstream_data"
+    );
+
+    let built = project.run_ok(&[]);
+    let nodes = names(&built["execution"]["nodes"]);
+    assert!(nodes.contains(&"stg_payments".to_owned()), "{nodes:?}");
+    assert!(!nodes.contains(&"stg_orders".to_owned()), "{nodes:?}");
+    // Built again, it is back: nothing more to do.
+    assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
+}
+
+/// A full refresh depends on the selection: a reader of a node it would rebuild is
+/// still reused when that node isn't selected, so it is checked like any other.
+#[test]
+fn a_full_refresh_selection_still_checks_what_it_reuses() {
+    let project = Project::new("dropped-full-refresh");
+    let dropped = project.dir.join("dropped");
+    let project = project.with("FAKE_DBT_DROPPED", dropped.to_str().unwrap());
+    project.set_config("model.jaffle_ods.orders", "materialized", "incremental");
+    project.run_ok(&[]);
+    std::fs::write(&dropped, "model.jaffle_ods.customer_order_rank\n").unwrap();
+    let planned = project.run_ok(&["--dry-run", "--full-refresh", "-s", "customer_order_rank"]);
+    let rank = entry(&planned, "customer_order_rank");
+    assert_eq!(rank["action"], "build", "{rank:#}");
+    assert_eq!(rank["reasons"][0]["code"], "relation_missing", "{rank:#}");
+}
+
+/// If the warehouse can't be asked, nothing is reused on trust: every candidate is
+/// built, and the run says why.
+#[test]
+fn when_the_relation_check_fails_candidates_are_built() {
+    let project = Project::new("check-fails");
+    project.run_ok(&[]);
+    let project = project.with("FAKE_DBT_SHOW_FAIL", "1");
+    let (code, json, stderr) = project.ods_with_stderr(&[
+        "state",
+        "build",
+        "--dry-run",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["build"], 13);
+    assert_eq!(
+        entry(result, "raw_orders")["reasons"][0]["code"],
+        "relation_unverified"
+    );
+    let warnings = result["warnings"].to_string();
+    assert!(
+        warnings.contains("couldn't check that the tables"),
+        "{warnings}"
+    );
+    assert!(
+        stderr.contains("couldn't check the warehouse: "),
+        "the plan groups them: {stderr}"
+    );
+}
+
 #[test]
 fn a_dry_run_changes_nothing() {
     let project = Project::new("dry");
@@ -1024,4 +1147,70 @@ fn copy(from: &Path, to: &Path) {
     } else {
         std::fs::copy(from, to).unwrap();
     }
+}
+
+/// #230 against real dbt and `DuckDB`: a table and a view dropped behind ODS's back
+/// are rebuilt, with the reason, and nothing that is still there. Both are leaves:
+/// `DuckDB` can't replace a table a view reads, with or without ODS.
+#[test]
+fn real_dbt_rebuilds_a_dropped_table() {
+    let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
+        eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
+        return;
+    };
+    let dbt = dbt.to_str().unwrap().to_owned();
+    let project = real_project();
+    // Only this copy of the project has it; written before the first run, so it is
+    // part of the code every run sees.
+    std::fs::write(
+        project.dir.join("macros/ods_test_drop.sql"),
+        "{% macro ods_test_drop(kind, name) %}\
+         {% do run_query('drop ' ~ kind ~ ' ' ~ name) %}\
+         {% endmacro %}\n",
+    )
+    .unwrap();
+    for command in ["seed", "run"] {
+        let (code, json) = real_cmd(&project, &dbt, command, &[]);
+        assert_eq!(code, 0, "{command}: {json:#}");
+    }
+    let dropped = ["customers_snapshot_view", "segment_summary"];
+    for (kind, name) in [("view", dropped[0]), ("table", dropped[1])] {
+        let out = Command::new(&dbt)
+            .args([
+                "run-operation",
+                "ods_test_drop",
+                "--args",
+                &format!("{{kind: {kind}, name: {name}}}"),
+                "--profiles-dir",
+                ".",
+            ])
+            .env("DBT_SEND_ANONYMOUS_USAGE_STATS", "false")
+            .current_dir(&project.dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+    let (code, json) = real_cmd(
+        &project,
+        &dbt,
+        "build",
+        &["--exclude-resource-type", "test"],
+    );
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    for name in dropped {
+        assert_eq!(
+            entry(result, name)["reasons"][0]["code"],
+            "relation_missing",
+            "{name}"
+        );
+    }
+    assert_eq!(names(&result["execution"]["nodes"]), dropped);
+    let (code, again) = real_cmd(&project, &dbt, "run", &[]);
+    assert_eq!(code, 0, "{again:#}");
+    assert_eq!(again["result"]["outcome"], "nothing_to_build", "{again:#}");
 }

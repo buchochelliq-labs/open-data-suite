@@ -3,7 +3,9 @@
 //!
 //! 1. Prepare: compile, so fingerprints describe the code that would run, and measure
 //!    sources (`--no-compile`, `--no-source-freshness` skip these).
-//! 2. Plan against the latest state, as `ods state plan` does.
+//! 2. Plan against the latest state, as `ods state plan` does, after checking that
+//!    the nodes it would reuse are still in the warehouse (#230): one query for all of
+//!    them, and a node that isn't there, or can't be shown to be, is built.
 //! 3. Execute the BUILD set, and nothing else, unless `--dry-run` or there is nothing
 //!    to build.
 //! 4. Record: re-read the artifacts the run wrote and commit a snapshot in which only
@@ -21,6 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, SnapshotId, Timestamp};
+use ods_core::{Capability, Strategy, choose};
 use ods_provider_dbt::RunResults;
 use ods_provider_dbt::executor::{DbtExecutor, DbtOutput, DbtStep};
 use ods_sdk::ProviderError;
@@ -28,8 +31,9 @@ use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, PrepareReport,
     PrepareRequest, RequestedNode,
 };
+use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::state_store::{StateStore, StoredSnapshot};
-use ods_state::{Outcome, Recorded, RunResult};
+use ods_state::{Outcome, Recorded, RelationFact, RunResult};
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
@@ -386,6 +390,10 @@ impl Steps {
                 }
             ),
             DbtStep::Test { nodes } => format!("dbt test: the tests of {}", count(nodes, "node")),
+            DbtStep::RelationCheck { nodes } => format!(
+                "dbt show: are the tables of {} ODS would reuse still there?",
+                count(nodes, "node")
+            ),
             _ => "dbt".to_owned(),
         };
         self.line(Some(n), &text);
@@ -464,6 +472,8 @@ fn reason_label(code: ReasonCode) -> &'static str {
         ReasonCode::UnknownDependency => "depends on something ODS can't see",
         ReasonCode::PolicyBlocksReuse => "its policy never reuses it",
         ReasonCode::FullRefreshRequested => "full refresh requested",
+        ReasonCode::RelationMissing => "not in the warehouse",
+        ReasonCode::RelationUnverified => "couldn't check the warehouse",
         _ => "other",
     }
 }
@@ -543,6 +553,100 @@ fn plan_options(args: &ArgMatches) -> ods_state::PlanOptions {
     } else {
         options
     }
+}
+
+/// How many dbt commands a run will make if it builds.
+fn step_count(args: &ArgMatches, builds: bool) -> usize {
+    let compiles = !args.get_flag("no-compile");
+    let measures = compiles && !args.get_flag("no-source-freshness");
+    // Whether there is state, and so reuse to check: a guess made before anything
+    // runs, for the count only.
+    let checks = args
+        .get_one::<String>("state-db")
+        .is_some_and(|db| Path::new(db).is_file());
+    [measures, compiles, checks, builds]
+        .into_iter()
+        .map(usize::from)
+        .sum()
+}
+
+/// Checks that the nodes the plan would reuse are still in the warehouse, and records
+/// the answers on them, so the plan builds the ones that aren't (#230). One query for
+/// all of them; none when there is nothing to reuse. If the check fails, they are all
+/// built: missing evidence never means reuse (AGENTS.md rule 3). Returns `options`
+/// for the plan, saying whether relations were checked, so it builds any node that
+/// wasn't.
+fn check_relations<I: RelationInspector + ?Sized>(
+    project: &mut ods_state::Project,
+    latest: Option<&StoredSnapshot>,
+    inspector: &I,
+    now: Timestamp,
+    options: ods_state::PlanOptions,
+    warnings: &mut Vec<String>,
+) -> Result<ods_state::PlanOptions, CliError> {
+    let strategies = [
+        Strategy::new("warehouse_check", [Capability::RelationExistence], true),
+        Strategy::fallback("trust_recorded_build", false),
+    ];
+    let choice = choose(&inspector.info().capabilities, &strategies)
+        .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    if !choice.chosen.value {
+        // Reuse then says in its evidence that nothing checked the relation.
+        warnings.push(
+            "the executor can't check that reused tables are still in the warehouse: reuse trusts the last recorded build"
+                .to_owned(),
+        );
+        return Ok(options);
+    }
+    let candidates =
+        ods_state::reuse_candidates(project, latest.map(|s| (s.id, &s.snapshot)), now, options)
+            .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    if candidates.is_empty() {
+        return Ok(options);
+    }
+    let names: BTreeMap<&str, &str> = project
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.name.as_str()))
+        .collect();
+    let requested: Vec<RequestedNode> = candidates
+        .iter()
+        .map(|id| RequestedNode::new(id.clone(), names.get(id.as_str()).copied().unwrap_or(id)))
+        .collect();
+    let mut facts: BTreeMap<String, RelationFact> = BTreeMap::new();
+    match block_on(inspector.inspect(&requested))? {
+        Ok(report) => {
+            for (id, presence) in report.nodes {
+                let fact = match presence {
+                    RelationPresence::Present { kind } => RelationFact::Present(kind),
+                    RelationPresence::Missing => RelationFact::Missing,
+                    RelationPresence::Unknown(why) => RelationFact::Unverified(why),
+                    _ => RelationFact::Unverified("an answer ODS doesn't understand".to_owned()),
+                };
+                // Two answers for one node: trust neither.
+                if facts.insert(id.clone(), fact).is_some() {
+                    facts.insert(
+                        id,
+                        RelationFact::Unverified("the check answered twice".to_owned()),
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            warnings.push(format!(
+                "couldn't check that the tables of the nodes ODS would reuse are still in the warehouse, so they are built: {e}"
+            ));
+        }
+    }
+    let candidates: BTreeSet<String> = candidates.into_iter().collect();
+    for node in &mut project.nodes {
+        if candidates.contains(&node.id) {
+            node.relation = facts.remove(&node.id).unwrap_or_else(|| {
+                RelationFact::Unverified("the relation check didn't report on it".to_owned())
+            });
+        }
+    }
+    Ok(options.relations_checked())
 }
 
 /// Each node's checks digest.
@@ -861,13 +965,8 @@ impl RunReport {
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        let compiles = !args.get_flag("no-compile");
-        let measures = compiles && !args.get_flag("no-source-freshness");
         let builds = kind != Kind::Compile;
-        let steps = Steps::new(
-            progress,
-            usize::from(measures) + usize::from(compiles) + usize::from(builds),
-        );
+        let steps = Steps::new(progress, step_count(args, builds));
         let executor = steps.attach(executor(args, &target_dir));
         let mut warnings = Vec::new();
 
@@ -876,7 +975,7 @@ impl RunReport {
         warnings.extend(vars_mismatch(args, &target_dir));
 
         // 2. Plan.
-        let ws = Workspace::load(args, sources)?;
+        let mut ws = Workspace::load(args, sources)?;
         let dry_run = !builds || args.get_flag("dry-run");
         let tested = execution_tested(kind, args);
         let store = if dry_run && !ws.state_db.is_file() {
@@ -888,13 +987,18 @@ impl RunReport {
             Some(store) => ws.latest(store)?,
             None => None,
         };
-        let (plan, plan_warnings) = plan_against(
-            &ws,
+        // One clock for the check and the plan, so they agree on what is due.
+        let now = Timestamp::now();
+        let options = check_relations(
+            &mut ws.project,
             latest.as_ref(),
-            &select_specs(args),
-            Timestamp::now(),
+            &executor,
+            now,
             plan_options(args),
+            &mut warnings,
         )?;
+        let (plan, plan_warnings) =
+            plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;
         warnings.extend(plan_warnings);
         let types = if builds {
             build_types(kind, args)

@@ -185,7 +185,8 @@ is what the caller needs to see which nodes failed.
     for commands whose partial result matters.
 - Follow-up issues:
   - Per-node leases (#28) so concurrent runs don't both build a node.
-  - Checking that reused relations still exist in the warehouse.
+  - Checking that reused relations still exist in the warehouse: done in
+    [ADR-0016](0016-relation-existence-before-reuse.md) (#230).
 
 ## References
 - #23, #24; [ADR-0006](0006-plugin-sdk-and-capabilities.md) (contracts, conformance);

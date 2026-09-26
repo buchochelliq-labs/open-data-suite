@@ -241,8 +241,11 @@ graph LR
 
 - Entries are ordered by DAG depth, then by id.
 - A cycle is an error, not a plan.
-- Every REUSE says that the relation's continued existence was not checked: this slice
-  has no warehouse connection, so that evidence has exactness `none`.
+- Every REUSE says whether the relation's continued existence was checked. `ods state
+  plan` has no warehouse connection, so there that evidence has exactness `none`.
+  *Amended by [ADR-0016](0016-relation-existence-before-reuse.md) (#230):* the commands
+  that run dbt check first. A missing relation is BUILT (`relation_missing`), and so is
+  one that couldn't be checked (`relation_unverified`).
 - The plan also gives the dbt command for the BUILD set:
   `dbt build --select <names>`.
 
@@ -271,7 +274,8 @@ graph LR
   - partial runs are safe by construction.
 - Negative / trade-offs:
   - Without warehouse metadata, reuse trusts that the last built relation still exists.
-    This is labelled in every REUSE and fixed by #15/#17.
+    This is labelled in every REUSE. ADR-0016 (#230) checks existence before reuse;
+    #17 will check that the content is unchanged.
   - Upstream code changes always propagate. Column-level pruning (the `ods lineage`
     impact engine) is a follow-up.
   - `sqlx` adds build time.

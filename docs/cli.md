@@ -496,12 +496,13 @@ each starting with dbt's usual `Running with dbt=…` banner:
   dbt starts each one with the same banner; the plan is summed up between them:
 
   ```text
-  ods ▸ 1/3 dbt source freshness: how new each source's data is
-  ods ▸ 2/3 dbt compile: the code as it is now, for the plan
+  ods ▸ 1/4 dbt source freshness: how new each source's data is
+  ods ▸ 2/4 dbt compile: the code as it is now, for the plan
+  ods ▸ 3/4 dbt show: are the tables of 5 nodes ODS would reuse still there?
   ods ▸ plan: 8 to build, 5 to reuse
   ods ▸   code changed: stg_orders
   ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, …
-  ods ▸ 3/3 dbt build: 8 nodes, without tests
+  ods ▸ 4/4 dbt build: 8 nodes, without tests
   ```
 
   What builds is grouped by its main reason, with long lists cut short; reused nodes
@@ -608,8 +609,15 @@ A node is **built** when (first match wins):
    data, or a parent was rebuilt by a run it didn't read), unless its `lag_tolerance`
    hasn't run out or `require_fresh_data_from: all` isn't met yet.
 
-Otherwise it is **reused**. Every reuse says so: ODS doesn't check yet that the relation
-it built still exists in the warehouse.
+Otherwise it is **reused**, as long as what it built is still in the warehouse (#230).
+Before planning, the commands that run dbt ask, in one `dbt show` query, whether the
+table or view of every node they would reuse still exists.
+- A node whose relation is gone is **built** (reason `not in the warehouse`), and its
+  readers see new data.
+- If the query fails (no access, a connection error), every node it would have
+  checked is built (reason `couldn't check the warehouse`), with a warning.
+- `ods state plan` doesn't run dbt, so it can't check. Its reuses say that the
+  relation was not checked (evidence `relation_exists`, exactness `none`).
 
 `ods state record` only accepts a real build of the manifest's code:
 - `run_results.json` must come from `dbt build`, `run`, `seed` or `snapshot`, not

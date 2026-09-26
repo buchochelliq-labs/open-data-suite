@@ -20,6 +20,7 @@ pub mod executor;
 pub mod fingerprint;
 mod info_schema;
 pub mod normalize;
+mod relations;
 mod runs;
 mod seeds;
 pub mod selection;
