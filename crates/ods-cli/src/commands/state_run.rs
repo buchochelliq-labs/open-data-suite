@@ -12,6 +12,7 @@
 //!    The commit is a compare-and-swap on the state read in step 2, so a concurrent
 //!    run can't be overwritten.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use ods_core::state::{ExecutionPlan, PlanAction, SnapshotId, Timestamp};
+use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, SnapshotId, Timestamp};
 use ods_provider_dbt::executor::{DbtExecutor, DbtOutput, DbtStep};
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::executor::{
@@ -309,13 +310,59 @@ impl Steps {
     }
 }
 
-/// The plan, in one line.
-fn plan_note(report: &RunReport) -> String {
-    let mut note = format!("plan: {} to build, {} to reuse", report.build, report.reuse);
+/// Names listed per reason before the rest are counted.
+const NAMES_PER_REASON: usize = 8;
+
+/// The plan: a summary line, then what builds grouped by its main reason. Reused nodes
+/// are only counted: in a large project they are most of it (`-vv` names them).
+fn plan_notes(report: &RunReport) -> Vec<String> {
+    let mut summary = format!("plan: {} to build, {} to reuse", report.build, report.reuse);
     if !report.left_out.is_empty() {
-        let _ = write!(note, ", {} left out", report.left_out.len());
+        let _ = write!(summary, ", {} left out", report.left_out.len());
     }
-    note
+    let left_out: BTreeSet<&str> = report.left_out.iter().map(|l| l.node.as_str()).collect();
+    // In plan order, so groups and names read upstream first.
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+    for entry in report.plan.with_action(PlanAction::Build) {
+        if left_out.contains(entry.node.as_str()) {
+            continue;
+        }
+        let why = entry
+            .reasons
+            .first()
+            .map_or("other", |r| reason_label(r.code));
+        match groups.iter_mut().find(|(label, _)| *label == why) {
+            Some((_, names)) => names.push(&entry.name),
+            None => groups.push((why, vec![&entry.name])),
+        }
+    }
+    let mut notes = vec![summary];
+    for (why, names) in groups {
+        let mut line = format!(
+            "  {why}: {}",
+            names[..names.len().min(NAMES_PER_REASON)].join(", ")
+        );
+        if names.len() > NAMES_PER_REASON {
+            let _ = write!(line, " and {} more", names.len() - NAMES_PER_REASON);
+        }
+        notes.push(line);
+    }
+    notes
+}
+
+/// A few words for why a node builds.
+fn reason_label(code: ReasonCode) -> &'static str {
+    match code {
+        ReasonCode::NeverBuilt => "not built by ODS yet",
+        ReasonCode::CodeChanged => "code changed",
+        ReasonCode::UpstreamCodeChanged => "upstream code changed",
+        ReasonCode::NewUpstreamData => "new upstream data",
+        ReasonCode::MissingDataEvidence => "source data version unknown",
+        ReasonCode::CodeEvidenceIncomplete => "code can't be fully fingerprinted",
+        ReasonCode::UnknownDependency => "depends on something ODS can't see",
+        ReasonCode::PolicyBlocksReuse => "its policy never reuses it",
+        _ => "other",
+    }
 }
 
 /// Whether this run tests what it builds (`--test`).
@@ -618,7 +665,9 @@ impl RunReport {
             warnings,
             has_sources: !ws.project.sources.is_empty(),
         };
-        steps.note(&plan_note(&report));
+        for note in plan_notes(&report) {
+            steps.note(&note);
+        }
         if dry_run {
             steps.note("dry run: nothing is built or recorded");
             return Ok((report, None));

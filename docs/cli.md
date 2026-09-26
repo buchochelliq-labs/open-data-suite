@@ -482,9 +482,14 @@ each starting with dbt's usual `Running with dbt=…` banner:
   ```text
   ods ▸ 1/3 dbt source freshness: how new each source's data is
   ods ▸ 2/3 dbt compile: the code as it is now, for the plan
-  ods ▸ plan: 13 to build, 0 to reuse
-  ods ▸ 3/3 dbt build: 13 nodes, without tests
+  ods ▸ plan: 8 to build, 5 to reuse
+  ods ▸   code changed: stg_orders
+  ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, …
+  ods ▸ 3/3 dbt build: 8 nodes, without tests
   ```
+
+  What builds is grouped by its main reason, with long lists cut short; reused nodes
+  are only counted (`-vv` or `ods state plan` names each one and why).
 
   When nothing needs building, the last line is `ods ▸ nothing to build, so dbt
   doesn't run again`. `-q` turns them off.

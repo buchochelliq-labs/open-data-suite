@@ -330,6 +330,9 @@ fn dbt_output_streams_to_stderr() {
         "ods ▸ 2/3 dbt compile: the code as it is now, for the plan",
         "fake dbt: compile",
         "ods ▸ plan: 13 to build, 0 to reuse",
+        // What builds, by reason; long lists are cut short.
+        "ods ▸   not built by ODS yet: raw_customers, ",
+        " and 5 more",
         "ods ▸ 3/3 dbt build: 13 nodes, without tests",
         "fake dbt: build",
     ];
@@ -354,6 +357,7 @@ fn dbt_output_streams_to_stderr() {
     project.change_code("model.jaffle_ods.orders");
     let (_, _, info) =
         project.ods_with_stderr(&["-v", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    assert!(info.contains("ods ▸   code changed: orders"), "{info}");
     for text in ["running dbt", "dbt finished", "recording the run"] {
         assert!(info.contains(text), "{text} missing at -v:\n{info}");
     }
