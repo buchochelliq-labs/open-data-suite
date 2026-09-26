@@ -383,6 +383,14 @@ pub(super) fn plan_against(
         now,
     )
     .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    for entry in &plan.entries {
+        tracing::debug!(
+            node = %entry.name,
+            action = ?entry.action,
+            why = entry.reasons.first().map_or("", |r| r.message.as_str()),
+            "planned"
+        );
+    }
     let mut warnings = Vec::new();
     if ws.project.sources.iter().any(|s| s.version.is_none()) && ws.sources_file.is_none() {
         warnings.push(

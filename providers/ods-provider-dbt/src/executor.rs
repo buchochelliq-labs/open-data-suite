@@ -219,6 +219,10 @@ impl DbtExecutor {
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
             }
         }
+        // Names only: values can be credentials (AGENTS.md rule 9).
+        tracing::info!(command = %self.display(args), "running dbt");
+        tracing::debug!(env = ?self.env.keys().collect::<Vec<_>>(), output = ?self.output, "dbt settings");
+        let started = std::time::Instant::now();
         // Not `Command::output()`: tokio's always pipes stdout and stderr, which would
         // swallow dbt's output in `DbtOutput::Stderr` mode.
         let output = command
@@ -231,6 +235,11 @@ impl DbtExecutor {
             .map_err(|e| {
                 ProviderError::Other(format!("`{}` failed: {e}", self.program.display()))
             })?;
+        tracing::info!(
+            exit = ?output.status.code(),
+            seconds = started.elapsed().as_secs_f64(),
+            "dbt finished"
+        );
         let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         let lines: Vec<&str> = text.lines().collect();
@@ -424,8 +433,16 @@ fn is_operation(id: &str) -> bool {
 /// the nodes it reads. `None` if that manifest can't be read or is from another
 /// invocation, so the caller assumes the worst.
 fn check_coverage(manifest: &Path, run: &RunResults) -> Option<BTreeMap<String, Vec<String>>> {
-    let manifest = crate::Manifest::read(manifest).ok()?;
+    let Ok(manifest) = crate::Manifest::read(manifest) else {
+        tracing::info!("can't read the run's manifest: no test pass counts");
+        return None;
+    };
     if manifest.invocation_id.is_none() || manifest.invocation_id != run.invocation_id {
+        tracing::info!(
+            manifest = ?manifest.invocation_id,
+            run = ?run.invocation_id,
+            "the manifest isn't from this run: no test pass counts"
+        );
         return None;
     }
     Some(
@@ -587,6 +604,25 @@ fn outcomes(
     manifest: &Path,
 ) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
     let checks = Checks::new(request, run, manifest);
+    let (nodes, failed, unrequested) = node_outcomes(request, run, checks);
+    for n in &nodes {
+        tracing::debug!(
+            node = %n.node,
+            status = ?n.status,
+            checks_passed = ?n.checks_passed,
+            checks_failed = ?n.checks_failed,
+            checks_skipped = ?n.checks_skipped,
+            "dbt result"
+        );
+    }
+    (nodes, failed, unrequested)
+}
+
+fn node_outcomes(
+    request: &ExecutionRequest,
+    run: &RunResults,
+    checks: Checks<'_>,
+) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
     if request.mode == ExecutionMode::Test {
         return (
             test_outcomes(request, run, &checks),

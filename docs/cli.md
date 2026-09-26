@@ -500,7 +500,19 @@ each starting with dbt's usual `Running with dbt=…` banner:
 - **dbt's own files** are written as usual: `logs/dbt.log` in the project (dbt's debug
   log), and `manifest.json`, `run_results.json` and `sources.json` in the target
   directory. ODS reads those artifacts; it keeps its state in `.ods/state.db`.
-- ODS writes no log file of its own.
+- ODS writes no log file of its own. Its logs go to stderr, at the level `-v`/`-q` or
+  `ODS_LOG` set:
+
+  | Level | Shows |
+  |---|---|
+  | default (`warn`) | the step lines and warnings |
+  | `-v` (`info`) | each dbt command line ODS runs, its exit code and time, and what was recorded |
+  | `-vv` (`debug`) | also each node's plan decision and why, dbt's result per node (tests passed, failed, didn't run), and nodes that kept their last state |
+  | `-vvv` (`trace`) | also libraries' logs, e.g. every statement the state store runs |
+  | `-q` (`error`) | errors only: no step lines |
+
+  dbt's own verbosity is dbt's: pass it through, e.g. `-- --debug` or
+  `-- --log-level debug`. dbt also writes its debug log to `logs/dbt.log`.
 
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.

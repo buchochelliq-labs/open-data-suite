@@ -4,6 +4,8 @@
 
 use clap::{ArgAction, Args};
 use tracing::level_filters::LevelFilter;
+use tracing_subscriber::filter::Targets;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 /// Verbosity flags accepted by every command.
 #[derive(Debug, Clone, Args)]
@@ -50,14 +52,27 @@ impl LogArgs {
 }
 
 /// Installs the global stderr subscriber. A second call (e.g. in tests) is a no-op.
+///
+/// Libraries' own logs (e.g. every SQL statement the state store runs) only show at
+/// `trace`: at `debug`, ODS's own decisions should be readable.
 pub fn init(level: LevelFilter, ansi: bool) {
-    let _ = tracing_subscriber::fmt()
+    let libraries = if level == LevelFilter::TRACE {
+        LevelFilter::TRACE
+    } else {
+        level.min(LevelFilter::WARN)
+    };
+    let targets = Targets::new()
+        .with_default(libraries)
+        .with_target("ods", level);
+    let subscriber = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_max_level(level)
         .with_ansi(ansi)
         .with_target(false)
         .without_time()
-        .try_init();
+        .finish()
+        .with(targets);
+    let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
 /// Converts a configured level to a filter.

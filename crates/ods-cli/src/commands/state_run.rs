@@ -429,6 +429,15 @@ fn record(
         execution.finished_at,
         sources_recorded,
     );
+    tracing::info!(
+        run = %execution.run_id,
+        advanced = recorded.advanced.len(),
+        kept = recorded.kept.len(),
+        "recording the run"
+    );
+    for (node, why) in &recorded.kept {
+        tracing::debug!(node = %node, why = %why, "kept its last state");
+    }
     let snapshot = if recorded.advanced.is_empty() {
         None
     } else {

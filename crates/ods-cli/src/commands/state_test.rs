@@ -197,6 +197,13 @@ impl TestReport {
             &execution.run_id,
             execution.finished_at,
         );
+        tracing::info!(
+            run = %execution.run_id,
+            passed = recorded.passed.len(),
+            failed = recorded.failed.len(),
+            ignored = recorded.ignored.len(),
+            "recording the tests"
+        );
         let snapshot =
             block_on(store.commit(&ws.scope, &recorded.snapshot))?.map_err(|e| store_error(&e))?;
         report.outcome = if !recorded.failed.is_empty() {

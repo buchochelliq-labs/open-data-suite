@@ -348,6 +348,22 @@ fn dbt_output_streams_to_stderr() {
     let (_, _, quiet) =
         project.ods_with_stderr(&["-q", "state", "run", "--dbt", dbt.to_str().unwrap()]);
     assert!(!quiet.contains("ods ▸"), "-q hides progress: {quiet}");
+
+    // Logs: none by default; -v says what ODS runs and records, -vv why, per node.
+    assert!(!stderr.contains("running dbt"), "{stderr}");
+    project.change_code("model.jaffle_ods.orders");
+    let (_, _, info) =
+        project.ods_with_stderr(&["-v", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    for text in ["running dbt", "dbt finished", "recording the run"] {
+        assert!(info.contains(text), "{text} missing at -v:\n{info}");
+    }
+    assert!(!info.contains("planned"), "{info}");
+    project.change_code("model.jaffle_ods.orders");
+    let (_, _, debug) =
+        project.ods_with_stderr(&["-vv", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    for text in ["planned", "dbt result", "dbt settings"] {
+        assert!(debug.contains(text), "{text} missing at -vv:\n{debug}");
+    }
     let (_, _, captured) = project.ods_with_stderr(&[
         "state",
         "run",
