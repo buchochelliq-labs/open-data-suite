@@ -159,11 +159,14 @@ is what the caller needs to see which nodes failed.
   test. The settings ODS has options for (`DBT_TARGET`, `DBT_PROFILE`,
   `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR`, `DBT_TARGET_PATH`, `DBT_FULL_REFRESH`) are read
   as those options' defaults, passed as flags, and removed from dbt's environment.
-  Settings a flag beats are overridden with a warning (`--no-defer`,
-  `--no-favor-state`, `--no-empty`; `--write-json` and `--indirect-selection eager`
-  always, which also covers `dbt_project.yml`'s `flags:`). The rest that change what
-  is built or recorded are refused, including `DBT_STATE` and its relatives and the
-  recorder's replay mode. Harmless settings and non-dbt variables pass through.
+  Settings a flag beats are overridden with a warning (`--no-defer`, which also makes
+  `DBT_STATE` and its relatives inert; `--no-favor-state`; `--no-empty`), and
+  `--write-json`, `--partial-parse-file-diff` and `--indirect-selection eager` are
+  always passed, which also covers `dbt_project.yml`'s `flags:`. The rest that change
+  what is built or recorded are refused (resource types, sample, event time, the old
+  spellings that beat dbt's flags, the recorder's replay mode, `DBT_PP_FILE_DIFF_TEST`).
+  Harmless settings and non-dbt variables pass through. The executor reads the
+  settings it has options for as their defaults when a caller doesn't set them.
 - `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
   snapshots the plan needs. `--test` builds and tests, like `dbt build`.
   *Amended (#229):* the build commands are named after dbt's: `ods state run` (models,

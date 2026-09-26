@@ -231,6 +231,7 @@ pub(super) fn build_command(kind: Kind) -> Command {
                 .long("full-refresh")
                 .action(ArgAction::SetTrue)
                 .env("DBT_FULL_REFRESH")
+                .hide_env_values(true)
                 .value_parser(clap::builder::BoolishValueParser::new())
                 .help("Rebuild the selected incremental models and seeds from scratch, even if unchanged, as dbt's --full-refresh does"),
         );
@@ -393,7 +394,13 @@ pub(super) fn check_settings(
     warnings: &mut Vec<String>,
 ) -> Result<Vec<DbtSetting>, CliError> {
     let settings = dbt_settings(args, target_dir);
-    tracing::info!(settings = %settings_line(&settings), "dbt settings");
+    // Not the vars: the log may go further than the report.
+    let logged: Vec<DbtSetting> = settings
+        .iter()
+        .filter(|s| s.name != "vars")
+        .cloned()
+        .collect();
+    tracing::info!(settings = %settings_line(&logged), "dbt settings");
     executor.refuse_env().map_err(|e| {
         CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e.to_string()).with_hint(
             "these dbt settings change what dbt builds in ways ODS can't record; see `docs/cli.md`",

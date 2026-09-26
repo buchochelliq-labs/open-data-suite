@@ -328,7 +328,11 @@ async fn dbt_settings_from_the_environment_are_owned_overridden_or_refused() {
         .env("DBT_SCHEMA", "a project's own")
         .target("prod")
         .profile("warehouse");
-    assert_eq!(run.env_warnings().len(), 2, "{:?}", run.env_warnings());
+    // The shell running the tests may set others.
+    let warnings = run.env_warnings().join("\n");
+    for name in ["DBT_DEFER", "DBT_EMPTY"] {
+        assert!(warnings.contains(name), "{warnings}");
+    }
     let report = run
         .execute(&ExecutionRequest::new(
             vec![RequestedNode::new(
@@ -360,10 +364,31 @@ async fn dbt_settings_from_the_environment_are_owned_overridden_or_refused() {
         assert!(env.iter().any(|n| n == name), "{name} missing: {env:?}");
     }
 
+    // Without an explicit setting, dbt's variable is the default, passed as a flag.
+    let calls = seen(&dir).len();
+    executor(&dir)
+        .env("FAKE_DBT_SEEN", dir.join("seen").display().to_string())
+        .env("DBT_TARGET", "from-env")
+        .execute(&ExecutionRequest::new(
+            vec![RequestedNode::new(
+                "seed.jaffle_ods.raw_orders",
+                "raw_orders",
+            )],
+            ExecutionMode::Run,
+        ))
+        .await
+        .unwrap();
+    let all = seen(&dir);
+    assert_eq!(all.len(), calls + 1);
+    let (argv, env) = all.last().unwrap();
+    assert!(argv.join(" ").contains("--target from-env"), "{argv:?}");
+    assert!(!env.iter().any(|n| n == "DBT_TARGET"), "{env:?}");
+
     // A setting nothing beats: refused before dbt runs.
+    let calls = seen(&dir);
     let refused = executor(&dir)
         .env("FAKE_DBT_SEEN", dir.join("seen").display().to_string())
-        .env("DBT_STATE", "prod-artifacts")
+        .env("DBT_SAMPLE", "3 days")
         .execute(&ExecutionRequest::new(
             vec![RequestedNode::new(
                 "seed.jaffle_ods.raw_orders",
@@ -376,7 +401,7 @@ async fn dbt_settings_from_the_environment_are_owned_overridden_or_refused() {
     assert!(
         refused
             .to_string()
-            .starts_with("unset DBT_STATE for ODS runs"),
+            .starts_with("unset DBT_SAMPLE for ODS runs"),
         "{refused}"
     );
     assert_eq!(seen(&dir).len(), calls.len(), "dbt didn't run");

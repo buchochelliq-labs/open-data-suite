@@ -213,17 +213,31 @@ impl DbtExecutor {
             "--target-path".to_owned(),
             target_path.display().to_string(),
         ];
-        if let Some(dir) = &self.project_dir {
-            args.extend(["--project-dir".to_owned(), dir.display().to_string()]);
-        }
-        if let Some(dir) = &self.profiles_dir {
-            args.extend(["--profiles-dir".to_owned(), dir.display().to_string()]);
-        }
-        if let Some(profile) = &self.profile {
-            args.extend(["--profile".to_owned(), profile.clone()]);
-        }
-        if let Some(target) = &self.target {
-            args.extend(["--target".to_owned(), target.clone()]);
+        // dbt's own variables are the defaults, as in dbt: they are removed from its
+        // environment, so they are passed as flags (#227).
+        let owned = |set: Option<String>, name: &str| set.or_else(|| self.env_value(name));
+        let settings = [
+            (
+                "--project-dir",
+                owned(
+                    self.project_dir.as_ref().map(|d| d.display().to_string()),
+                    "DBT_PROJECT_DIR",
+                ),
+            ),
+            (
+                "--profiles-dir",
+                owned(
+                    self.profiles_dir.as_ref().map(|d| d.display().to_string()),
+                    "DBT_PROFILES_DIR",
+                ),
+            ),
+            ("--profile", owned(self.profile.clone(), "DBT_PROFILE")),
+            ("--target", owned(self.target.clone(), "DBT_TARGET")),
+        ];
+        for (flag, value) in settings {
+            if let Some(value) = value {
+                args.extend([flag.to_owned(), value]);
+            }
         }
         if let Some(vars) = &self.vars {
             args.extend(["--vars".to_owned(), vars.clone()]);
@@ -459,6 +473,16 @@ impl DbtExecutor {
             .collect();
         env.extend(self.env.clone());
         crate::settings::EnvReport::of(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+
+    /// A variable dbt would read: this executor's own, else the process's; empty is
+    /// unset.
+    fn env_value(&self, name: &str) -> Option<String> {
+        self.env
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+            .filter(|v| !v.is_empty())
     }
 
     /// Warnings for the dbt settings in the environment that ODS overrides, e.g.

@@ -489,8 +489,8 @@ it handles the flag (#227):
 | Group | Variables | What ODS does |
 |---|---|---|
 | ODS has an option for it | `DBT_TARGET`, `DBT_PROFILE`, `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR`, `DBT_TARGET_PATH`, `DBT_FULL_REFRESH` | reads it as the default of `--target`, `--dbt-profile`, `--profiles-dir`, `--project-dir`, `--target-dir` (relative to the project, as dbt reads it) and `--full-refresh`; passes the result to dbt as a flag, and removes the variable from dbt's environment. An explicit option wins, as in dbt |
-| Beaten by a flag | `DBT_DEFER`, `DBT_FAVOR_STATE`, `DBT_EMPTY`, `DBT_WRITE_JSON`, `DBT_INDIRECT_SELECTION` | passes `--no-defer`, `--no-favor-state`, `--no-empty` (where dbt has `--empty`), `--write-json` and `--indirect-selection eager` (for `build` and `test`), with a warning. The last two are always passed, so `dbt_project.yml`'s `flags:` can't change them either |
-| Nothing beats it | `DBT_STATE`, `DBT_DEFER_STATE`, `DBT_ARTIFACT_STATE_PATH`, `DBT_RESOURCE_TYPES`, `DBT_EXCLUDE_RESOURCE_TYPES`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, the old spellings `DBT_DEFER_TO_STATE` and `DBT_FAVOR_STATE_MODE` (they beat dbt's own flags), and `DBT_RECORDER_MODE` | refuses to start (exit 2) until it is unset, and says why |
+| Beaten by a flag | `DBT_DEFER`, `DBT_FAVOR_STATE`, `DBT_EMPTY`; `DBT_STATE`, `DBT_DEFER_STATE`, `DBT_ARTIFACT_STATE_PATH` (only deferral reads them, and ODS never passes `state:` selectors); `DBT_WRITE_JSON`, `DBT_INDIRECT_SELECTION`, `DBT_PARTIAL_PARSE_FILE_DIFF` | passes `--no-defer`, `--no-favor-state` and `--no-empty` (where dbt has `--empty`), with a warning, so slim-CI settings exported for every job don't stop ODS. `--write-json`, `--partial-parse-file-diff` and `--indirect-selection eager` (for `build` and `test`) are always passed, so `dbt_project.yml`'s `flags:` can't change them either |
+| Nothing beats it | `DBT_RESOURCE_TYPES`, `DBT_EXCLUDE_RESOURCE_TYPES`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, the old spellings `DBT_DEFER_TO_STATE` and `DBT_FAVOR_STATE_MODE` (they beat dbt's own flags), `DBT_RECORDER_MODE` and `DBT_PP_FILE_DIFF_TEST` | refuses to start (exit 2) until it is unset, and says why |
 | Harmless | logging, colours, printing, parsing, caching, `DBT_FAIL_FAST`, `DBT_WARN_ERROR*`, `DBT_STORE_FAILURES`, … | passed through |
 | Not a dbt setting | `DBT_ENV_SECRET_*`, `DBT_ENV_CUSTOM_ENV_*`, your project's own (`env_var('DBT_SCHEMA')`) | passed through; what they change in the code is in the compiled SQL, which is fingerprinted |
 
@@ -654,7 +654,7 @@ it ran.
 | Flag | Meaning |
 |---|---|
 | `--state-db PATH` | SQLite state database; default `.ods/state.db` (created by `record`) |
-| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir`, else `DBT_TARGET_PATH` (relative to the project), else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else `.`) |
+| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir` (relative to where ODS runs; ODS passes dbt an absolute path), else `DBT_TARGET_PATH` (relative to the project, as dbt reads it), else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else `.`). `ods state policies` reads the same place; `ods lineage`, `erd`, `serve` and `mcp` still default to `./target` |
 | `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default `default` |
 | `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |
 | `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |

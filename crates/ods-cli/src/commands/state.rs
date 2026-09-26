@@ -43,8 +43,17 @@ impl Module for State {
                         Arg::new("target-dir")
                             .long("target-dir")
                             .value_name("DIR")
-                            .default_value("target")
-                            .help("dbt target directory with manifest.json or dbt v2's Information Schema"),
+                            .env("DBT_TARGET_PATH")
+                            .hide_env_values(true)
+                            .help("dbt target directory with manifest.json or dbt v2's Information Schema [default: <project-dir>/target]"),
+                    )
+                    .arg(
+                        Arg::new("project-dir")
+                            .long("project-dir")
+                            .value_name("DIR")
+                            .env("DBT_PROJECT_DIR")
+                            .hide_env_values(true)
+                            .help("The dbt project, whose target directory ODS reads [default: .]"),
                     )
                     .arg(
                         Arg::new("artifacts")
@@ -124,10 +133,7 @@ struct SourceFreshness {
 
 impl PoliciesReport {
     fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let target_dir = PathBuf::from(
-            args.get_one::<String>("target-dir")
-                .map_or("target", String::as_str),
-        );
+        let target_dir = super::state_plan::target_dir(args);
         let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
             Some("json") => ArtifactPreference::Json,
             Some("info-schema") => ArtifactPreference::InfoSchema,

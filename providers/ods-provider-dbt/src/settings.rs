@@ -44,20 +44,20 @@ use EnvClass::{Harmless, Overridden, Owned, Refused};
 
 const CHANGES_SELECTION: &str = "it changes which nodes dbt builds, and ODS selects exactly the nodes its plan builds; use --resource-type or --exclude-resource-type on `ods state build` instead";
 const NOT_REAL: &str = "it makes dbt build something other than the real thing (empty, sampled or one time window), which ODS can't record as a build";
-const OTHER_STATE: &str = "it points dbt at another project's artifacts, for deferral or `state:` selectors; ODS keeps its own state and selects by exact id";
 const BEATS_FLAGS: &str = "this old spelling beats dbt's own flags (dbt maps it over --no-defer and --no-favor-state), so ODS can't override it";
+const STALE_PARSE: &str = "it makes dbt parse the project from a file of changes instead of the files themselves, so ODS could plan and fingerprint code that isn't what runs";
 const REPLAYS: &str = "in replay mode dbt answers from a recording instead of the warehouse, so nothing ODS records would be real";
 
 /// Every dbt setting ODS knows, by variable name, sorted. dbt 1.10's `params.py` names
 /// are all here (a test checks the installed dbt), plus the recorder's, which dbt reads
 /// outside it.
-pub const DBT_ENV: [(&str, EnvClass); 60] = [
-    ("DBT_ARTIFACT_STATE_PATH", Refused { why: OTHER_STATE }),
+pub const DBT_ENV: [(&str, EnvClass); 61] = [
+    ("DBT_ARTIFACT_STATE_PATH", Overridden { flag: "--no-defer" }),
     ("DBT_CACHE_SELECTED_ONLY", Harmless),
     ("DBT_CLEAN_PROJECT_FILES_ONLY", Harmless),
     ("DBT_DEBUG", Harmless),
     ("DBT_DEFER", Overridden { flag: "--no-defer" }),
-    ("DBT_DEFER_STATE", Refused { why: OTHER_STATE }),
+    ("DBT_DEFER_STATE", Overridden { flag: "--no-defer" }),
     ("DBT_DEFER_TO_STATE", Refused { why: BEATS_FLAGS }),
     ("DBT_EMPTY", Overridden { flag: "--no-empty" }),
     ("DBT_ENGINE_RECORDER_MODE", Refused { why: REPLAYS }),
@@ -104,9 +104,17 @@ pub const DBT_ENV: [(&str, EnvClass); 60] = [
     ("DBT_MACRO_DEBUGGING", Harmless),
     ("DBT_NO_PRINT", Harmless),
     ("DBT_PARTIAL_PARSE", Harmless),
-    ("DBT_PARTIAL_PARSE_FILE_DIFF", Harmless),
+    // False makes dbt trust its saved parse instead of reading the files: changed
+    // code would compile, and be fingerprinted, as it was.
+    (
+        "DBT_PARTIAL_PARSE_FILE_DIFF",
+        Overridden {
+            flag: "--partial-parse-file-diff",
+        },
+    ),
     ("DBT_PARTIAL_PARSE_FILE_PATH", Harmless),
     ("DBT_POPULATE_CACHE", Harmless),
+    ("DBT_PP_FILE_DIFF_TEST", Refused { why: STALE_PARSE }),
     ("DBT_PRINT", Harmless),
     ("DBT_PRINTER_WIDTH", Harmless),
     (
@@ -139,7 +147,9 @@ pub const DBT_ENV: [(&str, EnvClass); 60] = [
     ("DBT_SEND_ANONYMOUS_USAGE_STATS", Harmless),
     ("DBT_SHOW_RESOURCE_REPORT", Harmless),
     ("DBT_SINGLE_THREADED", Harmless),
-    ("DBT_STATE", Refused { why: OTHER_STATE }),
+    // Only read for deferral, which --no-defer turns off, and `state:` selectors,
+    // which ODS never passes: it selects by exact id.
+    ("DBT_STATE", Overridden { flag: "--no-defer" }),
     ("DBT_STATIC_PARSER", Harmless),
     ("DBT_STORE_FAILURES", Harmless),
     ("DBT_TARGET", Owned { option: "--target" }),
@@ -166,7 +176,11 @@ pub const DBT_ENV: [(&str, EnvClass); 60] = [
 ];
 
 /// dbt reads these outside `params.py`, so a check against it doesn't find them.
-pub const OUTSIDE_PARAMS: [&str; 2] = ["DBT_ENGINE_RECORDER_MODE", "DBT_RECORDER_MODE"];
+pub const OUTSIDE_PARAMS: [&str; 3] = [
+    "DBT_ENGINE_RECORDER_MODE",
+    "DBT_PP_FILE_DIFF_TEST",
+    "DBT_RECORDER_MODE",
+];
 
 /// What ODS does with `name`, or `None` if it isn't a dbt setting.
 pub fn class(name: &str) -> Option<EnvClass> {
@@ -176,15 +190,22 @@ pub fn class(name: &str) -> Option<EnvClass> {
         .map(|i| DBT_ENV[i].1)
 }
 
-/// Whether `name` set to `value` changes what dbt does. For most, a false value
-/// (empty, `0`, `false`) is dbt's default; `DBT_WRITE_JSON` and
-/// `DBT_INDIRECT_SELECTION` do harm with any value (`false`, `empty`).
+/// Whether `name` set to `value` changes what dbt does. For dbt's booleans, a false
+/// value (empty, `0`, `false`, `no`) is the default; any other setting does something
+/// with any value (`DBT_WRITE_JSON=false`, `DBT_STATE=path`, `DBT_SAMPLE=…`).
 fn is_set(name: &str, value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
-    if matches!(name, "DBT_WRITE_JSON" | "DBT_INDIRECT_SELECTION") {
-        return !value.is_empty();
+    if matches!(
+        name,
+        "DBT_DEFER"
+            | "DBT_DEFER_TO_STATE"
+            | "DBT_EMPTY"
+            | "DBT_FAVOR_STATE"
+            | "DBT_FAVOR_STATE_MODE"
+    ) {
+        return !matches!(value.as_str(), "" | "0" | "false" | "no");
     }
-    !matches!(value.as_str(), "" | "0" | "false" | "no")
+    !value.is_empty()
 }
 
 /// The dbt settings in an environment, by what ODS does with them.
@@ -260,25 +281,26 @@ pub fn owned() -> impl Iterator<Item = &'static str> {
 
 /// The flags ODS passes to `command` so no setting from the environment, or from
 /// `dbt_project.yml`'s `flags:`, changes what is built or recorded.
-/// - `--write-json` always: ODS reads the artifacts.
+/// - `--write-json` and `--partial-parse-file-diff` always: ODS reads the artifacts,
+///   and they must describe the files as they are.
 /// - `--indirect-selection eager` where tests are selected (`build`, `test`): the
 ///   tests of the selected nodes, as ODS plans them.
-/// - `--no-defer`, `--no-favor-state` and `--no-empty` when their variables are set;
-///   `--no-empty` only where dbt has `--empty`.
+/// - `--no-defer`, `--no-favor-state` and `--no-empty` when a variable they beat is
+///   set; `--no-empty` only where dbt has `--empty`.
 pub fn override_args(report: &EnvReport, command: &str) -> Vec<String> {
-    let mut args = vec!["--write-json".to_owned()];
+    let mut args = vec![
+        "--write-json".to_owned(),
+        "--partial-parse-file-diff".to_owned(),
+    ];
     if matches!(command, "build" | "test") {
         args.extend(["--indirect-selection".to_owned(), "eager".to_owned()]);
     }
-    for (_, flag) in &report.overridden {
-        let applies = match *flag {
-            "--no-defer" | "--no-favor-state" => true,
-            "--no-empty" => matches!(command, "run" | "build" | "compile" | "snapshot"),
-            // Always passed, above, where they apply.
-            _ => false,
-        };
-        if applies {
-            args.push((*flag).to_owned());
+    for flag in ["--no-defer", "--no-favor-state", "--no-empty"] {
+        let wanted = report.overridden.iter().any(|(_, f)| *f == flag);
+        let accepted =
+            flag != "--no-empty" || matches!(command, "run" | "build" | "compile" | "snapshot");
+        if wanted && accepted {
+            args.push(flag.to_owned());
         }
     }
     args
@@ -311,7 +333,8 @@ mod tests {
             ("DBT_FAVOR_STATE", "false"),
             ("DBT_EMPTY", "1"),
             ("DBT_STATE", "prod-artifacts"),
-            ("DBT_SAMPLE", ""),
+            ("DBT_SAMPLE", "3 days"),
+            ("DBT_EVENT_TIME_START", ""),
             ("DBT_TARGET", "prod"),
             ("DBT_LOG_LEVEL", "debug"),
             ("DBT_SCHEMA", "x"),
@@ -320,17 +343,19 @@ mod tests {
             report.overridden,
             [
                 ("DBT_DEFER".to_owned(), "--no-defer"),
-                ("DBT_EMPTY".to_owned(), "--no-empty")
+                ("DBT_EMPTY".to_owned(), "--no-empty"),
+                // Only deferral reads it, and --no-defer turns that off.
+                ("DBT_STATE".to_owned(), "--no-defer"),
             ]
         );
         assert_eq!(report.refused.len(), 1);
-        assert_eq!(report.refused[0].0, "DBT_STATE");
+        assert_eq!(report.refused[0].0, "DBT_SAMPLE");
         let refusal = report.refusal().unwrap();
         assert!(
-            refusal.starts_with("unset DBT_STATE for ODS runs"),
+            refusal.starts_with("unset DBT_SAMPLE for ODS runs"),
             "{refusal}"
         );
-        assert_eq!(report.warnings().len(), 2);
+        assert_eq!(report.warnings().len(), 3);
     }
 
     #[test]
@@ -340,31 +365,37 @@ mod tests {
             ("DBT_DEFER", "true"),
             ("DBT_INDIRECT_SELECTION", "empty"),
             ("DBT_WRITE_JSON", "false"),
+            ("DBT_PARTIAL_PARSE_FILE_DIFF", "false"),
         ]);
-        // False values of these two still do harm.
-        assert_eq!(report.overridden.len(), 4, "{report:?}");
+        // False values of the last three still do harm.
+        assert_eq!(report.overridden.len(), 5, "{report:?}");
+        let always = ["--write-json", "--partial-parse-file-diff"];
         assert_eq!(
             override_args(&report, "run"),
-            ["--write-json", "--no-defer", "--no-empty"]
+            [&always[..], &["--no-defer", "--no-empty"]].concat()
         );
         assert_eq!(
             override_args(&report, "build"),
             [
-                "--write-json",
-                "--indirect-selection",
-                "eager",
-                "--no-defer",
-                "--no-empty"
+                &always[..],
+                &["--indirect-selection", "eager", "--no-defer", "--no-empty"]
             ]
+            .concat()
         );
         assert_eq!(
             override_args(&report, "seed"),
-            ["--write-json", "--no-defer"]
+            [&always[..], &["--no-defer"]].concat()
         );
         // With nothing set, only what is always passed.
         assert_eq!(
             override_args(&EnvReport::default(), "test"),
-            ["--write-json", "--indirect-selection", "eager"]
+            [&always[..], &["--indirect-selection", "eager"]].concat()
+        );
+        // Several variables --no-defer beats: passed once.
+        let state = EnvReport::of([("DBT_DEFER", "1"), ("DBT_STATE", "prod")]);
+        assert_eq!(
+            override_args(&state, "run"),
+            [&always[..], &["--no-defer"]].concat()
         );
     }
 
