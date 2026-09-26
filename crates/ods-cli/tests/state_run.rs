@@ -129,6 +129,56 @@ impl Project {
         )
     }
 
+    /// Like [`ods_with_stderr`](Self::ods_with_stderr), without `--target-dir`, so
+    /// ODS finds the target directory itself (#227).
+    fn ods_bare(&self, args: &[&str]) -> (i32, Value, String) {
+        let db = self.db();
+        let mut all: Vec<&str> = args.to_vec();
+        all.extend(["--state-db", db.to_str().unwrap(), "--json"]);
+        let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+            .args(&all)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("XDG_CONFIG_HOME", &self.dir)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .current_dir(&self.dir)
+            .output()
+            .unwrap();
+        let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "{e}: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (
+            out.status.code().unwrap(),
+            json,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    /// What the fake dbt saw on each call: its arguments and the `DBT_*` names in its
+    /// environment.
+    fn seen(&self) -> Vec<(Vec<String>, Vec<String>)> {
+        std::fs::read_to_string(self.dir.join("seen"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                let v: Value = serde_json::from_str(line).unwrap();
+                let strings = |key: &str| -> Vec<String> {
+                    v[key]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|s| s.as_str().unwrap().to_owned())
+                        .collect()
+                };
+                (strings("argv"), strings("env"))
+            })
+            .collect()
+    }
+
     /// `ods state build` without tests (what `ods state run` did before #229), or with
     /// them when `extra` holds `--test`.
     fn run(&self, extra: &[&str]) -> (i32, Value) {
@@ -1212,4 +1262,223 @@ fn real_dbt_rebuilds_a_dropped_table() {
     let (code, again) = real_cmd(&project, &dbt, "run", &[]);
     assert_eq!(code, 0, "{again:#}");
     assert_eq!(again["result"]["outcome"], "nothing_to_build", "{again:#}");
+}
+
+/// The value and source of a dbt setting in a report.
+fn setting(result: &Value, name: &str) -> Option<(String, String)> {
+    result["dbt"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == name)
+        .map(|s| {
+            (
+                s["value"].as_str().unwrap().to_owned(),
+                s["source"].as_str().unwrap().to_owned(),
+            )
+        })
+}
+
+/// #227: dbt's own variables for the settings ODS has options for are read as those
+/// options' defaults, and reach dbt as flags only.
+#[test]
+fn dbt_variables_act_like_the_options_ods_has_for_them() {
+    let project = Project::new("owned-env");
+    let seen = project.dir.join("seen");
+    let project = project
+        .with("FAKE_DBT_SEEN", seen.to_str().unwrap())
+        .with("DBT_TARGET", "prod")
+        .with("DBT_PROFILE", "warehouse")
+        .with("DBT_FULL_REFRESH", "true");
+    let result = project.run_ok(&[]);
+    assert_eq!(
+        setting(&result, "target"),
+        Some(("prod".into(), "DBT_TARGET".into()))
+    );
+    assert_eq!(
+        setting(&result, "profile"),
+        Some(("warehouse".into(), "DBT_PROFILE".into()))
+    );
+    assert_eq!(
+        setting(&result, "full_refresh"),
+        Some(("true".into(), "DBT_FULL_REFRESH".into()))
+    );
+    for (argv, env) in project.seen() {
+        let joined = argv.join(" ");
+        assert!(joined.contains("--target prod"), "{joined}");
+        assert!(joined.contains("--profile warehouse"), "{joined}");
+        for owned in ["DBT_TARGET", "DBT_PROFILE", "DBT_FULL_REFRESH"] {
+            assert!(
+                !env.iter().any(|n| n == owned),
+                "{owned} reached dbt: {env:?}"
+            );
+        }
+    }
+    let command = result["execution"]["command"].as_str().unwrap();
+    assert!(command.contains("--full-refresh"), "{command}");
+
+    // An explicit option beats the variable, as in dbt.
+    let result = project.run_ok(&["--dry-run", "--target", "dev", "--dbt-profile", "other"]);
+    assert_eq!(
+        setting(&result, "target"),
+        Some(("dev".into(), "flag".into()))
+    );
+    assert_eq!(
+        setting(&result, "profile"),
+        Some(("other".into(), "flag".into()))
+    );
+}
+
+/// #227: with `DBT_PROJECT_DIR`, ODS reads the artifacts where dbt writes them, the
+/// project's `target`, in every command.
+#[test]
+fn the_project_dir_moves_the_target_dir() {
+    let project = Project::new("project-dir").with("DBT_PROJECT_DIR", "proj");
+    let dbt = fixture("fake-dbt/dbt");
+    let build = [
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ];
+    let (code, json, _) = project.ods_bare(&build);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(
+        setting(result, "target_dir"),
+        Some(("proj/target".into(), "project_dir".into()))
+    );
+    assert!(project.dir.join("proj/target/manifest.json").is_file());
+    // Planning finds the same artifacts, and the state recorded from them.
+    let (code, plan, _) = project.ods_bare(&["state", "plan"]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert!(
+        plan["result"]["plan"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["action"] == "reuse"),
+        "{plan:#}"
+    );
+}
+
+/// #227: dbt settings that change what is built are beaten by a flag where dbt has
+/// one, with a warning, and refused before dbt runs where it hasn't.
+#[test]
+fn dbt_variables_that_change_the_build_are_overridden_or_refused() {
+    let project = Project::new("env-policy");
+    let seen = project.dir.join("seen");
+    let project = project
+        .with("FAKE_DBT_SEEN", seen.to_str().unwrap())
+        .with("DBT_DEFER", "true");
+    let result = project.run_ok(&[]);
+    let warnings = result["warnings"].to_string();
+    assert!(
+        warnings.contains("DBT_DEFER is set: ODS passes --no-defer"),
+        "{warnings}"
+    );
+    assert!(
+        project
+            .seen()
+            .iter()
+            .all(|(argv, _)| argv.iter().any(|a| a == "--no-defer")),
+        "every dbt call gets it"
+    );
+
+    // Slim-CI settings only matter for deferral, which --no-defer turns off.
+    let slim = project.with("DBT_STATE", "prod-artifacts");
+    let result = slim.run_ok(&["--dry-run"]);
+    assert!(
+        result["warnings"].to_string().contains("DBT_STATE is set"),
+        "{result:#}"
+    );
+
+    let calls = slim.seen().len();
+    let refused = slim.with("DBT_SAMPLE", "3 days");
+    let (code, json) = refused.run(&[]);
+    assert_eq!(code, 2, "{json:#}");
+    let message = json["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("unset DBT_SAMPLE for ODS runs"),
+        "{message}"
+    );
+    assert_eq!(refused.seen().len(), calls, "dbt didn't run");
+}
+
+/// #227: the target directory is where dbt writes, however it is given, in every
+/// State command.
+#[test]
+fn the_target_dir_is_found_as_dbt_finds_it() {
+    let dbt = fixture("fake-dbt/dbt");
+    let dry = |project: &Project, extra: &[&str]| {
+        let mut args = vec![
+            "state",
+            "build",
+            "--dry-run",
+            "--dbt",
+            dbt.to_str().unwrap(),
+            "--dbt-output",
+            "capture",
+        ];
+        args.extend(extra);
+        let (code, json, _) = project.ods_bare(&args);
+        assert_eq!(code, 0, "{json:#}");
+        setting(&json["result"], "target_dir").unwrap()
+    };
+    // A relative DBT_TARGET_PATH is read against the project, as dbt reads it.
+    let both = Project::new("target-path")
+        .with("DBT_PROJECT_DIR", "proj")
+        .with("DBT_TARGET_PATH", "out");
+    assert_eq!(
+        dry(&both, &[]),
+        ("proj/out".into(), "DBT_TARGET_PATH".into())
+    );
+    assert!(both.dir.join("proj/out/manifest.json").is_file());
+    // An explicit --target-dir wins, relative to where ODS runs.
+    assert_eq!(
+        dry(&both, &["--target-dir", "mine"]),
+        ("mine".into(), "flag".into())
+    );
+    // An absolute one is used as it is.
+    let absolute = both.dir.join("abs");
+    let abs = Project::new("target-abs").with("DBT_TARGET_PATH", absolute.to_str().unwrap());
+    assert_eq!(
+        dry(&abs, &[]),
+        (absolute.display().to_string(), "DBT_TARGET_PATH".into())
+    );
+    // `policies` reads the same place.
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "policies", "--json"])
+        .env_clear()
+        .envs(both.env.iter().map(|(k, v)| (k, v)))
+        .current_dir(&both.dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// #227: `--help` names the dbt variables options default to, never their values.
+#[test]
+fn help_hides_the_values_of_dbt_variables() {
+    let project = Project::new("help")
+        .with("DBT_TARGET", "prod-secret-name")
+        .with("DBT_FULL_REFRESH", "true");
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--help"])
+        .env_clear()
+        .envs(project.env.iter().map(|(k, v)| (k, v)))
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("DBT_TARGET"), "{help}");
+    assert!(!help.contains("prod-secret-name"), "{help}");
+    assert!(!help.contains("DBT_FULL_REFRESH=true"), "{help}");
 }

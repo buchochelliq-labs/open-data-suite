@@ -90,6 +90,7 @@ pub struct DbtExecutor {
     project_dir: Option<PathBuf>,
     profiles_dir: Option<PathBuf>,
     target: Option<String>,
+    profile: Option<String>,
     env: BTreeMap<String, String>,
     output: DbtOutput,
     vars: Option<String>,
@@ -105,6 +106,7 @@ impl std::fmt::Debug for DbtExecutor {
             .field("project_dir", &self.project_dir)
             .field("profiles_dir", &self.profiles_dir)
             .field("target", &self.target)
+            .field("profile", &self.profile)
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("output", &self.output)
             .field("vars", &self.vars)
@@ -122,6 +124,7 @@ impl DbtExecutor {
             project_dir: None,
             profiles_dir: None,
             target: None,
+            profile: None,
             env: BTreeMap::new(),
             output: DbtOutput::default(),
             vars: None,
@@ -147,6 +150,14 @@ impl DbtExecutor {
     #[must_use]
     pub fn target(mut self, target: impl Into<String>) -> Self {
         self.target = Some(target.into());
+        self
+    }
+
+    /// dbt's `--profile`: the profile in `profiles.yml` to use, instead of the
+    /// project's.
+    #[must_use]
+    pub fn profile(mut self, profile: impl Into<String>) -> Self {
+        self.profile = Some(profile.into());
         self
     }
 
@@ -192,28 +203,47 @@ impl DbtExecutor {
     }
 
     /// The arguments every invocation shares.
-    fn common_args(&self) -> Vec<String> {
-        self.common_args_in(&self.target_path())
+    fn common_args(&self, command: &str) -> Vec<String> {
+        self.common_args_in(command, &self.target_path())
     }
 
     /// [`common_args`](Self::common_args), writing artifacts to `target_path` instead.
-    fn common_args_in(&self, target_path: &Path) -> Vec<String> {
+    fn common_args_in(&self, command: &str, target_path: &Path) -> Vec<String> {
         let mut args = vec![
             "--target-path".to_owned(),
             target_path.display().to_string(),
         ];
-        if let Some(dir) = &self.project_dir {
-            args.extend(["--project-dir".to_owned(), dir.display().to_string()]);
-        }
-        if let Some(dir) = &self.profiles_dir {
-            args.extend(["--profiles-dir".to_owned(), dir.display().to_string()]);
-        }
-        if let Some(target) = &self.target {
-            args.extend(["--target".to_owned(), target.clone()]);
+        // dbt's own variables are the defaults, as in dbt: they are removed from its
+        // environment, so they are passed as flags (#227).
+        let owned = |set: Option<String>, name: &str| set.or_else(|| self.env_value(name));
+        let settings = [
+            (
+                "--project-dir",
+                owned(
+                    self.project_dir.as_ref().map(|d| d.display().to_string()),
+                    "DBT_PROJECT_DIR",
+                ),
+            ),
+            (
+                "--profiles-dir",
+                owned(
+                    self.profiles_dir.as_ref().map(|d| d.display().to_string()),
+                    "DBT_PROFILES_DIR",
+                ),
+            ),
+            ("--profile", owned(self.profile.clone(), "DBT_PROFILE")),
+            ("--target", owned(self.target.clone(), "DBT_TARGET")),
+        ];
+        for (flag, value) in settings {
+            if let Some(value) = value {
+                args.extend([flag.to_owned(), value]);
+            }
         }
         if let Some(vars) = &self.vars {
             args.extend(["--vars".to_owned(), vars.clone()]);
         }
+        // So nothing in the environment or `dbt_project.yml` changes what is built.
+        args.extend(crate::settings::override_args(&self.env_report(), command));
         args
     }
 
@@ -246,9 +276,16 @@ impl DbtExecutor {
         read_stdout: bool,
     ) -> Result<(bool, String, String), ProviderError> {
         let mut command = tokio::process::Command::new(&self.program);
+        // ODS passes these settings as flags; their variables would only compete.
+        for name in crate::settings::owned() {
+            command.env_remove(name);
+        }
         command
             .args(args)
-            .envs(&self.env)
+            .envs(self.env.iter().filter(|(k, _)| {
+                crate::settings::class(k)
+                    .is_none_or(|c| !matches!(c, crate::settings::EnvClass::Owned { .. }))
+            }))
             .stdin(Stdio::null())
             .kill_on_drop(true);
         match self.output {
@@ -373,21 +410,6 @@ const PASSTHROUGH_OPTIONS: [&str; 9] = [
 /// Short pass-through flags (`-x` fail fast, `-d` debug, `-q` quiet), alone or bundled.
 const PASSTHROUGH_SHORT: [char; 3] = ['x', 'd', 'q'];
 
-/// dbt settings read from the environment that, like the refused options, make a build
-/// something other than the real thing (empty, sampled, one time window) or read
-/// relations ODS didn't build.
-const REFUSED_ENV: [&str; 8] = [
-    "DBT_EMPTY",
-    "DBT_SAMPLE",
-    "DBT_EVENT_TIME_START",
-    "DBT_EVENT_TIME_END",
-    "DBT_DEFER",
-    "DBT_FAVOR_STATE",
-    // Deprecated spellings dbt still maps to the two above.
-    "DBT_DEFER_TO_STATE",
-    "DBT_FAVOR_STATE_MODE",
-];
-
 /// The arguments in `args` that may not be passed through.
 fn refused_args(args: &[String]) -> Vec<String> {
     let mut refused = Vec::new();
@@ -443,29 +465,41 @@ fn refuse_engine_args(args: &[String]) -> Result<(), ProviderError> {
 }
 
 impl DbtExecutor {
-    /// Refuses to run when dbt would read a setting that makes builds not the real
-    /// thing from the environment.
-    fn refuse_env(&self) -> Result<(), ProviderError> {
-        let set: Vec<&str> = REFUSED_ENV
-            .into_iter()
-            .filter(|key| {
-                let value = self
-                    .env
-                    .get(*key)
-                    .cloned()
-                    .or_else(|| std::env::var(key).ok());
-                value.is_some_and(|v| {
-                    !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false")
-                })
-            })
+    /// The dbt settings dbt would read from the environment: the process's, with this
+    /// executor's own variables over it.
+    fn env_report(&self) -> crate::settings::EnvReport {
+        let mut env: BTreeMap<String, String> = std::env::vars()
+            .filter(|(k, _)| k.starts_with("DBT_"))
             .collect();
-        if set.is_empty() {
-            Ok(())
-        } else {
-            Err(ProviderError::Other(format!(
-                "{} set in the environment: dbt would build something ODS can't record as a real build; unset it",
-                set.join(", ")
-            )))
+        env.extend(self.env.clone());
+        crate::settings::EnvReport::of(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+
+    /// A variable dbt would read: this executor's own, else the process's; empty is
+    /// unset.
+    fn env_value(&self, name: &str) -> Option<String> {
+        self.env
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Warnings for the dbt settings in the environment that ODS overrides, e.g.
+    /// `DBT_DEFER`: they have no effect on its runs.
+    pub fn env_warnings(&self) -> Vec<String> {
+        self.env_report().warnings()
+    }
+
+    /// Refuses to run while dbt would read a setting from the environment that
+    /// changes what is built or recorded, and that no flag beats.
+    ///
+    /// # Errors
+    /// Names each such setting, and why.
+    pub fn refuse_env(&self) -> Result<(), ProviderError> {
+        match self.env_report().refusal() {
+            Some(why) => Err(ProviderError::Other(why)),
+            None => Ok(()),
         }
     }
 }
@@ -795,7 +829,7 @@ impl RelationInspector for DbtExecutor {
             "--log-format".to_owned(),
             "json".to_owned(),
         ];
-        args.extend(self.common_args_in(&target));
+        args.extend(self.common_args_in("show", &target));
         self.step(DbtStep::RelationCheck { nodes: nodes.len() });
         let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
         if !ok {
@@ -853,7 +887,7 @@ impl Executor for DbtExecutor {
             let sources = self.artifact("sources.json");
             let before = sources_invocation_of(&sources);
             let mut args = vec!["source".to_owned(), "freshness".to_owned()];
-            args.extend(self.common_args());
+            args.extend(self.common_args("source"));
             self.step(DbtStep::SourceFreshness);
             let (ok, _) = self.invoke(&args).await?;
             let after = sources_invocation_of(&sources);
@@ -871,7 +905,7 @@ impl Executor for DbtExecutor {
             }
         }
         let mut args = vec!["compile".to_owned()];
-        args.extend(self.common_args());
+        args.extend(self.common_args("compile"));
         self.step(DbtStep::Compile);
         let (ok, tail) = self.invoke(&args).await?;
         if !ok {
@@ -921,7 +955,7 @@ impl Executor for DbtExecutor {
                 .map(str::to_owned),
             );
         }
-        args.extend(self.common_args());
+        args.extend(self.common_args(dbt_command));
         args.extend(request.engine_args.iter().cloned());
         let command = self.display(&args);
         let results_path = self.artifact("run_results.json");

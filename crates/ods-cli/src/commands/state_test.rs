@@ -72,6 +72,10 @@ pub(super) struct TestReport {
     execution: Option<ExecutionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<TestRecordReport>,
+    /// The dbt settings in effect, and where each came from.
+    dbt: Vec<super::state_run::DbtSetting>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,17 +120,12 @@ impl TestReport {
     }
 
     fn build(args: &ArgMatches, progress: ProgressSettings) -> Result<Self, CliError> {
-        let target_dir = PathBuf::from(
-            args.get_one::<String>("target-dir")
-                .map_or("target", String::as_str),
-        );
+        let target_dir = super::state_plan::target_dir(args);
         let compiles = !args.get_flag("no-compile");
         let steps = Steps::new(progress, usize::from(compiles) + 1);
         let executor = steps.attach(executor(args, &target_dir));
-        let vars_warning = super::state_run::vars_mismatch(args, &target_dir);
-        if let Some(warning) = &vars_warning {
-            tracing::warn!("{warning}");
-        }
+        let mut warnings = Vec::new();
+        let dbt = super::state_run::check_settings(args, &executor, &target_dir, &mut warnings)?;
         if compiles {
             block_on(executor.prepare(&PrepareRequest::new()))?.map_err(|e| {
                 CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
@@ -181,6 +180,8 @@ impl TestReport {
             left_out,
             execution: None,
             record: None,
+            dbt,
+            warnings,
         };
         if requested.is_empty() {
             steps.note("nothing to test, so dbt doesn't run again");
@@ -241,6 +242,10 @@ impl Present for TestReport {
                 ))],
             ),
         ];
+        summary.push((
+            "dbt".into(),
+            vec![Span::plain(super::state_run::settings_line(&self.dbt))],
+        ));
         if let Some(command) = self.execution.as_ref().and_then(|e| e.command.as_deref()) {
             summary.push(("ran".into(), vec![Span::toned(command, Tone::Code)]));
         }
@@ -303,6 +308,12 @@ impl Present for TestReport {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))],
+            });
+        }
+        for warning in &self.warnings {
+            blocks.push(ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(warning.as_str())],
             });
         }
         ViewNode::Group(blocks)
