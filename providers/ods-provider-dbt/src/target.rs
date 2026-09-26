@@ -1,44 +1,39 @@
 //! Which target dbt builds in, asked of dbt itself (#227).
 //!
-//! One `dbt compile --inline` renders [`QUERY`]: the non-secret fields of dbt's
+//! One `dbt compile --inline` renders [`QUERY`]: named, non-secret fields of dbt's
 //! `target` (what `dbt debug` shows), so ODS never reads `profiles.yml` or a
 //! credential (AGENTS.md rule 9), and `env_var()` in profiles resolves as dbt resolves
-//! it. Only named fields are rendered, never the whole `target`.
+//! it. The location (host, account or file) can carry a credential (`user:pw@host`,
+//! `md:db?motherduck_token=…`), so the query itself renders only a cleaned form for
+//! people and a digest of the whole: the raw value is never rendered, so it reaches
+//! neither ODS nor dbt's logs and compiled output.
 
 use ods_core::state::TargetIdentity;
 
 /// Marks the answer as ODS's, not something else dbt printed.
 const MARKER: &str = "ods_target";
 
-/// The inline query. `location` is the first of the fields adapters use for where
-/// the warehouse is; `database` likewise for where builds go.
-pub(crate) const QUERY: &str = "{{ tojson({\"ods_target\": 1, \
+/// The inline query. `raw` is the first of the fields adapters use for where the
+/// warehouse is; `shown` drops a query string, fragment, `;` options and anything up to
+/// an `@`.
+pub(crate) const QUERY: &str = "\
+{%- set raw = (target.get(\"host\") or target.get(\"account\") or target.get(\"server\") \
+or target.get(\"path\") or target.get(\"project\") or \"\") | string -%}\
+{%- set shown = raw.split(\"?\")[0].split(\"#\")[0].split(\";\")[0] -%}\
+{%- if \"@\" in shown -%}{%- set shown = shown.split(\"@\")[-1] -%}{%- endif -%}\
+{{ tojson({\"ods_target\": 1, \
 \"name\": target.get(\"name\"), \
 \"profile\": target.get(\"profile_name\"), \
 \"type\": target.get(\"type\"), \
-\"location\": target.get(\"host\") or target.get(\"account\") or target.get(\"server\") \
-or target.get(\"path\") or target.get(\"project\"), \
+\"location\": shown, \
+\"location_digest\": (local_md5(raw) if raw else none), \
 \"database\": target.get(\"database\") or target.get(\"catalog\") or target.get(\"dbname\")}) }}";
 
-/// Drops credentials a location might carry, e.g. `user:secret@host` or
-/// `postgres://user:secret@host/db`: only what follows the last `@` is kept.
-fn without_userinfo(location: &str) -> String {
-    let (scheme, rest) = location
-        .split_once("://")
-        .map_or(("", location), |(s, r)| (s, r));
-    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    let mut clean = String::new();
-    if !scheme.is_empty() {
-        clean.push_str(scheme);
-        clean.push_str("://");
-    }
-    clean.push_str(host);
-    if rest.contains('/') {
-        clean.push('/');
-        clean.push_str(path);
-    }
-    clean
+/// The same cleaning as [`QUERY`]'s, again, in case a dbt renders it differently:
+/// what is shown and stored never carries a user, query string or options.
+fn shown(location: &str) -> String {
+    let cut = location.split(['?', '#', ';']).next().unwrap_or_default();
+    cut.rsplit('@').next().unwrap_or(cut).to_owned()
 }
 
 /// Reads [`QUERY`]'s answer from what `dbt compile --output json --log-format json`
@@ -71,7 +66,12 @@ pub(crate) fn parse(stdout: &str) -> Result<TargetIdentity, String> {
     Ok(TargetIdentity::new(name)
         .profile(field("profile"))
         .kind(field("type"))
-        .location(field("location").map(|l| without_userinfo(&l)))
+        .location(
+            field("location")
+                .map(|l| shown(&l))
+                .filter(|l| !l.is_empty()),
+        )
+        .location_digest(field("location_digest"))
         .database(field("database")))
 }
 
@@ -80,7 +80,7 @@ mod tests {
     use super::*;
 
     /// As dbt 1.10 prints it (trimmed), for the jaffle-ods `DuckDB` profile.
-    const COMPILED: &str = r#"{"data": {"compiled": "{\"ods_target\": 1, \"name\": \"dev\", \"profile\": \"jaffle_ods\", \"type\": \"duckdb\", \"location\": \"target/jaffle_ods.duckdb\", \"database\": \"jaffle_ods\"}", "is_inline": true}, "info": {"code": "Q042", "name": "CompiledNode"}}"#;
+    const COMPILED: &str = r#"{"data": {"compiled": "{\"ods_target\": 1, \"name\": \"dev\", \"profile\": \"jaffle_ods\", \"type\": \"duckdb\", \"location\": \"target/jaffle_ods.duckdb\", \"location_digest\": \"d04e57c88f5f224f6f03b151597e38e3\", \"database\": \"jaffle_ods\"}", "is_inline": true}, "info": {"code": "Q042", "name": "CompiledNode"}}"#;
 
     #[test]
     fn reads_the_compiled_node_event() {
@@ -91,6 +91,7 @@ mod tests {
                 .profile(Some("jaffle_ods".into()))
                 .kind(Some("duckdb".into()))
                 .location(Some("target/jaffle_ods.duckdb".into()))
+                .location_digest(Some("d04e57c88f5f224f6f03b151597e38e3".into()))
                 .database(Some("jaffle_ods".into()))
         );
         assert!(parse("").is_err());
@@ -104,22 +105,28 @@ mod tests {
             ("user:secret@db.example.com", "db.example.com"),
             (
                 "postgres://user:secret@db.example.com:5432/analytics",
-                "postgres://db.example.com:5432/analytics",
+                "db.example.com:5432/analytics",
             ),
+            ("postgresql://h/db?password=secret", "postgresql://h/db"),
+            ("md:my_db?motherduck_token=secret", "md:my_db"),
+            ("host;Password=secret", "host"),
             (
-                "https://adb-123.azuredatabricks.net",
+                "https://adb-123.azuredatabricks.net#x",
                 "https://adb-123.azuredatabricks.net",
             ),
             ("/data/warehouse.duckdb", "/data/warehouse.duckdb"),
         ] {
-            assert_eq!(without_userinfo(given), kept, "{given}");
+            assert_eq!(shown(given), kept, "{given}");
         }
     }
 
     #[test]
-    fn the_query_names_only_non_secret_fields() {
+    fn the_query_never_renders_the_raw_location() {
         for secret in ["password", "token", "private_key", "keyfile", "user"] {
             assert!(!QUERY.contains(secret), "{secret}");
         }
+        // `raw` is only ever hashed.
+        assert_eq!(QUERY.matches("raw").count(), 4, "{QUERY}");
+        assert!(QUERY.contains("local_md5(raw)"));
     }
 }

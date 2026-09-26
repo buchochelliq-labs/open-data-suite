@@ -1541,11 +1541,35 @@ fn state_is_kept_per_target() {
     // And a test run back on the first host doesn't vouch for the other's builds.
     let back = moved.with("FAKE_DBT_TARGET_HOST", "fake-host");
     let (code, json) = back.test(&["--target", "prod", "--no-compile"]);
-    assert_eq!(code, 0, "{json:#}");
-    assert_eq!(json["result"]["outcome"], "nothing_to_test");
+    assert_eq!(code, 1, "{json:#}");
+    let message = json["diagnostics"][0]["message"].as_str().unwrap();
     assert!(
-        json["result"]["warnings"].to_string().contains("not prod"),
-        "{json:#}"
+        message.contains("none of them are this target's to test"),
+        "{message}"
+    );
+
+    // `plan` doesn't run dbt: it names the recorded target, and plans state recorded
+    // under another name as `run` would.
+    let (code, plan) = back.ods(&["state", "plan", "--target", "prod"]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["result"]["recorded_target"]["name"], "prod");
+    assert_eq!(plan["result"]["reuse"], 13);
+    let (code, plan) = back.ods(&[
+        "state",
+        "plan",
+        "--target",
+        "prod",
+        "--environment",
+        "default",
+    ]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(
+        plan["result"]["build"], 13,
+        "default holds dev's builds: {plan:#}"
+    );
+    assert!(
+        plan["result"]["warnings"].to_string().contains("not prod"),
+        "{plan:#}"
     );
 }
 
@@ -1587,4 +1611,61 @@ fn state_without_a_target_is_rebuilt_once() {
         "{result:#}"
     );
     assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
+
+    // Recording another dbt build after it doesn't vouch for its target either: the
+    // last one ODS saw isn't evidence of where this one went.
+    project.change_code("model.jaffle_ods.orders");
+    let out = Command::new(fixture("fake-dbt/dbt"))
+        .args([
+            "build",
+            "--select",
+            "fqn:jaffle_ods",
+            "--exclude-resource-type",
+            "test",
+            "--target-path",
+            target.to_str().unwrap(),
+        ])
+        .envs(project.env.iter().map(|(k, v)| (k, v)))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (code, json) = project.ods(&["state", "record"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(reasons(&project.run_ok(&[])), ["target_changed"]);
+}
+
+/// #227: `DBT_TARGET` names the environment, as `--target` does.
+#[test]
+fn dbt_target_names_the_environment() {
+    let project = Project::new("target-env").with("DBT_TARGET", "prod");
+    assert_eq!(project.run_ok(&[])["scope"], "jaffle_ods/prod");
+    let (code, plan) = project.ods(&["state", "plan"]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["result"]["scope"], "jaffle_ods/prod");
+    assert_eq!(plan["result"]["reuse"], 13);
+}
+
+/// #227: if dbt can't say which target it builds in, a dry run still plans, reusing
+/// nothing; a run that would record stops.
+#[test]
+fn a_failed_target_check_only_stops_what_records() {
+    let project = Project::new("target-fails");
+    project.run_ok(&[]);
+    let failing = project.with("FAKE_DBT_TARGET_FAIL", "1");
+    let planned = failing.run_ok(&["--dry-run"]);
+    assert_eq!(planned["build"], 13);
+    assert!(planned.get("target").is_none(), "{planned:#}");
+    assert!(
+        planned["warnings"]
+            .to_string()
+            .contains("which target it builds in"),
+        "{planned:#}"
+    );
+    let (code, json) = failing.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(failing.history().len(), 1, "nothing recorded");
 }

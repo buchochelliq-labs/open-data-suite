@@ -29,13 +29,22 @@ fields `dbt debug` shows), rendered with `tojson`:
 - `name`;
 - `profile_name`;
 - `type`;
-- the first of `host`, `account`, `server`, `path`, `project`;
+- the location: the first of `host`, `account`, `server`, `path`, `project`;
 - the first of `database`, `catalog`, `dbname`.
 
 It resolves the profile exactly as the build will. It names no secret field, and
 never renders the whole `target`. It passes `--no-populate-cache --no-introspect`,
-since no warehouse metadata is needed. Any `user:password@` in the location is
-dropped before the identity is kept or shown.
+since no warehouse metadata is needed.
+
+A location can still carry a credential: `user:pw@host`, `?password=…`, or
+MotherDuck's `md:db?motherduck_token=…`. So the query itself renders only:
+- a cleaned form for people, with the query string, fragment, `;` options and
+  anything up to an `@` removed;
+- and `local_md5` of the raw value, which tells targets apart.
+
+The raw value is never rendered, so it reaches neither ODS nor dbt's logs and
+compiled output. ODS cleans the shown form again, in case a dbt renders it
+differently.
 
 ### Option C: identity only, environment stays `default`
 Switching between targets with `--target` would then rebuild everything on every
@@ -54,17 +63,26 @@ switch.
      1.0 to 1.1, and 1.0 documents still read.
    
    Commands that run dbt (`run`, `seed`, `snapshot`, `build`, `compile`, `test`) ask
-   dbt for it after compiling. `ods state record` carries the previous snapshot's
-   identity forward.
+   dbt for it after compiling. `ods state record` records none: the previous
+   snapshot's target is no evidence of where a dbt build ODS didn't run went, so the
+   next run rebuilds once.
 3. **A build is only reused in the target it went to.**
    - When the latest snapshot's identity differs from the current one, or is missing,
      nothing in it is reused. Each node is BUILT with the new reason `target_changed`,
      and the run warns with both identities.
    - The next snapshot still follows it, so history and the compare-and-swap are
      unchanged. It holds only this run's builds, under the new identity.
-   - `ods state test` doesn't vouch for builds made in another target.
-4. **The target check is required.** If dbt can't render the profile, the run stops:
-   every other dbt command would fail the same way.
+   - `ods state test` refuses to test builds made in another target, or in one it
+     can't tell (exit 1).
+   - `ods state plan` doesn't run dbt, so it can't ask. It shows the recorded target
+     as not checked. It plans state that names another target than `--target` as
+     `run` would: nothing in it is reused. State that doesn't name a target (from
+     `ods state record`) is planned as recorded, with a note: the offline
+     `record` + `plan` workflow never has one. `ods state run` still rebuilds it once.
+4. **The target check is required to record.** If dbt can't render the profile, a run
+   that would record stops, since every other dbt command would fail the same way.
+   A dry run or `ods state compile` records nothing, so it warns and plans as if
+   nothing were built.
 
 ## Consequences
 - Positive:
@@ -80,7 +98,13 @@ switch.
     is. Changing that default target is still caught by the identity, but as a
     rebuild, not as a separate scope.
   - Older ODS versions refuse 1.1 snapshots.
-- Follow-up issues: none.
+- Identity is only as good as the fields adapters expose. An adapter without any of
+  the location fields (e.g. one configured only by region) is told apart by name,
+  profile, type and database alone. The schema is left out, since fingerprints
+  include relation names.
+- Follow-up issues: the check is an inherent method of the dbt executor, not an SDK
+  contract with a fake and a conformance suite. It becomes one when a second engine
+  needs it.
 
 ## References
 - #227; [ADR-0013](0013-state-snapshots-fingerprints-and-store.md) (scopes,

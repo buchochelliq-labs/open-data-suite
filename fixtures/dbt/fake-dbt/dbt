@@ -18,12 +18,13 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_SHOW_FAIL  the relation check fails, as when the warehouse can't be reached
   FAKE_DBT_CALLS  file to append each command to, one per line
   FAKE_DBT_TARGET_HOST  where the target is, for ODS's target check [default: fake-host]
-  FAKE_DBT_TARGET_HOST  where the target is, for ODS's target check [default: fake-host]
+  FAKE_DBT_TARGET_FAIL  the target check fails, as when the profile can't be rendered
   FAKE_DBT_SEEN  file to append, per call, its arguments and the names of the DBT_*
                  variables it was given, as one JSON line
 """
 
 import datetime
+import hashlib
 import json
 import os
 import sys
@@ -187,12 +188,16 @@ def main():
 
     if words[:1] == ["compile"] and "ods_target" in (options.get("inline") or [""])[0]:
         # ODS's target check: the target as dbt would render it.
+        if os.environ.get("FAKE_DBT_TARGET_FAIL"):
+            print("fake dbt: can't render the profile", file=sys.stderr)
+            return 2
         answer = {
             "ods_target": 1,
             "name": (options.get("target") or ["dev"])[0],
             "profile": (options.get("profile") or ["jaffle_ods"])[0],
             "type": "fake",
             "location": os.environ.get("FAKE_DBT_TARGET_HOST", "fake-host"),
+            "location_digest": hashlib.md5(os.environ.get("FAKE_DBT_TARGET_HOST", "fake-host").encode()).hexdigest(),
             "database": "jaffle_ods",
         }
         print(json.dumps({"data": {"compiled": json.dumps(answer)}, "info": {"name": "CompiledNode"}}))

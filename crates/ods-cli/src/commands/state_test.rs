@@ -74,6 +74,8 @@ pub(super) struct TestReport {
     record: Option<TestRecordReport>,
     /// The dbt settings in effect, and where each came from.
     dbt: Vec<super::state_run::DbtSetting>,
+    /// The target dbt builds in.
+    target: ods_core::state::TargetIdentity,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -84,6 +86,29 @@ struct TestRecordReport {
     snapshot: SnapshotId,
     #[serde(flatten)]
     recorded: RecordedTests,
+}
+
+/// Builds in another target aren't this target's to vouch for (#227).
+fn same_target(
+    recorded: Option<&ods_core::state::TargetIdentity>,
+    target: &ods_core::state::TargetIdentity,
+) -> Result<(), CliError> {
+    if recorded == Some(target) {
+        return Ok(());
+    }
+    Err(CliError::new(
+        ExitStatus::Failure,
+        codes::STATE_INPUT,
+        match recorded {
+            Some(recorded) => format!(
+                "ODS's builds here were made in target {recorded}, not {target}: none of them are this target's to test"
+            ),
+            None => format!(
+                "ODS's builds here don't say which target they were made in, so none of them can be tested as {target}'s"
+            ),
+        },
+    )
+    .with_hint("build in this target first, e.g. `ods state build`"))
 }
 
 impl TestReport {
@@ -150,9 +175,7 @@ impl TestReport {
         }
         let store = ws.open_store()?;
         let latest = ws.latest(&store)?.ok_or_else(no_state)?;
-        // Builds in another target aren't this target's to vouch for (#227).
-        let (latest, _) = super::state_run::in_target(Some(latest), &target, &mut warnings);
-        let latest = latest.ok_or_else(no_state)?;
+        same_target(latest.snapshot.target.as_ref(), &target)?;
 
         // What to test: built by ODS, in the selection, with checks, and not tested
         // with the checks it has now unless --all. A node without checks has nothing
@@ -186,6 +209,7 @@ impl TestReport {
             execution: None,
             record: None,
             dbt,
+            target,
             warnings,
         };
         if requested.is_empty() {

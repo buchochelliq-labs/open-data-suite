@@ -679,26 +679,44 @@ pub(super) fn identify(executor: &DbtExecutor) -> Result<TargetIdentity, CliErro
     Ok(target)
 }
 
+/// The target a run builds in. A run that records needs it; one that doesn't (a dry
+/// run, `compile`) plans as if in an unknown target, reusing nothing.
+fn target_for(
+    executor: &DbtExecutor,
+    dry_run: bool,
+    warnings: &mut Vec<String>,
+) -> Result<Option<TargetIdentity>, CliError> {
+    match identify(executor) {
+        Ok(target) => Ok(Some(target)),
+        Err(e) if dry_run => {
+            warnings.push(format!("{e}; planned as if nothing were built yet"));
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// The recorded state to plan against in `target`: `latest` if it was built there;
 /// otherwise none of its builds count (#227), though the next snapshot still follows
 /// it. Returns whether the target changed, and says so in `warnings`.
 pub(super) fn in_target(
     latest: Option<StoredSnapshot>,
-    target: &TargetIdentity,
+    target: Option<&TargetIdentity>,
     warnings: &mut Vec<String>,
 ) -> (Option<StoredSnapshot>, bool) {
     let Some(latest) = latest else {
         return (None, false);
     };
-    if latest.snapshot.target.as_ref() == Some(target) {
+    if target.is_some() && latest.snapshot.target.as_ref() == target {
         return (Some(latest), false);
     }
-    warnings.push(match &latest.snapshot.target {
-        Some(before) => format!(
+    warnings.push(match (&latest.snapshot.target, target) {
+        (Some(before), Some(target)) => format!(
             "the recorded state was built in target {before}, not {target}: nothing in it is reused"
         ),
-        None => format!(
-            "the recorded state doesn't say which target it was built in (it predates ODS recording targets): nothing in it is reused, and this run records {target}"
+        (None, _) => "the recorded state doesn't say which target it was built in (it predates ODS recording targets, or was recorded with `ods state record`): nothing in it is reused".to_owned(),
+        (Some(before), None) => format!(
+            "the recorded state was built in target {before}, and which target dbt builds in now is unknown: nothing in it is reused"
         ),
     });
     let mut empty = latest.snapshot.clone();
@@ -906,7 +924,7 @@ fn record(
     tested: bool,
     sources: Sources,
     execution: &ExecutionReport,
-    (latest, target): (Option<&StoredSnapshot>, &TargetIdentity),
+    (latest, target): (Option<&StoredSnapshot>, Option<&TargetIdentity>),
     store: &SqliteStateStore,
     planned_checks: &BTreeMap<String, Option<String>>,
 ) -> Result<RunRecord, CliError> {
@@ -965,7 +983,7 @@ fn record(
         execution.finished_at,
         sources_recorded,
     );
-    recorded.snapshot.target = Some(target.clone());
+    recorded.snapshot.target = target.cloned();
     tracing::info!(
         run = %execution.run_id,
         advanced = recorded.advanced.len(),
@@ -1061,8 +1079,9 @@ pub(super) struct RunReport {
     warnings: Vec<String>,
     /// The dbt settings in effect, and where each came from.
     dbt: Vec<DbtSetting>,
-    /// The target dbt builds in.
-    target: TargetIdentity,
+    /// The target dbt builds in, if dbt could say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<TargetIdentity>,
     #[serde(skip)]
     has_sources: bool,
     /// Each node's checks digest when planned, for recording.
@@ -1127,11 +1146,11 @@ impl RunReport {
 
         // 1. Prepare: the code as it is, and the target dbt builds in.
         let (prepared, sources) = prepare(args, &executor, &mut warnings)?;
-        let target = identify(&executor)?;
+        let dry_run = !builds || args.get_flag("dry-run");
+        let target = target_for(&executor, dry_run, &mut warnings)?;
 
         // 2. Plan.
         let mut ws = Workspace::load(args, sources)?;
-        let dry_run = !builds || args.get_flag("dry-run");
         let tested = execution_tested(kind, args);
         let store = if dry_run && !ws.state_db.is_file() {
             None
@@ -1142,7 +1161,7 @@ impl RunReport {
             Some(store) => ws.latest(store)?,
             None => None,
         };
-        let (latest, target_changed) = in_target(latest, &target, &mut warnings);
+        let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
         // One clock for the check and the plan, so they agree on what is due.
         let now = Timestamp::now();
         let options = check_relations(
@@ -1261,7 +1280,7 @@ impl RunReport {
             self.tests,
             sources,
             &execution,
-            (latest, &self.target),
+            (latest, self.target.as_ref()),
             store,
             &self.planned_checks,
         );
@@ -1314,7 +1333,14 @@ impl RunReport {
             ),
         ];
         summary.push(("dbt".into(), vec![Span::plain(settings_line(&self.dbt))]));
-        summary.push(("target".into(), vec![Span::plain(self.target.to_string())]));
+        summary.push((
+            "target".into(),
+            vec![Span::plain(
+                self.target
+                    .as_ref()
+                    .map_or_else(|| "unknown".to_owned(), ToString::to_string),
+            )],
+        ));
         if let Some(command) = self.execution.as_ref().and_then(|e| e.command.as_deref()) {
             summary.push(("ran".into(), vec![Span::toned(command, Tone::Code)]));
         }

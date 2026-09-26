@@ -180,9 +180,9 @@ pub fn record(
         }
     }
     Recorded {
-        // Built where the previous state was, unless the caller knows better.
-        snapshot: StateSnapshot::new(previous.map(|(id, _)| id), finished_at, run_id, nodes)
-            .with_target(previous.and_then(|(_, s)| s.target.clone())),
+        // Where these builds went is the caller's to say (#227): the previous
+        // snapshot's target is no evidence of it.
+        snapshot: StateSnapshot::new(previous.map(|(id, _)| id), finished_at, run_id, nodes),
         advanced: advanced.into_iter().collect(),
         kept,
         ignored: ignored.into_iter().collect(),

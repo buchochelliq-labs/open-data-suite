@@ -671,8 +671,15 @@ target's name, profile, adapter type, host or account and database; never a
 credential) and record that in each snapshot. When it differs from the recorded one
 (same target name on another host, another profile, or state recorded before ODS
 kept targets), nothing in the recorded state is reused: everything builds, with the
-reason `target changed`, and the run says which targets differ. `ods state test`
-doesn't test another target's builds.
+reason `target changed`, and the run says which targets differ. A host, account or
+path is shown without anything that could be a credential (a user, a query string),
+and compared by a digest. `ods state test` refuses to test another target's builds.
+`ods state plan` doesn't run dbt: it shows the target the state was recorded in as not
+checked (use `ods state compile` for a checked plan). State recorded under another
+target name than `--target` is planned with nothing reused; state without a target is
+planned as recorded, with a note.
+`ods state record` doesn't know where the dbt build it records went, so it records no
+target: the next run rebuilds once.
 
 ## Entity-relationship diagrams
 

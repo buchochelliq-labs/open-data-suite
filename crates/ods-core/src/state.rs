@@ -492,8 +492,12 @@ pub struct TargetIdentity {
     pub profile: Option<String>,
     /// The kind of warehouse, e.g. an adapter type.
     pub kind: Option<String>,
-    /// Where it is: a host, account or file, without credentials.
+    /// Where it is, for people: a host, account or file, with anything that could be a
+    /// credential (a user, a query string) left out. Not enough to tell targets apart.
     pub location: Option<String>,
+    /// A digest of where it is, in full: tells targets apart without keeping, or
+    /// showing, what the location might carry.
+    pub location_digest: Option<String>,
     /// The database or catalog builds go to.
     pub database: Option<String>,
 }
@@ -506,6 +510,7 @@ impl TargetIdentity {
             profile: None,
             kind: None,
             location: None,
+            location_digest: None,
             database: None,
         }
     }
@@ -528,6 +533,13 @@ impl TargetIdentity {
     #[must_use]
     pub fn location(mut self, location: Option<String>) -> Self {
         self.location = location;
+        self
+    }
+
+    /// Sets the location's digest.
+    #[must_use]
+    pub fn location_digest(mut self, digest: Option<String>) -> Self {
+        self.location_digest = digest;
         self
     }
 
@@ -850,6 +862,18 @@ mod tests {
             serde_json::from_value::<StateSnapshot>(json).unwrap(),
             snapshot
         );
+        // A 1.0 document, as stored before targets were recorded, still reads: with
+        // no target.
+        let old = serde_json::json!({
+            "schema_version": {"major": 1, "minor": 0},
+            "parent": null,
+            "created_at": "1970-01-01T00:00:20Z",
+            "run_id": "run-0",
+            "nodes": {}
+        });
+        let old: StateSnapshot = serde_json::from_value(old).unwrap();
+        assert!(STATE_SCHEMA_VERSION.can_read(old.schema_version));
+        assert_eq!(old.target, None);
         // With one, it round-trips too.
         let targeted = snapshot.with_target(Some(
             TargetIdentity::new("prod").location(Some("db.example.com".into())),
