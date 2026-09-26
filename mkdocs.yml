@@ -91,4 +91,5 @@ nav:
       - adr/0014-executor-contract-and-state-run.md
       - adr/0015-cli-compatibility-front-ends.md
       - adr/0016-relation-existence-before-reuse.md
+      - adr/0017-state-per-target.md
   - Legal and trademarks: legal.md

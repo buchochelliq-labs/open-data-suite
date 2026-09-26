@@ -72,6 +72,8 @@ pub enum DbtStep {
         /// How many nodes' tests are selected.
         nodes: usize,
     },
+    /// `dbt compile --inline`: which target dbt builds in.
+    Identify,
     /// `dbt show`: whether the relations of `nodes` nodes ODS would reuse still exist.
     RelationCheck {
         /// How many nodes ODS would reuse.
@@ -787,6 +789,56 @@ impl Provider for DbtExecutor {
             env!("CARGO_PKG_VERSION"),
             CapabilitySet::from([Capability::RelationExistence]),
         )
+    }
+}
+
+/// Where the target check writes its artifacts, apart from the target path's own.
+const TARGET_CHECK_DIR: &str = "ods-target-check";
+
+impl DbtExecutor {
+    /// The target dbt builds in, without credentials (#227): one `dbt compile
+    /// --inline` of the non-secret fields of dbt's `target`, which resolves the
+    /// profile as every other dbt command here does.
+    ///
+    /// # Errors
+    /// If dbt can't render the profile, or its answer can't be read.
+    pub async fn identify(&self) -> Result<ods_core::state::TargetIdentity, ProviderError> {
+        self.refuse_env()?;
+        let target = self.target_path().join(TARGET_CHECK_DIR);
+        // A best effort: dbt parses from scratch without it, just more slowly.
+        if std::fs::create_dir_all(&target).is_ok() {
+            let _ = std::fs::copy(
+                self.artifact("partial_parse.msgpack"),
+                target.join("partial_parse.msgpack"),
+            );
+        }
+        let mut args = vec![
+            "compile".to_owned(),
+            "--quiet".to_owned(),
+            "--inline".to_owned(),
+            crate::target::QUERY.to_owned(),
+            "--output".to_owned(),
+            "json".to_owned(),
+            "--log-format".to_owned(),
+            "json".to_owned(),
+            // Rendering `target` needs no warehouse metadata.
+            "--no-populate-cache".to_owned(),
+            "--no-introspect".to_owned(),
+        ];
+        args.extend(self.common_args_in("compile", &target));
+        self.step(DbtStep::Identify);
+        let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
+        if !ok {
+            return Err(Self::failure(
+                "dbt couldn't say which target it builds in (`dbt compile --inline`)",
+                &tail,
+            ));
+        }
+        crate::target::parse(&stdout).map_err(|why| {
+            ProviderError::Other(format!(
+                "dbt couldn't say which target it builds in (`dbt compile --inline`): {why}"
+            ))
+        })
     }
 }
 

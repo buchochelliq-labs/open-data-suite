@@ -17,7 +17,8 @@ use crate::SchemaVersion;
 use crate::freshness::FreshnessPolicy;
 
 /// Version of [`StateSnapshot`] and [`ExecutionPlan`] documents.
-pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+/// 1.1 adds [`StateSnapshot::target`].
+pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -474,6 +475,95 @@ pub struct StateSnapshot {
     pub run_id: String,
     /// Node id → last successful build.
     pub nodes: BTreeMap<String, NodeState>,
+    /// Where it was built, if known. A build is only reused in the same target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<TargetIdentity>,
+}
+
+/// Which warehouse target builds went to, without anything secret: enough to tell
+/// two targets apart, never enough to connect (AGENTS.md rule 9).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct TargetIdentity {
+    /// The target's name, e.g. `prod`.
+    pub name: String,
+    /// The profile it belongs to, if the engine has profiles.
+    pub profile: Option<String>,
+    /// The kind of warehouse, e.g. an adapter type.
+    pub kind: Option<String>,
+    /// Where it is, for people: a host, account or file, with anything that could be a
+    /// credential (a user, a query string) left out. Not enough to tell targets apart.
+    pub location: Option<String>,
+    /// A digest of where it is, in full: tells targets apart without keeping, or
+    /// showing, what the location might carry.
+    pub location_digest: Option<String>,
+    /// The database or catalog builds go to.
+    pub database: Option<String>,
+}
+
+impl TargetIdentity {
+    /// A target called `name`, with nothing else known yet.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            profile: None,
+            kind: None,
+            location: None,
+            location_digest: None,
+            database: None,
+        }
+    }
+
+    /// Sets the profile.
+    #[must_use]
+    pub fn profile(mut self, profile: Option<String>) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// Sets the kind.
+    #[must_use]
+    pub fn kind(mut self, kind: Option<String>) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Sets the location.
+    #[must_use]
+    pub fn location(mut self, location: Option<String>) -> Self {
+        self.location = location;
+        self
+    }
+
+    /// Sets the location's digest.
+    #[must_use]
+    pub fn location_digest(mut self, digest: Option<String>) -> Self {
+        self.location_digest = digest;
+        self
+    }
+
+    /// Sets the database.
+    #[must_use]
+    pub fn database(mut self, database: Option<String>) -> Self {
+        self.database = database;
+        self
+    }
+}
+
+impl fmt::Display for TargetIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)?;
+        let details: Vec<&str> = [&self.profile, &self.kind, &self.location, &self.database]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        if !details.is_empty() {
+            write!(f, " ({})", details.join(", "))?;
+        }
+        Ok(())
+    }
 }
 
 impl StateSnapshot {
@@ -490,7 +580,15 @@ impl StateSnapshot {
             created_at,
             run_id: run_id.into(),
             nodes,
+            target: None,
         }
+    }
+
+    /// Sets where its builds went.
+    #[must_use]
+    pub fn with_target(mut self, target: Option<TargetIdentity>) -> Self {
+        self.target = target;
+        self
     }
 }
 
@@ -537,6 +635,9 @@ pub enum ReasonCode {
     /// A full refresh was asked for, and rebuilds it from scratch (e.g. an incremental
     /// model).
     FullRefreshRequested,
+    /// Its last build went to another target (another host, account, database or
+    /// profile), or to one ODS can't identify.
+    TargetChanged,
     /// It would be reused, but its relation isn't in the warehouse any more.
     RelationMissing,
     /// It would be reused, but whether its relation is still in the warehouse couldn't
@@ -748,9 +849,11 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(
             json["schema_version"],
-            serde_json::json!({"major": 1, "minor": 0})
+            serde_json::json!({"major": 1, "minor": 1})
         );
         assert_eq!(json["parent"], 3);
+        // No target: left out, so 1.0 readers' documents and ours look alike.
+        assert!(json.get("target").is_none());
         assert_eq!(
             json["nodes"]["model.p.a"]["built_at"],
             "1970-01-01T00:00:10Z"
@@ -758,6 +861,28 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<StateSnapshot>(json).unwrap(),
             snapshot
+        );
+        // A 1.0 document, as stored before targets were recorded, still reads: with
+        // no target.
+        let old = serde_json::json!({
+            "schema_version": {"major": 1, "minor": 0},
+            "parent": null,
+            "created_at": "1970-01-01T00:00:20Z",
+            "run_id": "run-0",
+            "nodes": {}
+        });
+        let old: StateSnapshot = serde_json::from_value(old).unwrap();
+        assert!(STATE_SCHEMA_VERSION.can_read(old.schema_version));
+        assert_eq!(old.target, None);
+        // With one, it round-trips too.
+        let targeted = snapshot.with_target(Some(
+            TargetIdentity::new("prod").location(Some("db.example.com".into())),
+        ));
+        let json = serde_json::to_value(&targeted).unwrap();
+        assert_eq!(json["target"]["name"], "prod");
+        assert_eq!(
+            serde_json::from_value::<StateSnapshot>(json).unwrap(),
+            targeted
         );
     }
 }

@@ -20,5 +20,6 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0014](0014-executor-contract-and-state-run.md) | The Executor contract and `ods state run` | Proposed | #23, #24, #211 |
 | [0015](0015-cli-compatibility-front-ends.md) | A dbt-shaped CLI, and compatibility front-ends for other tools' CLIs | Proposed | #224, #225, #226 |
 | [0016](0016-relation-existence-before-reuse.md) | Check that a relation still exists before reusing it | Proposed | #230 |
+| [0017](0017-state-per-target.md) | State per dbt target, with a non-secret target identity | Proposed | #227 |
 
 Planned for M0: ADR-0007 clean-room & licensing policy (#10).
