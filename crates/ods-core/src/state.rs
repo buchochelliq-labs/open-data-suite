@@ -537,6 +537,10 @@ pub enum ReasonCode {
     /// A full refresh was asked for, and rebuilds it from scratch (e.g. an incremental
     /// model).
     FullRefreshRequested,
+    /// A parent is rebuilt from scratch by a full refresh, or reads one that is, so
+    /// its data is rebuilt too, whatever the lag tolerance: a full refresh is how data
+    /// is corrected.
+    UpstreamFullRefresh,
     /// It would be reused, but its relation isn't in the warehouse any more.
     RelationMissing,
     /// It would be reused, but whether its relation is still in the warehouse couldn't

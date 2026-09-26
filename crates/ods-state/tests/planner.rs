@@ -883,6 +883,46 @@ fn a_failed_build_clears_the_tested_mark_it_kept() {
     assert!(skipped.nodes["model.p.orders"].tested.is_some());
 }
 
+/// A full refresh corrects data: like a code change, it reaches everything
+/// downstream now, whatever their lag tolerance.
+#[test]
+fn a_full_refresh_reaches_everything_downstream_whatever_the_lag() {
+    use ods_state::{PlanOptions, plan_with};
+    let mut p = project();
+    // `stg_orders` is incremental; `orders` and `report` tolerate an hour of lag.
+    p.nodes[0] = p.nodes[0].clone().full_refresh_rebuilds();
+    p.nodes[2].policy.lag_tolerance_secs = 3600;
+    p.nodes[3].policy.lag_tolerance_secs = 3600;
+    let state = built(&p);
+    let plan = plan_with(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+        PlanOptions::default().full_refresh(),
+    )
+    .unwrap();
+    let why = |name: &str| {
+        let e = plan.entries.iter().find(|e| e.name == name).unwrap();
+        (e.action, e.reasons[0].code)
+    };
+    assert_eq!(
+        why("stg_orders"),
+        (PlanAction::Build, ReasonCode::FullRefreshRequested)
+    );
+    assert_eq!(
+        why("orders"),
+        (PlanAction::Build, ReasonCode::UpstreamFullRefresh)
+    );
+    // Two steps down, through a reader that isn't incremental itself.
+    assert_eq!(
+        why("report"),
+        (PlanAction::Build, ReasonCode::UpstreamFullRefresh)
+    );
+    // Nothing else is touched.
+    assert_eq!(why("stg_users"), (PlanAction::Reuse, ReasonCode::Unchanged));
+}
+
 #[test]
 fn a_full_refresh_rebuilds_the_selected_nodes_it_changes_and_their_readers() {
     use ods_state::{PlanOptions, plan_with};
@@ -915,12 +955,14 @@ fn a_full_refresh_rebuilds_the_selected_nodes_it_changes_and_their_readers() {
         (all["orders"].0, all["orders"].1),
         (PlanAction::Build, ReasonCode::FullRefreshRequested)
     );
-    // Its reader sees new data, and says where from.
-    assert_eq!(all["report"].0, PlanAction::Build);
-    assert!(
-        all["report"].2.contains("orders (full refresh)"),
-        "{}",
-        all["report"].2
+    // Its reader is rebuilt too, and says where from.
+    assert_eq!(
+        (all["report"].0, all["report"].1),
+        (PlanAction::Build, ReasonCode::UpstreamFullRefresh)
+    );
+    assert_eq!(
+        all["report"].2,
+        "upstream full refresh: orders will be rebuilt from scratch"
     );
     // Nodes a full refresh doesn't change (tables, views) are still reused.
     assert_eq!(all["stg_orders"].0, PlanAction::Reuse);

@@ -472,6 +472,7 @@ fn reason_label(code: ReasonCode) -> &'static str {
         ReasonCode::UnknownDependency => "depends on something ODS can't see",
         ReasonCode::PolicyBlocksReuse => "its policy never reuses it",
         ReasonCode::FullRefreshRequested => "full refresh requested",
+        ReasonCode::UpstreamFullRefresh => "upstream full refresh",
         ReasonCode::RelationMissing => "not in the warehouse",
         ReasonCode::RelationUnverified => "couldn't check the warehouse",
         _ => "other",

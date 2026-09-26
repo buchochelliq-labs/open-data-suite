@@ -100,6 +100,8 @@ fn order(project: &Project) -> Result<Vec<(&Node, u32)>, PlanError> {
 struct Inputs {
     /// Parents that will be built because their code changed.
     code_changed: Vec<String>,
+    /// Parents rebuilt from scratch by a full refresh, or downstream of one.
+    refreshed: Vec<String>,
     /// Parents with data newer than what the node was built from.
     new_data: Vec<String>,
     /// Parents without new data.
@@ -151,8 +153,11 @@ impl Context<'_> {
             if *action == PlanAction::Build {
                 if is_code_change(*code) {
                     inputs.code_changed.push(name);
-                } else if *code == ReasonCode::FullRefreshRequested {
-                    inputs.new_data.push(format!("{name} (full refresh)"));
+                } else if matches!(
+                    *code,
+                    ReasonCode::FullRefreshRequested | ReasonCode::UpstreamFullRefresh
+                ) {
+                    inputs.refreshed.push(name);
                 } else {
                     inputs.new_data.push(name);
                 }
@@ -281,6 +286,17 @@ fn decide(
             format!(
                 "upstream code changed: {} will be rebuilt",
                 inputs.code_changed.join(", ")
+            ),
+        );
+    }
+    // Like a code change, a full refresh reaches everything downstream now: it is how
+    // data gets corrected, so waiting out a lag tolerance would defeat it.
+    if !inputs.refreshed.is_empty() {
+        return build(
+            ReasonCode::UpstreamFullRefresh,
+            format!(
+                "upstream full refresh: {} will be rebuilt from scratch",
+                inputs.refreshed.join(", ")
             ),
         );
     }
