@@ -22,9 +22,9 @@ use serde::Serialize;
 use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, select_specs, store_error,
 };
-use super::state_run::{LeftOut, dbt_args, dbt_options, executor, narrow};
+use super::state_run::{LeftOut, Steps, dbt_args, dbt_options, executor, narrow};
 use crate::exit::{CliError, ExitStatus, codes};
-use crate::module::Context;
+use crate::module::{Context, ProgressSettings};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
 
 /// `ods state test`'s own arguments.
@@ -85,7 +85,7 @@ struct TestRecordReport {
 impl TestReport {
     /// Runs the tests and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let report = Self::build(args)?;
+        let report = Self::build(args, ctx.progress)?;
         if report.outcome == TestOutcome::Incomplete {
             let error = CliError::new(
                 ExitStatus::Failure,
@@ -115,13 +115,15 @@ impl TestReport {
         ctx.emit(&report)
     }
 
-    fn build(args: &ArgMatches) -> Result<Self, CliError> {
+    fn build(args: &ArgMatches, progress: ProgressSettings) -> Result<Self, CliError> {
         let target_dir = PathBuf::from(
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        let executor = executor(args, &target_dir);
-        if !args.get_flag("no-compile") {
+        let compiles = !args.get_flag("no-compile");
+        let steps = Steps::new(progress, usize::from(compiles) + 1);
+        let executor = steps.attach(executor(args, &target_dir));
+        if compiles {
             block_on(executor.prepare(&PrepareRequest::new()))?.map_err(|e| {
                 CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
                     .with_hint("fix the project so `dbt compile` succeeds, or use --no-compile")
@@ -177,6 +179,7 @@ impl TestReport {
             record: None,
         };
         if requested.is_empty() {
+            steps.note("nothing to test, so dbt doesn't run again");
             return Ok(report);
         }
 
@@ -186,25 +189,7 @@ impl TestReport {
             CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
                 .with_hint("nothing was recorded")
         })?;
-        // A check that didn't run leaves its node untested (the executor lists it as
-        // skipped), so partial results can't mark anything tested. But if dbt failed
-        // with no test failing, something else went wrong: nothing is marked tested.
-        let failed =
-            |n: &NodeExecution| n.status == ExecutionStatus::Failed || !n.checks_failed.is_empty();
-        let trusted = execution.succeeded || execution.nodes.iter().any(failed);
-        let results: Vec<TestResult> = execution
-            .nodes
-            .iter()
-            .filter_map(|n| {
-                if failed(n) {
-                    Some(TestResult::new(n.node.clone(), false, n.completed_at))
-                } else if trusted && n.fully_checked() {
-                    Some(TestResult::new(n.node.clone(), true, n.completed_at))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let results = results_to_record(&execution);
         let recorded = ods_state::record_tests(
             &ws.project,
             (latest.id, &latest.snapshot),
@@ -311,6 +296,29 @@ impl Present for TestReport {
         }
         ViewNode::Group(blocks)
     }
+}
+
+/// What a test run shows about each node. A check that didn't run leaves its node
+/// untested (the executor lists it as skipped), so partial results can't mark anything
+/// tested. But if dbt failed with no test failing, something else went wrong: nothing
+/// is marked tested. Nodes whose tests didn't all run keep what they had.
+fn results_to_record(execution: &ExecutionReport) -> Vec<TestResult> {
+    let failed =
+        |n: &NodeExecution| n.status == ExecutionStatus::Failed || !n.checks_failed.is_empty();
+    let trusted = execution.succeeded || execution.nodes.iter().any(failed);
+    execution
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            if failed(n) {
+                Some(TestResult::new(n.node.clone(), false, n.completed_at))
+            } else if trusted && n.fully_checked() {
+                Some(TestResult::new(n.node.clone(), true, n.completed_at))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// One node's test outcome, for people.

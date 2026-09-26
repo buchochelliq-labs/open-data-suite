@@ -323,12 +323,31 @@ fn dbt_output_streams_to_stderr() {
     let (code, json, stderr) =
         project.ods_with_stderr(&["state", "run", "--dbt", dbt.to_str().unwrap()]);
     assert_eq!(code, 0, "{json:#}");
-    for line in ["fake dbt: compile", "fake dbt: build"] {
-        assert!(
-            stderr.contains(line),
-            "{line} missing from stderr:\n{stderr}"
-        );
+    // ODS says which dbt command runs, and why, just before dbt's own output (#220).
+    let expected = [
+        "ods ▸ 1/3 dbt source freshness: how new each source's data is",
+        "fake dbt: source freshness",
+        "ods ▸ 2/3 dbt compile: the code as it is now, for the plan",
+        "fake dbt: compile",
+        "ods ▸ plan: 13 to build, 0 to reuse",
+        "ods ▸ 3/3 dbt build: 13 nodes, without tests",
+        "fake dbt: build",
+    ];
+    let mut rest = stderr.as_str();
+    for line in expected {
+        let at = rest
+            .find(line)
+            .unwrap_or_else(|| panic!("{line:?} missing or out of order in stderr:\n{stderr}"));
+        rest = &rest[at + line.len()..];
     }
+    let (_, _, again) = project.ods_with_stderr(&["state", "run", "--dbt", dbt.to_str().unwrap()]);
+    assert!(
+        again.contains("ods ▸ nothing to build, so dbt doesn't run again"),
+        "{again}"
+    );
+    let (_, _, quiet) =
+        project.ods_with_stderr(&["-q", "state", "run", "--dbt", dbt.to_str().unwrap()]);
+    assert!(!quiet.contains("ods ▸"), "-q hides progress: {quiet}");
     let (_, _, captured) = project.ods_with_stderr(&[
         "state",
         "run",

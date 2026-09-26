@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use ods_core::CapabilitySet;
@@ -44,6 +45,31 @@ pub enum DbtOutput {
     Capture,
 }
 
+/// A dbt command the executor is about to run, for callers that show progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DbtStep {
+    /// `dbt source freshness`: how new each source's data is.
+    SourceFreshness,
+    /// `dbt compile`: the compiled SQL fingerprints need.
+    Compile,
+    /// `dbt build` of `nodes` nodes, with or without their tests.
+    Build {
+        /// How many nodes are selected.
+        nodes: usize,
+        /// Whether their tests run too.
+        tests: bool,
+    },
+    /// `dbt test` of `nodes` nodes' tests.
+    Test {
+        /// How many nodes' tests are selected.
+        nodes: usize,
+    },
+}
+
+/// Called before each dbt command runs.
+pub type StepHook = Arc<dyn Fn(DbtStep) + Send + Sync>;
+
 /// Runs the dbt CLI.
 #[derive(Clone)]
 pub struct DbtExecutor {
@@ -54,6 +80,7 @@ pub struct DbtExecutor {
     target: Option<String>,
     env: BTreeMap<String, String>,
     output: DbtOutput,
+    on_step: Option<StepHook>,
 }
 
 // Environment values can be credentials: show only their names.
@@ -67,6 +94,7 @@ impl std::fmt::Debug for DbtExecutor {
             .field("target", &self.target)
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("output", &self.output)
+            .field("on_step", &self.on_step.is_some())
             .finish()
     }
 }
@@ -82,6 +110,7 @@ impl DbtExecutor {
             target: None,
             env: BTreeMap::new(),
             output: DbtOutput::default(),
+            on_step: None,
         }
     }
 
@@ -118,6 +147,19 @@ impl DbtExecutor {
     pub fn output(mut self, output: DbtOutput) -> Self {
         self.output = output;
         self
+    }
+
+    /// Calls `hook` before each dbt command, e.g. to say which one runs and why.
+    #[must_use]
+    pub fn on_step(mut self, hook: impl Fn(DbtStep) + Send + Sync + 'static) -> Self {
+        self.on_step = Some(Arc::new(hook));
+        self
+    }
+
+    fn step(&self, step: DbtStep) {
+        if let Some(hook) = &self.on_step {
+            hook(step);
+        }
     }
 
     /// The target path as dbt must see it: absolute, since dbt resolves a relative one
@@ -619,6 +661,7 @@ impl Executor for DbtExecutor {
             let before = sources_invocation_of(&sources);
             let mut args = vec!["source".to_owned(), "freshness".to_owned()];
             args.extend(self.common_args());
+            self.step(DbtStep::SourceFreshness);
             let (ok, _) = self.invoke(&args).await?;
             let after = sources_invocation_of(&sources);
             // A file from an earlier invocation says nothing about the data now.
@@ -636,6 +679,7 @@ impl Executor for DbtExecutor {
         }
         let mut args = vec!["compile".to_owned()];
         args.extend(self.common_args());
+        self.step(DbtStep::Compile);
         let (ok, tail) = self.invoke(&args).await?;
         if !ok {
             return Err(Self::failure(
@@ -691,6 +735,16 @@ impl Executor for DbtExecutor {
         let command = self.display(&args);
         let results_path = self.artifact("run_results.json");
         let before = invocation_of(&results_path);
+        self.step(if request.mode == ExecutionMode::Test {
+            DbtStep::Test {
+                nodes: request.nodes.len(),
+            }
+        } else {
+            DbtStep::Build {
+                nodes: request.nodes.len(),
+                tests: request.mode == ExecutionMode::Build,
+            }
+        });
         let (ok, tail) = self.invoke(&args).await?;
         let run = match RunResults::read(&results_path) {
             Ok(run) if run.invocation_id.is_some() && run.invocation_id != before => run,

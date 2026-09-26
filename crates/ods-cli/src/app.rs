@@ -13,10 +13,11 @@ use clap::{ArgMatches, Args, Command, FromArgMatches};
 
 use crate::exit::{CliError, ExitStatus};
 use crate::logging::{self, LogArgs};
-use crate::module::{Context, Registry};
+use crate::module::{Context, ProgressSettings, Registry};
 use crate::output::{ColorChoice, Mode, OutputArgs, OutputSettings};
 use crate::present;
 use ods_config::Inputs;
+use tracing::level_filters::LevelFilter;
 
 /// Flags accepted by every command.
 #[derive(Debug, Clone, Args)]
@@ -169,7 +170,12 @@ where
     let Some(module) = registry.get(name) else {
         return ExitStatus::Usage;
     };
-    let mut ctx = Context::new(settings, &loaded, io.out, &root);
+    // Progress is information: `-q` (errors only) or `ODS_LOG=off` turns it off.
+    let progress = ProgressSettings {
+        enabled: level >= LevelFilter::WARN,
+        ansi: log_ansi,
+    };
+    let mut ctx = Context::new(settings, &loaded, io.out, &root).with_progress(progress);
     let result = module.run(sub_matches, &mut ctx).and_then(|()| {
         io.out.flush()?;
         Ok(())

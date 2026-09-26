@@ -12,11 +12,15 @@
 //!    The commit is a compare-and-swap on the state read in step 2, so a concurrent
 //!    run can't be overwritten.
 
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{ExecutionPlan, PlanAction, SnapshotId, Timestamp};
-use ods_provider_dbt::executor::{DbtExecutor, DbtOutput};
+use ods_provider_dbt::executor::{DbtExecutor, DbtOutput, DbtStep};
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, PrepareReport,
@@ -31,7 +35,7 @@ use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, plan_against, select_specs, store_error,
 };
 use crate::exit::{CliError, ExitStatus, codes};
-use crate::module::Context;
+use crate::module::{Context, ProgressSettings};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
 
 /// Options shared by the commands that run dbt (`run`, `test`).
@@ -235,6 +239,85 @@ pub(super) fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
     executor
 }
 
+/// Progress lines on stderr between dbt's own output (#220): which dbt command runs,
+/// and why. dbt starts each command with the same banner, so without them the steps
+/// look alike. They go to the process's stderr, where dbt writes, so they interleave
+/// with it in order.
+#[derive(Debug, Clone)]
+pub(super) struct Steps {
+    settings: ProgressSettings,
+    done: Arc<AtomicUsize>,
+    total: usize,
+}
+
+impl Steps {
+    /// Numbered out of `total`: the dbt commands this run will make if it builds.
+    pub(super) fn new(settings: ProgressSettings, total: usize) -> Self {
+        Self {
+            settings,
+            done: Arc::default(),
+            total,
+        }
+    }
+
+    /// A note that isn't a dbt command, e.g. the plan.
+    pub(super) fn note(&self, text: &str) {
+        self.line(None, text);
+    }
+
+    /// The dbt command about to run.
+    pub(super) fn step(&self, step: DbtStep) {
+        let n = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+        let text = match step {
+            DbtStep::SourceFreshness => {
+                "dbt source freshness: how new each source's data is".to_owned()
+            }
+            DbtStep::Compile => "dbt compile: the code as it is now, for the plan".to_owned(),
+            DbtStep::Build { nodes, tests } => format!(
+                "dbt build: {}{}",
+                count(nodes, "node"),
+                if tests {
+                    " and their tests"
+                } else {
+                    ", without tests"
+                }
+            ),
+            DbtStep::Test { nodes } => format!("dbt test: the tests of {}", count(nodes, "node")),
+            _ => "dbt".to_owned(),
+        };
+        self.line(Some(n), &text);
+    }
+
+    fn line(&self, n: Option<usize>, text: &str) {
+        if !self.settings.enabled {
+            return;
+        }
+        let number = n.map_or_else(String::new, |n| format!("{n}/{} ", self.total.max(n)));
+        let line = if self.settings.ansi {
+            format!("\x1b[1;36mods ▸\x1b[0m \x1b[1m{number}\x1b[0m{text}\n")
+        } else {
+            format!("ods ▸ {number}{text}\n")
+        };
+        // Best effort: progress must never fail the command.
+        let _ = std::io::stderr().write_all(line.as_bytes());
+    }
+
+    /// Makes `executor` announce each dbt command here.
+    pub(super) fn attach(&self, executor: DbtExecutor) -> DbtExecutor {
+        let steps = self.clone();
+        executor.on_step(move |step| steps.step(step))
+    }
+}
+
+/// The plan, in one line.
+fn plan_note(report: &RunReport) -> String {
+    let mut note = format!("plan: {} to build, {} to reuse", report.build, report.reuse);
+    if !report.left_out.is_empty() {
+        let _ = write!(note, ", {} left out", report.left_out.len());
+    }
+    note
+}
+
 /// Whether this run tests what it builds (`--test`).
 fn execution_tested(args: &ArgMatches) -> bool {
     args.get_flag("test")
@@ -435,7 +518,7 @@ pub(super) struct RunReport {
 impl RunReport {
     /// Runs the whole flow and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let (report, record_error) = Self::build(args)?;
+        let (report, record_error) = Self::build(args, ctx.progress)?;
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);
         }
@@ -471,12 +554,18 @@ impl RunReport {
 
     /// Runs the flow. A failure to record after dbt ran comes back with the report, so
     /// the caller still sees what dbt did.
-    fn build(args: &ArgMatches) -> Result<(Self, Option<CliError>), CliError> {
+    fn build(
+        args: &ArgMatches,
+        progress: ProgressSettings,
+    ) -> Result<(Self, Option<CliError>), CliError> {
         let target_dir = PathBuf::from(
             args.get_one::<String>("target-dir")
                 .map_or("target", String::as_str),
         );
-        let executor = executor(args, &target_dir);
+        let compiles = !args.get_flag("no-compile");
+        let measures = compiles && !args.get_flag("no-source-freshness");
+        let steps = Steps::new(progress, usize::from(measures) + usize::from(compiles) + 1);
+        let executor = steps.attach(executor(args, &target_dir));
         let mut warnings = Vec::new();
 
         // 1. Prepare.
@@ -520,10 +609,13 @@ impl RunReport {
             warnings,
             has_sources: !ws.project.sources.is_empty(),
         };
+        steps.note(&plan_note(&report));
         if dry_run {
+            steps.note("dry run: nothing is built or recorded");
             return Ok((report, None));
         }
         let (Some(store), false) = (store, requested.is_empty()) else {
+            steps.note("nothing to build, so dbt doesn't run again");
             report.outcome = RunOutcome::NothingToBuild;
             return Ok((report, None));
         };

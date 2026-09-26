@@ -44,6 +44,18 @@ pub struct Context<'a> {
     pub config: &'a Loaded,
     out: &'a mut dyn Write,
     root: &'a Command,
+    /// Whether and how to print progress lines on stderr.
+    pub progress: ProgressSettings,
+}
+
+/// Progress lines on stderr: short notes between another tool's output saying which
+/// step runs and why. Off with `-q`; never on stdout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProgressSettings {
+    /// Print them.
+    pub enabled: bool,
+    /// Style them with ANSI escapes.
+    pub ansi: bool,
 }
 
 impl<'a> Context<'a> {
@@ -59,7 +71,15 @@ impl<'a> Context<'a> {
             config,
             out,
             root,
+            progress: ProgressSettings::default(),
         }
+    }
+
+    /// Sets how progress lines are shown.
+    #[must_use]
+    pub fn with_progress(mut self, progress: ProgressSettings) -> Self {
+        self.progress = progress;
+        self
     }
 
     /// Writes a command result in the active output mode.

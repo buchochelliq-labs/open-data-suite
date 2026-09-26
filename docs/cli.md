@@ -476,6 +476,18 @@ each starting with dbt's usual `Running with dbt=…` banner:
 
 `ods state test` runs 1 and 2 the same way, then `dbt test --select …`.
 
+- **ODS's step lines** on stderr say which dbt command is about to run and why, since
+  dbt starts each one with the same banner; the plan is summed up between them:
+
+  ```text
+  ods ▸ 1/3 dbt source freshness: how new each source's data is
+  ods ▸ 2/3 dbt compile: the code as it is now, for the plan
+  ods ▸ plan: 13 to build, 0 to reuse
+  ods ▸ 3/3 dbt build: 13 nodes, without tests
+  ```
+
+  When nothing needs building, the last line is `ods ▸ nothing to build, so dbt
+  doesn't run again`. `-q` turns them off.
 - **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
   streams to **stderr** as dbt writes it, exactly as dbt prints it: ODS doesn't
   reformat it. With `--dbt-output capture` it is hidden, and the last lines are quoted
@@ -488,7 +500,7 @@ each starting with dbt's usual `Running with dbt=…` banner:
 - **dbt's own files** are written as usual: `logs/dbt.log` in the project (dbt's debug
   log), and `manifest.json`, `run_results.json` and `sources.json` in the target
   directory. ODS reads those artifacts; it keeps its state in `.ods/state.db`.
-- ODS writes no log file of its own, and prints nothing of its own while dbt runs.
+- ODS writes no log file of its own.
 
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.
