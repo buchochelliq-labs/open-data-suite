@@ -113,6 +113,10 @@ In detail:
    supply the node attributes the methods read (tags, file path, config), and the
    grammar lives in `ods-state::selection`. A method or operator ODS doesn't support is
    an error naming it, never a partial match.
+   *Amended (#227):* dbt's `DBT_*` variables are the defaults of the options ODS has
+   for them (`DBT_TARGET` for `--target`, and so on), as in dbt. dbt's `--profile` is
+   spelled `--dbt-profile` on native commands, since `--profile` is ODS's configuration
+   profile (ADR-0005); the `ods dbt` front-end takes dbt's `--profile`, as dbt does.
 2. **`ods dbt` front-end.** It accepts dbt's commands and flags:
    - `build`, `run`, `seed`, `snapshot`: ODS plans and builds only what changed
      (`run` = models, `seed`, `snapshot` = that resource type, `build` = all of them

@@ -292,3 +292,92 @@ async fn a_missing_program_is_an_error() {
         .unwrap_err();
     assert!(err.to_string().contains("couldn't start"), "{err}");
 }
+
+/// What the fake dbt saw on each call: its arguments and the `DBT_*` names in its
+/// environment.
+fn seen(dir: &Path) -> Vec<(Vec<String>, Vec<String>)> {
+    std::fs::read_to_string(dir.join("seen"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            let strings = |key: &str| {
+                v[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            };
+            (strings("argv"), strings("env"))
+        })
+        .collect()
+}
+
+/// #227: dbt settings from the environment are handled like dbt's flags. ODS passes
+/// its own settings as flags only, beats the ones a flag can beat, and refuses the rest.
+#[tokio::test]
+async fn dbt_settings_from_the_environment_are_owned_overridden_or_refused() {
+    let dir = scratch("env");
+    let run = executor(&dir)
+        .env("FAKE_DBT_SEEN", dir.join("seen").display().to_string())
+        .env("DBT_DEFER", "true")
+        .env("DBT_EMPTY", "1")
+        .env("DBT_TARGET", "elsewhere")
+        .env("DBT_LOG_LEVEL", "debug")
+        .env("DBT_SCHEMA", "a project's own")
+        .target("prod")
+        .profile("warehouse");
+    assert_eq!(run.env_warnings().len(), 2, "{:?}", run.env_warnings());
+    let report = run
+        .execute(&ExecutionRequest::new(
+            vec![RequestedNode::new(
+                "seed.jaffle_ods.raw_orders",
+                "raw_orders",
+            )],
+            ExecutionMode::Run,
+        ))
+        .await
+        .unwrap();
+    assert!(report.succeeded, "{report:?}");
+    let calls = seen(&dir);
+    let (argv, env) = calls.last().unwrap();
+    for flag in [
+        "--no-defer",
+        "--write-json",
+        "--target",
+        "prod",
+        "--profile",
+        "warehouse",
+    ] {
+        assert!(argv.iter().any(|a| a == flag), "{flag} missing: {argv:?}");
+    }
+    // `dbt seed` has no --empty, so no --no-empty either.
+    assert!(!argv.iter().any(|a| a == "--no-empty"), "{argv:?}");
+    // ODS's own settings reach dbt as flags only; the rest pass through.
+    assert!(!env.iter().any(|n| n == "DBT_TARGET"), "{env:?}");
+    for name in ["DBT_DEFER", "DBT_LOG_LEVEL", "DBT_SCHEMA"] {
+        assert!(env.iter().any(|n| n == name), "{name} missing: {env:?}");
+    }
+
+    // A setting nothing beats: refused before dbt runs.
+    let refused = executor(&dir)
+        .env("FAKE_DBT_SEEN", dir.join("seen").display().to_string())
+        .env("DBT_STATE", "prod-artifacts")
+        .execute(&ExecutionRequest::new(
+            vec![RequestedNode::new(
+                "seed.jaffle_ods.raw_orders",
+                "raw_orders",
+            )],
+            ExecutionMode::Run,
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .starts_with("unset DBT_STATE for ODS runs"),
+        "{refused}"
+    );
+    assert_eq!(seen(&dir).len(), calls.len(), "dbt didn't run");
+}

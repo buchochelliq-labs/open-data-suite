@@ -17,6 +17,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
                     node brings it back [default: every relation exists]
   FAKE_DBT_SHOW_FAIL  the relation check fails, as when the warehouse can't be reached
   FAKE_DBT_CALLS  file to append each command to, one per line
+  FAKE_DBT_SEEN  file to append, per call, its arguments and the names of the DBT_*
+                 variables it was given, as one JSON line
 """
 
 import datetime
@@ -156,6 +158,10 @@ def show(options, manifest, target):
 
 def main():
     words, options = parse(sys.argv[1:])
+    if os.environ.get("FAKE_DBT_SEEN"):
+        with open(os.environ["FAKE_DBT_SEEN"], "a") as f:
+            seen = {"argv": sys.argv[1:], "env": sorted(k for k in os.environ if k.startswith("DBT_"))}
+            f.write(json.dumps(seen) + "\n")
     if os.environ.get("FAKE_DBT_CALLS") and words:
         with open(os.environ["FAKE_DBT_CALLS"], "a") as f:
             f.write(" ".join(words) + "\n")

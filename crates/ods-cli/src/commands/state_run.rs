@@ -76,21 +76,27 @@ pub(super) fn dbt_options(command: Command) -> Command {
                 .help("The dbt executable"),
         )
         .arg(
-            Arg::new("project-dir")
-                .long("project-dir")
-                .value_name("DIR")
-                .help("dbt's --project-dir"),
-        )
-        .arg(
             Arg::new("profiles-dir")
                 .long("profiles-dir")
                 .value_name("DIR")
+                .env("DBT_PROFILES_DIR")
+                .hide_env_values(true)
                 .help("dbt's --profiles-dir"),
+        )
+        .arg(
+            Arg::new("dbt-profile")
+                .long("dbt-profile")
+                .value_name("NAME")
+                .env("DBT_PROFILE")
+                .hide_env_values(true)
+                .help("dbt's --profile: the profile in profiles.yml to use instead of the project's (ODS's own --profile picks its configuration)"),
         )
         .arg(
             Arg::new("target")
                 .long("target")
                 .value_name("NAME")
+                .env("DBT_TARGET")
+                .hide_env_values(true)
                 .help("dbt's --target (the profile output to use)"),
         )
         .arg(
@@ -224,6 +230,8 @@ pub(super) fn build_command(kind: Kind) -> Command {
             Arg::new("full-refresh")
                 .long("full-refresh")
                 .action(ArgAction::SetTrue)
+                .env("DBT_FULL_REFRESH")
+                .value_parser(clap::builder::BoolishValueParser::new())
                 .help("Rebuild the selected incremental models and seeds from scratch, even if unchanged, as dbt's --full-refresh does"),
         );
     }
@@ -306,6 +314,103 @@ pub(super) fn narrow(
     Ok((requested, left_out))
 }
 
+/// A dbt setting in effect for a run, and where it came from (#227).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct DbtSetting {
+    name: &'static str,
+    value: String,
+    /// `flag`, the `DBT_*` variable it was read from, or `default`.
+    source: String,
+}
+
+/// The dbt settings ODS passes to dbt, and where each came from: ODS's option, the
+/// dbt variable it reads as that option's default, or a default.
+pub(super) fn dbt_settings(args: &ArgMatches, target_dir: &Path) -> Vec<DbtSetting> {
+    let source = |id: &str, env: &str| match args.value_source(id) {
+        Some(clap::parser::ValueSource::EnvVariable) => env.to_owned(),
+        Some(clap::parser::ValueSource::CommandLine) => "flag".to_owned(),
+        _ => "default".to_owned(),
+    };
+    let mut settings = Vec::new();
+    for (name, id, env) in [
+        ("target", "target", "DBT_TARGET"),
+        ("profile", "dbt-profile", "DBT_PROFILE"),
+        ("profiles_dir", "profiles-dir", "DBT_PROFILES_DIR"),
+        ("project_dir", "project-dir", "DBT_PROJECT_DIR"),
+        ("vars", "vars", ""),
+    ] {
+        if let Some(value) = args.try_get_one::<String>(id).ok().flatten() {
+            settings.push(DbtSetting {
+                name,
+                value: value.clone(),
+                source: source(id, env),
+            });
+        }
+    }
+    settings.push(DbtSetting {
+        name: "target_dir",
+        value: target_dir.display().to_string(),
+        source: match args.value_source("target-dir") {
+            Some(_) => source("target-dir", "DBT_TARGET_PATH"),
+            None if args.value_source("project-dir").is_some() => "project_dir".to_owned(),
+            None => "default".to_owned(),
+        },
+    });
+    if full_refresh(args) {
+        settings.push(DbtSetting {
+            name: "full_refresh",
+            value: "true".to_owned(),
+            source: source("full-refresh", "DBT_FULL_REFRESH"),
+        });
+    }
+    settings
+}
+
+/// The settings on one line, for people: `target prod (DBT_TARGET), …`.
+pub(super) fn settings_line(settings: &[DbtSetting]) -> String {
+    settings
+        .iter()
+        .map(|s| {
+            if s.source == "flag" {
+                format!("{} {}", s.name, s.value)
+            } else {
+                format!("{} {} ({})", s.name, s.value, s.source)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Before any dbt call: returns the dbt settings in effect, and logs them; refuses dbt
+/// settings in the environment that change what is built or recorded and that no
+/// flag beats; and warns about the ones ODS overrides (#227), and about artifacts
+/// compiled with other vars.
+pub(super) fn check_settings(
+    args: &ArgMatches,
+    executor: &DbtExecutor,
+    target_dir: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<DbtSetting>, CliError> {
+    let settings = dbt_settings(args, target_dir);
+    tracing::info!(settings = %settings_line(&settings), "dbt settings");
+    executor.refuse_env().map_err(|e| {
+        CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e.to_string()).with_hint(
+            "these dbt settings change what dbt builds in ways ODS can't record; see `docs/cli.md`",
+        )
+    })?;
+    for warning in executor
+        .env_warnings()
+        .into_iter()
+        .chain(vars_mismatch(args, target_dir))
+    {
+        // The report shows it; the log only when asked for.
+        tracing::debug!("{warning}");
+        warnings.push(warning);
+    }
+    Ok(settings)
+}
+
 /// Options after `--`, for dbt.
 pub(super) fn dbt_args(args: &ArgMatches) -> Vec<String> {
     args.get_many::<String>("dbt-args")
@@ -335,6 +440,9 @@ pub(super) fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
     }
     if let Some(target) = args.get_one::<String>("target") {
         executor = executor.target(target);
+    }
+    if let Some(profile) = args.get_one::<String>("dbt-profile") {
+        executor = executor.profile(profile);
     }
     if let Some(vars) = args.get_one::<String>("vars") {
         executor = executor.vars(vars);
@@ -518,7 +626,7 @@ fn unbuilt_parents(
 /// With `--no-compile`, ODS plans from artifacts some earlier dbt command wrote. dbt
 /// records the vars it ran with in `run_results.json`: if they differ from `--vars`,
 /// the plan describes other code than the build will run (#229).
-pub(super) fn vars_mismatch(args: &ArgMatches, target_dir: &Path) -> Option<String> {
+fn vars_mismatch(args: &ArgMatches, target_dir: &Path) -> Option<String> {
     if !args.get_flag("no-compile") {
         return None;
     }
@@ -906,6 +1014,8 @@ pub(super) struct RunReport {
     record: Option<RunRecord>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+    /// The dbt settings in effect, and where each came from.
+    dbt: Vec<DbtSetting>,
     #[serde(skip)]
     has_sources: bool,
     /// Each node's checks digest when planned, for recording.
@@ -961,18 +1071,15 @@ impl RunReport {
         args: &ArgMatches,
         progress: ProgressSettings,
     ) -> Result<(Self, Option<CliError>), CliError> {
-        let target_dir = PathBuf::from(
-            args.get_one::<String>("target-dir")
-                .map_or("target", String::as_str),
-        );
+        let target_dir = super::state_plan::target_dir(args);
         let builds = kind != Kind::Compile;
         let steps = Steps::new(progress, step_count(args, builds));
         let executor = steps.attach(executor(args, &target_dir));
         let mut warnings = Vec::new();
+        let dbt = check_settings(args, &executor, &target_dir, &mut warnings)?;
 
         // 1. Prepare.
         let (prepared, sources) = prepare(args, &executor, &mut warnings)?;
-        warnings.extend(vars_mismatch(args, &target_dir));
 
         // 2. Plan.
         let mut ws = Workspace::load(args, sources)?;
@@ -1037,6 +1144,7 @@ impl RunReport {
             execution: None,
             record: None,
             warnings,
+            dbt,
             has_sources: !ws.project.sources.is_empty(),
             planned_checks: checks_by_node(&ws.project),
         };
@@ -1151,6 +1259,7 @@ impl RunReport {
                 ))],
             ),
         ];
+        summary.push(("dbt".into(), vec![Span::plain(settings_line(&self.dbt))]));
         if let Some(command) = self.execution.as_ref().and_then(|e| e.command.as_deref()) {
             summary.push(("ran".into(), vec![Span::toned(command, Tone::Code)]));
         }

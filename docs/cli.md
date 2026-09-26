@@ -471,13 +471,31 @@ stdout carries only the report (one JSON document with `--json`).
 | `--exclude-resource-type model\|seed\|snapshot\|test` | `build` only: leave this type out; `test` builds without tests (and unit tests, dbt 1.8+); repeatable |
 | `--full-refresh` | like dbt's: rebuild the selected incremental models and seeds from scratch, **even if unchanged** (reason `full refresh requested`); their readers rebuild too, seeing new data. Models with `full_refresh: false` opt out, as in dbt; tables, views and snapshots follow the plan (dbt never full-refreshes snapshots, and `snapshot` has no such flag) |
 | `--vars YAML` | dbt's `--vars`, passed to **every** dbt command ODS runs (freshness, compile, build, test), so the plan and the build see the same values. Values end up in the compiled SQL, so nodes that use them are fingerprinted with them: change a var, and exactly those rebuild. With `--no-compile`, ODS warns if the artifacts were compiled with other vars (dbt records them in `run_results.json`). Don't pass secrets as vars: use `env_var()` |
-| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Only options about how dbt runs and logs are accepted: `--threads`, `--log-level`, `--log-format`, `--log-path`, `--printer-width`, `--warn-error`, `--warn-error-options`, `--fail-fast`/`-x`, `--debug`/`-d`, `--quiet`/`-q`, `--(no-)use-colors`, `--(no-)partial-parse`, `--store-failures` and the like. Anything else (selection, target, project, vars, `--empty`, `--sample`, …) is refused: use the ODS option where there is one. A run also refuses to start when `DBT_EMPTY`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE` (or `DBT_DEFER_TO_STATE`, `DBT_FAVOR_STATE_MODE`) is set |
+| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Only options about how dbt runs and logs are accepted: `--threads`, `--log-level`, `--log-format`, `--log-path`, `--printer-width`, `--warn-error`, `--warn-error-options`, `--fail-fast`/`-x`, `--debug`/`-d`, `--quiet`/`-q`, `--(no-)use-colors`, `--(no-)partial-parse`, `--store-failures` and the like. Anything else (selection, target, project, vars, `--empty`, `--sample`, …) is refused: use the ODS option where there is one. dbt's `DBT_*` settings are handled the same way: see [below](#dbt-settings-from-the-environment) |
 | `--dry-run` | prepare and plan, but build and record nothing (`compile` always does just that) |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
 | `--dbt PROGRAM` | the dbt executable; default `dbt` |
-| `--project-dir`, `--profiles-dir`, `--target` | passed to dbt |
+| `--project-dir DIR` | dbt's; also where ODS finds the artifacts: `DIR/target` unless `--target-dir` says otherwise. Default `DBT_PROJECT_DIR`, then `.` |
+| `--profiles-dir DIR`, `--target NAME` | dbt's; default `DBT_PROFILES_DIR`, `DBT_TARGET` |
+| `--dbt-profile NAME` | dbt's `--profile`: the `profiles.yml` profile to use instead of the project's; default `DBT_PROFILE`. (ODS's own `--profile` picks its [configuration profile](#configuration)) |
 | `--dbt-output stderr\|capture` | show dbt's output on stderr (default), or capture it and quote the end on failure |
+
+### dbt settings from the environment
+
+dbt reads about 60 `DBT_*` variables as defaults for its flags. ODS handles each one as
+it handles the flag (#227):
+
+| Group | Variables | What ODS does |
+|---|---|---|
+| ODS has an option for it | `DBT_TARGET`, `DBT_PROFILE`, `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR`, `DBT_TARGET_PATH`, `DBT_FULL_REFRESH` | reads it as the default of `--target`, `--dbt-profile`, `--profiles-dir`, `--project-dir`, `--target-dir` (relative to the project, as dbt reads it) and `--full-refresh`; passes the result to dbt as a flag, and removes the variable from dbt's environment. An explicit option wins, as in dbt |
+| Beaten by a flag | `DBT_DEFER`, `DBT_FAVOR_STATE`, `DBT_EMPTY`, `DBT_WRITE_JSON`, `DBT_INDIRECT_SELECTION` | passes `--no-defer`, `--no-favor-state`, `--no-empty` (where dbt has `--empty`), `--write-json` and `--indirect-selection eager` (for `build` and `test`), with a warning. The last two are always passed, so `dbt_project.yml`'s `flags:` can't change them either |
+| Nothing beats it | `DBT_STATE`, `DBT_DEFER_STATE`, `DBT_ARTIFACT_STATE_PATH`, `DBT_RESOURCE_TYPES`, `DBT_EXCLUDE_RESOURCE_TYPES`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, the old spellings `DBT_DEFER_TO_STATE` and `DBT_FAVOR_STATE_MODE` (they beat dbt's own flags), and `DBT_RECORDER_MODE` | refuses to start (exit 2) until it is unset, and says why |
+| Harmless | logging, colours, printing, parsing, caching, `DBT_FAIL_FAST`, `DBT_WARN_ERROR*`, `DBT_STORE_FAILURES`, … | passed through |
+| Not a dbt setting | `DBT_ENV_SECRET_*`, `DBT_ENV_CUSTOM_ENV_*`, your project's own (`env_var('DBT_SCHEMA')`) | passed through; what they change in the code is in the compiled SQL, which is fingerprinted |
+
+The report says which settings were in effect and where each came from, e.g.
+`dbt: target prod (DBT_TARGET), target_dir target (default)`; `-v` logs it too.
 
 ### What you see while it runs
 
@@ -636,6 +654,7 @@ it ran.
 | Flag | Meaning |
 |---|---|
 | `--state-db PATH` | SQLite state database; default `.ods/state.db` (created by `record`) |
+| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir`, else `DBT_TARGET_PATH` (relative to the project), else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else `.`) |
 | `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default `default` |
 | `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |
 | `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |

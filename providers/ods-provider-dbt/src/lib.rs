@@ -24,6 +24,7 @@ mod relations;
 mod runs;
 mod seeds;
 pub mod selection;
+pub mod settings;
 pub mod state_config;
 
 pub use artifacts::{

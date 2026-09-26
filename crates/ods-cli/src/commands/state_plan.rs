@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use clap::parser::ValueSource;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{
     DataVersion, Exactness, ExecutionPlan, PlanAction, SnapshotId, StateSnapshot, Timestamp,
@@ -31,8 +32,17 @@ pub(super) fn common(command: Command) -> Command {
             Arg::new("target-dir")
                 .long("target-dir")
                 .value_name("DIR")
-                .default_value("target")
-                .help("dbt target directory"),
+                .env("DBT_TARGET_PATH")
+                .hide_env_values(true)
+                .help("dbt target directory [default: <project-dir>/target]"),
+        )
+        .arg(
+            Arg::new("project-dir")
+                .long("project-dir")
+                .value_name("DIR")
+                .env("DBT_PROJECT_DIR")
+                .hide_env_values(true)
+                .help("dbt's --project-dir: the dbt project, whose target directory ODS reads [default: .]"),
         )
         .arg(
             Arg::new("artifacts")
@@ -151,12 +161,30 @@ pub(super) struct Workspace {
     pub(super) source_errors: Vec<String>,
 }
 
+/// Where dbt writes the artifacts ODS reads, as dbt resolves it: `--target-dir`, or
+/// `DBT_TARGET_PATH` relative to the project (#227), or the project's `target`.
+pub(super) fn target_dir(args: &ArgMatches) -> PathBuf {
+    let project = args
+        .try_get_one::<String>("project-dir")
+        .ok()
+        .flatten()
+        .map(PathBuf::from);
+    match args.get_one::<String>("target-dir") {
+        // dbt reads a relative target path against the project, not where it runs.
+        Some(dir)
+            if args.value_source("target-dir") == Some(ValueSource::EnvVariable)
+                && Path::new(dir).is_relative() =>
+        {
+            project.map_or_else(|| PathBuf::from(dir), |p| p.join(dir))
+        }
+        Some(dir) => PathBuf::from(dir),
+        None => project.map_or_else(|| PathBuf::from("target"), |p| p.join("target")),
+    }
+}
+
 impl Workspace {
     pub(super) fn load(args: &ArgMatches, sources: Sources) -> Result<Self, CliError> {
-        let target_dir = PathBuf::from(
-            args.get_one::<String>("target-dir")
-                .map_or("target", String::as_str),
-        );
+        let target_dir = target_dir(args);
         let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
             Some("json") => ArtifactPreference::Json,
             Some("info-schema") => ArtifactPreference::InfoSchema,

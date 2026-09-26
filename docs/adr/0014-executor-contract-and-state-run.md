@@ -154,6 +154,16 @@ is what the caller needs to see which nodes failed.
   `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, `DBT_DEFER` or `DBT_FAVOR_STATE` (or
   their deprecated spellings `DBT_DEFER_TO_STATE` and `DBT_FAVOR_STATE_MODE`), which
   would make a build something ODS can't record as the real thing.
+  *Amended (#227):* every `DBT_*` setting dbt reads is classified in one table
+  (`ods_provider_dbt::settings`), checked against the installed dbt's `params.py` in a
+  test. The settings ODS has options for (`DBT_TARGET`, `DBT_PROFILE`,
+  `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR`, `DBT_TARGET_PATH`, `DBT_FULL_REFRESH`) are read
+  as those options' defaults, passed as flags, and removed from dbt's environment.
+  Settings a flag beats are overridden with a warning (`--no-defer`,
+  `--no-favor-state`, `--no-empty`; `--write-json` and `--indirect-selection eager`
+  always, which also covers `dbt_project.yml`'s `flags:`). The rest that change what
+  is built or recorded are refused, including `DBT_STATE` and its relatives and the
+  recorder's replay mode. Harmless settings and non-dbt variables pass through.
 - `ods state run` builds **without tests by default**, like `dbt run` plus the seeds and
   snapshots the plan needs. `--test` builds and tests, like `dbt build`.
   *Amended (#229):* the build commands are named after dbt's: `ods state run` (models,
