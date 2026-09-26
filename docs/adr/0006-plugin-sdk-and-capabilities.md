@@ -82,7 +82,8 @@ then have to break.
 
 ### 3. Capabilities (#3)
 - **The vocabulary lives in `ods-core`**, per ADR-0001.
-  - Well-known capabilities are enum variants: `relation_versions`, `zero_copy_clone`,
+  - Well-known capabilities are enum variants: `relation_versions`,
+    `relation_existence` ([ADR-0016](0016-relation-existence-before-reuse.md)), `zero_copy_clone`,
     `atomic_replace`, `change_tracking`, `query_history`, `source_freshness`,
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry` and
     `fencing_tokens`.

@@ -9,6 +9,9 @@
 //!   that invocation wrote; a file left by an earlier invocation is never read as this
 //!   one's.
 //!
+//! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
+//!   asks the adapter which relations exist (#230).
+//!
 //! dbt's own output goes to ODS's stderr (or is captured), never to stdout, which
 //! carries ODS's report.
 
@@ -18,12 +21,13 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use ods_core::CapabilitySet;
 use ods_core::state::Timestamp;
+use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
-    PrepareReport, PrepareRequest,
+    PrepareReport, PrepareRequest, RequestedNode,
 };
+use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
 use crate::runs::{RunResults, RunStatus, SourceFreshness};
@@ -66,6 +70,11 @@ pub enum DbtStep {
     /// `dbt test` of `nodes` nodes' tests.
     Test {
         /// How many nodes' tests are selected.
+        nodes: usize,
+    },
+    /// `dbt show`: whether the relations of `nodes` nodes ODS would reuse still exist.
+    RelationCheck {
+        /// How many nodes ODS would reuse.
         nodes: usize,
     },
 }
@@ -184,9 +193,14 @@ impl DbtExecutor {
 
     /// The arguments every invocation shares.
     fn common_args(&self) -> Vec<String> {
+        self.common_args_in(&self.target_path())
+    }
+
+    /// [`common_args`](Self::common_args), writing artifacts to `target_path` instead.
+    fn common_args_in(&self, target_path: &Path) -> Vec<String> {
         let mut args = vec![
             "--target-path".to_owned(),
-            self.target_path().display().to_string(),
+            target_path.display().to_string(),
         ];
         if let Some(dir) = &self.project_dir {
             args.extend(["--project-dir".to_owned(), dir.display().to_string()]);
@@ -220,6 +234,17 @@ impl DbtExecutor {
     /// Runs dbt with `args`; returns whether it exited successfully and, if captured,
     /// the tail of its output.
     async fn invoke(&self, args: &[String]) -> Result<(bool, String), ProviderError> {
+        let (ok, tail, _) = self.invoke_with(args, false).await?;
+        Ok((ok, tail))
+    }
+
+    /// [`invoke`](Self::invoke), also returning what dbt printed to stdout when
+    /// `read_stdout`, which then never reaches ODS's stderr.
+    async fn invoke_with(
+        &self,
+        args: &[String],
+        read_stdout: bool,
+    ) -> Result<(bool, String, String), ProviderError> {
         let mut command = tokio::process::Command::new(&self.program);
         command
             .args(args)
@@ -235,6 +260,9 @@ impl DbtExecutor {
             DbtOutput::Capture => {
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
             }
+        }
+        if read_stdout {
+            command.stdout(Stdio::piped());
         }
         // Names only: values can be credentials (AGENTS.md rule 9).
         tracing::info!(command = %self.display(args), "running dbt");
@@ -257,11 +285,12 @@ impl DbtExecutor {
             seconds = started.elapsed().as_secs_f64(),
             "dbt finished"
         );
-        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let mut text = stdout.clone();
         text.push_str(&String::from_utf8_lossy(&output.stderr));
         let lines: Vec<&str> = text.lines().collect();
         let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
-        Ok((output.status.success(), tail))
+        Ok((output.status.success(), tail, stdout))
     }
 
     fn failure(what: &str, tail: &str) -> ProviderError {
@@ -718,7 +747,83 @@ fn node_outcomes(
 
 impl Provider for DbtExecutor {
     fn info(&self) -> ProviderInfo {
-        ProviderInfo::new(KIND, "dbt", env!("CARGO_PKG_VERSION"), CapabilitySet::new())
+        ProviderInfo::new(
+            KIND,
+            "dbt",
+            env!("CARGO_PKG_VERSION"),
+            CapabilitySet::from([Capability::RelationExistence]),
+        )
+    }
+}
+
+/// Where the relation check writes its artifacts: apart from the target path's own,
+/// which `dbt show` would otherwise overwrite with a manifest without compiled SQL.
+const RELATION_CHECK_DIR: &str = "ods-relation-check";
+
+#[async_trait]
+impl RelationInspector for DbtExecutor {
+    async fn inspect(&self, nodes: &[RequestedNode]) -> Result<RelationReport, ProviderError> {
+        self.refuse_env()?;
+        // The nodes as the plan saw them, to tell which ones the query covers.
+        let manifest = crate::Manifest::read(&self.artifact("manifest.json")).map_err(|e| {
+            ProviderError::Other(format!("can't read the manifest to check relations: {e}"))
+        })?;
+        let checkable = crate::relations::checkable(&manifest);
+        let target = self.target_path().join(RELATION_CHECK_DIR);
+        // A best effort: dbt parses from scratch without it, just more slowly.
+        if std::fs::create_dir_all(&target).is_ok() {
+            let _ = std::fs::copy(
+                self.artifact("partial_parse.msgpack"),
+                target.join("partial_parse.msgpack"),
+            );
+        }
+        let mut args = vec![
+            "show".to_owned(),
+            "--quiet".to_owned(),
+            "--inline".to_owned(),
+            crate::relations::QUERY.to_owned(),
+            "--output".to_owned(),
+            "json".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+            "--log-format".to_owned(),
+            "json".to_owned(),
+        ];
+        args.extend(self.common_args_in(&target));
+        self.step(DbtStep::RelationCheck { nodes: nodes.len() });
+        let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
+        if !ok {
+            return Err(Self::failure(
+                "the relation check (`dbt show`) failed",
+                &tail,
+            ));
+        }
+        let found = crate::relations::parse(&stdout).map_err(|why| {
+            ProviderError::Other(format!("the relation check (`dbt show`) failed: {why}"))
+        })?;
+        // dbt saw another project than the plan did: none of its answers can be trusted.
+        if found.checked != checkable.len() {
+            return Err(ProviderError::Other(format!(
+                "the relation check saw {} relations, the manifest has {}: \
+                 did the project change?",
+                found.checked,
+                checkable.len()
+            )));
+        }
+        let nodes = nodes
+            .iter()
+            .map(|n| {
+                let presence = if !checkable.contains(n.id.as_str()) {
+                    RelationPresence::Unknown("not a node with a relation".to_owned())
+                } else if found.missing.contains(&n.id) {
+                    RelationPresence::Missing
+                } else {
+                    RelationPresence::Present { kind: None }
+                };
+                (n.id.clone(), presence)
+            })
+            .collect();
+        Ok(RelationReport::new(nodes))
     }
 }
 

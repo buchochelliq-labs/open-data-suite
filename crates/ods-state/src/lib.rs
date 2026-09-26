@@ -14,7 +14,7 @@ mod planner;
 mod recorder;
 mod selection;
 
-pub use planner::{PlanError, PlanOptions, plan, plan_with};
+pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use selection::select;
 
@@ -47,6 +47,24 @@ pub struct Node {
     /// A full refresh builds it differently from a normal build (e.g. an incremental
     /// model rebuilt from scratch), so a full-refresh run builds it even if unchanged.
     pub full_refresh_rebuilds: bool,
+    /// Whether its relation is still in the warehouse (#230): a node that would be
+    /// reused is built when it isn't, or when that couldn't be checked.
+    pub relation: RelationFact,
+}
+
+/// What is known about a node's relation (table or view) in the warehouse.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RelationFact {
+    /// Nobody looked: nothing can check it. A reuse says so in its evidence.
+    #[default]
+    Unchecked,
+    /// It exists, and what it is (e.g. `table`), if known.
+    Present(Option<String>),
+    /// It doesn't exist.
+    Missing,
+    /// The check couldn't tell, and why.
+    Unverified(String),
 }
 
 impl Node {
@@ -69,7 +87,15 @@ impl Node {
             self_contained: false,
             checks: None,
             full_refresh_rebuilds: false,
+            relation: RelationFact::Unchecked,
         }
+    }
+
+    /// Sets what is known about its relation.
+    #[must_use]
+    pub fn with_relation(mut self, relation: RelationFact) -> Self {
+        self.relation = relation;
+        self
     }
 
     /// Marks it as built differently by a full refresh.

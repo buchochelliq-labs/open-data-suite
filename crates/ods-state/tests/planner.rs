@@ -7,7 +7,10 @@ use ods_core::state::{
     Timestamp,
 };
 use ods_core::{FreshnessPolicy, Quorum, UnappliedSetting};
-use ods_state::{Node, Outcome, PlanError, Project, RunResult, Source, plan, record, select};
+use ods_state::{
+    Node, Outcome, PlanError, PlanOptions, Project, RelationFact, RunResult, Source, plan, record,
+    reuse_candidates, select,
+};
 
 const T0: i64 = 1_000_000;
 
@@ -468,6 +471,112 @@ fn every_reuse_says_the_relation_was_not_checked() {
             entry.name
         );
     }
+}
+
+/// `project()` with `name`'s relation fact set, and every other one present.
+fn with_relations(name: &str, fact: &RelationFact) -> Project {
+    let mut p = project();
+    for node in &mut p.nodes {
+        node.relation = if node.name == name {
+            fact.clone()
+        } else {
+            RelationFact::Present(Some("table".to_owned()))
+        };
+    }
+    p
+}
+
+#[test]
+fn a_missing_relation_is_built_and_its_readers_see_new_data() {
+    let state = built(&project());
+    let p = with_relations("stg_orders", &RelationFact::Missing);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::RelationMissing));
+    // Not a code change: readers follow their freshness policy, as for new data.
+    assert_eq!(got["orders"], build(ReasonCode::NewUpstreamData));
+    assert_eq!(got["stg_users"], reuse(ReasonCode::Unchanged));
+    assert_eq!(got["lonely"], reuse(ReasonCode::Unchanged));
+
+    let plan = plan(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap();
+    let entry = |name: &str| plan.entries.iter().find(|e| e.name == name).unwrap();
+    assert_eq!(
+        entry("stg_orders").reasons[0].message,
+        "its table isn't in the warehouse"
+    );
+    let relation = |name: &str| {
+        entry(name)
+            .evidence
+            .iter()
+            .find(|e| e.kind == "relation_exists")
+            .map(|e| (e.value.clone(), e.exactness))
+    };
+    assert_eq!(
+        relation("stg_orders"),
+        Some((Some("missing".to_owned()), Exactness::Exact))
+    );
+    assert_eq!(
+        relation("stg_users"),
+        Some((Some("table".to_owned()), Exactness::Exact))
+    );
+}
+
+#[test]
+fn an_unverified_relation_is_built_and_says_why() {
+    let state = built(&project());
+    let p = with_relations("lonely", &RelationFact::Unverified("no access".to_owned()));
+    let plan = plan(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap();
+    let lonely = plan.entries.iter().find(|e| e.name == "lonely").unwrap();
+    assert_eq!(lonely.action, PlanAction::Build);
+    assert_eq!(lonely.reasons[0].code, ReasonCode::RelationUnverified);
+    assert!(
+        lonely.reasons[0].message.ends_with(": no access"),
+        "{}",
+        lonely.reasons[0].message
+    );
+}
+
+#[test]
+fn relation_facts_only_matter_for_reuse() {
+    // A node built anyway keeps its own reason, whatever its relation.
+    let p = with_relations("stg_orders", &RelationFact::Missing);
+    let got = actions(&p, None, T0);
+    assert_eq!(got["stg_orders"], build(ReasonCode::NeverBuilt));
+}
+
+#[test]
+fn reuse_candidates_are_what_would_be_reused_unchecked() {
+    let state = built(&project());
+    let mut p = with_relations("stg_orders", &RelationFact::Missing);
+    // Facts already set don't change what is worth checking.
+    p.nodes[2] = node("orders", &["stg_orders"], "changed");
+    let candidates = reuse_candidates(
+        &p,
+        Some((SnapshotId(1), &state)),
+        Timestamp::from_unix(T0 + 60),
+        PlanOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        candidates,
+        ["model.p.lonely", "model.p.stg_orders", "model.p.stg_users"]
+    );
+    assert!(
+        reuse_candidates(&p, None, Timestamp::from_unix(T0), PlanOptions::default())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

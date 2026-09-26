@@ -1,16 +1,17 @@
-//! In-memory [`Executor`].
+//! In-memory [`Executor`] and [`RelationInspector`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use ods_core::CapabilitySet;
 use ods_core::state::Timestamp;
+use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
-    PrepareReport, PrepareRequest,
+    PrepareReport, PrepareRequest, RequestedNode,
 };
+use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
 use crate::KIND;
@@ -20,16 +21,19 @@ use crate::clock::FakeClock;
 struct Inner {
     runs: u64,
     built: Vec<String>,
+    dropped: BTreeSet<String>,
 }
 
 /// An executor over a set of known nodes, some of which fail. It builds nothing real:
-/// it records which nodes it "built", for tests to check.
+/// it records which nodes it "built", for tests to check. Every known node's relation
+/// exists until [dropped](FakeExecutor::drop_relation); building it creates it again.
 #[derive(Debug, Clone)]
 pub struct FakeExecutor {
     clock: FakeClock,
     nodes: BTreeSet<String>,
     failing: BTreeSet<String>,
     checks: BTreeMap<String, Vec<String>>,
+    inspection_fails: bool,
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -41,6 +45,7 @@ impl FakeExecutor {
             nodes: nodes.into_iter().map(Into::into).collect(),
             failing: BTreeSet::new(),
             checks: BTreeMap::new(),
+            inspection_fails: false,
             inner: Arc::default(),
         }
     }
@@ -69,6 +74,19 @@ impl FakeExecutor {
         self
     }
 
+    /// Makes [`inspect`](RelationInspector::inspect) fail, as when the warehouse can't
+    /// be reached.
+    #[must_use]
+    pub fn failing_inspection(mut self) -> Self {
+        self.inspection_fails = true;
+        self
+    }
+
+    /// Drops `node`'s relation, as if someone dropped its table (shared between clones).
+    pub fn drop_relation(&self, node: &str) {
+        self.inner().dropped.insert(node.to_owned());
+    }
+
     /// The nodes built so far, in order (shared between clones).
     pub fn built(&self) -> Vec<String> {
         self.inner().built.clone()
@@ -94,7 +112,7 @@ impl Provider for FakeExecutor {
             KIND,
             "fake",
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::new(),
+            CapabilitySet::from([Capability::RelationExistence]),
         )
     }
 }
@@ -136,6 +154,7 @@ impl Executor for FakeExecutor {
                     }
                 } else {
                     inner.built.push(n.id.clone());
+                    inner.dropped.remove(&n.id);
                     (ExecutionStatus::Success, None)
                 };
                 let ran_checks =
@@ -151,5 +170,33 @@ impl Executor for FakeExecutor {
             nodes,
             Vec::new(),
         ))
+    }
+}
+
+#[async_trait]
+impl RelationInspector for FakeExecutor {
+    async fn inspect(&self, nodes: &[RequestedNode]) -> Result<RelationReport, ProviderError> {
+        if self.inspection_fails {
+            return Err(ProviderError::Other(
+                "the fake warehouse can't be reached".to_owned(),
+            ));
+        }
+        let inner = self.inner();
+        let nodes = nodes
+            .iter()
+            .map(|n| {
+                let presence = if !self.nodes.contains(&n.id) {
+                    RelationPresence::Unknown("unknown node".to_owned())
+                } else if inner.dropped.contains(&n.id) {
+                    RelationPresence::Missing
+                } else {
+                    RelationPresence::Present {
+                        kind: Some("table".to_owned()),
+                    }
+                };
+                (n.id.clone(), presence)
+            })
+            .collect();
+        Ok(RelationReport::new(nodes))
     }
 }

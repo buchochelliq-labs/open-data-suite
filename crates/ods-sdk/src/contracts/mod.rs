@@ -15,6 +15,7 @@
 //! | [`StateStore`](state_store::StateStore) | #11, #25 | defined (ADR-0013) |
 //! | `FingerprintProvider` | #13 | planned |
 //! | [`Executor`](executor::Executor) | #23, #24 | defined (ADR-0014) |
+//! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
 //! | `ChangeProvider` | #16 | planned |
 //! | `CloneProvider` | #29 | planned |
 //! | `PolicyProvider` | #9 | planned |
@@ -27,5 +28,6 @@
 pub mod executor;
 pub mod lock;
 pub mod observed_lineage;
+pub mod relations;
 pub mod sql_lineage;
 pub mod state_store;

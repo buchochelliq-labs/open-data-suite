@@ -9,7 +9,7 @@ use ods_core::state::{
     ReasonCode, SnapshotId, StateSnapshot, Timestamp,
 };
 
-use crate::{Node, Project, Source};
+use crate::{Node, Project, RelationFact, Source};
 
 /// Why no plan could be made.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -429,6 +429,68 @@ impl PlanOptions {
     }
 }
 
+/// Records what is known about a reused node's relation, and returns why it must be
+/// built instead, if it must.
+fn relation_check(node: &Node, evidence: &mut Vec<Evidence>) -> Option<Reason> {
+    let (value, exactness, reason) = match &node.relation {
+        RelationFact::Unchecked => (None, Exactness::None, None),
+        RelationFact::Present(kind) => (
+            Some(kind.clone().unwrap_or_else(|| "present".to_owned())),
+            Exactness::Exact,
+            None,
+        ),
+        RelationFact::Missing => (
+            Some("missing".to_owned()),
+            Exactness::Exact,
+            Some(Reason::new(
+                ReasonCode::RelationMissing,
+                "its table isn't in the warehouse",
+            )),
+        ),
+        RelationFact::Unverified(why) => (
+            None,
+            Exactness::None,
+            Some(Reason::new(
+                ReasonCode::RelationUnverified,
+                format!("couldn't check that its table is still in the warehouse: {why}"),
+            )),
+        ),
+    };
+    evidence.push(Evidence::new(
+        "relation_exists",
+        node.id.clone(),
+        value,
+        exactness,
+    ));
+    reason
+}
+
+/// The nodes a plan would reuse if their relations are all still there: the ones worth
+/// checking (#230). It covers the whole project, whatever is selected, as selection
+/// never changes a decision. Relation facts only ever turn a reuse into a build, so
+/// checking these once is enough.
+///
+/// # Errors
+/// As [`plan`].
+pub fn reuse_candidates(
+    project: &Project,
+    previous: Option<(SnapshotId, &StateSnapshot)>,
+    now: Timestamp,
+    options: PlanOptions,
+) -> Result<Vec<String>, PlanError> {
+    let mut unchecked = project.clone();
+    for node in &mut unchecked.nodes {
+        node.relation = RelationFact::Unchecked;
+    }
+    let all = unchecked.nodes.iter().map(|n| n.id.clone()).collect();
+    Ok(plan_with(&unchecked, previous, &all, now, options)?
+        .entries
+        .into_iter()
+        .filter(|e| e.action == PlanAction::Reuse)
+        .map(|e| e.node)
+        .collect())
+}
+
 /// [`plan`], with `options`.
 ///
 /// # Errors
@@ -473,14 +535,16 @@ pub fn plan_with(
             } else {
                 decide(node, &context, now, &mut evidence, &mut changed_components)
             };
-        if action == PlanAction::Reuse {
-            evidence.push(Evidence::new(
-                "relation_exists",
-                node.id.clone(),
-                None,
-                Exactness::None,
-            ));
-        }
+        // Reuse vouches for a build that is still there: one that isn't, or can't be
+        // shown to be, is built (#230). Decided before children look at it, so they
+        // see the rebuild.
+        let (action, reasons) = if action == PlanAction::Reuse {
+            relation_check(node, &mut evidence).map_or((action, reasons), |reason| {
+                (PlanAction::Build, vec![reason])
+            })
+        } else {
+            (action, reasons)
+        };
         context
             .decided
             .insert(node.id.clone(), (action, reasons[0].code));

@@ -16,6 +16,7 @@
 
 pub mod executor;
 pub mod lock;
+pub mod relations;
 pub mod state_store;
 
 /// What a suite run did.
