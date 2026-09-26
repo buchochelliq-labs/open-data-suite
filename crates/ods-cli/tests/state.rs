@@ -129,7 +129,7 @@ fn without_state_everything_is_built_and_planning_writes_nothing() {
     assert!(!s.db().exists(), "plan must not create or change state");
     assert_eq!(
         plan["plan"]["schema_version"],
-        json!({"major": 1, "minor": 0})
+        json!({"major": 1, "minor": 1})
     );
 }
 

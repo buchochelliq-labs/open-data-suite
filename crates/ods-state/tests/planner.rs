@@ -625,6 +625,29 @@ fn reuse_candidates_ignore_a_full_refresh() {
 }
 
 #[test]
+fn state_from_another_target_builds_everything_and_says_why() {
+    // The caller plans without the other target's builds, and says why.
+    let p = project();
+    let plan = ods_state::plan_with(
+        &p,
+        None,
+        &all(&p),
+        Timestamp::from_unix(T0),
+        PlanOptions::default().target_changed(),
+    )
+    .unwrap();
+    for entry in &plan.entries {
+        assert_eq!(entry.action, PlanAction::Build, "{}", entry.name);
+        assert_eq!(
+            entry.reasons[0].code,
+            ReasonCode::TargetChanged,
+            "{}",
+            entry.name
+        );
+    }
+}
+
+#[test]
 fn a_source_version_measured_before_the_last_build_is_not_evidence() {
     let p = project();
     let snapshot = built(&p);
