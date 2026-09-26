@@ -142,9 +142,15 @@ def main():
 
     if not (words[:1] == ["build"] and os.environ.get("FAKE_DBT_KEEP_MANIFEST")):
         write(os.path.join(target, "manifest.json"), manifest)
+    # Like dbt, it records the vars it ran with (parsed; JSON stands in for YAML here).
+    raw_vars = (options.get("vars") or ["{}"])[0]
+    try:
+        run_vars = json.loads(raw_vars)
+    except ValueError:
+        run_vars = raw_vars
     if words[:1] == ["compile"]:
         doc = {"metadata": metadata("run-results", 6, invocation, started),
-               "results": [], "elapsed_time": 0, "args": {"which": "compile"}}
+               "results": [], "elapsed_time": 0, "args": {"which": "compile", "vars": run_vars}}
         write(os.path.join(target, "run_results.json"), doc)
         return 0
     # `run`, `seed` and `snapshot` build only their own resource type, and never tests.
@@ -179,7 +185,7 @@ def main():
             if test["resource_type"] == "test" and any(d in chosen for d in deps):
                 results.append(result(test_id, test_status(test), started))
         doc = {"metadata": metadata("run-results", 6, invocation, started),
-               "results": results, "elapsed_time": 0, "args": {"which": "test"}}
+               "results": results, "elapsed_time": 0, "args": {"which": "test", "vars": run_vars}}
         write(os.path.join(target, "run_results.json"), doc)
         return 1 if any(r["status"] == "fail" for r in results) else 0
     # Parents first, as dbt runs them.
@@ -215,7 +221,7 @@ def main():
             for node_id in built:
                 f.write(node_id + "\n")
     doc = {"metadata": metadata("run-results", 6, invocation, started),
-           "results": results, "elapsed_time": 0, "args": {"which": words[0]}}
+           "results": results, "elapsed_time": 0, "args": {"which": words[0], "vars": run_vars}}
     write(os.path.join(target, "run_results.json"), doc)
     failed = any(r["status"] in ("error", "fail") for r in results)
     return 1 if failed else 0

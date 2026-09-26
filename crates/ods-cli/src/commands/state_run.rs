@@ -12,15 +12,16 @@
 //!    The commit is a compare-and-swap on the state read in step 2, so a concurrent
 //!    run can't be overwritten.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, SnapshotId, Timestamp};
+use ods_provider_dbt::RunResults;
 use ods_provider_dbt::executor::{DbtExecutor, DbtOutput, DbtStep};
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::executor::{
@@ -87,6 +88,12 @@ pub(super) fn dbt_options(command: Command) -> Command {
                 .long("target")
                 .value_name("NAME")
                 .help("dbt's --target (the profile output to use)"),
+        )
+        .arg(
+            Arg::new("vars")
+                .long("vars")
+                .value_name("YAML")
+                .help("dbt's --vars, e.g. '{region: eu}'; passed to every dbt command ODS runs, so the plan and the build see the same values"),
         )
         .arg(
             Arg::new("dbt-output")
@@ -213,7 +220,7 @@ pub(super) fn build_command(kind: Kind) -> Command {
             Arg::new("full-refresh")
                 .long("full-refresh")
                 .action(ArgAction::SetTrue)
-                .help("dbt's --full-refresh for the nodes being built"),
+                .help("Rebuild the selected incremental models and seeds from scratch, even if unchanged, as dbt's --full-refresh does"),
         );
     }
     if kind == Kind::Build {
@@ -324,6 +331,9 @@ pub(super) fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
     }
     if let Some(target) = args.get_one::<String>("target") {
         executor = executor.target(target);
+    }
+    if let Some(vars) = args.get_one::<String>("vars") {
+        executor = executor.vars(vars);
     }
     executor
 }
@@ -453,6 +463,7 @@ fn reason_label(code: ReasonCode) -> &'static str {
         ReasonCode::CodeEvidenceIncomplete => "code can't be fully fingerprinted",
         ReasonCode::UnknownDependency => "depends on something ODS can't see",
         ReasonCode::PolicyBlocksReuse => "its policy never reuses it",
+        ReasonCode::FullRefreshRequested => "full refresh requested",
         _ => "other",
     }
 }
@@ -492,6 +503,60 @@ fn unbuilt_parents(
             ))
         })
         .collect()
+}
+
+/// With `--no-compile`, ODS plans from artifacts some earlier dbt command wrote. dbt
+/// records the vars it ran with in `run_results.json`: if they differ from `--vars`,
+/// the plan describes other code than the build will run (#229).
+pub(super) fn vars_mismatch(args: &ArgMatches, target_dir: &Path) -> Option<String> {
+    if !args.get_flag("no-compile") {
+        return None;
+    }
+    let compiled = RunResults::read(&target_dir.join("run_results.json"))
+        .ok()?
+        .vars
+        .filter(|v| v.as_object().is_none_or(|o| !o.is_empty()));
+    let given = args.get_one::<String>("vars");
+    let differs = match (&compiled, given) {
+        (None, None) => false,
+        (Some(_), None) | (None, Some(_)) => true,
+        // YAML that isn't JSON (`{a: 1}`) can't be compared here without a YAML parser.
+        (Some(compiled), Some(given)) => {
+            serde_json::from_str::<serde_json::Value>(given).is_ok_and(|g| &g != compiled)
+        }
+    };
+    differs.then(|| {
+        format!(
+            "the artifacts in {} were compiled with vars {}, but this run has {}: the plan may not match what dbt builds. Drop --no-compile, or pass the same --vars",
+            target_dir.display(),
+            compiled.map_or_else(|| "none".to_owned(), |v| v.to_string()),
+            given.map_or_else(|| "none".to_owned(), |v| format!("`{v}`")),
+        )
+    })
+}
+
+/// How to plan: a full refresh forces what it rebuilds.
+fn plan_options(args: &ArgMatches) -> ods_state::PlanOptions {
+    let options = ods_state::PlanOptions::default();
+    if full_refresh(args) {
+        options.full_refresh()
+    } else {
+        options
+    }
+}
+
+/// Each node's checks digest.
+fn checks_by_node(project: &ods_state::Project) -> BTreeMap<String, Option<String>> {
+    project
+        .nodes
+        .iter()
+        .map(|n| (n.id.clone(), n.checks.clone()))
+        .collect()
+}
+
+/// Whether `--full-refresh` was given (not every command has it).
+fn full_refresh(args: &ArgMatches) -> bool {
+    args.try_get_one::<bool>("full-refresh").ok().flatten() == Some(&true)
 }
 
 /// Values of a repeatable option, if the command has it.
@@ -587,8 +652,18 @@ fn record(
     execution: &ExecutionReport,
     latest: Option<&StoredSnapshot>,
     store: &SqliteStateStore,
+    planned_checks: &BTreeMap<String, Option<String>>,
 ) -> Result<RunRecord, CliError> {
-    let built = Workspace::load(args, sources)?;
+    let mut built = Workspace::load(args, sources)?;
+    // Each node's checks as planned. The manifest dbt writes while building keeps the
+    // compiled SQL only of the tests that invocation ran, so digests computed from it
+    // depend on what ran; the plan's (from `dbt compile`, just before this build, so
+    // the same code) match what the next plan computes (#229).
+    for node in &mut built.project.nodes {
+        if let Some(checks) = planned_checks.get(&node.id) {
+            node.checks.clone_from(checks);
+        }
+    }
     if built.invocation_id.as_deref() != Some(execution.run_id.as_str()) {
         return Err(CliError::new(
             ExitStatus::Failure,
@@ -729,6 +804,9 @@ pub(super) struct RunReport {
     warnings: Vec<String>,
     #[serde(skip)]
     has_sources: bool,
+    /// Each node's checks digest when planned, for recording.
+    #[serde(skip)]
+    planned_checks: BTreeMap<String, Option<String>>,
 }
 
 impl RunReport {
@@ -795,6 +873,7 @@ impl RunReport {
 
         // 1. Prepare.
         let (prepared, sources) = prepare(args, &executor, &mut warnings)?;
+        warnings.extend(vars_mismatch(args, &target_dir));
 
         // 2. Plan.
         let ws = Workspace::load(args, sources)?;
@@ -809,8 +888,13 @@ impl RunReport {
             Some(store) => ws.latest(store)?,
             None => None,
         };
-        let (plan, plan_warnings) =
-            plan_against(&ws, latest.as_ref(), &select_specs(args), Timestamp::now())?;
+        let (plan, plan_warnings) = plan_against(
+            &ws,
+            latest.as_ref(),
+            &select_specs(args),
+            Timestamp::now(),
+            plan_options(args),
+        )?;
         warnings.extend(plan_warnings);
         let types = if builds {
             build_types(kind, args)
@@ -850,6 +934,7 @@ impl RunReport {
             record: None,
             warnings,
             has_sources: !ws.project.sources.is_empty(),
+            planned_checks: checks_by_node(&ws.project),
         };
         for note in plan_notes(&report) {
             steps.note(&note);
@@ -891,9 +976,7 @@ impl RunReport {
             ExecutionMode::Run
         };
         let request = ExecutionRequest::new(requested, mode)
-            .with_full_refresh(
-                args.try_get_one::<bool>("full-refresh").ok().flatten() == Some(&true),
-            )
+            .with_full_refresh(full_refresh(args))
             .with_engine_args(dbt_args(args));
         let execution = block_on(executor.execute(&request))?.map_err(|e| {
             execution_error(&e)
@@ -907,7 +990,15 @@ impl RunReport {
         }
 
         // 4. Record.
-        let recorded = record(args, self.tests, sources, &execution, latest, store);
+        let recorded = record(
+            args,
+            self.tests,
+            sources,
+            &execution,
+            latest,
+            store,
+            &self.planned_checks,
+        );
         self.execution = Some(execution);
         Ok(match recorded {
             Ok(record) => {

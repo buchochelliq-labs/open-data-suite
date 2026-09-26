@@ -534,6 +534,9 @@ pub enum ReasonCode {
     MissingDataEvidence,
     /// Code and inputs are the same as when it was last built.
     Unchanged,
+    /// A full refresh was asked for, and rebuilds it from scratch (e.g. an incremental
+    /// model).
+    FullRefreshRequested,
 }
 
 /// One reason for a decision.

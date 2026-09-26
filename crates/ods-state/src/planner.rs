@@ -151,6 +151,8 @@ impl Context<'_> {
             if *action == PlanAction::Build {
                 if is_code_change(*code) {
                     inputs.code_changed.push(name);
+                } else if *code == ReasonCode::FullRefreshRequested {
+                    inputs.new_data.push(format!("{name} (full refresh)"));
                 } else {
                     inputs.new_data.push(name);
                 }
@@ -394,7 +396,8 @@ fn decide_on_data(
 }
 
 /// Plans every node against the last snapshot. Only `selected` nodes appear in the
-/// plan, but every node is evaluated, so a selection never changes a decision.
+/// plan, but every node is evaluated, so a selection never changes a decision (except
+/// what a full refresh forces, see [`PlanOptions`]).
 ///
 /// # Errors
 /// Returns [`PlanError`] if the graph has a cycle or duplicate ids.
@@ -403,6 +406,39 @@ pub fn plan(
     previous: Option<(SnapshotId, &StateSnapshot)>,
     selected: &BTreeSet<String>,
     now: Timestamp,
+) -> Result<ExecutionPlan, PlanError> {
+    plan_with(project, previous, selected, now, PlanOptions::default())
+}
+
+/// How a run asks to be planned, beyond what changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PlanOptions {
+    /// A full refresh: selected nodes a full refresh builds differently
+    /// ([`Node::full_refresh_rebuilds`]) are built even if unchanged. Their readers see
+    /// new data, as after any rebuild.
+    pub full_refresh: bool,
+}
+
+impl PlanOptions {
+    /// Asks for a full refresh.
+    #[must_use]
+    pub fn full_refresh(mut self) -> Self {
+        self.full_refresh = true;
+        self
+    }
+}
+
+/// [`plan`], with `options`.
+///
+/// # Errors
+/// As [`plan`].
+pub fn plan_with(
+    project: &Project,
+    previous: Option<(SnapshotId, &StateSnapshot)>,
+    selected: &BTreeSet<String>,
+    now: Timestamp,
+    options: PlanOptions,
 ) -> Result<ExecutionPlan, PlanError> {
     let ordered = order(project)?;
     let mut context = Context {
@@ -425,7 +461,18 @@ pub fn plan(
     for (node, depth) in ordered {
         let mut evidence = Vec::new();
         let mut changed_components = Vec::new();
-        let (action, reasons) = decide(node, &context, now, &mut evidence, &mut changed_components);
+        let (action, reasons) =
+            if options.full_refresh && node.full_refresh_rebuilds && selected.contains(&node.id) {
+                (
+                    PlanAction::Build,
+                    vec![Reason::new(
+                        ReasonCode::FullRefreshRequested,
+                        "full refresh requested: rebuilt from scratch",
+                    )],
+                )
+            } else {
+                decide(node, &context, now, &mut evidence, &mut changed_components)
+            };
         if action == PlanAction::Reuse {
             evidence.push(Evidence::new(
                 "relation_exists",

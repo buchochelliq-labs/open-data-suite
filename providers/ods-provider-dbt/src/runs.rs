@@ -66,6 +66,8 @@ pub struct RunResults {
     pub command: Option<String>,
     /// Whether it ran with `--empty` (schema-only builds with no rows).
     pub empty: bool,
+    /// The `--vars` it ran with, as dbt parsed them (`{}` when none).
+    pub vars: Option<serde_json::Value>,
     /// Per-node results, in file order.
     pub results: Vec<NodeResult>,
 }
@@ -96,6 +98,8 @@ struct RawArgs {
     which: Option<String>,
     #[serde(default)]
     empty: Option<bool>,
+    #[serde(default)]
+    vars: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -167,6 +171,7 @@ impl RunResults {
             generated_at: raw.metadata.generated_at,
             command: raw.args.which,
             empty: raw.args.empty == Some(true),
+            vars: raw.args.vars,
             results,
         })
     }

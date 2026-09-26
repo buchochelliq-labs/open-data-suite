@@ -123,6 +123,10 @@ impl TestReport {
         let compiles = !args.get_flag("no-compile");
         let steps = Steps::new(progress, usize::from(compiles) + 1);
         let executor = steps.attach(executor(args, &target_dir));
+        let vars_warning = super::state_run::vars_mismatch(args, &target_dir);
+        if let Some(warning) = &vars_warning {
+            tracing::warn!("{warning}");
+        }
         if compiles {
             block_on(executor.prepare(&PrepareRequest::new()))?.map_err(|e| {
                 CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
