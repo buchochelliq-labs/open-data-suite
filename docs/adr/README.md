@@ -22,5 +22,6 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0016](0016-relation-existence-before-reuse.md) | Check that a relation still exists before reusing it | Proposed | #230 |
 | [0017](0017-state-per-target.md) | State per dbt target, with a non-secret target identity | Proposed | #227 |
 | [0018](0018-state-store-migrations-and-recovery.md) | State store migrations, integrity and recovery | Proposed | #188 |
+| [0019](0019-release-and-versioning.md) | Release and versioning strategy | Proposed | #101, #212 |
 
 Planned for M0: ADR-0007 clean-room & licensing policy (#10).
