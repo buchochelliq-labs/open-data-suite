@@ -96,8 +96,8 @@ for at least one minor release before it is removed.**
 | `ods` binary (product) | `workspace.package.version`, tag `vX.Y.Z` | SemVer (§1) | Each release |
 | Plugin SDK | `SDK_VERSION` | ADR-0006 §6: before 1.0 exactly `0.p`; from 1.0, same major and provider minor ≤ host minor | When any contract changes |
 | Each SDK contract | `Contract.version` | as the SDK | When that contract changes |
-| JSON output envelope | `schema_version` in every `--output json` result | `SchemaVersion::can_read`: same major, the reader's minor ≥ the writer's | Minor: fields added. Major: fields removed, renamed or retyped |
-| Persisted documents (snapshots, exports) | their `schema_version` | `can_read` | As JSON output |
+| JSON output envelope | `schema_version` in every `--output json` result | `SchemaVersion::can_read`: same major, the reader's minor ≥ the writer's. Consumers ignore fields they don't know | Minor: fields added. Major: fields removed, renamed or retyped |
+| Persisted documents (snapshots, exports) | their `schema_version` | `can_read`, and a newer reader loads every earlier minor of its major | Minor: only optional or defaulted fields added (`#[serde(default)]`, or `Option`), with a test loading a document written at the previous minor. A new required field, or a removed, renamed or retyped one, is a major, read through a migration (below) |
 | SQLite state store | migration version (ADR-0018) | A newer `ods` migrates older stores forward, keeping a copy. An older `ods` refuses a newer store | Each schema migration. It is recorded in the changelog and never happens in a patch |
 | `ods.toml` configuration | the product version | Unknown keys are errors (ADR-0005). Removing or changing a key's meaning is breaking | Per §1 |
 
@@ -132,13 +132,20 @@ formats) is covered by the rows above.
 - **Before 1.0:** removal is allowed in the next minor at the earliest. The warning must
   have shipped in at least one release.
 - **From 1.0:** removal is allowed in the next major only.
-- **Persisted formats are never deprecated away.**
-  - Every `ods` from 0.1.0 on keeps the migrations for every earlier store schema, and
-    readers for every earlier document major it supports.
-  - Dropping support for reading an old format is itself a breaking change, which needs
-    a major (or, before 1.0, a minor with a Breaking entry).
-- An SDK contract version is deprecated by adding its successor. The host rejects the
-  old one only after the deprecation window above.
+- **Persisted formats are never deprecated away.** State written by any `ods` since
+  0.1.0 stays readable by every later `ods`, whatever the version:
+  - every earlier store schema keeps its migration;
+  - every earlier document major keeps a reader that upgrades it to the current one.
+
+  Support is never removed, so history can always be explained (AGENTS.md rule 4).
+- **SDK contracts.**
+  - **Before 1.0,** a provider must match the host's contract minor exactly (ADR-0006
+    §6), so there is no window. A contract change is listed under **Breaking**, and
+    out-of-process plugins must be rebuilt for the release. In-process providers are
+    compiled with the host and need nothing.
+  - **From 1.0,** the host accepts providers built against earlier minors, so a
+    contract's successor ships alongside it and the deprecation window above applies.
+    The old contract is removed only in a major.
 
 ## Consequences
 - Positive:
