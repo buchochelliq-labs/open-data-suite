@@ -116,13 +116,21 @@ pub(super) fn record_command() -> Command {
 
 /// `ods state history`'s own arguments.
 pub(super) fn history_command() -> Command {
-    common(Command::new("history").about("List recorded state snapshots, newest first")).arg(
+    common(Command::new("history").about(
+        "List recorded state snapshots, newest first; with a node, its builds and why each happened",
+    ))
+    .arg(
         Arg::new("limit")
             .long("limit")
             .value_name("N")
             .value_parser(clap::value_parser!(usize))
             .default_value("20")
             .help("How many to show"),
+    )
+    .arg(
+        Arg::new("node")
+            .value_name("NODE")
+            .help("A model, seed or snapshot (name or unique id): its builds, tests, and what changed before each build"),
     )
 }
 
@@ -388,9 +396,9 @@ fn kind_word(t: ResourceType) -> &'static str {
 #[serde(rename_all = "snake_case")]
 pub(super) struct PlanReport {
     target_dir: PathBuf,
-    state_db: PathBuf,
-    scope: String,
-    based_on: Option<SnapshotId>,
+    pub(super) state_db: PathBuf,
+    pub(super) scope: String,
+    pub(super) based_on: Option<SnapshotId>,
     /// The target the recorded state was built in, as recorded: `plan` doesn't run
     /// dbt, so it isn't checked against the target dbt would build in now.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -400,9 +408,9 @@ pub(super) struct PlanReport {
     reuse: usize,
     /// The dbt command that builds exactly the BUILD set.
     dbt_command: Option<String>,
-    plan: ExecutionPlan,
+    pub(super) plan: ExecutionPlan,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    warnings: Vec<String>,
+    pub(super) warnings: Vec<String>,
 }
 
 /// A plan against the latest state, with the warnings that qualify it.
@@ -458,7 +466,10 @@ pub(super) fn plan_against(
 
 /// `--select` values.
 pub(super) fn select_specs(args: &ArgMatches) -> Vec<String> {
-    args.get_many::<String>("select")
+    // Not every command that plans selects.
+    args.try_get_many::<String>("select")
+        .ok()
+        .flatten()
         .into_iter()
         .flatten()
         .cloned()
@@ -478,7 +489,7 @@ impl PlanReport {
     pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
         let settings = StateSettings::resolve(args, config)?;
         let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
-        let now = match args.get_one::<String>("now") {
+        let now = match args.try_get_one::<String>("now").ok().flatten() {
             Some(at) => Timestamp::parse(at)
                 .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?,
             None => Timestamp::now(),

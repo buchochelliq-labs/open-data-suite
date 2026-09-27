@@ -15,7 +15,7 @@ codes).
 | `ods state retry` | available (preview): run the last `run`, `seed`, `snapshot`, `build` or `test` again with its options, see [below](#retrying-a-run) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
-| `ods state explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
+| `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -30,7 +30,7 @@ codes).
 | `ods completions <shell>` | available |
 
 Planned commands already appear in `--help`. They accept any arguments and exit with
-status 3 (`ods state explain --select x` reports "not implemented", not a usage error).
+status 3 (`ods usage --select x` reports "not implemented", not a usage error).
 
 ## Global flags
 
@@ -760,6 +760,69 @@ target name than `--target` is planned with nothing reused; state without a targ
 planned as recorded, with a note.
 `ods state record` doesn't know where the dbt build it records went, so it records no
 target: the next run rebuilds once.
+
+## State: explain, diff, graph
+
+These say why, without running anything (#21). They plan as `ods state plan` does,
+from the artifacts in the target directory, and take the same options (`--target-dir`,
+`--state-db`, `--environment`, …). Run `dbt compile` (or `ods state compile`) first
+so the artifacts show the code as it is.
+
+```sh
+ods state explain customers        # why it would be built or reused, traced upstream
+ods state why-build customers      # the same, answering "why does it build?"
+ods state why-skip stg_payments    # … and "why is it reused?"
+ods state diff                     # what changed since the recorded state
+ods state diff --from 3 --to 5     # what changed between two snapshots
+ods state history orders           # each build of `orders`, and why it happened
+ods state graph --changed          # what would be built, as a Mermaid graph
+```
+
+- **`explain NODE`** shows the node's decision, its reasons and evidence (the
+  fingerprint, the source data versions, its parents' decisions), and what changed.
+  When it builds because a parent builds, the parent is explained in turn, up to the
+  root cause:
+
+  ```text
+  customers would be built
+
+  customers: build
+    upstream code changed: orders will be rebuilt
+    orders: build
+      upstream code changed: stg_orders will be rebuilt
+      stg_orders: build
+        code changed since run 51c7…: sql
+  ```
+
+  `why-build` and `why-skip` answer the same way, and say so when the node does the
+  opposite. `NODE` is a name or a unique id; a name two nodes share is an error that
+  lists them.
+- **`diff`** compares the project now with the recorded state: nodes added or
+  removed, code that changed (by fingerprint component, e.g. `sql`, `config`), and
+  source data newer than what the recorded builds read. With `--from` and `--to` it
+  compares two snapshots (`ods state history` lists them), and says what changed
+  before each node that was rebuilt.
+- **`history NODE`** lists the node's builds and tests, newest first, and for each
+  build what changed since the one before:
+  - its code;
+  - the source data it read;
+  - a parent that was rebuilt.
+
+  This comes from what the snapshots record, so past decisions stay explainable. A
+  rebuild where nothing recorded changed is shown as such. Full refreshes and missing
+  relations aren't kept in snapshots, so a rebuild for one of those reasons appears
+  this way; a change of dbt target is recorded, and shown. Without `NODE`, `history` lists snapshots as before.
+- **`graph`** writes the plan as a graph: each node with its action, and an edge to
+  each node that reads it.
+  - `--changed` keeps only the nodes that would be built.
+  - `--format mermaid` (the default) or `--format dot` picks the format.
+  - The text goes to stdout as it is, so `ods state graph --changed > plan.mmd` works.
+  - With `--json`, the graph comes as nodes and edges, with the text alongside.
+
+All of them work with `--json`: the explanation is a tree of plan entries (`entry`,
+`causes`), history is a list of `built`, `tested` and `dropped` events with typed
+`changes` (`code`, `code_unknown`, `data`, `target`, `upstream`), and a diff lists `added`,
+`removed` and `changed` nodes.
 
 ## Recovering state
 

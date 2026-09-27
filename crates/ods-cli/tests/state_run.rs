@@ -2028,3 +2028,152 @@ fn a_damaged_state_database_is_diagnosed_and_recovered() {
     assert_eq!(code, 0, "{plan:#}");
     assert_eq!(plan["result"]["reuse"], 13, "{plan:#}");
 }
+
+/// #21: `explain`, `why-build` and `why-skip` trace a decision to its root cause.
+#[test]
+fn explain_traces_a_build_to_its_root_cause() {
+    let project = Project::new("explain");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.stg_orders");
+    // The fake dbt writes the change to the target directory when it compiles.
+    let (code, json) = project.command("compile", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    let (code, json) = project.ods(&["state", "explain", "customers"]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["verdict"], "customers would be built");
+    assert!(result["last_build"]["run_id"].is_string(), "{json:#}");
+    let customers = &result["explanation"];
+    assert_eq!(
+        customers["entry"]["reasons"][0]["code"],
+        "upstream_code_changed"
+    );
+    let orders = &customers["causes"][0];
+    assert_eq!(orders["entry"]["name"], "orders");
+    let stg_orders = &orders["causes"][0];
+    assert_eq!(stg_orders["entry"]["name"], "stg_orders");
+    assert_eq!(stg_orders["entry"]["reasons"][0]["code"], "code_changed");
+    assert!(stg_orders["causes"].as_array().unwrap().is_empty());
+
+    // Asked the other way round, the answer says so.
+    let (code, json) = project.ods(&["state", "why-skip", "customers"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(
+        json["result"]["verdict"],
+        "customers isn't reused: it would be built"
+    );
+    let (_, json) = project.ods(&["state", "why-build", "stg_payments"]);
+    assert_eq!(
+        json["result"]["verdict"],
+        "stg_payments isn't built: it would be reused"
+    );
+    assert_eq!(
+        json["result"]["explanation"]["entry"]["reasons"][0]["code"],
+        "unchanged"
+    );
+    // A unique id works too; an unknown name is a usage error.
+    let (code, _) = project.ods(&["state", "explain", "model.jaffle_ods.orders"]);
+    assert_eq!(code, 0);
+    let (code, json) = project.ods(&["state", "explain", "nope"]);
+    assert_eq!(code, 2, "{json:#}");
+}
+
+/// #21: `history <node>` explains each past build from what the snapshots record, and
+/// `diff` says what changed, now or between two snapshots.
+#[test]
+fn past_builds_stay_explainable_and_diffs_say_what_changed() {
+    let project = Project::new("node-history");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.stg_orders");
+    // The fake dbt writes the change to the target directory when it compiles.
+    let (code, json) = project.command("compile", &[]);
+    assert_eq!(code, 0, "{json:#}");
+
+    // Before building: the project differs from the recorded state.
+    let (code, json) = project.ods(&["state", "diff"]);
+    assert_eq!(code, 0, "{json:#}");
+    let changed = &json["result"]["diff"]["changed"];
+    assert_eq!(changed.as_array().unwrap().len(), 1, "{json:#}");
+    assert_eq!(changed[0]["node"], "model.jaffle_ods.stg_orders");
+    assert_eq!(changed[0]["changes"][0]["kind"], "code");
+
+    project.run_ok(&[]);
+    let (code, json) = project.ods(&["state", "history", "stg_orders"]);
+    assert_eq!(code, 0, "{json:#}");
+    let events = json["result"]["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2, "{json:#}");
+    assert_eq!(events[0]["event"], "built");
+    assert_eq!(events[0]["changes"][0]["kind"], "code");
+    assert_eq!(events[1]["first"], true);
+    // A reader rebuilt because of it says which parent was rebuilt.
+    let (_, json) = project.ods(&["state", "history", "orders"]);
+    let latest = &json["result"]["events"][0];
+    assert!(
+        latest["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["kind"] == "upstream" && c["parent"] == "model.jaffle_ods.stg_orders"),
+        "{json:#}"
+    );
+
+    // Between the two snapshots: what was rebuilt, and why.
+    let (code, json) = project.ods(&["state", "diff", "--from", "1", "--to", "2"]);
+    assert_eq!(code, 0, "{json:#}");
+    let rebuilt: Vec<&str> = json["result"]["diff"]["changed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["node"].as_str().unwrap())
+        .collect();
+    assert!(
+        rebuilt.contains(&"model.jaffle_ods.stg_orders"),
+        "{rebuilt:?}"
+    );
+    assert!(
+        !rebuilt.contains(&"model.jaffle_ods.stg_payments"),
+        "{rebuilt:?}"
+    );
+    // Now nothing differs.
+    let (_, json) = project.ods(&["state", "diff"]);
+    assert!(
+        json["result"]["diff"]["changed"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{json:#}"
+    );
+}
+
+/// #21: `graph --changed` shows what would be built and what it reads.
+#[test]
+fn graph_shows_what_would_be_built() {
+    let project = Project::new("state-graph");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.stg_orders");
+    // The fake dbt writes the change to the target directory when it compiles.
+    let (code, json) = project.command("compile", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    let (code, json) = project.ods(&["state", "graph", "--changed"]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert!(
+        result["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["action"] == "build"),
+        "{json:#}"
+    );
+    assert!(
+        result["edges"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!([
+                "model.jaffle_ods.stg_orders",
+                "model.jaffle_ods.orders"
+            ])),
+        "{json:#}"
+    );
+    assert!(result["text"].as_str().unwrap().starts_with("graph LR"));
+}

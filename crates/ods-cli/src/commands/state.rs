@@ -15,7 +15,7 @@ use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{ArtifactPreference, Artifacts};
 use serde::Serialize;
 
-use super::{Planned, state_doctor, state_plan, state_retry, state_run, state_test};
+use super::{Planned, state_doctor, state_explain, state_plan, state_retry, state_run, state_test};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -33,7 +33,7 @@ impl Module for State {
     fn command(&self) -> Command {
         Command::new("state")
             .about(format!(
-                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`, `doctor`, `retry`; more in {MILESTONE}]"
+                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`, `doctor`, `retry`, `explain`, `diff`, `graph`; more in {MILESTONE}]"
             ))
             .args_conflicts_with_subcommands(true)
             .subcommand(
@@ -76,6 +76,9 @@ impl Module for State {
             .subcommand(state_plan::record_command())
             .subcommand(state_plan::history_command())
             .subcommand(state_retry::retry_command())
+            .subcommands(state_explain::Question::ALL.map(state_explain::question_command))
+            .subcommand(state_explain::diff_command())
+            .subcommand(state_explain::graph_command())
             .subcommand(state_doctor::doctor_command())
             .subcommand(state_doctor::backup_command())
             .subcommand(state_doctor::reset_command())
@@ -98,13 +101,34 @@ impl Module for State {
         {
             return state_run::RunReport::run(kind, args, ctx);
         }
+        if let Some((name, args)) = matches.subcommand()
+            && let Some(question) = state_explain::Question::named(name)
+        {
+            return ctx.emit(&state_explain::ExplainReport::build(
+                question, args, ctx.config,
+            )?);
+        }
         match matches.subcommand() {
             Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args, ctx.config)?),
             Some(("test", args)) => state_test::TestReport::run(args, ctx),
             Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args, ctx.config)?),
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args, ctx.config)?),
+            Some(("history", args)) if args.get_one::<String>("node").is_some() => {
+                ctx.emit(&state_explain::NodeHistoryReport::build(args, ctx.config)?)
+            }
             Some(("history", args)) => {
                 ctx.emit(&state_plan::HistoryReport::build(args, ctx.config)?)
+            }
+            Some(("diff", args)) => ctx.emit(&state_explain::DiffReport::build(args, ctx.config)?),
+            Some(("graph", args)) => {
+                let report = state_explain::GraphReport::build(args, ctx.config)?;
+                // The graph is for other tools: written as it is, unless JSON is asked for.
+                if ctx.output.mode == crate::output::Mode::Json {
+                    ctx.emit(&report)
+                } else {
+                    ctx.raw_out().write_all(report.text().as_bytes())?;
+                    Ok(())
+                }
             }
             Some(("retry", args)) => {
                 let (last, line) = state_retry::last_run(args, ctx.config)?;

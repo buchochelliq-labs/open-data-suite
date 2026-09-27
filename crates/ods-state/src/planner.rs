@@ -25,7 +25,7 @@ pub enum PlanError {
 
 /// Reasons that mean a node's output may differ in shape, not just in data: its
 /// children rebuild whatever their lag tolerance.
-fn is_code_change(code: ReasonCode) -> bool {
+pub(crate) fn is_code_change(code: ReasonCode) -> bool {
     matches!(
         code,
         ReasonCode::NeverBuilt
