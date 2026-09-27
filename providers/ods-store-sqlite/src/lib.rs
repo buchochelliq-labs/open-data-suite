@@ -284,7 +284,7 @@ impl SqliteStateStore {
             if !from.exists() {
                 continue;
             }
-            std::fs::rename(&from, &to).map_err(|e| {
+            rename_patiently(&from, &to).map_err(|e| {
                 ProviderError::Other(format!(
                     "can't move `{}` aside: {e}{}",
                     from.display(),
@@ -509,6 +509,28 @@ impl Drop for WriteTx {
     fn drop(&mut self) {
         if let Some(conn) = self.0.take() {
             drop(conn.detach());
+        }
+    }
+}
+
+/// Renames `from` to `to`, retrying for up to about a second while another process holds
+/// the file: on Windows a just-closed database, or a virus scanner, can keep it open
+/// briefly (a sharing violation, OS error 32).
+fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
+    const SHARING_VIOLATION: i32 = 32;
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e)
+                if cfg!(windows)
+                    && attempt < 20
+                    && (e.raw_os_error() == Some(SHARING_VIOLATION)
+                        || e.kind() == std::io::ErrorKind::PermissionDenied) =>
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            result => return result,
         }
     }
 }
