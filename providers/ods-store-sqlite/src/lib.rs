@@ -513,24 +513,33 @@ impl Drop for WriteTx {
     }
 }
 
-/// Renames `from` to `to`, retrying for a few seconds while another process holds
-/// the file: on Windows a just-closed database, or a virus scanner, can keep it open
-/// briefly (a sharing violation, OS error 32).
+/// Renames `from` to `to`, retrying for up to about 10 seconds while another process
+/// holds the file: on Windows a virus scanner or indexer can keep a just-written file
+/// open for several seconds (a sharing violation, OS error 32). The error says how long
+/// it waited.
 fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
     const SHARING_VIOLATION: i32 = 32;
-    let mut attempt = 0;
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    let mut pause = std::time::Duration::from_millis(50);
     loop {
         match std::fs::rename(from, to) {
             Err(e)
                 if cfg!(windows)
-                    && attempt < 12
                     && (e.raw_os_error() == Some(SHARING_VIOLATION)
                         || e.kind() == std::io::ErrorKind::PermissionDenied) =>
             {
-                // Virus scanners and indexers can hold a just-written file for a few
-                // seconds: back off, waiting about 4 seconds in all.
-                attempt += 1;
-                std::thread::sleep(std::time::Duration::from_millis(50 * attempt));
+                if start.elapsed() >= PATIENCE {
+                    return Err(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "{e} (still held after {:.1}s)",
+                            start.elapsed().as_secs_f64()
+                        ),
+                    ));
+                }
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(std::time::Duration::from_millis(500));
             }
             result => return result,
         }
