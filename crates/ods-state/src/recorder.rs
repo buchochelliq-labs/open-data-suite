@@ -179,10 +179,13 @@ pub fn record(
             }
         }
     }
+    // Where these builds went is the caller's to say (#227): the previous snapshot's
+    // target is no evidence of it. Source checks carry over until the caller records
+    // new results for them (#232).
+    let mut snapshot = StateSnapshot::new(previous.map(|(id, _)| id), finished_at, run_id, nodes);
+    snapshot.sources = previous.map(|(_, s)| s.sources.clone()).unwrap_or_default();
     Recorded {
-        // Where these builds went is the caller's to say (#227): the previous
-        // snapshot's target is no evidence of it.
-        snapshot: StateSnapshot::new(previous.map(|(id, _)| id), finished_at, run_id, nodes),
+        snapshot,
         advanced: advanced.into_iter().collect(),
         kept,
         ignored: ignored.into_iter().collect(),
@@ -278,9 +281,11 @@ pub fn record_tests(
     passed.sort();
     failed.sort();
     ignored.sort();
+    let mut next = StateSnapshot::new(Some(id), finished_at, run_id, nodes)
+        .with_target(snapshot.target.clone());
+    next.sources.clone_from(&snapshot.sources);
     RecordedTests {
-        snapshot: StateSnapshot::new(Some(id), finished_at, run_id, nodes)
-            .with_target(snapshot.target.clone()),
+        snapshot: next,
         passed,
         failed,
         ignored,

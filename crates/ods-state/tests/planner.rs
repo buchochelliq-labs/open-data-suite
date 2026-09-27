@@ -1037,3 +1037,94 @@ fn a_full_refresh_rebuilds_the_selected_nodes_it_changes_and_their_readers() {
         "without the option"
     );
 }
+
+/// #232: a source's checks are recorded against its data, carried by every later
+/// snapshot until new results replace them, and never touched by node builds.
+#[test]
+fn source_checks_carry_over_builds_and_test_runs() {
+    use ods_state::{
+        SourceCheckAction, TestResult, record_source_checks, record_tests, select_sources,
+        source_checks,
+    };
+    let mut project = project();
+    for source in &mut project.sources {
+        source.checks = Some("checks-v1".to_owned());
+    }
+    let mut first = built(&project);
+    let recorded = record_source_checks(
+        &mut first,
+        &project,
+        &[TestResult::new(
+            "source.p.raw_orders",
+            true,
+            Some(Timestamp::from_unix(T0)),
+        )],
+        Timestamp::from_unix(T0),
+        true,
+    );
+    assert_eq!(recorded.passed, ["source.p.raw_orders"]);
+    // A later build, and a test-only run, keep it.
+    let results = [RunResult::new(
+        "model.p.orders",
+        Outcome::Success,
+        Some(Timestamp::from_unix(T0 + 10)),
+    )];
+    let second = record(
+        &project,
+        Some((SnapshotId(1), &first)),
+        &results,
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert_eq!(second.sources, first.sources);
+    let third = record_tests(
+        &project,
+        (SnapshotId(2), &second),
+        &[],
+        "run-3",
+        Timestamp::from_unix(T0 + 20),
+    )
+    .snapshot;
+    assert_eq!(third.sources, first.sources);
+    // Measured again after the pass, unchanged: raw_orders is skipped; raw_users
+    // (never tested) runs.
+    let scope = select_sources(&project, &[]).unwrap();
+    let decided: Vec<(String, SourceCheckAction)> =
+        source_checks(&project, Some(&third), &scope, false)
+            .into_iter()
+            .map(|c| (c.name, c.action))
+            .collect();
+    assert_eq!(
+        decided,
+        [
+            ("raw_orders".to_owned(), SourceCheckAction::Skip),
+            ("raw_users".to_owned(), SourceCheckAction::Test),
+        ]
+    );
+}
+
+/// #232: with `--select`, only the sources a `+` selector reaches as ancestors, as dbt
+/// selects them; a node selected alone doesn't bring in its sources.
+#[test]
+fn sources_are_selected_as_ancestors_only() {
+    use ods_state::select_sources;
+    let project = project();
+    let ids = |specs: &[&str]| -> Vec<String> {
+        let specs: Vec<String> = specs.iter().map(|s| (*s).to_owned()).collect();
+        select_sources(&project, &specs)
+            .unwrap()
+            .into_iter()
+            .collect()
+    };
+    assert_eq!(ids(&[]), ["source.p.raw_orders", "source.p.raw_users"]);
+    assert_eq!(ids(&["+orders"]), ["source.p.raw_orders"]);
+    assert_eq!(
+        ids(&["+report+"]),
+        ["source.p.raw_orders", "source.p.raw_users"]
+    );
+    assert!(ids(&["stg_orders"]).is_empty());
+    assert!(ids(&["stg_orders+"]).is_empty());
+    assert!(select_sources(&project, &["+nope".to_owned()]).is_err());
+}
