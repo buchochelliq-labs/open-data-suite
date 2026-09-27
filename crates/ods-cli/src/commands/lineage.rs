@@ -26,6 +26,7 @@ use ods_sdk::contracts::observed_lineage::{ObservedLineage, ObservedLineageSourc
 use ods_sdk::contracts::sql_lineage::SqlLineageAnalyzer;
 use serde::Serialize;
 
+use super::state_settings::{artifact_dir_args, artifacts_dir};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, TreeItem, ViewNode};
@@ -34,14 +35,10 @@ use crate::present::{Level, Present, Span, Tone, TreeItem, ViewNode};
 pub struct Lineage;
 
 pub(super) fn common_args(command: Command) -> Command {
-    command
-        .arg(
-            Arg::new("target-dir")
-                .long("target-dir")
-                .value_name("DIR")
-                .default_value("target")
-                .help("dbt target directory with manifest.json (and catalog.json, if generated)"),
-        )
+    artifact_dir_args(
+        command,
+        "manifest.json (and catalog.json, if generated)",
+    )
         .arg(
             Arg::new("artifacts")
                 .long("artifacts")
@@ -120,7 +117,7 @@ impl Module for Lineage {
         let Some((name, args)) = matches.subcommand() else {
             return Ok(());
         };
-        let loaded = Loaded::load(args)?;
+        let loaded = Loaded::load(args, ctx.config)?;
         match name {
             "columns" => {
                 let model = args.get_one::<String>("model").map(String::as_str);
@@ -336,11 +333,8 @@ pub(super) struct Loaded {
 }
 
 impl Loaded {
-    pub(super) fn load(args: &ArgMatches) -> Result<Self, CliError> {
-        let target_dir = PathBuf::from(
-            args.get_one::<String>("target-dir")
-                .map_or("target", String::as_str),
-        );
+    pub(super) fn load(args: &ArgMatches, config: &ods_config::Loaded) -> Result<Self, CliError> {
+        let target_dir = artifacts_dir(args, config)?;
         Self::from_dir(&target_dir, &LoadOptions::from_args(args), shared_cache())
     }
 
