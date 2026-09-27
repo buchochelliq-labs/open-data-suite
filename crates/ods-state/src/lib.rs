@@ -6,14 +6,21 @@
 //! - [`plan`] decides, per node, BUILD or REUSE, with reasons and evidence;
 //! - [`record`] turns a finished run into the next snapshot, advancing only the nodes
 //!   that succeeded (AGENTS.md rule 5);
-//! - [`select`] resolves dbt-style `+name+` selectors.
+//! - [`select`] resolves dbt-style `+name+` selectors;
+//! - [`explain`], [`node_history`], [`diff_states`] and [`diff_project`] explain
+//!   decisions, past builds and differences (#21).
 //!
 //! Missing or uncertain evidence always means BUILD (AGENTS.md rule 3).
 
+mod explain;
 mod planner;
 mod recorder;
 mod selection;
 
+pub use explain::{
+    Change, Explanation, NodeDiff, NodeEvent, StateDiff, changes, diff_project, diff_states,
+    explain, node_history,
+};
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use selection::select;

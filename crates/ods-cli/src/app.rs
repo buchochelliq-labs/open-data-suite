@@ -410,12 +410,12 @@ mod tests {
 
     #[test]
     fn planned_command_reports_not_implemented_on_stderr() {
-        let o = invoke(&["state", "explain", "--select", "+orders"]);
+        let o = invoke(&["usage", "--select", "+orders"]);
         assert_eq!(o.status, ExitStatus::NotImplemented);
         assert!(o.out.is_empty(), "stdout must stay clean: {}", o.out);
         insta::assert_snapshot!(o.err, @r"
-        error[ODS-E0003]: `ods state` is not implemented yet
-          hint: planned for M1 State MVP (v0.1.0); see docs/ROADMAP.md
+        error[ODS-E0003]: `ods usage` is not implemented yet
+          hint: planned for M3 ERD & Usage (v0.3.0); see docs/ROADMAP.md
         ");
     }
 
@@ -492,24 +492,24 @@ mod tests {
 
     #[test]
     fn global_flags_after_planned_arguments_still_apply() {
-        let o = invoke(&["state", "explain", "--select", "+orders", "--json"]);
+        let o = invoke(&["usage", "--select", "+orders", "--json"]);
         assert_eq!(o.status, ExitStatus::NotImplemented);
         let value: serde_json::Value = serde_json::from_str(&o.out).expect("one JSON document");
         assert_eq!(value["diagnostics"][0]["code"], "ODS-E0003");
         assert!(o.err.is_empty());
 
-        let bad = invoke(&["state", "explain", "-o", "yaml"]);
+        let bad = invoke(&["usage", "-o", "yaml"]);
         assert_eq!(
             bad.status,
             ExitStatus::Usage,
             "hoisted flags are still validated"
         );
 
-        let help = invoke(&["state", "explain", "--help"]);
+        let help = invoke(&["usage", "--help"]);
         assert_eq!(help.status, ExitStatus::Success);
-        assert!(help.out.contains("Usage: ods state"), "{}", help.out);
+        assert!(help.out.contains("Usage: ods usage"), "{}", help.out);
 
-        let literal = invoke(&["state", "explain", "--", "--json"]);
+        let literal = invoke(&["usage", "--", "--json"]);
         assert_eq!(literal.status, ExitStatus::NotImplemented);
         assert!(literal.out.is_empty(), "flags after `--` are literal");
     }
