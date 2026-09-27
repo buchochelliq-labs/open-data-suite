@@ -7,6 +7,7 @@
 
 pub mod capability;
 pub mod freshness;
+pub mod graph;
 pub mod lineage;
 pub mod state;
 pub mod strategy;

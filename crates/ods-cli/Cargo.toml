@@ -28,6 +28,7 @@ ods-state.workspace = true
 ods-store-sqlite.workspace = true
 ods-web.workspace = true
 opener.workspace = true
+petgraph.workspace = true
 rs-rich.workspace = true
 serde.workspace = true
 serde_json.workspace = true

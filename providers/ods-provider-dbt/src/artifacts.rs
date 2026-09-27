@@ -1,6 +1,6 @@
 //! Lean, tolerant models of `manifest.json` and `catalog.json`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -603,6 +603,62 @@ pub(crate) fn check_version(
 }
 
 impl Manifest {
+    /// The nodes by id, for lookups.
+    pub fn nodes_by_id(&self) -> BTreeMap<&str, &ManifestNode> {
+        self.nodes
+            .iter()
+            .map(|n| (n.unique_id.as_str(), n))
+            .collect()
+    }
+
+    /// `depends_on`, with every node that `pass_through` accepts replaced by that node's
+    /// own dependencies, transitively (e.g. ephemeral models, whose SQL their readers
+    /// inline). Sorted. Ids that name no node in `by_id` are kept.
+    pub fn dependencies_through<'a>(
+        by_id: &BTreeMap<&'a str, &'a ManifestNode>,
+        depends_on: &'a [String],
+        pass_through: impl Fn(&ManifestNode) -> bool,
+    ) -> BTreeSet<&'a str> {
+        let mut out = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut pending: Vec<&str> = depends_on.iter().map(String::as_str).collect();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match by_id.get(id) {
+                Some(node) if pass_through(node) => {
+                    pending.extend(node.depends_on.iter().map(String::as_str));
+                }
+                _ => {
+                    out.insert(id);
+                }
+            }
+        }
+        out
+    }
+
+    /// The macros reachable from `roots` through the macros they call, sorted. Macros
+    /// `skip` accepts are left out and not followed; ids of macros the manifest
+    /// doesn't include are kept, so callers can report them.
+    pub fn macros_reached<'a>(
+        &'a self,
+        roots: impl IntoIterator<Item = &'a str>,
+        skip: impl Fn(&str) -> bool,
+    ) -> BTreeSet<&'a str> {
+        let mut seen = BTreeSet::new();
+        let mut pending: Vec<&str> = roots.into_iter().collect();
+        while let Some(id) = pending.pop() {
+            if skip(id) || !seen.insert(id) {
+                continue;
+            }
+            if let Some(m) = self.macros.get(id) {
+                pending.extend(m.depends_on.iter().map(String::as_str));
+            }
+        }
+        seen
+    }
+
     /// Reads and validates a manifest.
     ///
     /// # Errors

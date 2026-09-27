@@ -213,6 +213,28 @@ fn builds_in_dependency_waves_and_reports_opaque_models() {
 }
 
 #[test]
+fn a_dependency_cycle_is_named() {
+    let node = |id: &str, deps: &[&str]| {
+        LineageNode::new(id, rel(id), NodeKind::Model).with_depends_on(deps.iter().copied())
+    };
+    // `d` only reads the cycle; `a` reads itself, which is not a cycle.
+    let project = LineageProject::new(vec![
+        node("a", &["a"]),
+        node("b", &["a", "c"]),
+        node("c", &["b"]),
+        node("d", &["c"]),
+    ]);
+    let Err(err) = build(
+        &project,
+        &FakeSqlLineageAnalyzer::new(),
+        &MemoryCache::default(),
+    ) else {
+        panic!("a cycle");
+    };
+    assert_eq!(err.to_string(), "dependency cycle: b → c → b");
+}
+
+#[test]
 fn unchanged_models_are_served_from_the_cache() {
     let (project, analyzer) = project_and_analyzer();
     let cache = MemoryCache::default();

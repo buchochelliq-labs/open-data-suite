@@ -22,8 +22,9 @@ pub enum BuildError {
     /// Two nodes build the same relation.
     #[error("nodes `{0}` and `{1}` both build `{2}`")]
     DuplicateRelation(String, String, RelationName),
-    /// The dependencies contain a cycle through these nodes.
-    #[error("dependency cycle through: {}", .0.join(", "))]
+    /// The dependencies contain a cycle: each node depends on the one before it, and
+    /// the first on the last.
+    #[error("dependency cycle: {}", ods_core::graph::Cycle(.0.clone()))]
     Cycle(Vec<String>),
     /// The analyzer itself failed (not the SQL: unparseable SQL is an opaque result).
     #[error("analyzer failed on `{node}`: {source}")]
@@ -152,43 +153,25 @@ fn waves(
     by_id: &BTreeMap<&str, &LineageNode>,
     stats: &mut BuildStats,
 ) -> Result<Vec<Vec<String>>, BuildError> {
-    let mut remaining: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut edges = Vec::new();
     for (id, node) in by_id {
-        let deps = node
-            .depends_on
-            .iter()
-            .filter(|d| {
-                let known = by_id.contains_key(d.as_str());
-                if !known {
-                    stats.missing_dependencies.insert((*d).clone());
-                }
-                known && d.as_str() != *id
-            })
-            .map(String::as_str)
-            .collect();
-        remaining.insert(id, deps);
-    }
-    let mut waves = Vec::new();
-    while !remaining.is_empty() {
-        let ready: Vec<&str> = remaining
-            .iter()
-            .filter(|(_, deps)| deps.is_empty())
-            .map(|(id, _)| *id)
-            .collect();
-        if ready.is_empty() {
-            return Err(BuildError::Cycle(
-                remaining.keys().map(|id| (*id).to_owned()).collect(),
-            ));
-        }
-        for id in &ready {
-            remaining.remove(id);
-        }
-        for deps in remaining.values_mut() {
-            for id in &ready {
-                deps.remove(id);
+        for dep in &node.depends_on {
+            if !by_id.contains_key(dep.as_str()) {
+                stats.missing_dependencies.insert(dep.clone());
+            } else if dep != id {
+                edges.push((dep.as_str(), *id));
             }
         }
-        waves.push(ready.into_iter().map(str::to_owned).collect());
+    }
+    let order = ods_core::graph::layers(by_id.keys().copied(), edges)
+        .map_err(|cycle| BuildError::Cycle(cycle.0))?;
+    let mut waves: Vec<Vec<String>> = Vec::new();
+    for (id, depth) in order {
+        let depth = depth as usize;
+        if waves.len() <= depth {
+            waves.push(Vec::new());
+        }
+        waves[depth].push(id.to_owned());
     }
     Ok(waves)
 }

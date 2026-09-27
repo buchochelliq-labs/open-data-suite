@@ -488,12 +488,7 @@ fn project(
     analyzer: &SqlparserAnalyzer,
 ) -> Result<(LineageProject, BTreeMap<String, String>), CliError> {
     let catalog = artifacts.catalog.as_ref();
-    let by_id: BTreeMap<&str, &ods_provider_dbt::ManifestNode> = artifacts
-        .manifest
-        .nodes
-        .iter()
-        .map(|n| (n.unique_id.as_str(), n))
-        .collect();
+    let by_id = artifacts.manifest.nodes_by_id();
     let included = |n: &ods_provider_dbt::ManifestNode| {
         kind(n.resource_type).is_some() && n.relation_name.is_some()
     };
@@ -513,21 +508,14 @@ fn project(
         })?;
         // Ephemeral models have no relation: their SQL is inlined into consumers as a
         // CTE, so a consumer really depends on the ephemeral model's own upstreams.
-        let mut depends_on = BTreeSet::new();
-        let mut pending: Vec<&str> = node.depends_on.iter().map(String::as_str).collect();
-        let mut seen = BTreeSet::new();
-        while let Some(dep) = pending.pop() {
-            if !seen.insert(dep) {
-                continue;
-            }
-            match by_id.get(dep) {
-                Some(upstream) if included(upstream) => {
-                    depends_on.insert(dep.to_owned());
-                }
-                Some(upstream) => pending.extend(upstream.depends_on.iter().map(String::as_str)),
-                None => {}
-            }
-        }
+        let depends_on: BTreeSet<String> =
+            ods_provider_dbt::Manifest::dependencies_through(&by_id, &node.depends_on, |n| {
+                !included(n)
+            })
+            .into_iter()
+            .filter(|id| by_id.contains_key(id))
+            .map(str::to_owned)
+            .collect();
         let mut lineage_node =
             LineageNode::new(&node.unique_id, relation, kind).with_depends_on(depends_on);
         let sql_model =
