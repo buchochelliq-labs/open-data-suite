@@ -39,6 +39,8 @@ csv = "1"
 # Hex encoding of digests.
 hex = "0.4"
 insta = "1"
+# Date and time: parsing and printing `Timestamp`. No time zone database needed (UTC only).
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 # Opens the lineage viewer in the user's browser, on every platform (and WSL).
 opener = "0.8"
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the

@@ -27,14 +27,28 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 // ---------------------------------------------------------------------------- time
 
-/// A point in time, to the second, in UTC. Serialized as RFC 3339 (`…Z`).
+/// A point in time, to the second, in UTC, between the years -9999 and 9999. Serialized
+/// as RFC 3339 (`…Z`), which reads back as the same value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(i64);
 
 impl Timestamp {
-    /// Seconds since the Unix epoch.
+    /// The earliest time jiff represents: -9999-01-02T01:59:59Z.
+    const MIN_UNIX: i64 = -377_705_023_201;
+    /// The latest time jiff represents: 9999-12-30T22:00:00Z.
+    const MAX_UNIX: i64 = 253_402_207_200;
+
+    /// Seconds since the Unix epoch. A time outside the years -9999 to 9999 (only
+    /// saturating arithmetic produces one, e.g. "never due") becomes the nearest
+    /// representable time, so every `Timestamp` prints and parses back exactly.
     pub const fn from_unix(seconds: i64) -> Self {
-        Self(seconds)
+        if seconds < Self::MIN_UNIX {
+            Self(Self::MIN_UNIX)
+        } else if seconds > Self::MAX_UNIX {
+            Self(Self::MAX_UNIX)
+        } else {
+            Self(seconds)
+        }
     }
 
     /// Seconds since the Unix epoch.
@@ -44,10 +58,7 @@ impl Timestamp {
 
     /// Now, from the system clock.
     pub fn now() -> Self {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-        Self(secs)
+        Self(jiff::Timestamp::now().as_second())
     }
 
     /// Parses RFC 3339 and the variants dbt writes: `2026-09-25T03:14:58.849275Z`,
@@ -59,82 +70,29 @@ impl Timestamp {
     pub fn parse(text: &str) -> Result<Self, String> {
         let bad = || format!("`{text}` is not an RFC 3339 timestamp");
         let text = text.trim();
-        let (date, rest) = text.split_once(['T', 't', ' ']).ok_or_else(bad)?;
-        let number = |part: &str| part.parse::<i64>().map_err(|_| bad());
-        let parts: Vec<&str> = date.split('-').collect();
-        let [year, month, day] = parts.as_slice() else {
-            return Err(bad());
+        let instant = match text.parse::<jiff::Timestamp>() {
+            Ok(instant) => instant,
+            // dbt sometimes writes no offset; it means UTC. A date alone is not a time.
+            Err(_) if !text.contains(['T', 't', ' ']) => return Err(bad()),
+            Err(_) => text
+                .parse::<jiff::civil::DateTime>()
+                .and_then(|civil| civil.to_zoned(jiff::tz::TimeZone::UTC))
+                .map_err(|_| bad())?
+                .timestamp(),
         };
-        let (year, month, day) = (number(year)?, number(month)?, number(day)?);
-        // Offset: `Z`, `+HH:MM`, `-HH:MM`, or none.
-        let (clock, offset_secs) = if let Some(clock) = rest.strip_suffix(['Z', 'z']) {
-            (clock, 0)
-        } else if let Some(at) = rest.rfind(['+', '-']).filter(|&at| at >= 8) {
-            let (clock, offset) = rest.split_at(at);
-            let sign = if offset.starts_with('-') { -1 } else { 1 };
-            let (h, m) = offset[1..].split_once(':').unwrap_or((&offset[1..], "0"));
-            (clock, sign * (number(h)? * 3600 + number(m)? * 60))
-        } else {
-            (rest, 0)
-        };
-        let clock = clock.split('.').next().unwrap_or(clock);
-        let fields: Vec<&str> = clock.split(':').collect();
-        let (hour, minute, second) = match fields.as_slice() {
-            [hour, minute] => (number(hour)?, number(minute)?, 0),
-            [hour, minute, second] => (number(hour)?, number(minute)?, number(second)?),
-            _ => return Err(bad()),
-        };
-        if !(1..=12).contains(&month)
-            || !(1..=31).contains(&day)
-            || hour > 23
-            || minute > 59
-            || second > 60
-        {
-            return Err(bad());
-        }
-        let days = days_from_civil(year, month, day);
+        // `as_second` truncates toward zero; round down so fractions before 1970 are
+        // dropped the same way as after.
         Ok(Self(
-            days * 86_400 + hour * 3600 + minute * 60 + second - offset_secs,
+            instant.as_second() - i64::from(instant.subsec_nanosecond() < 0),
         ))
     }
 }
 
-/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's algorithm).
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// The date of a day number from [`days_from_civil`].
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
 impl fmt::Display for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (days, secs) = (self.0.div_euclid(86_400), self.0.rem_euclid(86_400));
-        let (y, m, d) = civil_from_days(days);
-        write!(
-            f,
-            "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
-            secs / 3600,
-            secs % 3600 / 60,
-            secs % 60
-        )
+        // `from_unix` keeps every value in jiff's range, so this always succeeds.
+        let instant = jiff::Timestamp::from_second(self.0).map_err(|_| fmt::Error)?;
+        write!(f, "{instant}")
     }
 }
 
@@ -791,8 +749,42 @@ mod tests {
             Timestamp::from_unix(951_782_400).to_string(),
             "2000-02-29T00:00:00Z"
         );
+        assert_eq!(Timestamp::parse("2026-09-25t03:14:58z").unwrap(), t);
+        assert_eq!(Timestamp::parse("2026-09-25T03:14:58+0000").unwrap(), t);
+        assert_eq!(
+            Timestamp::parse(" 2026-09-25T03:14:58.1-01:30 ").unwrap(),
+            Timestamp::from_unix(t.unix() + 5400)
+        );
+        assert_eq!(
+            Timestamp::parse("2026-09-25T03:14").unwrap(),
+            Timestamp::from_unix(t.unix() - 58)
+        );
+        assert_eq!(
+            Timestamp::parse("1969-12-31T23:59:59.5Z").unwrap().unix(),
+            -1
+        );
+        assert_eq!(Timestamp::from_unix(-1).to_string(), "1969-12-31T23:59:59Z");
+        assert_eq!(Timestamp::MIN_UNIX, jiff::Timestamp::MIN.as_second());
+        assert_eq!(Timestamp::MAX_UNIX, jiff::Timestamp::MAX.as_second());
+        for edge in [
+            Timestamp::from_unix(i64::MIN),
+            Timestamp::from_unix(i64::MAX),
+        ] {
+            let json = serde_json::to_string(&edge).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Timestamp>(&json).unwrap(),
+                edge,
+                "{json}"
+            );
+        }
+        assert_eq!(
+            Timestamp::from_unix(i64::MAX).to_string(),
+            "9999-12-30T22:00:00Z"
+        );
         assert!(Timestamp::parse("yesterday").is_err());
         assert!(Timestamp::parse("2026-13-01T00:00:00Z").is_err());
+        assert!(Timestamp::parse("2026-02-30T00:00:00Z").is_err());
+        assert!(Timestamp::parse("2026-09-25").is_err());
         let json = serde_json::to_string(&t).unwrap();
         assert_eq!(serde_json::from_str::<Timestamp>(&json).unwrap(), t);
     }

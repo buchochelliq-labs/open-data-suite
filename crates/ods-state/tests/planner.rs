@@ -253,6 +253,38 @@ fn lag_tolerance_defers_new_data_until_due() {
 }
 
 #[test]
+fn a_lag_beyond_representable_time_is_never_due() {
+    let message = |lag: u64| {
+        let mut p = project();
+        p.nodes[0].policy.lag_tolerance_secs = lag;
+        let state = built(&p);
+        let mut fresh = p.clone();
+        fresh.sources[0] = source("raw_orders", Some("v2"));
+        let plan = plan(
+            &fresh,
+            Some((SnapshotId(1), &state)),
+            &all(&fresh),
+            Timestamp::from_unix(T0 + 600),
+        )
+        .unwrap();
+        let entry = plan
+            .entries
+            .into_iter()
+            .find(|e| e.name == "stg_orders")
+            .unwrap();
+        assert_eq!(entry.reasons[0].code, ReasonCode::WithinLagTolerance);
+        entry.reasons[0].message.clone()
+    };
+    let hour = message(3600);
+    assert!(hour.contains("due at "), "{hour}");
+    let forever = message(u64::MAX);
+    assert!(
+        forever.ends_with("never due") && !forever.contains("due at"),
+        "{forever}"
+    );
+}
+
+#[test]
 fn lag_tolerance_never_defers_an_upstream_code_change() {
     let mut p = project();
     p.nodes[2].policy.lag_tolerance_secs = 3600;
