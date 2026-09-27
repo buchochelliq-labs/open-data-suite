@@ -114,19 +114,21 @@ fn implicit_macros<'m>(manifest: &'m Manifest, node: &ManifestNode) -> Vec<&'m s
 
 /// Every macro `node` calls, directly or through other macros, as `id sha256` lines.
 fn macros_content(manifest: &Manifest, node: &ManifestNode) -> Result<String, String> {
-    let mut seen = BTreeSet::new();
-    let mut stack: Vec<&str> = node.depends_on_macros.iter().map(String::as_str).collect();
-    stack.extend(implicit_macros(manifest, node));
-    while let Some(id) = stack.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Some(m) = manifest.macros.get(id) {
-            stack.extend(m.depends_on.iter().map(String::as_str));
-        }
-    }
+    let roots = node
+        .depends_on_macros
+        .iter()
+        .map(String::as_str)
+        .chain(implicit_macros(manifest, node));
+    macro_lines(manifest, manifest.macros_reached(roots, |_| false))
+}
+
+/// `id sha256` lines for `ids`, or which one the artifacts don't include.
+fn macro_lines<'a>(
+    manifest: &Manifest,
+    ids: impl IntoIterator<Item = &'a str>,
+) -> Result<String, String> {
     let mut out = String::new();
-    for id in seen {
+    for id in ids {
         let m = manifest
             .macros
             .get(id)
@@ -245,15 +247,10 @@ fn hooks_block_reuse(manifest: &Manifest, node: &ManifestNode) -> Option<String>
     // `depends_on.macros`.
     let mut texts: Vec<(String, &str)> =
         hooks.iter().map(|h| ("its hooks".to_owned(), *h)).collect();
-    let mut stack: Vec<&str> = node.depends_on_macros.iter().map(String::as_str).collect();
-    let mut seen = BTreeSet::new();
-    while let Some(id) = stack.pop() {
-        if !seen.insert(id) || is_engine(id) {
-            continue;
-        }
+    let roots = node.depends_on_macros.iter().map(String::as_str);
+    for id in manifest.macros_reached(roots, is_engine) {
         if let Some(m) = manifest.macros.get(id) {
             texts.push((format!("macro `{id}`"), &m.sql));
-            stack.extend(m.depends_on.iter().map(String::as_str));
         }
     }
     texts.iter().find_map(|(what, text)| {
@@ -351,25 +348,8 @@ fn check_macros_content(manifest: &Manifest, test: &ManifestNode) -> Result<Stri
     let engine = |id: &str| {
         id.starts_with("macro.dbt.") || adapter.as_deref().is_some_and(|a| id.starts_with(a))
     };
-    let mut seen = BTreeSet::new();
-    let mut stack: Vec<&str> = test.depends_on_macros.iter().map(String::as_str).collect();
-    while let Some(id) = stack.pop() {
-        if engine(id) || !seen.insert(id) {
-            continue;
-        }
-        if let Some(m) = manifest.macros.get(id) {
-            stack.extend(m.depends_on.iter().map(String::as_str));
-        }
-    }
-    let mut out = String::new();
-    for id in seen {
-        let m = manifest
-            .macros
-            .get(id)
-            .ok_or_else(|| format!("it calls macro `{id}`, which the artifacts don't include"))?;
-        let _ = writeln!(out, "{id} {}", sha256_hex(m.sql.as_bytes()));
-    }
-    Ok(out)
+    let roots = test.depends_on_macros.iter().map(String::as_str);
+    macro_lines(manifest, manifest.macros_reached(roots, engine))
 }
 
 /// The scheme [`checks_digest`] uses; changing it makes every node untested once.
