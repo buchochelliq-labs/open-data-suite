@@ -1110,6 +1110,9 @@ impl RunReport {
         ctx: &mut Context<'_>,
     ) -> Result<(), CliError> {
         let settings = StateSettings::resolve(args, ctx.config)?;
+        if kind != Kind::Compile {
+            super::state_retry::remember(&build_command(kind), args, &settings);
+        }
         let (report, record_error) = Self::build(kind, args, &settings, ctx.progress)?;
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);

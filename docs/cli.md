@@ -12,6 +12,7 @@ codes).
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
 | `ods state compile\|run\|seed\|snapshot\|build` | available (preview): each runs the dbt command it's named after, on only what needs building, and records what succeeded, see [below](#state-run) |
 | `ods state test` | available (preview): test what was built but not yet tested, see [below](#state-test) |
+| `ods state retry` | available (preview): run the last `run`, `seed`, `snapshot`, `build` or `test` again with its options, see [below](#retrying-a-run) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
@@ -545,6 +546,36 @@ target = "ci"
 `ods config explain state.environment` says where a value came from, and the report's
 `dbt` line names each setting's source (`project config`, `profile ci`,
 `ODS__STATE__ENVIRONMENT`, …).
+
+### Retrying a run
+
+When a run fails, the nodes that built are recorded. Failed nodes, the ones dbt skipped
+because of them, and nodes whose tests failed keep their last state, so running the
+same command again builds exactly those. It also builds anything else that changed
+since. `ods state retry` saves retyping that command (#276):
+
+```sh
+ods state build -s +orders --vars '{region: eu}'   # stg_payments fails; orders is skipped
+# … fix stg_payments …
+ods state retry                  # runs `ods state build -s +orders --vars '{region: eu}'` again
+ods state retry --dry-run        # plan the retry; build and record nothing
+```
+
+- **Planned afresh:** unlike `dbt retry`, it doesn't replay a list of failed nodes.
+  The plan picks up a fix made in between, and reuses what already succeeded.
+- **What it keeps:** every `run`, `seed`, `snapshot`, `build` and `test` that isn't a
+  dry run keeps its command line beside the state database, in
+  `.ods/state.db.last-run.json`. Only what was typed is kept, including `-- DBT_ARGS`.
+  Environment variables (`DBT_TARGET`, …) and configuration are read again when
+  retrying, as for any command, so none of their values is written down. Don't put
+  secrets on the command line: use `env_var()` in dbt.
+- **One last run per state database:** `retry` reruns whichever command ran last,
+  whatever its target. It prints what it runs on stderr, e.g. retrying
+  `ods state build -s +orders`. `--state-db` picks the database, as elsewhere, and the
+  retry runs against the database it was found in, even if configuration now names
+  another. `--dry-run` plans without building, except after `ods state test`, which has
+  no dry run.
+- **Nothing to retry:** with no run kept yet, `retry` fails with `ODS-E0403`.
 
 ### What you see while it runs
 

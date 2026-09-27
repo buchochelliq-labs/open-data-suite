@@ -116,6 +116,7 @@ impl TestReport {
     /// Runs the tests and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let settings = StateSettings::resolve(args, ctx.config)?;
+        super::state_retry::remember(&test_command(), args, &settings);
         let report = Self::build(args, &settings, ctx.progress)?;
         if report.outcome == TestOutcome::Incomplete {
             let error = CliError::new(
