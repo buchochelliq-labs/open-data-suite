@@ -13,6 +13,7 @@ codes).
 | `ods state compile\|run\|seed\|snapshot\|build` | available (preview): each runs the dbt command it's named after, on only what needs building, and records what succeeded, see [below](#state-run) |
 | `ods state test` | available (preview): test what was built but not yet tested, see [below](#state-test) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
+| `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|diff\|…` | planned: M1 State MVP (v0.1.0) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
@@ -119,6 +120,7 @@ meanings get new numbers.
 | `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
 | `ODS-E0402` | Another run recorded state first; plan again and retry. |
 | `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. |
+| `ODS-E0405` | The state database is damaged: it can't be read, or holds a record that can't be decoded. Nothing was changed; `ods state doctor` says what is wrong. |
 | `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. |
 
 ## Environment variables
@@ -727,6 +729,54 @@ target name than `--target` is planned with nothing reused; state without a targ
 planned as recorded, with a note.
 `ods state record` doesn't know where the dbt build it records went, so it records no
 target: the next run rebuilds once.
+
+## Recovering state
+
+The state database (`.ods/state.db` by default) is the only record of what was built.
+ODS protects it ([ADR-0018](adr/0018-state-store-migrations-and-recovery.md), #188):
+
+- **Failed runs** change nothing. A run records in one transaction at the end, and
+  only its successes; if it fails, is interrupted or loses a race, the last good state
+  stays as it was.
+- **Upgrades:** a newer ODS migrates the database forward the first time it opens it,
+  in one transaction. It first keeps a copy beside it,
+  `state.db.v<version>-<time>-<process>.bak`.
+  If the migration fails, nothing changes and the error names the copy.
+- **Downgrades:** an older ODS refuses a database a newer one wrote (`ODS-E0401`,
+  "upgrade ODS"). It never guesses. To go back, restore the copy kept when it was
+  migrated.
+- **Damage:** if the file can't be read, or a snapshot in it can't be decoded, commands
+  that read it stop with `ODS-E0405`, change nothing and point at `ods state doctor`.
+  They never reuse a build on the strength of damaged state.
+
+```sh
+ods state doctor                 # check; changes nothing; exit 1 (ODS-E0405) if damaged
+ods state backup                 # consistent copy: state.db.<time>.bak (or --to PATH)
+ods state reset --yes            # set it aside: state.db-<time>-<process>.set-aside; deletes nothing
+```
+
+`doctor` reports:
+- the database's schema version, and the latest this ODS knows;
+- every scope, with its head snapshot and how many snapshots it has;
+- every problem: `damaged` (SQLite's integrity check failed, or it isn't a state
+  database), `newer schema`, `unreadable snapshot`, `inconsistent snapshot` (what
+  `history` lists disagrees with the snapshot itself), `dangling head` or
+  `broken chain` (a head or parent that points at a missing snapshot);
+- any copies it finds beside the database, and what to do.
+
+`backup` works while runs use the database. Take one before anything risky, or on a
+schedule in CI.
+
+To recover a damaged database:
+1. `ods state doctor` to see what is wrong, and which copies exist.
+2. `ods state reset --yes`: the damaged database moves aside, so it can still be
+   inspected (and its `-wal`/`-shm` files move with it, so it still opens).
+3. Either restore a copy, by copying it over the database (e.g.
+   `cp .ods/state.db.v1-1790000000-4242.bak .ods/state.db`) and running `ods state doctor`
+   again; or start afresh by doing nothing more. With no state, the next run builds
+   every node and records new state.
+
+Don't reset or restore while a run is using the database.
 
 ## Entity-relationship diagrams
 

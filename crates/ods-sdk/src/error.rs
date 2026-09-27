@@ -37,6 +37,10 @@ pub enum ProviderError {
     /// The operation conflicts with current state, e.g. a lease is no longer held.
     #[error("conflict: {0}")]
     Conflict(String),
+    /// Stored data is damaged: the store can't be read, or holds a record it can't
+    /// decode. Retrying won't help; the store's own check says what is wrong (#188).
+    #[error("{0}")]
+    Corrupt(String),
     /// A transient failure; retrying later may succeed.
     #[error("temporarily unavailable: {0}")]
     Unavailable(String),

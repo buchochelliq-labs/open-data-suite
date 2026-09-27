@@ -100,6 +100,11 @@ graph LR
   - A newer database is refused, not guessed at.
   - WAL mode lets readers run during a commit.
 
+  *Amended by [ADR-0018](0018-state-store-migrations-and-recovery.md) (#188):* a copy
+  is kept before migrating a database that holds data; damage is `ProviderError::Corrupt`,
+  never a guess; the contract (0.2) adds a read-only `check()`, and `ods state doctor`,
+  `backup` and `reset` are how people recover.
+
 ### Tested builds (#220)
 - `NodeState.tested` (optional, absent in older snapshots) records the run whose checks
   last passed on the node's current build. A build with its tests passing sets it. A

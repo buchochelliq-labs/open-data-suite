@@ -20,5 +20,5 @@ impl StateStoreHarness for Harness {
 async fn conforms() {
     let report = run(&Harness).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 5, "{report:?}");
+    assert_eq!(report.passed.len(), 7, "{report:?}");
 }

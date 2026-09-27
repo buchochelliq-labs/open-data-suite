@@ -85,6 +85,8 @@ pub mod codes {
     pub const STATE_INPUT: &str = "ODS-E0403";
     /// The executor (e.g. dbt) couldn't run, or reported failed nodes or checks.
     pub const STATE_EXECUTION: &str = "ODS-E0404";
+    /// The state database is damaged; `ods state doctor` says how (#188).
+    pub const STATE_DAMAGED: &str = "ODS-E0405";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

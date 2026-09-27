@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use ods_core::CapabilitySet;
 use ods_core::state::{SnapshotId, StateSnapshot};
 use ods_sdk::contracts::state_store::{
-    SnapshotSummary, StateScope, StateStore, StoredSnapshot, check_readable,
+    ProblemKind, ScopeSummary, SnapshotSummary, StateScope, StateStore, StoreCheck, StoreProblem,
+    StoredSnapshot, check_readable,
 };
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -118,5 +119,48 @@ impl StateStore for FakeStateStore {
                 SnapshotSummary::of(&StoredSnapshot::new(*id, snapshot.clone()))
             })
             .collect())
+    }
+
+    async fn check(&self) -> Result<StoreCheck, ProviderError> {
+        let inner = self.inner();
+        let mut problems = Vec::new();
+        let mut counts: BTreeMap<&StateScope, usize> = BTreeMap::new();
+        for (id, (scope, snapshot)) in &inner.snapshots {
+            *counts.entry(scope).or_default() += 1;
+            if let Err(e) = check_readable(snapshot) {
+                problems.push(StoreProblem::new(
+                    ProblemKind::UnreadableSnapshot,
+                    format!("snapshot {id} of `{scope}`: {e}"),
+                ));
+            }
+            if let Some(parent) = snapshot.parent
+                && inner.snapshots.get(&parent).is_none_or(|(s, _)| s != scope)
+            {
+                problems.push(StoreProblem::new(
+                    ProblemKind::BrokenChain,
+                    format!("snapshot {id} of `{scope}` follows {parent}, which isn't in it"),
+                ));
+            }
+        }
+        for (scope, head) in &inner.heads {
+            if inner.snapshots.get(head).is_none_or(|(s, _)| s != scope) {
+                problems.push(StoreProblem::new(
+                    ProblemKind::DanglingHead,
+                    format!("`{scope}` points at snapshot {head}, which isn't in it"),
+                ));
+            }
+        }
+        let scopes = inner
+            .heads
+            .iter()
+            .map(|(scope, head)| {
+                ScopeSummary::new(
+                    scope.as_str(),
+                    Some(*head),
+                    counts.get(scope).copied().unwrap_or_default(),
+                )
+            })
+            .collect();
+        Ok(StoreCheck::new(None, scopes, problems))
     }
 }
