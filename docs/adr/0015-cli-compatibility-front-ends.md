@@ -136,6 +136,14 @@ In detail:
    - Exit codes follow dbt's in this mode (0 success, 1 a node or test failed, 2 dbt or
      ODS couldn't run), so CI steps keep their meaning. This amends ADR-0004 for the
      front-end only.
+   - *Amended (#276):* `retry` maps to `ods state retry`. It reruns the last `ods state`
+     command that ran dbt, with the options typed for it, **planned afresh**: it doesn't
+     replay dbt's list of failed nodes. Failed and skipped nodes kept their last state, so
+     they build again; what succeeded is reused, and a fix made in between is picked
+     up. The command line is kept beside the state database in
+     `<state-db>.last-run.json`, which has a `schema_version`. It holds only what was
+     typed on the command line, never environment variables or configuration; those are
+     read again when retrying. Dry runs and `compile` aren't kept.
 3. **Invoked as `dbt`.** When the binary's name is `dbt` (a symlink or copy), it
    behaves as `ods dbt`. It finds the real dbt from configuration (`dbt.program`),
    `ODS_DBT`, or `PATH` *excluding itself*, and refuses to start if it would call

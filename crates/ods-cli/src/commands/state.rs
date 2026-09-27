@@ -15,7 +15,7 @@ use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{ArtifactPreference, Artifacts};
 use serde::Serialize;
 
-use super::{Planned, state_plan, state_run, state_test};
+use super::{Planned, state_plan, state_retry, state_run, state_test};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -75,6 +75,7 @@ impl Module for State {
             .subcommand(state_plan::plan_command())
             .subcommand(state_plan::record_command())
             .subcommand(state_plan::history_command())
+            .subcommand(state_retry::retry_command())
             .arg(
                 Arg::new(PASSTHROUGH)
                     .num_args(0..)
@@ -101,6 +102,24 @@ impl Module for State {
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args, ctx.config)?),
             Some(("history", args)) => {
                 ctx.emit(&state_plan::HistoryReport::build(args, ctx.config)?)
+            }
+            Some(("retry", args)) => {
+                let (last, line) = state_retry::last_run(args, ctx.config)?;
+                let matches = self.command().try_get_matches_from(&line).map_err(|e| {
+                    CliError::new(
+                        ExitStatus::Usage,
+                        codes::STATE_INPUT,
+                        format!(
+                            "the last run, `{}`, no longer parses: {}",
+                            last.shown(),
+                            e.kind()
+                        ),
+                    )
+                    .with_hint("run the command you want yourself; retry will then use it")
+                })?;
+                state_run::Steps::new(ctx.progress, 0)
+                    .note(&format!("retrying `{}`", last.shown()));
+                self.run(&matches, ctx)
             }
             _ => Planned::new("state", ABOUT, MILESTONE).run(matches, ctx),
         }

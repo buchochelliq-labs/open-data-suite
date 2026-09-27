@@ -11,6 +11,7 @@ mod planned;
 mod serve;
 mod state;
 mod state_plan;
+mod state_retry;
 mod state_run;
 mod state_settings;
 mod state_test;

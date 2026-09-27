@@ -1829,3 +1829,68 @@ fn unknown_dbt_settings_are_configuration_errors() {
         "{json:#}"
     );
 }
+
+/// #276: `retry` runs the last command again, with the options it was given, planned
+/// afresh: what failed builds again, what succeeded is reused.
+#[test]
+fn retry_reruns_the_last_command_with_its_options() {
+    let mut project = Project::new("retry");
+    let db = project.db();
+    let retry = |project: &Project, extra: &[&str]| {
+        let mut args = vec!["state", "retry", "--state-db", db.to_str().unwrap()];
+        args.extend(extra);
+        project.ods_in(&project.dir, &args)
+    };
+    let (code, json, _) = retry(&project, &[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert!(json.to_string().contains("no run to retry"), "{json:#}");
+
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.stg_orders");
+    let vars = r#"{"region": "eu"}"#;
+    let failing = project.with("FAKE_DBT_FAIL", "orders");
+    let (code, json) = failing.command(
+        "build",
+        &[
+            "-s",
+            "+orders",
+            "--vars",
+            vars,
+            "--exclude-resource-type",
+            "test",
+        ],
+    );
+    assert_eq!(code, 1, "{json:#}");
+    project = failing;
+    project.env.retain(|(k, _)| k != "FAKE_DBT_FAIL");
+
+    // What it keeps: the command and the options typed, nothing from the environment.
+    let kept = std::fs::read_to_string(project.dir.join(".ods/state.db.last-run.json")).unwrap();
+    let kept: Value = serde_json::from_str(&kept).unwrap();
+    assert_eq!(kept["command"], "build");
+    assert!(kept["args"].to_string().contains("+orders"), "{kept:#}");
+    assert!(!kept.to_string().contains("FAKE_DBT"), "{kept:#}");
+
+    // A dry run plans the same selection and changes nothing, not even what retry reruns.
+    let (code, json, _) = retry(&project, &["--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["outcome"], "dry_run");
+
+    let (code, json, stderr) = retry(&project, &[]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(stderr.contains("retrying `ods state build"), "{stderr}");
+    let result = &json["result"];
+    let built = names(&result["execution"]["nodes"]);
+    assert!(built.contains(&"orders".to_owned()), "{built:?}");
+    assert!(
+        !built.contains(&"stg_orders".to_owned()),
+        "reused: {built:?}"
+    );
+    let command = result["execution"]["command"].as_str().unwrap();
+    assert!(
+        command.contains("--vars") && command.contains("region"),
+        "{command}"
+    );
+    // Only +orders was selected: nothing outside it built.
+    assert!(!built.contains(&"customers".to_owned()), "{built:?}");
+}
