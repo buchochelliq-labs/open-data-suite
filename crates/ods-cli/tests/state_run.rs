@@ -1862,8 +1862,15 @@ fn a_damaged_state_database_is_diagnosed_and_recovered() {
     assert_eq!(code, 0, "{json:#}");
     assert!(copy.is_file());
 
-    // A disk fault, or another program, overwrites it.
+    // A disk fault, or another program, overwrites it. SQLite's journal goes too:
+    // committed pages may still be there (on macOS they often are), and SQLite rightly
+    // reads them, so a damaged main file alone isn't the same damage everywhere.
     std::fs::write(&db, vec![0x5a; 8192]).unwrap();
+    for journal in ["-wal", "-shm"] {
+        let mut name = db.clone().into_os_string();
+        name.push(journal);
+        let _ = std::fs::remove_file(name);
+    }
     let (code, json) = project.ods(&["state", "plan"]);
     assert_eq!(code, 1, "{json:#}");
     let text = json.to_string();
