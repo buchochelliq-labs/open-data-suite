@@ -1072,9 +1072,12 @@ fn real_dbt() {
     };
 
     // Each command runs its dbt namesake (#229): seeds first, as with dbt on a fresh
-    // database, then the models that read them.
-    let (code, seeded) = dbt_cmd("seed", &[]);
+    // database, then the models that read them. This one keeps the default
+    // `--dbt-output`: dbt's own output streams to stderr (#220).
+    let (code, seeded, stderr) =
+        project.ods_with_stderr(&["state", "seed", "--dbt", &dbt, "--profiles-dir", "."]);
     assert_eq!(code, 0, "{seeded:#}");
+    assert!(stderr.contains("Running with dbt="), "{stderr}");
     assert_eq!(advanced(&seeded), 3);
     assert!(ran(&seeded).contains(" seed --select "), "{}", ran(&seeded));
     let (code, first) = real(&[]);
