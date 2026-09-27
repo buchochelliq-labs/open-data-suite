@@ -55,14 +55,22 @@ impl LastRun {
     /// The command line to show: `ods state build -s +orders`.
     pub(super) fn shown(&self) -> String {
         let mut words = vec!["ods".to_owned(), "state".to_owned(), self.command.clone()];
-        words.extend(self.args.iter().map(|a| {
-            if a.is_empty() || a.contains(char::is_whitespace) || a.contains(['\'', '"']) {
-                format!("'{}'", a.replace('\'', "'\\''"))
-            } else {
-                a.clone()
-            }
-        }));
+        words.extend(self.args.iter().map(|a| quoted(a)));
         words.join(" ")
+    }
+}
+
+/// `word` as a POSIX shell reads it back: as it is if it holds only characters no shell
+/// treats specially, else in single quotes, so `$(…)`, `$HOME` or `*` stay literal.
+fn quoted(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
@@ -152,6 +160,7 @@ pub(super) fn last_run(
     config: &ods_config::Loaded,
 ) -> Result<(LastRun, Vec<String>), CliError> {
     let db = StateSettings::resolve(args, config)?.state_db();
+    let dry_run = args.get_flag("dry-run");
     let path = path_for(&db);
     let text = match std::fs::read(&path) {
         Ok(text) => text,
@@ -186,14 +195,29 @@ pub(super) fn last_run(
             last.schema_version.major, last.schema_version.minor
         )));
     }
+    if dry_run && last.command == "test" {
+        return Err(CliError::new(
+            ExitStatus::Usage,
+            codes::STATE_INPUT,
+            format!("the last run, `{}`, has no dry run", last.shown()),
+        )
+        .with_hint("`ods state test` only runs tests; retry without --dry-run to run them again"));
+    }
     let mut line = vec!["state".to_owned(), last.command.clone()];
     let split = last
         .args
         .iter()
         .position(|a| a == "--")
         .unwrap_or(last.args.len());
-    line.extend(last.args[..split].iter().cloned());
-    if args.get_flag("dry-run") && !last.args[..split].iter().any(|a| a == "--dry-run") {
+    let options = &last.args[..split];
+    line.extend(options.iter().cloned());
+    // The database the retry was found in is the one it runs against, even if the run
+    // took its database from configuration that now names another.
+    if !options.iter().any(|a| a == "--state-db") {
+        line.push("--state-db".to_owned());
+        line.push(db.display().to_string());
+    }
+    if dry_run && !options.iter().any(|a| a == "--dry-run") {
         line.push("--dry-run".to_owned());
     }
     line.extend(last.args[split..].iter().cloned());
@@ -268,5 +292,20 @@ mod tests {
             recorded_at: Timestamp::from_unix(0),
         };
         assert_eq!(last.shown(), "ods state build --vars '{a: 1}' -s x");
+        let odd = LastRun {
+            args: vec![
+                "--".into(),
+                "--log-path".into(),
+                "$(id)".into(),
+                "it's".into(),
+                "+orders".into(),
+                String::new(),
+            ],
+            ..last
+        };
+        assert_eq!(
+            odd.shown(),
+            "ods state build -- --log-path '$(id)' 'it'\\''s' +orders ''"
+        );
     }
 }

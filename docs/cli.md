@@ -569,7 +569,10 @@ ods state retry --dry-run        # plan the retry; build and record nothing
   secrets on the command line: use `env_var()` in dbt.
 - **One last run per state database:** `retry` reruns whichever command ran last,
   whatever its target. It prints what it runs on stderr, e.g. retrying
-  `ods state build -s +orders`. `--state-db` picks the database, as elsewhere.
+  `ods state build -s +orders`. `--state-db` picks the database, as elsewhere, and the
+  retry runs against the database it was found in, even if configuration now names
+  another. `--dry-run` plans without building, except after `ods state test`, which has
+  no dry run.
 - **Nothing to retry:** with no run kept yet, `retry` fails with `ODS-E0403`.
 
 ### What you see while it runs

@@ -1894,3 +1894,63 @@ fn retry_reruns_the_last_command_with_its_options() {
     // Only +orders was selected: nothing outside it built.
     assert!(!built.contains(&"customers".to_owned()), "{built:?}");
 }
+
+/// #276: the database a retry is found in is the one it runs against, even when the
+/// run took its database from configuration that now names another.
+#[test]
+fn retry_runs_against_the_database_it_was_found_in() {
+    let project = Project::new("retry-db");
+    let sub = configure(&project, "");
+    let build = [
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt-output",
+        "capture",
+    ];
+    let (code, json, _) = project.ods_in(&sub, &build);
+    assert_eq!(code, 0, "{json:#}");
+    let first = project.dir.join("state/ods.db");
+    assert!(first.is_file());
+    // The configuration now names another database.
+    let toml = std::fs::read_to_string(project.dir.join("ods.toml")).unwrap();
+    std::fs::write(
+        project.dir.join("ods.toml"),
+        toml.replace("state/ods.db", "state/other.db"),
+    )
+    .unwrap();
+    let (code, json, _) = project.ods_in(
+        &sub,
+        &["state", "retry", "--state-db", first.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(
+        json["result"]["state_db"],
+        first.to_str().unwrap(),
+        "{json:#}"
+    );
+    assert_eq!(json["result"]["outcome"], "nothing_to_build", "{json:#}");
+    assert!(!project.dir.join("state/other.db").exists());
+}
+
+/// #276: `ods state test` has no dry run, so neither has its retry.
+#[test]
+fn a_test_run_has_no_dry_run_retry() {
+    let project = Project::new("retry-test");
+    project.run_ok(&["--test"]);
+    project.test_ok(&[]);
+    let db = project.db();
+    let (code, json, _) = project.ods_in(
+        &project.dir,
+        &[
+            "state",
+            "retry",
+            "--dry-run",
+            "--state-db",
+            db.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 2, "{json:#}");
+    assert!(json.to_string().contains("has no dry run"), "{json:#}");
+}
