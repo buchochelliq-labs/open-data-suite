@@ -14,6 +14,7 @@ use ods_web::{Loader, ServeOptions, Snapshot, WebError};
 use serde::Serialize;
 
 use super::lineage::{LoadOptions, Loaded, Summary, common_args};
+use super::state_settings::artifacts_dir;
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -69,11 +70,7 @@ impl Module for Serve {
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let target_dir = PathBuf::from(
-            matches
-                .get_one::<String>("target-dir")
-                .map_or("target", String::as_str),
-        );
+        let target_dir = artifacts_dir(matches, ctx.config)?;
         let load = LoadOptions::from_args(matches);
         // Shared across reloads so only changed models are re-analyzed.
         let cache = Arc::new(MemoryCache::default());

@@ -16,6 +16,7 @@ use serde::Serialize;
 
 use super::Planned;
 use super::lineage::{LoadOptions, Loaded, shared_cache};
+use super::state_settings::{artifact_dir_args, artifacts_dir};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::output::Mode;
@@ -58,16 +59,13 @@ impl Module for ErdCommand {
 }
 
 fn generate_command() -> Command {
-    Command::new("generate")
-        .about("Draw the entity-relationship diagram implied by the project's tests and constraints")
-        .arg(
-            Arg::new("target-dir")
-                .long("target-dir")
-                .value_name("DIR")
-                .default_value("target")
-                .help("dbt target directory with manifest.json (and catalog.json for column types) or dbt v2's Information Schema"),
-        )
-        .arg(
+    artifact_dir_args(
+        Command::new("generate").about(
+            "Draw the entity-relationship diagram implied by the project's tests and constraints",
+        ),
+        "manifest.json (and catalog.json for column types) or dbt v2's Information Schema",
+    )
+    .arg(
             Arg::new("artifacts")
                 .long("artifacts")
                 .value_name("FORMAT")
@@ -639,10 +637,7 @@ impl ErdReport {
 }
 
 fn generate(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-    let target_dir = PathBuf::from(
-        args.get_one::<String>("target-dir")
-            .map_or("target", String::as_str),
-    );
+    let target_dir = artifacts_dir(args, ctx.config)?;
     let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
         Some("json") => ArtifactPreference::Json,
         Some("info-schema") => ArtifactPreference::InfoSchema,

@@ -268,7 +268,7 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 
 | Flag | Meaning |
 |---|---|
-| `--target-dir DIR` | dbt target directory; default `target` |
+| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are, found as `ods state` finds them: `--target-dir`, else `DBT_TARGET_PATH`, else the configured `target_dir`, else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else the configured `project_dir`, else `.`); see [State settings](#state-settings-in-odstoml). The same for `erd`, `serve` and `mcp` |
 | `--artifacts FORMAT` | `auto` (default: `manifest.json` if present, else the Information Schema), `json`, or `info-schema` (dbt v2's Parquet `target/info_schema/v1/`) |
 | `--dialect NAME` | `databricks`, `spark`, `duckdb`, `snowflake`, `bigquery`, `postgres`, `redshift` or `generic`; default: the manifest's adapter type |
 | `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable |
@@ -703,7 +703,7 @@ it ran.
 | Flag | Meaning |
 |---|---|
 | `--state-db PATH` | SQLite state database; default `.ods/state.db` (created by `record`) |
-| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir` (relative to where ODS runs; ODS passes dbt an absolute path), else `DBT_TARGET_PATH` (relative to the project, as dbt reads it), else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else `.`). `ods state policies` reads the same place; `ods lineage`, `erd`, `serve` and `mcp` still default to `./target` |
+| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir` (relative to where ODS runs; ODS passes dbt an absolute path), else `DBT_TARGET_PATH` (relative to the project, as dbt reads it), else the configured `target_dir`, else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else the configured `project_dir`, else `.`). `ods state policies`, `ods lineage`, `erd`, `serve` and `mcp` read the same place |
 | `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default: the dbt target (`--target`, else `DBT_TARGET`), else `default` |
 | `--target NAME` | dbt's `--target`; on `plan`, `record` and `history` too, so they find the same state |
 | `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |

@@ -610,3 +610,62 @@ fn seeds_get_column_lineage_without_a_catalog() {
         "a filter on status shapes customers' rows, so everything downstream of them: {reaches:?}"
     );
 }
+
+/// Like `ods --json`, run in `cwd` with `env`, returning the exit code and envelope.
+fn ods_in(cwd: &Path, env: &[(&str, &str)], args: &[&str]) -> (i32, Value) {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(args)
+        .arg("--json")
+        .current_dir(cwd)
+        .env_clear()
+        .env("XDG_CONFIG_HOME", cwd)
+        .envs(env.iter().copied())
+        .output()
+        .expect("failed to spawn ods");
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    (out.status.code().unwrap(), envelope)
+}
+
+/// The commands that read dbt's artifacts without running dbt find them as `ods state`
+/// does: `--target-dir`, `DBT_TARGET_PATH`, the configured dbt settings, then the
+/// project's `target` (`--project-dir`, `DBT_PROJECT_DIR`, configured `project_dir`).
+#[test]
+fn artifacts_are_found_where_the_project_is_configured() {
+    let dir = Temp::new();
+    copy_dir(&fixture(), &dir.0.join("transform/target"));
+    let sub = dir.0.join("elsewhere");
+    fs::create_dir_all(&sub).unwrap();
+
+    // Not in `./target`: an error.
+    let (code, _) = ods_in(&sub, &[], &["lineage", "columns"]);
+    assert_eq!(code, 1);
+    // `DBT_PROJECT_DIR`, as dbt reads it.
+    let project = dir.0.join("transform");
+    let project = project.to_str().unwrap();
+    let (code, json) = ods_in(
+        &sub,
+        &[("DBT_PROJECT_DIR", project)],
+        &["lineage", "columns"],
+    );
+    assert_eq!(code, 0, "{json:#}");
+    // `ods.toml`, from a directory below it.
+    fs::write(
+        dir.0.join("ods.toml"),
+        "[providers.dbt]\nkind = \"dbt\"\n\n[providers.dbt.settings]\nproject_dir = \"transform\"\n",
+    )
+    .unwrap();
+    for args in [
+        &["lineage", "columns"][..],
+        &["erd", "generate", "--format", "mermaid"][..],
+    ] {
+        let (code, json) = ods_in(&sub, &[], args);
+        assert_eq!(code, 0, "{args:?}: {json:#}");
+    }
+    // A flag still wins.
+    let (code, _) = ods_in(
+        &sub,
+        &[],
+        &["lineage", "columns", "--target-dir", "nowhere"],
+    );
+    assert_eq!(code, 1);
+}
