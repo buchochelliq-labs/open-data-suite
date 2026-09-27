@@ -1,9 +1,10 @@
 <!doctype html>
 <!--
-  ODS lineage explorer (ADR-0008, ADR-0009). No external scripts or styles. It renders a
-  GraphDocument (schema_version 1): embedded below (offline single file), fetched from
-  graph.json (static site), or from the ods serve API (with live reload and impact
-  queries). The VS Code extension (#107) reuses this page with the same JSON contract.
+  ODS lineage explorer (ADR-0008, ADR-0009). No external scripts or styles: the layout
+  library (dagre) is inlined into the page. It renders a GraphDocument (schema_version 1):
+  embedded below (offline single file), fetched from graph.json (static site), or from
+  the ods serve API (with live reload and impact queries). The VS Code extension (#107)
+  reuses this page with the same JSON contract.
 -->
 <html lang="en">
 <head>
@@ -103,6 +104,8 @@
   <div id="canvas"><svg id="svg"><g id="viewport"><g id="edges"></g><g id="nodes"></g></g></svg></div>
   <aside id="details"><p class="kv">Click a model or column to see where its data comes from and what depends on it.</p></aside>
 </div>
+<!-- dagre (MIT), vendored in assets/vendor/ (see LICENSE-dagre) and inlined by page.rs. -->
+<script>/*__ODS_DAGRE__*/</script>
 <script type="application/json" id="ods-graph">/*__ODS_GRAPH__*/</script>
 <script>
 "use strict";
@@ -178,34 +181,42 @@
     return { up, down };
   }
 
-  // ---------- layout: layers by dependency depth, ordered by barycentre
+  // ---------- layout: dagre (layered, left to right). Nodes and edges go in sorted
+  // order so the same graph always gets the same picture.
   function layout(visible) {
-    const layers = new Map();
-    for (const n of doc.nodes) if (visible.has(n.id)) push(layers, n.layer, n.id);
-    const order = [...layers.keys()].sort((a, b) => a - b);
-    for (const l of order) layers.get(l).sort((a, b) => byId.get(a).name.localeCompare(byId.get(b).name));
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: "LR", ranksep: GAPX, nodesep: GAPY, marginx: 0, marginy: 0 });
+    g.setDefaultEdgeLabel(() => ({}));
     const height = id => HEAD + (state.columns ? byId.get(id).columns.length * ROW : 0);
-    const pos = new Map();
-    const place = () => {
-      order.forEach((l, li) => {
-        let y = 0;
-        for (const id of layers.get(l)) { pos.set(id, { x: li * (W + GAPX), y, h: height(id) }); y += height(id) + GAPY; }
-      });
-    };
-    place();
-    for (let pass = 0; pass < 6; pass++) {
-      const seq = pass % 2 === 0 ? order : [...order].reverse();
-      for (const l of seq) {
-        const nbrs = pass % 2 === 0 ? nodeIn : nodeOut;
-        const ids = layers.get(l);
-        const bary = new Map(ids.map(id => {
-          const ys = (nbrs.get(id) || []).filter(x => pos.has(x)).map(x => pos.get(x).y + pos.get(x).h / 2);
-          return [id, ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : pos.get(id).y];
-        }));
-        ids.sort((a, b) => bary.get(a) - bary.get(b));
-      }
-      place();
+    const ids = [...visible].filter(id => byId.has(id)).sort();
+    for (const id of ids) g.setNode(id, { width: W, height: height(id) });
+    const edges = doc.node_edges.filter(e => visible.has(e.from) && visible.has(e.to))
+      .map(e => [e.from, e.to]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
+    for (const [from, to] of edges) g.setEdge(from, to);
+    try {
+      dagre.layout(g);
+    } catch (e) {
+      // dagre recurses, so a very long chain can overflow the stack: lay out by each
+      // node's exported layer instead, one column per layer, in id order.
+      console.warn("dagre layout failed; using a simple layered layout", e);
+      return layered(ids, height);
     }
+    const pos = new Map();
+    // dagre gives centres; the renderer works from top-left corners.
+    for (const id of ids) { const n = g.node(id); pos.set(id, { x: n.x - W / 2, y: n.y - n.height / 2, h: n.height }); }
+    routes = new Map();
+    for (const [from, to] of edges) { const e = g.edge(from, to); if (e && e.points) routes.set(key(from, to), e.points); }
+    return pos;
+  }
+
+  function layered(ids, height) {
+    const pos = new Map(), next = new Map();
+    for (const id of ids) {
+      const layer = byId.get(id).layer || 0, y = next.get(layer) || 0;
+      pos.set(id, { x: layer * (W + GAPX), y, h: height(id) });
+      next.set(layer, y + height(id) + GAPY);
+    }
+    routes = new Map();
     return pos;
   }
 
@@ -217,7 +228,7 @@
     return e;
   };
   const gNodes = document.getElementById("nodes"), gEdges = document.getElementById("edges");
-  let pos = new Map();
+  let pos = new Map(), routes = new Map();
 
   function visibleNodes() {
     if (!state.focus || !state.sel) return new Set(doc.nodes.map(n => n.id));
@@ -236,6 +247,20 @@
   const curve = (a, b) => {
     const dx = Math.max(40, (b.x - a.x) / 2);
     return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`;
+  };
+  // A model edge follows dagre's route (which bends around the nodes in between) from
+  // anchor `a` to anchor `b`, smoothed as a Catmull-Rom spline, level at both ends.
+  const route = (from, to, a, b) => {
+    const bends = routes.get(key(from, to));
+    if (!bends || bends.length < 3) return curve(a, b);
+    const pts = [a, ...bends.slice(1, -1), b];
+    let d = `M${a.x},${a.y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i], p2 = pts[i + 1];
+      const p0 = pts[i - 1] || { x: 2 * p1.x - p2.x, y: p2.y }, p3 = pts[i + 2] || { x: 2 * p2.x - p1.x, y: p1.y };
+      d += ` C${p1.x + (p2.x - p0.x) / 6},${p1.y + (p2.y - p0.y) / 6} ${p2.x - (p3.x - p1.x) / 6},${p2.y - (p3.y - p1.y) / 6} ${p2.x},${p2.y}`;
+    }
+    return d;
   };
 
   function render() {
@@ -279,7 +304,7 @@
           const inDown = (state.down.has(e.from) || e.from === selected.node) && (state.down.has(e.to) || e.to === selected.node);
           cls += inUp ? " up" : inDown ? " down" : " dimmed";
         }
-        el("path", { d: curve(a, b), class: cls }, gEdges);
+        el("path", { d: route(e.from, e.to, a, b), class: cls }, gEdges);
       }
     }
 
