@@ -100,6 +100,10 @@ unless they pass, or state exactly what failed.
 - Tests: unit tests next to code; integration tests use `fixtures/`. Snapshot tests
   (`insta`) for CLI JSON/plain output.
 - Comments explain *why*, not *what*. Keep doc comments on every public item.
+- Prefer a maintained crate over hand-written utilities (temp files, encoding, quoting,
+  time, UUIDs, opening files, …). Check for one before writing a helper, and if you
+  don't use one, say why in the PR. The licence rules under "Things agents must not do"
+  still apply.
 
 ## Workflow
 

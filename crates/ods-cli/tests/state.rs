@@ -2,26 +2,23 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
-
-static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// A scratch directory holding a copy of the fixture's `dbt build` artifacts (optionally
 /// edited) and the state database. Removed when dropped.
 struct Scratch {
     dir: PathBuf,
+    _guard: tempfile::TempDir,
 }
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "ods-state-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let guard = tempfile::Builder::new()
+            .prefix(&format!("ods-state-{name}-"))
+            .tempdir()
+            .unwrap();
+        let dir = guard.path().to_owned();
         let target = dir.join("target");
         std::fs::create_dir_all(&target).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -29,7 +26,7 @@ impl Scratch {
         for file in ["manifest.json", "run_results.json"] {
             std::fs::copy(fixture.join(file), target.join(file)).unwrap();
         }
-        Self { dir }
+        Self { dir, _guard: guard }
     }
 
     fn target(&self) -> PathBuf {
@@ -80,12 +77,6 @@ impl Scratch {
         let mut args = vec!["state", "plan", "--now", "2026-09-25T12:00:00Z"];
         args.extend(extra);
         self.ok(&args)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 

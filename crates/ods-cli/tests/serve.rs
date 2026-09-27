@@ -5,7 +5,6 @@ use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -19,25 +18,18 @@ struct Server {
     child: Child,
     /// e.g. `http://127.0.0.1:41234/lineage/`.
     url: String,
-    home: PathBuf,
+    _home: tempfile::TempDir,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.home);
     }
 }
 
 fn serve(target: &Path, extra: &[&str]) -> Server {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let home = std::env::temp_dir().join(format!(
-        "ods-cli-serve-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::SeqCst)
-    ));
-    fs::create_dir_all(&home).unwrap();
+    let home = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args([
             "serve",
@@ -48,9 +40,9 @@ fn serve(target: &Path, extra: &[&str]) -> Server {
             "--json",
         ])
         .args(extra)
-        .current_dir(&home)
+        .current_dir(home.path())
         .env_clear()
-        .env("XDG_CONFIG_HOME", &home)
+        .env("XDG_CONFIG_HOME", home.path())
         // Windows sockets need `SystemRoot`; without it, binding fails.
         .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
         .stdout(Stdio::piped())
@@ -69,7 +61,11 @@ fn serve(target: &Path, extra: &[&str]) -> Server {
         .as_str()
         .unwrap_or_else(|| panic!("ods serve didn't start: {envelope}"))
         .to_owned();
-    Server { child, url, home }
+    Server {
+        child,
+        url,
+        _home: home,
+    }
 }
 
 /// GET `path` relative to the server URL: (status, body).
@@ -115,13 +111,12 @@ fn serves_the_explorer_and_api_under_a_base_path() {
 
 #[test]
 fn reloads_when_the_artifacts_change_and_keeps_serving_on_errors() {
-    let target = std::env::temp_dir().join(format!("ods-cli-serve-target-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&target);
-    fs::create_dir_all(&target).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path();
     for file in ["manifest.json", "catalog.json"] {
         fs::copy(fixture().join(file), target.join(file)).unwrap();
     }
-    let server = serve(&target, &[]);
+    let server = serve(target, &[]);
     let generation = |server: &Server| -> (u64, Value) {
         let (_, body) = get(server, "api/version");
         let version: Value = serde_json::from_str(&body).unwrap();
@@ -164,7 +159,6 @@ fn reloads_when_the_artifacts_change_and_keeps_serving_on_errors() {
     let (g, _) = wait_for(&|g, e| g == 2 && e.is_null());
     assert_eq!(g, 2);
     drop(server);
-    let _ = fs::remove_dir_all(&target);
 }
 
 #[test]

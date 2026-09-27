@@ -296,14 +296,7 @@ fn digest(parts: &[&str]) -> String {
         hasher.update((part.len() as u64).to_le_bytes());
         hasher.update(part.as_bytes());
     }
-    hasher
-        .finalize()
-        .iter()
-        .fold(String::with_capacity(64), |mut s, b| {
-            use std::fmt::Write as _;
-            let _ = write!(s, "{b:02x}");
-            s
-        })
+    hex::encode(hasher.finalize())
 }
 
 impl Analyzer<'_> {

@@ -78,15 +78,32 @@ pub fn export_site(
     Ok(vec![index, graph])
 }
 
-/// Writes `path` via a temporary file in the same directory and a rename.
+/// Writes `path` via a temporary file in the same directory and a rename. The temporary
+/// file is removed if anything fails.
 fn replace(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = std::path::PathBuf::from(temporary);
-    fs::write(&temporary, contents)?;
-    fs::rename(&temporary, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temporary);
-    })
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    // Temporary files are private (0600). A site is published, often served by a web
+    // server running as another user, so the file gets the mode `fs::write` would give
+    // it: 0666 less the umask, or the mode of the file it replaces.
+    #[cfg(unix)]
+    let mut temporary = {
+        use std::os::unix::fs::PermissionsExt;
+        let existing = fs::metadata(path).ok().map(|m| m.permissions());
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o666))
+            .tempfile_in(dir)?;
+        if let Some(permissions) = existing {
+            temporary.as_file().set_permissions(permissions)?;
+        }
+        temporary
+    };
+    #[cfg(not(unix))]
+    let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut temporary, contents)?;
+    temporary.persist(path).map(drop).map_err(|e| e.error)
 }
 
 #[cfg(test)]
@@ -99,6 +116,27 @@ mod tests {
         assert!(page.contains(r#"<meta name="ods-source" content="graph.json">"#));
         assert!(page.contains(r#"<meta name="ods-generation" content="0">"#));
         assert!(!page.contains("__ODS_"), "every placeholder is replaced");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exported_files_are_as_readable_as_written_ones() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let reference = dir.path().join("reference");
+        fs::write(&reference, "x").unwrap();
+
+        let new = dir.path().join("new.html");
+        replace(&new, b"page").unwrap();
+        assert_eq!(mode(&new), mode(&reference), "0666 less the umask");
+
+        let kept = dir.path().join("kept.html");
+        fs::write(&kept, "old").unwrap();
+        fs::set_permissions(&kept, fs::Permissions::from_mode(0o640)).unwrap();
+        replace(&kept, b"page").unwrap();
+        assert_eq!(mode(&kept), 0o640, "a replaced file keeps its mode");
+        assert_eq!(fs::read(&kept).unwrap(), b"page");
     }
 
     #[test]

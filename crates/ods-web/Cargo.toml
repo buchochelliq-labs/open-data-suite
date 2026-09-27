@@ -14,6 +14,7 @@ ods-core.workspace = true
 ods-lineage.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "signal", "macros"] }
 tracing.workspace = true

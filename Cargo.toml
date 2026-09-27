@@ -36,7 +36,11 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 # Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
 csv = "1"
+# Hex encoding of digests.
+hex = "0.4"
 insta = "1"
+# Opens the lineage viewer in the user's browser, on every platform (and WSL).
+opener = "0.8"
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
 # compression codecs dbt may use.
 parquet = { version = "60", default-features = false, features = ["zstd", "snap", "lz4", "flate2-zlib-rs"] }
@@ -50,7 +54,11 @@ rs-rich = "0.0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
+# POSIX shell quoting of command lines shown to people.
+shlex = "2"
 sha2 = "0.10"
+# Temporary files and directories (atomic writes, tests).
+tempfile = "3"
 # SQL parsing for column lineage (ADR-0008). Every 0.N release breaks the AST: pin and
 # upgrade deliberately.
 sqlparser = { version = "=0.63.0", features = ["visitor"] }
@@ -58,6 +66,8 @@ sqlparser = { version = "=0.63.0", features = ["visitor"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros"] }
+# Formats OpenLineage run ids.
+uuid = { version = "1", default-features = false }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
