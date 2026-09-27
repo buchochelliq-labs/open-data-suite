@@ -199,10 +199,12 @@ impl SqliteStateStore {
         options: SqliteConnectOptions,
         location: String,
     ) -> Result<Self, ProviderError> {
-        // In memory, every connection would be its own database: use one.
-        let connections = if location == ":memory:" { 1 } else { 4 };
+        // One connection: ODS uses a store one query at a time, and with more, a pool
+        // can open a second connection in passing that is still closing after
+        // `close()` returns. That kept the file open, so `set_aside` couldn't move it on
+        // Windows. (In memory, every connection would be its own database anyway.)
         let pool = SqlitePoolOptions::new()
-            .max_connections(connections)
+            .max_connections(1)
             .connect_with(options)
             .await
             .map_err(|e| db_error(&e))?;
@@ -513,33 +515,22 @@ impl Drop for WriteTx {
     }
 }
 
-/// Renames `from` to `to`, retrying for up to about 10 seconds while another process
-/// holds the file: on Windows a virus scanner or indexer can keep a just-written file
-/// open for several seconds (a sharing violation, OS error 32). The error says how long
-/// it waited.
+/// Renames `from` to `to`, retrying for up to about a second while another process holds
+/// the file: on Windows a just-closed database, or a virus scanner, can keep it open
+/// briefly (a sharing violation, OS error 32).
 fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
     const SHARING_VIOLATION: i32 = 32;
-    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
-    let start = std::time::Instant::now();
-    let mut pause = std::time::Duration::from_millis(50);
+    let mut attempt = 0;
     loop {
         match std::fs::rename(from, to) {
             Err(e)
                 if cfg!(windows)
+                    && attempt < 20
                     && (e.raw_os_error() == Some(SHARING_VIOLATION)
                         || e.kind() == std::io::ErrorKind::PermissionDenied) =>
             {
-                if start.elapsed() >= PATIENCE {
-                    return Err(std::io::Error::new(
-                        e.kind(),
-                        format!(
-                            "{e} (still held after {:.1}s)",
-                            start.elapsed().as_secs_f64()
-                        ),
-                    ));
-                }
-                std::thread::sleep(pause);
-                pause = (pause * 2).min(std::time::Duration::from_millis(500));
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
             result => return result,
         }
