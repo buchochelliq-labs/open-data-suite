@@ -513,7 +513,7 @@ impl Drop for WriteTx {
     }
 }
 
-/// Renames `from` to `to`, retrying for up to about a second while another process holds
+/// Renames `from` to `to`, retrying for a few seconds while another process holds
 /// the file: on Windows a just-closed database, or a virus scanner, can keep it open
 /// briefly (a sharing violation, OS error 32).
 fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -523,12 +523,14 @@ fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
         match std::fs::rename(from, to) {
             Err(e)
                 if cfg!(windows)
-                    && attempt < 20
+                    && attempt < 12
                     && (e.raw_os_error() == Some(SHARING_VIOLATION)
                         || e.kind() == std::io::ErrorKind::PermissionDenied) =>
             {
+                // Virus scanners and indexers can hold a just-written file for a few
+                // seconds: back off, waiting about 4 seconds in all.
                 attempt += 1;
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::thread::sleep(std::time::Duration::from_millis(50 * attempt));
             }
             result => return result,
         }
