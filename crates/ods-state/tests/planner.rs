@@ -850,7 +850,7 @@ fn a_build_with_passing_tests_is_tested_and_a_test_run_marks_the_rest() {
 
     let recorded = record_tests(
         &p,
-        (SnapshotId(1), &built),
+        (Some(SnapshotId(1)), &built),
         &[
             TestResult::new("model.p.report", true, None),
             TestResult::new("model.p.stg_orders", false, None),
@@ -1081,7 +1081,7 @@ fn source_checks_carry_over_builds_and_test_runs() {
     assert_eq!(second.sources, first.sources);
     let third = record_tests(
         &project,
-        (SnapshotId(2), &second),
+        (Some(SnapshotId(2)), &second),
         &[],
         "run-3",
         Timestamp::from_unix(T0 + 20),

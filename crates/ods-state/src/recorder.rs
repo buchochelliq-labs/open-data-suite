@@ -235,9 +235,12 @@ pub struct RecordedTests {
 /// The snapshot after a test-only run: nodes whose checks passed are marked tested,
 /// nodes whose checks failed are marked untested. Builds are unchanged (a test run
 /// builds nothing).
+///
+/// `previous` is the snapshot the tests ran against, with its id: `None` when nothing
+/// was recorded yet, and a run only tested sources (#232).
 pub fn record_tests(
     project: &Project,
-    previous: (SnapshotId, &StateSnapshot),
+    previous: (Option<SnapshotId>, &StateSnapshot),
     results: &[TestResult],
     run_id: &str,
     finished_at: Timestamp,
@@ -281,8 +284,8 @@ pub fn record_tests(
     passed.sort();
     failed.sort();
     ignored.sort();
-    let mut next = StateSnapshot::new(Some(id), finished_at, run_id, nodes)
-        .with_target(snapshot.target.clone());
+    let mut next =
+        StateSnapshot::new(id, finished_at, run_id, nodes).with_target(snapshot.target.clone());
     next.sources.clone_from(&snapshot.sources);
     RecordedTests {
         snapshot: next,

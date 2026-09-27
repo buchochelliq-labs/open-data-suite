@@ -482,6 +482,13 @@ sources a `+name` selector reaches as ancestors are considered (a node selected 
 doesn't bring in its sources' tests, as in dbt). `ods state test --all` runs every
 source's tests.
 
+Sources don't need anything built first: `ods state test` on a state database with
+nothing recorded yet runs the sources' tests (and no node's) and records them, with
+`based_on: null` in JSON. With no sources to test either, it still fails with "ODS has
+no recorded builds to test". When a source test fails in `ods state test`, the nodes'
+tests that passed in the same run are still recorded as passed: the failing source test
+explains the failed run.
+
 The tests run in the same dbt invocation as the nodes, selected exactly
 (`fqn:<test fqn>,resource_type:test`). A failing source test fails the command
 (`ODS-E0404`), and, as with `dbt build`, the nodes being built that read the source,

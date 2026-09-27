@@ -15,12 +15,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use ods_core::state::{
     Evidence, Exactness, Reason, ReasonCode, SourceState, StateSnapshot, TestRecord, Timestamp,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Project, Source, TestResult};
 
 /// Whether a source's checks run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SourceCheckAction {
@@ -31,7 +31,7 @@ pub enum SourceCheckAction {
 }
 
 /// The decision for one source's checks, and why.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct SourceCheck {
@@ -182,7 +182,7 @@ fn decide(
 }
 
 /// What recording a run's source checks changed.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct RecordedSources {
@@ -260,6 +260,30 @@ pub fn record_source_checks(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn source_checks_round_trip_through_json() {
+        let check = SourceCheck {
+            source: "source.p.raw.orders".into(),
+            name: "raw.orders".into(),
+            action: SourceCheckAction::Test,
+            reasons: vec![Reason::new(ReasonCode::NewUpstreamData, "new data")],
+            evidence: Vec::new(),
+        };
+        let json = serde_json::to_string(&check).unwrap();
+        assert_eq!(serde_json::from_str::<SourceCheck>(&json).unwrap(), check);
+        let recorded = RecordedSources {
+            passed: vec!["a".into()],
+            failed: vec!["b".into()],
+            ignored: Vec::new(),
+        };
+        let json = serde_json::to_string(&recorded).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RecordedSources>(&json).unwrap(),
+            recorded
+        );
+    }
+
     use std::collections::BTreeMap;
 
     use ods_core::state::{DataVersion, SnapshotId};

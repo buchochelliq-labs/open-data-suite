@@ -65,7 +65,9 @@ enum TestOutcome {
 pub(super) struct TestReport {
     state_db: PathBuf,
     scope: String,
-    based_on: SnapshotId,
+    /// The snapshot compared with; `None` when nothing was recorded yet and only
+    /// sources were tested.
+    based_on: Option<SnapshotId>,
     outcome: TestOutcome,
     /// Nodes whose tests were asked to run.
     requested: usize,
@@ -186,12 +188,28 @@ impl TestReport {
                 "build first with `ods state run`, or record a dbt run with `ods state record`",
             )
         };
-        if !ws.state_db.is_file() {
-            return Err(no_state());
+        // Nodes need a recorded build to be tested; sources don't (#232), so a store
+        // with nothing in it yet can still run their tests.
+        let store = if ws.state_db.is_file() {
+            Some(ws.open_store()?)
+        } else {
+            None
+        };
+        let latest = match &store {
+            Some(store) => ws.latest(store)?,
+            None => None,
+        };
+        if let Some(latest) = &latest {
+            same_target(latest.snapshot.target.as_ref(), &target)?;
         }
-        let store = ws.open_store()?;
-        let latest = ws.latest(&store)?.ok_or_else(no_state)?;
-        same_target(latest.snapshot.target.as_ref(), &target)?;
+        let empty = ods_core::state::StateSnapshot::new(
+            None,
+            ods_core::state::Timestamp::now(),
+            "",
+            std::collections::BTreeMap::new(),
+        )
+        .with_target(Some(target.clone()));
+        let base = latest.as_ref().map_or(&empty, |l| &l.snapshot);
 
         // What to test: built by ODS, in the selection, with checks, and not tested
         // with the checks it has now unless --all. A node without checks has nothing
@@ -204,23 +222,26 @@ impl TestReport {
             .nodes
             .iter()
             .filter(|n| selected.contains(&n.id))
-            .filter(|n| latest.snapshot.nodes.contains_key(&n.id))
+            .filter(|n| base.nodes.contains_key(&n.id))
             .collect();
         let without_checks = built.iter().filter(|n| n.checks.is_none()).count();
         let candidates: Vec<(String, String, String)> = built
             .iter()
             .filter(|n| n.checks.is_some())
-            .filter(|n| all || !n.is_tested(&latest.snapshot.nodes[&n.id]))
+            .filter(|n| all || !n.is_tested(&base.nodes[&n.id]))
             .map(|n| (n.id.clone(), n.name.clone(), n.kind.clone()))
             .collect();
         let (requested, left_out) = narrow(args, &ws.project, candidates, &[], "ods state test")?;
         // Sources whose data is new or unknown since their tests passed here (#232).
-        let source_tests = plan_source_checks(args, &ws.project, Some(&latest), all)?;
+        let source_tests = plan_source_checks(args, &ws.project, latest.as_ref(), all)?;
         let checked_sources = source_requests(&source_tests);
+        if latest.is_none() && checked_sources.is_empty() {
+            return Err(no_state());
+        }
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
-            based_on: latest.id,
+            based_on: latest.as_ref().map(|l| l.id),
             outcome: TestOutcome::NothingToTest,
             requested: requested.len(),
             without_checks,
@@ -244,7 +265,12 @@ impl TestReport {
             CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
                 .with_hint("nothing was recorded")
         })?;
-        let record = record(&ws, &store, &latest, &execution)?;
+        let store = match store {
+            Some(store) => store,
+            None => ws.open_store()?,
+        };
+        let previous = (latest.as_ref().map(|l| l.id), base);
+        let record = record(&ws, &store, previous, &execution)?;
         report.outcome = record.outcome(&execution);
         report.execution = Some(execution);
         report.record = Some(record);
@@ -302,27 +328,20 @@ impl TestRecordReport {
 fn record(
     ws: &Workspace,
     store: &ods_store_sqlite::SqliteStateStore,
-    latest: &ods_sdk::contracts::state_store::StoredSnapshot,
+    previous: (Option<SnapshotId>, &ods_core::state::StateSnapshot),
     execution: &ExecutionReport,
 ) -> Result<TestRecordReport, CliError> {
     let results = results_to_record(execution);
     let mut recorded = ods_state::record_tests(
         &ws.project,
-        (latest.id, &latest.snapshot),
+        previous,
         &results,
         &execution.run_id,
         execution.finished_at,
     );
-    // As for nodes: if dbt failed with no test failing, no pass counts.
-    let trusted = execution.succeeded
-        || execution
-            .nodes
-            .iter()
-            .chain(&execution.sources)
-            .any(|n| !n.checks_failed.is_empty() || n.status == ExecutionStatus::Failed);
     let source_results: Vec<TestResult> = source_results(execution)
         .into_iter()
-        .filter(|r| trusted || !r.passed)
+        .filter(|r| trusted(execution) || !r.passed)
         .collect();
     let sources_predate_run = matches!(
         (ws.sources_taken_at, execution.started_at),
@@ -365,11 +384,10 @@ impl Present for TestReport {
             ),
             (
                 "compared with".into(),
-                vec![Span::plain(format!(
-                    "snapshot {} in {}",
-                    self.based_on,
-                    self.state_db.display()
-                ))],
+                vec![Span::plain(match self.based_on {
+                    Some(id) => format!("snapshot {id} in {}", self.state_db.display()),
+                    None => format!("nothing recorded yet in {}", self.state_db.display()),
+                })],
             ),
         ];
         summary.push((
@@ -440,14 +458,23 @@ impl Present for TestReport {
     }
 }
 
+/// Whether a run's passes can be believed. A failed run is still trustworthy when a
+/// test failing explains it, on a node or on a source; if dbt failed with no test
+/// failing, something else went wrong and no pass counts.
+fn trusted(execution: &ExecutionReport) -> bool {
+    execution.succeeded || execution.nodes.iter().chain(&execution.sources).any(failed)
+}
+
+fn failed(n: &NodeExecution) -> bool {
+    n.status == ExecutionStatus::Failed || !n.checks_failed.is_empty()
+}
+
 /// What a test run shows about each node. A check that didn't run leaves its node
 /// untested (the executor lists it as skipped), so partial results can't mark anything
 /// tested. But if dbt failed with no test failing, something else went wrong: nothing
 /// is marked tested. Nodes whose tests didn't all run keep what they had.
 fn results_to_record(execution: &ExecutionReport) -> Vec<TestResult> {
-    let failed =
-        |n: &NodeExecution| n.status == ExecutionStatus::Failed || !n.checks_failed.is_empty();
-    let trusted = execution.succeeded || execution.nodes.iter().any(failed);
+    let trusted = trusted(execution);
     execution
         .nodes
         .iter()

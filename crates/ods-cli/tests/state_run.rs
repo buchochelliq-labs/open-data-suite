@@ -2573,3 +2573,57 @@ fn a_failing_source_test_fails_the_build_and_skips_its_readers() {
         decided("skip", "unchanged")
     );
 }
+
+#[test]
+fn sources_can_be_tested_before_anything_is_built() {
+    let project = Project::new("source-tests-first")
+        .with("FAKE_DBT_SOURCES", "1")
+        .with(
+            "FAKE_DBT_LOADED_AT",
+            "raw.orders=2026-01-01T00:00:00Z,raw.payments=2026-01-01T00:00:00Z",
+        );
+    let first = project.test_ok(&["--all"]);
+    assert!(first["based_on"].is_null(), "{first:#}");
+    assert_eq!(first["requested"], 0, "no node is built, so none is tested");
+    assert_eq!(
+        first["record"]["source_tests"]["passed"],
+        serde_json::json!([
+            "source.jaffle_ods.raw.orders",
+            "source.jaffle_ods.raw.payments"
+        ])
+    );
+    // Recorded against their data: the same data needs no second run.
+    let again = project.test_ok(&[]);
+    assert_eq!(again["outcome"], "nothing_to_test", "{again:#}");
+    assert_eq!(
+        source_tests(&again)["raw.orders"],
+        decided("skip", "unchanged")
+    );
+}
+
+#[test]
+fn a_failing_source_test_keeps_the_nodes_tests_that_passed() {
+    let project = Project::new("source-test-fails-in-test")
+        .with("FAKE_DBT_SOURCES", "1")
+        .with(
+            "FAKE_DBT_LOADED_AT",
+            "raw.orders=2026-01-01T00:00:00Z,raw.payments=2026-01-01T00:00:00Z",
+        );
+    project.run_ok(&[]);
+    let project = project.with("FAKE_DBT_FAIL_TEST", "source_not_null_raw_orders_id");
+    let (code, json) = project.test(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    let record = &json["result"]["record"];
+    assert_eq!(
+        record["source_tests"]["failed"],
+        serde_json::json!(["source.jaffle_ods.raw.orders"])
+    );
+    let passed = record["passed"].as_array().unwrap();
+    assert!(
+        !passed.is_empty(),
+        "a source test failing explains the failed run: the nodes' passes count: {json:#}"
+    );
+    // So only the failed source's tests run next time.
+    let (_, again) = project.test(&[]);
+    assert_eq!(again["result"]["requested"], 0, "{again:#}");
+}
