@@ -1,24 +1,25 @@
 //! Configuration through the real `ods` binary: discovery, precedence, errors, explain.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct Dir(PathBuf);
+/// A scratch directory, removed when dropped.
+struct Dir(tempfile::TempDir);
 
 impl Dir {
     fn new() -> Self {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("ods-cli-config-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(path.join("home")).unwrap();
-        Self(path)
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("home")).unwrap();
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 
     fn write(&self, rel: &str, text: &str) {
-        let path = self.0.join(rel);
+        let path = self.path().join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
@@ -29,17 +30,11 @@ impl Dir {
 /// `/var` to `/private/var`), so that form is replaced first.
 fn redact_dir(text: &str, dir: &Dir) -> String {
     let mut text = text.to_owned();
-    if let Ok(canonical) = dir.0.canonicalize() {
+    if let Ok(canonical) = dir.path().canonicalize() {
         text = text.replace(&canonical.display().to_string(), "[dir]");
     }
-    text.replace(&dir.0.display().to_string(), "[dir]")
+    text.replace(&dir.path().display().to_string(), "[dir]")
         .replace('\\', "/")
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
 }
 
 /// Runs `ods` in `cwd` with a clean, isolated environment.
@@ -48,7 +43,7 @@ fn ods(dir: &Dir, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     cmd.args(args)
         .current_dir(cwd)
         .env_clear()
-        .env("XDG_CONFIG_HOME", dir.0.join("home"));
+        .env("XDG_CONFIG_HOME", dir.path().join("home"));
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -63,8 +58,8 @@ fn stdout(out: &Output) -> String {
 fn project_config_sets_defaults_that_flags_override() {
     let dir = Dir::new();
     dir.write("proj/ods.toml", "[output]\nformat = \"json\"\n");
-    fs::create_dir_all(dir.0.join("proj/models")).unwrap();
-    let cwd = dir.0.join("proj/models");
+    fs::create_dir_all(dir.path().join("proj/models")).unwrap();
+    let cwd = dir.path().join("proj/models");
 
     let out = ods(&dir, &cwd, &["version"], &[]);
     assert!(out.status.success());
@@ -93,7 +88,7 @@ fn project_config_sets_defaults_that_flags_override() {
 fn invalid_config_exits_4_in_the_active_output_mode() {
     let dir = Dir::new();
     dir.write("ods.toml", "[output]\nfromat = \"json\"\n");
-    let out = ods(&dir, &dir.0, &["version"], &[]);
+    let out = ods(&dir, dir.path(), &["version"], &[]);
     assert_eq!(out.status.code(), Some(4));
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -102,7 +97,7 @@ fn invalid_config_exits_4_in_the_active_output_mode() {
         "{stderr}"
     );
 
-    let out = ods(&dir, &dir.0, &["--json", "version"], &[]);
+    let out = ods(&dir, dir.path(), &["--json", "version"], &[]);
     assert_eq!(out.status.code(), Some(4));
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON document");
     assert_eq!(value["diagnostics"][0]["code"], "ODS-E0102");
@@ -115,11 +110,11 @@ fn profiles_are_selected_by_flag_or_environment() {
         "ods.toml",
         "[profiles.ci.output]\nformat = \"json\"\n[profiles.local.output]\nformat = \"plain\"\n",
     );
-    let out = ods(&dir, &dir.0, &["version"], &[("ODS_PROFILE", "ci")]);
+    let out = ods(&dir, dir.path(), &["version"], &[("ODS_PROFILE", "ci")]);
     assert!(stdout(&out).trim_start().starts_with('{'));
     let out = ods(
         &dir,
-        &dir.0,
+        dir.path(),
         &["--profile", "local", "version"],
         &[("ODS_PROFILE", "ci")],
     );
@@ -127,7 +122,7 @@ fn profiles_are_selected_by_flag_or_environment() {
         stdout(&out).starts_with("ods: "),
         "--profile beats ODS_PROFILE"
     );
-    let out = ods(&dir, &dir.0, &["version", "--profile", "nope"], &[]);
+    let out = ods(&dir, dir.path(), &["version", "--profile", "nope"], &[]);
     assert_eq!(out.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&out.stderr).contains("ODS-E0104"));
 }
@@ -144,7 +139,7 @@ fn explain_shows_values_sources_and_overrides() {
          [profiles.dev.providers.warehouse.settings]\nhost = \"dev.example\"\n",
     );
     dir.write("proj/.ods/local.toml", "[output]\nwidth = 120\n");
-    let cwd = dir.0.join("proj");
+    let cwd = dir.path().join("proj");
     let out = ods(
         &dir,
         &cwd,
@@ -173,7 +168,7 @@ fn explain_filters_by_key_prefix() {
     );
     let out = ods(
         &dir,
-        &dir.0,
+        dir.path(),
         &["config", "explain", "output", "--json"],
         &[],
     );
@@ -192,7 +187,7 @@ fn explain_filters_by_key_prefix() {
 
     let out = ods(
         &dir,
-        &dir.0,
+        dir.path(),
         &["config", "explain", "log", "-o", "plain"],
         &[],
     );
@@ -206,7 +201,7 @@ fn explain_reports_a_table_replaced_by_a_scalar() {
     dir.write(".ods/local.toml", "[policy.rules]\nmax = 5\n");
     let out = ods(
         &dir,
-        &dir.0,
+        dir.path(),
         &["config", "explain", "policy", "-o", "plain"],
         &[],
     );
@@ -236,7 +231,7 @@ fn non_utf8_ods_variables_are_config_errors() {
     let dir = Dir::new();
     let out = Command::new(env!("CARGO_BIN_EXE_ods"))
         .arg("version")
-        .current_dir(&dir.0)
+        .current_dir(dir.path())
         .env_clear()
         .env("ODS_PROFILE", OsStr::from_bytes(b"dev\xff"))
         .output()

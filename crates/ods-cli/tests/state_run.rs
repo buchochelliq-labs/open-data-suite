@@ -5,11 +5,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
-
-static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -22,16 +19,16 @@ fn fixture(path: &str) -> PathBuf {
 struct Project {
     dir: PathBuf,
     env: Vec<(String, String)>,
+    _guard: tempfile::TempDir,
 }
 
 impl Project {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "ods-state-run-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let guard = tempfile::Builder::new()
+            .prefix(&format!("ods-state-run-{name}-"))
+            .tempdir()
+            .unwrap();
+        let dir = guard.path().to_owned();
         std::fs::create_dir_all(dir.join("base")).unwrap();
         std::fs::copy(
             fixture("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
@@ -44,6 +41,7 @@ impl Project {
                 dir.join("base").display().to_string(),
             )],
             dir,
+            _guard: guard,
         }
     }
 
@@ -243,12 +241,6 @@ impl Project {
         let (code, json) = self.ods(&["state", "history"]);
         assert_eq!(code, 0, "{json:#}");
         json["result"]["snapshots"].as_array().unwrap().clone()
-    }
-}
-
-impl Drop for Project {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 

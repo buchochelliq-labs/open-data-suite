@@ -80,17 +80,7 @@ pub fn cache_key<'a>(
             }
         }
     }
-    hex(&hasher.finalize())
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-            let _ = write!(s, "{b:02x}");
-            s
-        })
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]

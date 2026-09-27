@@ -22,6 +22,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 ods-sdk = { workspace = true, features = ["conformance"] }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]

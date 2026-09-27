@@ -312,11 +312,13 @@ fn seed_columns_come_from_the_csv_dbt_loaded() {
 
     // A copy of the target directory away from the project: the CSV can't be found, so
     // the columns stay unknown rather than guessed.
-    let away = std::env::temp_dir().join(format!("ods-seed-away-{}", std::process::id()));
-    std::fs::create_dir_all(&away).unwrap();
-    std::fs::copy(v2().join("manifest.json"), away.join("manifest.json")).unwrap();
-    let manifest = Artifacts::load(&away).unwrap().manifest;
-    std::fs::remove_dir_all(&away).ok();
+    let away = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        v2().join("manifest.json"),
+        away.path().join("manifest.json"),
+    )
+    .unwrap();
+    let manifest = Artifacts::load(away.path()).unwrap().manifest;
     assert!(
         manifest
             .nodes

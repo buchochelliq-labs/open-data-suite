@@ -70,15 +70,16 @@ pub fn export_site(
     Ok(vec![index, graph])
 }
 
-/// Writes `path` via a temporary file in the same directory and a rename.
+/// Writes `path` via a temporary file in the same directory and a rename. The temporary
+/// file is removed if anything fails.
 fn replace(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = std::path::PathBuf::from(temporary);
-    fs::write(&temporary, contents)?;
-    fs::rename(&temporary, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temporary);
-    })
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut temporary, contents)?;
+    temporary.persist(path).map(drop).map_err(|e| e.error)
 }
 
 #[cfg(test)]

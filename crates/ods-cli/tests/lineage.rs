@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
@@ -11,22 +10,17 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10")
 }
 
-struct Temp(PathBuf);
+/// A scratch directory, removed when dropped.
+struct Temp(tempfile::TempDir);
 
 impl Temp {
     fn new() -> Self {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("ods-cli-lineage-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
+        let dir = tempfile::tempdir().unwrap();
+        Self(dir)
     }
-}
 
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 }
 
@@ -34,9 +28,9 @@ fn ods(args: &[&str]) -> Output {
     let home = Temp::new();
     Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(args)
-        .current_dir(&home.0)
+        .current_dir(home.path())
         .env_clear()
-        .env("XDG_CONFIG_HOME", &home.0)
+        .env("XDG_CONFIG_HOME", home.path())
         .output()
         .expect("failed to spawn ods")
 }
@@ -126,9 +120,9 @@ fn impact_prunes_readers_that_do_not_use_the_changed_column() {
 fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
     let head = Temp::new();
     for file in ["manifest.json", "catalog.json"] {
-        fs::copy(fixture().join(file), head.0.join(file)).unwrap();
+        fs::copy(fixture().join(file), head.path().join(file)).unwrap();
     }
-    let manifest_path = head.0.join("manifest.json");
+    let manifest_path = head.path().join("manifest.json");
     let mut manifest: Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     let code = &mut manifest["nodes"]["model.jaffle_ods.orders"]["compiled_code"];
@@ -144,7 +138,7 @@ fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
         "lineage",
         "impact",
         "--target-dir",
-        head.0.to_str().unwrap(),
+        head.path().to_str().unwrap(),
         "--base",
         base.to_str().unwrap(),
     ]);
@@ -177,7 +171,7 @@ fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
 #[test]
 fn export_writes_openlineage_job_events_with_column_lineage() {
     let out_dir = Temp::new();
-    let file = out_dir.0.join("events.ndjson");
+    let file = out_dir.path().join("events.ndjson");
     let target = fixture();
     let result = json(&[
         "lineage",
@@ -231,7 +225,7 @@ fn export_writes_openlineage_job_events_with_column_lineage() {
         "AGGREGATION"
     );
     // Deterministic: the same inputs give byte-identical events.
-    let again = out_dir.0.join("again.ndjson");
+    let again = out_dir.path().join("again.ndjson");
     json(&[
         "lineage",
         "export",
@@ -279,7 +273,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
     let target = fixture();
     let target = target.to_str().unwrap();
     let write = |format: &str, extra: &[&str]| {
-        let file = out_dir.0.join(format!("graph.{format}"));
+        let file = out_dir.path().join(format!("graph.{format}"));
         let mut args = vec![
             "lineage",
             "graph",
@@ -334,7 +328,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
 #[test]
 fn view_writes_a_self_contained_offline_page() {
     let out_dir = Temp::new();
-    let file = out_dir.0.join("lineage.html");
+    let file = out_dir.path().join("lineage.html");
     let target = fixture();
     let result = json(&[
         "lineage",
@@ -377,7 +371,7 @@ fn view_writes_a_self_contained_offline_page() {
 #[test]
 fn view_can_write_a_static_site_to_host() {
     let out_dir = Temp::new();
-    let site = out_dir.0.join("site");
+    let site = out_dir.path().join("site");
     let target = fixture();
     let result = json(&[
         "lineage",
@@ -418,9 +412,9 @@ fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
     // A seed's CSV changed: dbt's checksum differs, so everything downstream may change.
     let head = Temp::new();
     for file in ["manifest.json", "catalog.json"] {
-        fs::copy(fixture().join(file), head.0.join(file)).unwrap();
+        fs::copy(fixture().join(file), head.path().join(file)).unwrap();
     }
-    let manifest_path = head.0.join("manifest.json");
+    let manifest_path = head.path().join("manifest.json");
     let mut manifest: Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     manifest["nodes"]["seed.jaffle_ods.raw_payments"]["checksum"]["checksum"] =
@@ -432,7 +426,7 @@ fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
         "lineage",
         "impact",
         "--target-dir",
-        head.0.to_str().unwrap(),
+        head.path().to_str().unwrap(),
         "--base",
         base.to_str().unwrap(),
     ]);
@@ -462,7 +456,7 @@ fn v2_fixture() -> PathBuf {
 fn dbt_1x_json_v2_json_and_v2_parquet_give_the_same_lineage() {
     let out = Temp::new();
     let graph = |target: &Path, artifacts: &str| {
-        let file = out.0.join(format!(
+        let file = out.path().join(format!(
             "{artifacts}-{}.json",
             target.file_name().unwrap().to_str().unwrap()
         ));
@@ -499,15 +493,18 @@ fn a_v2_target_without_json_is_read_from_the_information_schema() {
     let target = Temp::new();
     copy_dir(
         &v2_fixture().join("info_schema"),
-        &target.0.join("info_schema"),
+        &target.path().join("info_schema"),
     );
-    copy_dir(&v2_fixture().join("compiled"), &target.0.join("compiled"));
-    assert!(!target.0.join("manifest.json").exists());
+    copy_dir(
+        &v2_fixture().join("compiled"),
+        &target.path().join("compiled"),
+    );
+    assert!(!target.path().join("manifest.json").exists());
     let result = json(&[
         "lineage",
         "columns",
         "--target-dir",
-        target.0.to_str().unwrap(),
+        target.path().to_str().unwrap(),
     ]);
     assert_eq!(result["summary"]["models_analyzed"], 9);
     assert_eq!(result["summary"]["models_opaque"], 1);
@@ -632,15 +629,15 @@ fn ods_in(cwd: &Path, env: &[(&str, &str)], args: &[&str]) -> (i32, Value) {
 #[test]
 fn artifacts_are_found_where_the_project_is_configured() {
     let dir = Temp::new();
-    copy_dir(&fixture(), &dir.0.join("transform/target"));
-    let sub = dir.0.join("elsewhere");
+    copy_dir(&fixture(), &dir.path().join("transform/target"));
+    let sub = dir.path().join("elsewhere");
     fs::create_dir_all(&sub).unwrap();
 
     // Not in `./target`: an error.
     let (code, _) = ods_in(&sub, &[], &["lineage", "columns"]);
     assert_eq!(code, 1);
     // `DBT_PROJECT_DIR`, as dbt reads it.
-    let project = dir.0.join("transform");
+    let project = dir.path().join("transform");
     let project = project.to_str().unwrap();
     let (code, json) = ods_in(
         &sub,
@@ -650,7 +647,7 @@ fn artifacts_are_found_where_the_project_is_configured() {
     assert_eq!(code, 0, "{json:#}");
     // `ods.toml`, from a directory below it.
     fs::write(
-        dir.0.join("ods.toml"),
+        dir.path().join("ods.toml"),
         "[providers.dbt]\nkind = \"dbt\"\n\n[providers.dbt.settings]\nproject_dir = \"transform\"\n",
     )
     .unwrap();

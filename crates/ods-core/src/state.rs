@@ -22,13 +22,7 @@ pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, b| {
-            let _ = write!(hex, "{b:02x}");
-            hex
-        })
+    hex::encode(Sha256::digest(bytes))
 }
 
 // ---------------------------------------------------------------------------- time

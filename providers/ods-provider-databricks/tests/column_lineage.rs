@@ -58,9 +58,8 @@ fn csv_and_json_exports_read_the_same() {
 
 #[test]
 fn newline_delimited_json_and_row_inputs() {
-    let dir = std::env::temp_dir().join(format!("ods-uc-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("lineage.ndjson");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lineage.ndjson");
     std::fs::write(
         &path,
         concat!(
@@ -82,14 +81,12 @@ fn newline_delimited_json_and_row_inputs() {
             RelationName::new(["c", "s", "b"]).unwrap()
         )
     );
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
 fn a_file_that_is_not_a_column_lineage_export_is_an_error() {
-    let dir = std::env::temp_dir().join(format!("ods-uc-bad-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("table_lineage.csv");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("table_lineage.csv");
     std::fs::write(
         &path,
         "source_table_full_name,target_table_full_name\na.b.c,a.b.d\n",
@@ -104,6 +101,5 @@ fn a_file_that_is_not_a_column_lineage_export_is_an_error() {
         err.contains("missing source_column_name, target_column_name"),
         "{err}"
     );
-    assert!(UcColumnLineage::from_path(dir.join("x.parquet")).is_err());
-    std::fs::remove_dir_all(dir).unwrap();
+    assert!(UcColumnLineage::from_path(dir.path().join("x.parquet")).is_err());
 }

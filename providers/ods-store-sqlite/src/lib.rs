@@ -824,22 +824,17 @@ impl SqliteStateStore {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
+    use std::collections::BTreeMap;
 
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_db(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ods-store-sqlite-unit-{}-{name}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("state.db")
+    /// A database path in a fresh directory, which is removed when the guard drops.
+    fn temp_db(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("ods-store-sqlite-unit-{name}-"))
+            .tempdir()
+            .unwrap();
+        let db = dir.path().join("state.db");
+        (dir, db)
     }
 
     fn backups(db: &Path) -> Vec<PathBuf> {
@@ -885,7 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn migrates_forward_across_versions_keeping_a_copy_each_time() {
-        let db = temp_db("forward");
+        let (_dir, db) = temp_db("forward");
         let scope = StateScope::new("p", "dev").unwrap();
         let id = {
             let store = SqliteStateStore::open_with(&db, &MIGRATIONS[..1])
@@ -918,12 +913,11 @@ mod tests {
             .unwrap();
         assert_eq!(first.schema_version().await.unwrap(), 1);
         assert_eq!(first.latest(&scope).await.unwrap().unwrap().id, id);
-        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 
     #[tokio::test]
     async fn a_failed_migration_changes_nothing() {
-        let db = temp_db("failed");
+        let (_dir, db) = temp_db("failed");
         let scope = StateScope::new("p", "dev").unwrap();
         let id = {
             let store = SqliteStateStore::open_with(&db, V2).await.unwrap();
@@ -942,12 +936,11 @@ mod tests {
         assert!(!tables(&store).await.contains(&"half_done".to_owned()));
         assert_eq!(store.latest(&scope).await.unwrap().unwrap().id, id);
         assert!(store.check().await.unwrap().problems.is_empty());
-        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 
     #[tokio::test]
     async fn an_older_build_refuses_a_newer_database_and_the_check_says_so() {
-        let db = temp_db("older-build");
+        let (_dir, db) = temp_db("older-build");
         drop(SqliteStateStore::open_with(&db, V3).await.unwrap());
         let error = SqliteStateStore::open_with(&db, V2).await.unwrap_err();
         assert!(error.to_string().contains("upgrade ODS"), "{error}");
@@ -957,12 +950,11 @@ mod tests {
         assert_eq!(check.problems.len(), 1, "{check:?}");
         assert_eq!(check.problems[0].kind, ProblemKind::NewerSchema);
         assert_eq!(store.schema_version().await.unwrap(), 3);
-        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn two_openers_upgrading_at_once_both_succeed() {
-        let db = temp_db("racing-upgrade");
+        let (_dir, db) = temp_db("racing-upgrade");
         let scope = StateScope::new("p", "dev").unwrap();
         let id = {
             let store = SqliteStateStore::open_with(&db, &MIGRATIONS[..1])
@@ -977,7 +969,6 @@ mod tests {
         let (a, b) = (a.unwrap(), b.unwrap());
         assert_eq!(a.schema_version().await.unwrap(), 2);
         assert_eq!(b.latest(&scope).await.unwrap().unwrap().id, id);
-        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 
     #[test]

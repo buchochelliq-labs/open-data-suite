@@ -149,7 +149,12 @@ fn foreign_keys_in_the_to_syntax_and_unresolvable_ones() {
             "expression": "somewhere_else.customers (customer_id)"
         }]);
     });
-    let result = json(&["erd", "generate", "--target-dir", dir.to_str().unwrap()]);
+    let result = json(&[
+        "erd",
+        "generate",
+        "--target-dir",
+        dir.path().to_str().unwrap(),
+    ]);
     let declared: Vec<_> = relationships(&result)
         .into_iter()
         .filter(|r| r.2 == "declared")
@@ -171,7 +176,6 @@ fn foreign_keys_in_the_to_syntax_and_unresolvable_ones() {
         "a table ODS doesn't know is reported, not guessed: {}",
         result["erd"]["diagnostics"]
     );
-    std::fs::remove_dir_all(dir).ok();
 }
 
 #[test]
@@ -236,14 +240,16 @@ fn other_erd_subcommands_are_still_planned() {
 }
 
 /// A copy of the dbt 1.10 fixture with `edit` applied to its manifest.
-fn patched(name: &str, edit: impl FnOnce(&mut Value)) -> PathBuf {
+fn patched(name: &str, edit: impl FnOnce(&mut Value)) -> tempfile::TempDir {
     let from = artifacts("dbt-1.10");
-    let dir = std::env::temp_dir().join(format!("ods-erd-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("ods-erd-{name}-"))
+        .tempdir()
+        .unwrap();
     for file in ["manifest.json", "catalog.json"] {
-        std::fs::copy(from.join(file), dir.join(file)).unwrap();
+        std::fs::copy(from.join(file), dir.path().join(file)).unwrap();
     }
-    let path = dir.join("manifest.json");
+    let path = dir.path().join("manifest.json");
     let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     edit(&mut manifest);
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -288,7 +294,7 @@ fn composite_keys_come_from_unique_key_config_and_column_combinations() {
         "erd",
         "generate",
         "--target-dir",
-        dir.to_str().unwrap(),
+        dir.path().to_str().unwrap(),
         "--all",
         "--format",
         "json",
@@ -305,7 +311,6 @@ fn composite_keys_come_from_unique_key_config_and_column_combinations() {
         serde_json::json!(["customer_id", "signup_date"])
     );
     assert_eq!(combination["basis"], "tested");
-    std::fs::remove_dir_all(dir).ok();
 }
 
 #[test]
@@ -318,7 +323,7 @@ fn filtered_tests_say_nothing_about_keys() {
         "erd",
         "generate",
         "--target-dir",
-        dir.to_str().unwrap(),
+        dir.path().to_str().unwrap(),
         "--all",
         "--format",
         "json",
@@ -333,5 +338,4 @@ fn filtered_tests_say_nothing_about_keys() {
         "{}",
         result["erd"]["diagnostics"]
     );
-    std::fs::remove_dir_all(dir).ok();
 }

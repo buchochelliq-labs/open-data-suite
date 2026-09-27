@@ -1716,24 +1716,10 @@ impl Present for GraphReport {
     }
 }
 
-/// Best effort: returns whether a browser launcher started.
+/// Best effort: returns whether the system's browser launcher started.
 fn open_in_browser(path: &Path) -> bool {
     let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    let mut command = if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-    } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    } else {
-        std::process::Command::new("xdg-open")
-    };
-    command
-        .arg(target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_ok()
+    opener::open_browser(target).is_ok()
 }
 
 impl Loaded {
