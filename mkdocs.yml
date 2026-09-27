@@ -93,4 +93,5 @@ nav:
       - adr/0016-relation-existence-before-reuse.md
       - adr/0017-state-per-target.md
       - adr/0018-state-store-migrations-and-recovery.md
+      - adr/0019-release-and-versioning.md
   - Legal and trademarks: legal.md

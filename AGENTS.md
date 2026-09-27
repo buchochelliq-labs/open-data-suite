@@ -112,8 +112,10 @@ unless they pass, or state exactly what failed.
   the harness assigns a branch.
 - Commits: Conventional Commits (`feat(state): …`, `fix(sdk): …`, `docs(adr): …`).
 - Keep PRs small and reviewable; do not widen scope beyond the issue's acceptance criteria.
-- New or changed persisted formats, CLI flags, or JSON output require tests and a
-  CHANGELOG entry (once #101 defines the format).
+- New or changed persisted formats, CLI flags, or JSON output require tests. Every
+  user-visible change adds an entry under `## [Unreleased]` in `CHANGELOG.md`, in the
+  format and with the breaking-change and deprecation rules of
+  [ADR-0019](docs/adr/0019-release-and-versioning.md).
 - Update `docs/ROADMAP.md` and `.github/milestones.json` together if milestone scope changes.
 
 ## Skills & agents available (`.claude/`)

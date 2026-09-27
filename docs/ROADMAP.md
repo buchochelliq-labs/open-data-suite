@@ -49,8 +49,9 @@ Every milestone must preserve these; reviewers reject PRs that break them.
 | later | Platform & ecosystem | M7–M9 | — | Mesh, server mode/API/RBAC/audit, integrations, synthetic data, dev envs, ops/cost/governance. |
 
 Target dates are proposals for a small team and should be revisited at the end of M0.
-Versioning follows SemVer with a `0.x` "anything may break between minors" caveat;
-the formal policy is delivered by #101 in M0.
+Versioning follows SemVer with a `0.x` "anything may break between minors" caveat.
+The formal policy (#101) is [ADR-0019](adr/0019-release-and-versioning.md): one product
+version, a version per interface, `CHANGELOG.md` and a deprecation window.
 
 ## 4. Milestones
 
