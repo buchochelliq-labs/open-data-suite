@@ -1142,6 +1142,200 @@ fn real_dbt() {
     std::fs::write(&model, &sql).unwrap();
 }
 
+/// A source on the seeded `raw_orders` table, with a passing and a failing test, read
+/// by `from_source`, which `from_from_source` reads (#232).
+const SOURCES_YML: &str = "version: 2
+sources:
+  - name: raw
+    schema: main
+    loaded_at_field: \"cast(order_date as timestamp)\"
+    freshness:
+      warn_after: {count: 36500, period: day}
+    tables:
+      - name: raw_orders
+        columns:
+          - name: id
+            data_tests: [not_null]
+          - name: status
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: [VALUES]
+";
+
+/// `real_project()` with [`SOURCES_YML`], whose `accepted_values` test accepts `values`.
+fn real_project_with_a_source(values: &str) -> Project {
+    let project = real_project();
+    std::fs::write(
+        project.dir.join("models/sources.yml"),
+        SOURCES_YML.replace("VALUES", values),
+    )
+    .unwrap();
+    std::fs::write(
+        project.dir.join("models/marts/from_source.sql"),
+        "select count(*) as n from {{ source('raw', 'raw_orders') }}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.dir.join("models/marts/from_from_source.sql"),
+        "select n from {{ ref('from_source') }}\n",
+    )
+    .unwrap();
+    project
+}
+
+/// The nodes (not tests) a real `dbt build` of `project` skipped, by name.
+fn dbt_build_skips(project: &Project, dbt: &str) -> Vec<String> {
+    // The profile's database file lives there.
+    std::fs::create_dir_all(project.dir.join("target")).unwrap();
+    let out = Command::new(dbt)
+        .args([
+            "build",
+            "--profiles-dir",
+            ".",
+            "--target-path",
+            "target-dbt",
+        ])
+        .env("DBT_SEND_ANONYMOUS_USAGE_STATS", "false")
+        .current_dir(&project.dir)
+        .output()
+        .unwrap();
+    let output = || {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    assert!(
+        !out.status.success(),
+        "the source test should fail dbt too: {}",
+        output()
+    );
+    let results = std::fs::read(project.dir.join("target-dbt/run_results.json"))
+        .unwrap_or_else(|e| panic!("{e}: {}", output()));
+    let results: Value = serde_json::from_slice(&results).unwrap();
+    let mut skipped: Vec<String> = results["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r["status"] == "skipped" && !r["unique_id"].as_str().unwrap().starts_with("test.")
+        })
+        .map(|r| {
+            r["unique_id"]
+                .as_str()
+                .unwrap()
+                .rsplit('.')
+                .next()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    skipped.sort();
+    skipped
+}
+
+/// #232 against real dbt and `DuckDB`: a failing source test fails `ods state build`,
+/// and the models downstream of the source are skipped, exactly as a plain `dbt build`
+/// of the same project skips them. Once fixed, the tests pass and are recorded against
+/// the source's `max_loaded_at`, so the next build skips them.
+#[test]
+fn real_dbt_a_failing_source_test_skips_downstream_models() {
+    let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
+        eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
+        return;
+    };
+    let dbt = dbt.to_str().unwrap().to_owned();
+    // What dbt itself does, on its own copy (and database).
+    let plain = real_project_with_a_source("'nope'");
+    let dbt_skipped = dbt_build_skips(&plain, &dbt);
+    assert_eq!(dbt_skipped, ["from_from_source", "from_source"]);
+
+    let project = real_project_with_a_source("'nope'");
+    let (code, json) = real_cmd(&project, &dbt, "seed", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    let (code, json) = real_cmd(&project, &dbt, "build", &[]);
+    assert_eq!(code, 1, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["outcome"], "failed", "{result:#}");
+    assert_eq!(
+        source_tests(result)["raw.raw_orders"],
+        decided("test", "not_tested")
+    );
+    let failed = result["execution"]["checks_failed"].as_array().unwrap();
+    assert!(
+        failed.iter().any(|c| c
+            .as_str()
+            .unwrap()
+            .contains("source_accepted_values_raw_raw_orders_status")),
+        "{result:#}"
+    );
+    let mut ods_skipped: Vec<String> = result["execution"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["status"] == "skipped")
+        .map(|n| {
+            n["node"]
+                .as_str()
+                .unwrap()
+                .rsplit('.')
+                .next()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    ods_skipped.sort();
+    assert_eq!(ods_skipped, dbt_skipped, "{result:#}");
+    assert_eq!(
+        result["record"]["source_tests"]["failed"],
+        serde_json::json!(["source.jaffle_ods.raw.raw_orders"])
+    );
+    let advanced = names(&result["record"]["advanced"]);
+    assert!(
+        !advanced.contains(&"from_source".to_owned()),
+        "{advanced:?}"
+    );
+    assert!(advanced.contains(&"orders".to_owned()), "{advanced:?}");
+
+    // Fixed: the tests run again (they changed) and pass, and the models build.
+    std::fs::write(
+        project.dir.join("models/sources.yml"),
+        SOURCES_YML.replace(
+            "VALUES",
+            "'completed', 'returned', 'placed', 'shipped', 'return_pending'",
+        ),
+    )
+    .unwrap();
+    let (code, json) = real_cmd(&project, &dbt, "build", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(
+        result["record"]["source_tests"]["passed"],
+        serde_json::json!(["source.jaffle_ods.raw.raw_orders"]),
+        "{result:#}"
+    );
+    assert_eq!(
+        names(&result["execution"]["nodes"]),
+        ["from_from_source", "from_source"]
+    );
+    // Same data: the tests are skipped, and nothing is left to build.
+    let (code, json) = real_cmd(&project, &dbt, "build", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(
+        source_tests(result)["raw.raw_orders"],
+        decided("skip", "unchanged"),
+        "{result:#}"
+    );
+    assert_eq!(result["outcome"], "nothing_to_build", "{result:#}");
+    // `ods state test` agrees: nothing to test.
+    let (code, json) = real_cmd(&project, &dbt, "test", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["outcome"], "nothing_to_test", "{json:#}");
+}
+
 /// `ods state <command>` against real dbt in `project`.
 fn real_cmd(project: &Project, dbt: &str, command: &str, extra: &[&str]) -> (i32, Value) {
     let mut args = vec![
@@ -2168,4 +2362,214 @@ fn graph_shows_what_would_be_built() {
         "{json:#}"
     );
     assert!(result["text"].as_str().unwrap().starts_with("graph LR"));
+}
+
+/// Each source's tests decision in a report: name → (action, first reason's code).
+fn source_tests(result: &Value) -> std::collections::BTreeMap<String, (String, String)> {
+    result["source_tests"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no source tests: {result:#}"))
+        .iter()
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                (
+                    c["action"].as_str().unwrap().to_owned(),
+                    c["reasons"][0]["code"].as_str().unwrap().to_owned(),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn decided(action: &str, code: &str) -> (String, String) {
+    (action.to_owned(), code.to_owned())
+}
+
+/// The ids of the tests a run selected itself (`resource_type:test`).
+fn selected_tests(result: &Value) -> Vec<String> {
+    result["execution"]["command"]
+        .as_str()
+        .unwrap()
+        .split(' ')
+        .filter(|s| s.ends_with(",resource_type:test"))
+        .map(|s| {
+            s.trim_start_matches("fqn:jaffle_ods.")
+                .trim_end_matches(",resource_type:test")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// #232 with the fake dbt: a source's tests run in `ods state build` and `ods state
+/// test` when its `max_loaded_at` changes, are skipped when it doesn't, and always run
+/// when its data version is unknown (`raw.payments` is never measured).
+#[test]
+fn source_tests_run_when_the_source_has_new_or_unknown_data() {
+    let project = Project::new("source-tests")
+        .with("FAKE_DBT_SOURCES", "1")
+        .with("FAKE_DBT_LOADED_AT", "raw.orders=2026-01-01T00:00:00Z");
+    let first = project.run_ok(&["--test"]);
+    assert_eq!(
+        source_tests(&first),
+        [
+            ("raw.orders".into(), decided("test", "not_tested")),
+            ("raw.payments".into(), decided("test", "not_tested")),
+        ]
+        .into()
+    );
+    assert_eq!(
+        selected_tests(&first),
+        [
+            "source_not_null_raw_orders_id",
+            "source_not_null_raw_payments_id"
+        ]
+    );
+    assert_eq!(
+        names(&first["execution"]["sources"]),
+        ["orders", "payments"],
+        "{first:#}"
+    );
+    assert_eq!(
+        first["record"]["source_tests"]["passed"],
+        serde_json::json!([
+            "source.jaffle_ods.raw.orders",
+            "source.jaffle_ods.raw.payments"
+        ])
+    );
+
+    // Same data: raw.orders' tests are skipped; raw.payments' version is unknown, so
+    // they run again.
+    let again = project.run_ok(&["--test"]);
+    let decisions = source_tests(&again);
+    assert_eq!(decisions["raw.orders"], decided("skip", "unchanged"));
+    assert_eq!(
+        decisions["raw.payments"],
+        decided("test", "missing_data_evidence")
+    );
+    assert_eq!(selected_tests(&again), ["source_not_null_raw_payments_id"]);
+
+    // New data in raw.orders: its tests run, and the report says why.
+    let project = project.with("FAKE_DBT_LOADED_AT", "raw.orders=2026-01-02T00:00:00Z");
+    let changed = project.run_ok(&["--test"]);
+    let orders = changed["source_tests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "raw.orders")
+        .unwrap();
+    assert_eq!(orders["action"], "test");
+    assert_eq!(orders["reasons"][0]["code"], "new_upstream_data");
+    assert!(
+        orders["reasons"][0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("`raw.orders` has new data"),
+        "{orders:#}"
+    );
+    assert!(
+        selected_tests(&changed).contains(&"source_not_null_raw_orders_id".to_owned()),
+        "{changed:#}"
+    );
+
+    // `ods state test` decides the same way: unchanged raw.orders is skipped, unknown
+    // raw.payments runs, and new data in raw.orders runs it.
+    let tested = project.test_ok(&[]);
+    assert_eq!(
+        source_tests(&tested)["raw.orders"],
+        decided("skip", "unchanged")
+    );
+    assert_eq!(
+        names(&tested["execution"]["sources"]),
+        ["payments"],
+        "{tested:#}"
+    );
+    assert_eq!(
+        tested["record"]["source_tests"]["passed"],
+        serde_json::json!(["source.jaffle_ods.raw.payments"])
+    );
+    let project = project.with("FAKE_DBT_LOADED_AT", "raw.orders=2026-01-03T00:00:00Z");
+    let tested = project.test_ok(&[]);
+    assert_eq!(
+        source_tests(&tested)["raw.orders"],
+        decided("test", "new_upstream_data")
+    );
+    assert_eq!(
+        names(&tested["execution"]["sources"]),
+        ["orders", "payments"]
+    );
+
+    // A build without tests runs no source tests either.
+    let untested = project.run_ok(&[]);
+    assert!(untested.get("source_tests").is_none(), "{untested:#}");
+}
+
+/// #232 with the fake dbt: a failing source test fails `ods state build`, and the
+/// nodes reading the source are skipped (as `dbt build` does) and keep their last
+/// state; the tests run again next time, even without new data.
+#[test]
+fn a_failing_source_test_fails_the_build_and_skips_its_readers() {
+    let project = Project::new("source-test-fails")
+        .with("FAKE_DBT_SOURCES", "1")
+        .with(
+            "FAKE_DBT_LOADED_AT",
+            "raw.orders=2026-01-01T00:00:00Z,raw.payments=2026-01-01T00:00:00Z",
+        )
+        .with("FAKE_DBT_FAIL_TEST", "source_not_null_raw_orders_id");
+    let (code, json) = project.run(&["--test"]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["diagnostics"][0]["code"], "ODS-E0404");
+    let result = &json["result"];
+    assert_eq!(result["outcome"], "failed");
+    assert_eq!(
+        result["execution"]["checks_failed"],
+        serde_json::json!(["test.jaffle_ods.source_not_null_raw_orders_id.0000000000"])
+    );
+    let status = |name: &str| {
+        result["execution"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node"].as_str().unwrap().ends_with(&format!(".{name}")))
+            .unwrap()["status"]
+            .clone()
+    };
+    // stg_orders reads raw.orders; orders reads stg_orders.
+    assert_eq!(status("stg_orders"), "skipped");
+    assert_eq!(status("orders"), "skipped");
+    assert_eq!(status("stg_payments"), "success");
+    assert_eq!(
+        result["record"]["source_tests"]["failed"],
+        serde_json::json!(["source.jaffle_ods.raw.orders"])
+    );
+    assert_eq!(
+        result["record"]["source_tests"]["passed"],
+        serde_json::json!(["source.jaffle_ods.raw.payments"])
+    );
+    let advanced = names(&result["record"]["advanced"]);
+    assert!(!advanced.contains(&"stg_orders".to_owned()), "{advanced:?}");
+    assert!(
+        advanced.contains(&"stg_payments".to_owned()),
+        "{advanced:?}"
+    );
+
+    // Same data, still failing: raw.orders' tests run again, and its readers stay
+    // unbuilt; raw.payments' passed on this data, so they are skipped.
+    let (code, json) = project.run(&["--test"]);
+    assert_eq!(code, 1, "{json:#}");
+    let decisions = source_tests(&json["result"]);
+    assert_eq!(decisions["raw.orders"], decided("test", "not_tested"));
+    assert_eq!(decisions["raw.payments"], decided("skip", "unchanged"));
+
+    // Fixed: they pass, and the readers build.
+    let project = project.with("FAKE_DBT_FAIL_TEST", "");
+    let fixed = project.run_ok(&["--test"]);
+    assert!(
+        names(&fixed["record"]["advanced"]).contains(&"stg_orders".to_owned()),
+        "{fixed:#}"
+    );
+    assert_eq!(
+        source_tests(&project.run_ok(&["--test"]))["raw.orders"],
+        decided("skip", "unchanged")
+    );
 }

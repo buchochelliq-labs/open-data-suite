@@ -3,9 +3,12 @@
 //! 1. Prepare: compile, so tests and selection match the code (`--no-compile` skips).
 //! 2. Pick the nodes ODS has a build of whose tests haven't passed since that build
 //!    (all of them with `--all`), within `--select` and minus `--exclude`.
+//!    With them, the sources whose data is new or unknown since their tests last
+//!    passed (#232).
 //! 3. Run only their tests, selected exactly.
 //! 4. Record: nodes whose tests passed are marked tested; nodes whose tests failed are
-//!    marked untested, so they come up again. Builds are unchanged.
+//!    marked untested, so they come up again. Builds are unchanged. A source's passing
+//!    tests are recorded against its data version; failing ones come up again.
 
 use std::path::PathBuf;
 
@@ -13,16 +16,16 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::SnapshotId;
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
-    PrepareRequest,
 };
 use ods_sdk::contracts::state_store::StateStore;
-use ods_state::{RecordedTests, TestResult};
+use ods_state::{RecordedSources, RecordedTests, SourceCheck, TestResult};
 use serde::Serialize;
 
-use super::state_plan::{
-    Sources, Workspace, block_on, common, display_name, select_specs, store_error,
+use super::state_plan::{Workspace, block_on, common, display_name, select_specs, store_error};
+use super::state_run::{
+    LeftOut, Steps, dbt_args, dbt_options, executor, narrow, plan_source_checks, source_requests,
+    source_results, source_rows,
 };
-use super::state_run::{LeftOut, Steps, dbt_args, dbt_options, executor, narrow};
 use super::state_settings::StateSettings;
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
@@ -34,11 +37,12 @@ pub(super) fn test_command() -> Command {
         "Run the tests of what was built but not yet tested, with dbt, and record the results",
     )))
     .arg(
-        Arg::new("all")
-            .long("all")
-            .action(ArgAction::SetTrue)
-            .help("Test every node ODS has a build of, not only the untested ones"),
+        Arg::new("all").long("all").action(ArgAction::SetTrue).help(
+            "Test every node ODS has a build of, and every source, not only the untested ones",
+        ),
     )
+    // Whether sources have new data decides whether their tests run (#232).
+    .arg(super::state_run::no_source_freshness())
 }
 
 /// How the test run ended.
@@ -69,6 +73,9 @@ pub(super) struct TestReport {
     without_checks: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     left_out: Vec<LeftOut>,
+    /// Every selected source with tests, and whether they run and why (#232).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_tests: Vec<SourceCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     execution: Option<ExecutionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +94,9 @@ struct TestRecordReport {
     snapshot: SnapshotId,
     #[serde(flatten)]
     recorded: RecordedTests,
+    /// Which sources' tests passed or failed (#232).
+    #[serde(skip_serializing_if = "RecordedSources::is_empty")]
+    source_tests: RecordedSources,
 }
 
 /// Builds in another target aren't this target's to vouch for (#227).
@@ -128,18 +138,20 @@ impl TestReport {
             return ctx.emit_failed(&report, error);
         }
         if report.outcome == TestOutcome::Failed {
-            let failed = report
-                .record
-                .as_ref()
-                .map_or(0, |r| r.recorded.failed.len());
+            let (nodes, sources) = report.record.as_ref().map_or((0, 0), |r| {
+                (r.recorded.failed.len(), r.source_tests.failed.len())
+            });
+            let plural =
+                |n: usize, noun: &str| format!("{n} {noun}{}", if n == 1 { "" } else { "s" });
+            let on = match (nodes, sources) {
+                (n, 0) => plural(n, "node"),
+                (0, s) => plural(s, "source"),
+                (n, s) => format!("{} and {}", plural(n, "node"), plural(s, "source")),
+            };
             let error = CliError::new(
                 ExitStatus::Failure,
                 codes::STATE_EXECUTION,
-                format!(
-                    "tests failed on {} node{}",
-                    failed,
-                    if failed == 1 { "" } else { "s" }
-                ),
+                format!("tests failed on {on}"),
             )
             .with_hint("they stay untested; fix them and run `ods state test` again");
             return ctx.emit_failed(&report, error);
@@ -153,19 +165,17 @@ impl TestReport {
         progress: ProgressSettings,
     ) -> Result<Self, CliError> {
         let compiles = !args.get_flag("no-compile");
-        // The target check, the compile, and the test.
-        let steps = Steps::new(progress, usize::from(compiles) + 2);
+        let measures = compiles && !args.get_flag("no-source-freshness");
+        // The source measurement, the compile, the target check, and the test.
+        let steps = Steps::new(progress, usize::from(measures) + usize::from(compiles) + 2);
         let executor = steps.attach(executor(args, settings));
         let mut warnings = Vec::new();
         let dbt = super::state_run::check_settings(args, settings, &executor, &mut warnings)?;
-        if compiles {
-            block_on(executor.prepare(&PrepareRequest::new()))?.map_err(|e| {
-                CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
-                    .with_hint("fix the project so `dbt compile` succeeds, or use --no-compile")
-            })?;
-        }
+        // Sources are measured too: whether their data is new decides whether their
+        // tests run (#232).
+        let (_, sources) = super::state_run::prepare(args, &executor, &mut warnings)?;
         let target = super::state_run::identify(&executor)?;
-        let ws = Workspace::load(args, settings, Sources::AsGiven)?;
+        let ws = Workspace::load(args, settings, sources)?;
         let no_state = || {
             CliError::new(
                 ExitStatus::Failure,
@@ -204,6 +214,9 @@ impl TestReport {
             .map(|n| (n.id.clone(), n.name.clone(), n.kind.clone()))
             .collect();
         let (requested, left_out) = narrow(args, &ws.project, candidates, &[], "ods state test")?;
+        // Sources whose data is new or unknown since their tests passed here (#232).
+        let source_tests = plan_source_checks(args, &ws.project, Some(&latest), all)?;
+        let checked_sources = source_requests(&source_tests);
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
@@ -212,51 +225,133 @@ impl TestReport {
             requested: requested.len(),
             without_checks,
             left_out,
+            source_tests,
             execution: None,
             record: None,
             dbt,
             target,
             warnings,
         };
-        if requested.is_empty() {
+        if requested.is_empty() && checked_sources.is_empty() {
             steps.note("nothing to test, so dbt doesn't run again");
             return Ok(report);
         }
 
-        let request =
-            ExecutionRequest::new(requested, ExecutionMode::Test).with_engine_args(dbt_args(args));
+        let request = ExecutionRequest::new(requested, ExecutionMode::Test)
+            .with_sources(checked_sources)
+            .with_engine_args(dbt_args(args));
         let execution = block_on(executor.execute(&request))?.map_err(|e| {
             CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
                 .with_hint("nothing was recorded")
         })?;
-        let results = results_to_record(&execution);
-        let recorded = ods_state::record_tests(
-            &ws.project,
-            (latest.id, &latest.snapshot),
-            &results,
-            &execution.run_id,
-            execution.finished_at,
-        );
-        tracing::info!(
-            run = %execution.run_id,
-            passed = recorded.passed.len(),
-            failed = recorded.failed.len(),
-            ignored = recorded.ignored.len(),
-            "recording the tests"
-        );
-        let snapshot =
-            block_on(store.commit(&ws.scope, &recorded.snapshot))?.map_err(|e| store_error(&e))?;
-        report.outcome = if !recorded.failed.is_empty() {
+        let record = record(&ws, &store, &latest, &execution)?;
+        report.outcome = record.outcome(&execution);
+        report.execution = Some(execution);
+        report.record = Some(record);
+        Ok(report)
+    }
+}
+
+impl TestReport {
+    /// How it ended, for people.
+    fn outcome_span(&self) -> Span {
+        match self.outcome {
+            TestOutcome::NothingToTest => Span::toned(
+                "nothing to test: every build with tests is tested",
+                Tone::Success,
+            ),
+            TestOutcome::Passed => Span::toned(
+                match self.execution.as_ref().map_or(0, |e| e.sources.len()) {
+                    0 => format!("{} tested, all passed", self.requested),
+                    sources => format!(
+                        "{} node{} and {sources} source{} tested, all passed",
+                        self.requested,
+                        if self.requested == 1 { "" } else { "s" },
+                        if sources == 1 { "" } else { "s" },
+                    ),
+                },
+                Tone::Success,
+            ),
+            TestOutcome::Failed => Span::toned("tests failed", Tone::Error),
+            TestOutcome::Incomplete => Span::toned(
+                "some tests didn't run; those nodes stay untested",
+                Tone::Warning,
+            ),
+        }
+    }
+}
+
+impl TestRecordReport {
+    /// How the test run ended, given what was recorded of `execution`.
+    fn outcome(&self, execution: &ExecutionReport) -> TestOutcome {
+        let (recorded, sources) = (&self.recorded, &self.source_tests);
+        if !recorded.failed.is_empty() || !sources.failed.is_empty() {
             TestOutcome::Failed
-        } else if recorded.passed.len() == execution.nodes.len() {
+        } else if recorded.passed.len() == execution.nodes.len()
+            && sources.passed.len() == execution.sources.len()
+        {
             TestOutcome::Passed
         } else {
             TestOutcome::Incomplete
-        };
-        report.execution = Some(execution);
-        report.record = Some(TestRecordReport { snapshot, recorded });
-        Ok(report)
+        }
     }
+}
+
+/// Step 4: records what the tests showed about the nodes' builds and the sources' data
+/// (#232), and commits it.
+fn record(
+    ws: &Workspace,
+    store: &ods_store_sqlite::SqliteStateStore,
+    latest: &ods_sdk::contracts::state_store::StoredSnapshot,
+    execution: &ExecutionReport,
+) -> Result<TestRecordReport, CliError> {
+    let results = results_to_record(execution);
+    let mut recorded = ods_state::record_tests(
+        &ws.project,
+        (latest.id, &latest.snapshot),
+        &results,
+        &execution.run_id,
+        execution.finished_at,
+    );
+    // As for nodes: if dbt failed with no test failing, no pass counts.
+    let trusted = execution.succeeded
+        || execution
+            .nodes
+            .iter()
+            .chain(&execution.sources)
+            .any(|n| !n.checks_failed.is_empty() || n.status == ExecutionStatus::Failed);
+    let source_results: Vec<TestResult> = source_results(execution)
+        .into_iter()
+        .filter(|r| trusted || !r.passed)
+        .collect();
+    let sources_predate_run = matches!(
+        (ws.sources_taken_at, execution.started_at),
+        // Strictly before: timestamps are to the second.
+        (Some(taken), Some(started)) if taken < started
+    );
+    let source_tests = ods_state::record_source_checks(
+        &mut recorded.snapshot,
+        &ws.project,
+        &source_results,
+        execution.finished_at,
+        sources_predate_run,
+    );
+    tracing::info!(
+        run = %execution.run_id,
+        passed = recorded.passed.len(),
+        failed = recorded.failed.len(),
+        ignored = recorded.ignored.len(),
+        source_tests_passed = source_tests.passed.len(),
+        source_tests_failed = source_tests.failed.len(),
+        "recording the tests"
+    );
+    let snapshot =
+        block_on(store.commit(&ws.scope, &recorded.snapshot))?.map_err(|e| store_error(&e))?;
+    Ok(TestRecordReport {
+        snapshot,
+        recorded,
+        source_tests,
+    })
 }
 
 impl Present for TestReport {
@@ -284,24 +379,7 @@ impl Present for TestReport {
         if let Some(command) = self.execution.as_ref().and_then(|e| e.command.as_deref()) {
             summary.push(("ran".into(), vec![Span::toned(command, Tone::Code)]));
         }
-        summary.push((
-            "outcome".into(),
-            vec![match self.outcome {
-                TestOutcome::NothingToTest => Span::toned(
-                    "nothing to test: every build with tests is tested",
-                    Tone::Success,
-                ),
-                TestOutcome::Passed => Span::toned(
-                    format!("{} tested, all passed", self.requested),
-                    Tone::Success,
-                ),
-                TestOutcome::Failed => Span::toned("tests failed", Tone::Error),
-                TestOutcome::Incomplete => Span::toned(
-                    "some tests didn't run; those nodes stay untested",
-                    Tone::Warning,
-                ),
-            }],
-        ));
+        summary.push(("outcome".into(), vec![self.outcome_span()]));
         if self.without_checks > 0 {
             summary.push((
                 "no tests".into(),
@@ -330,6 +408,13 @@ impl Present for TestReport {
                         ]
                     })
                     .collect(),
+            });
+        }
+        if !self.source_tests.is_empty() {
+            blocks.push(ViewNode::Table {
+                title: Some("source tests".into()),
+                columns: vec!["source".into(), "tests".into(), "why".into()],
+                rows: source_rows(&self.source_tests, self.execution.as_ref()),
             });
         }
         if !self.left_out.is_empty() {

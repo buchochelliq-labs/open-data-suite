@@ -35,7 +35,10 @@ use ods_sdk::contracts::executor::{
 };
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::state_store::{StateStore, StoredSnapshot};
-use ods_state::{Outcome, Recorded, RelationFact, RunResult};
+use ods_state::{
+    Outcome, Recorded, RecordedSources, RelationFact, RunResult, SourceCheck, SourceCheckAction,
+    TestResult,
+};
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
@@ -201,16 +204,18 @@ impl Kind {
     }
 }
 
+/// `--no-source-freshness`, for the commands that measure sources.
+pub(super) fn no_source_freshness() -> Arg {
+    Arg::new("no-source-freshness")
+        .long("no-source-freshness")
+        .action(ArgAction::SetTrue)
+        .help("Don't run `dbt source freshness` first; use --sources or an existing sources.json")
+}
+
 /// An `ods state` command that builds, with its own arguments.
 pub(super) fn build_command(kind: Kind) -> Command {
-    let mut command = dbt_options(common(Command::new(kind.name()).about(kind.about()))).arg(
-        Arg::new("no-source-freshness")
-            .long("no-source-freshness")
-            .action(ArgAction::SetTrue)
-            .help(
-                "Don't run `dbt source freshness` first; use --sources or an existing sources.json",
-            ),
-    );
+    let mut command = dbt_options(common(Command::new(kind.name()).about(kind.about())))
+        .arg(no_source_freshness());
     if kind == Kind::Compile {
         return command;
     }
@@ -490,16 +495,22 @@ impl Steps {
                 command,
                 nodes,
                 tests,
+                sources,
             } => format!(
-                "dbt {command}: {}{}",
+                "dbt {command}: {}{}{}",
                 count(nodes, "node"),
                 match (command, tests) {
                     (_, true) => " and their tests",
                     ("build", false) => ", without tests",
                     _ => "",
-                }
+                },
+                source_step(sources),
             ),
-            DbtStep::Test { nodes } => format!("dbt test: the tests of {}", count(nodes, "node")),
+            DbtStep::Test { nodes, sources } => format!(
+                "dbt test: the tests of {}{}",
+                count(nodes, "node"),
+                source_step(sources)
+            ),
             DbtStep::Identify => "dbt compile --inline: which target dbt builds in".to_owned(),
             DbtStep::RelationCheck { nodes } => format!(
                 "dbt show: are the tables of {} ODS would reuse still there?",
@@ -531,6 +542,15 @@ impl Steps {
     }
 }
 
+/// `, and the tests of 2 sources`, when there are any (#232).
+fn source_step(sources: usize) -> String {
+    if sources == 0 {
+        String::new()
+    } else {
+        format!(", and the tests of {}", count(sources, "source"))
+    }
+}
+
 /// Names listed per reason before the rest are counted.
 const NAMES_PER_REASON: usize = 8;
 
@@ -558,6 +578,28 @@ fn plan_notes(report: &RunReport) -> Vec<String> {
         }
     }
     let mut notes = vec![summary];
+    let testing: Vec<String> = report
+        .source_tests
+        .iter()
+        .filter(|c| c.action == SourceCheckAction::Test)
+        .map(|c| {
+            let why = c
+                .reasons
+                .first()
+                .map_or("other", |r| source_reason_label(r.code));
+            format!("{} ({why})", c.name)
+        })
+        .collect();
+    if !testing.is_empty() {
+        let mut line = format!(
+            "  source tests to run: {}",
+            testing[..testing.len().min(NAMES_PER_REASON)].join(", ")
+        );
+        if testing.len() > NAMES_PER_REASON {
+            let _ = write!(line, " and {} more", testing.len() - NAMES_PER_REASON);
+        }
+        notes.push(line);
+    }
     for (why, names) in groups {
         let mut line = format!(
             "  {why}: {}",
@@ -587,6 +629,18 @@ fn reason_label(code: ReasonCode) -> &'static str {
         ReasonCode::RelationMissing => "not in the warehouse",
         ReasonCode::RelationUnverified => "couldn't check the warehouse",
         ReasonCode::TargetChanged => "target changed",
+        _ => "other",
+    }
+}
+
+/// A few words for why a source's tests run (#232).
+fn source_reason_label(code: ReasonCode) -> &'static str {
+    match code {
+        ReasonCode::NotTested => "not tested by ODS yet",
+        ReasonCode::ChecksChanged => "its tests changed",
+        ReasonCode::NewUpstreamData => "new data",
+        ReasonCode::MissingDataEvidence => "data version unknown",
+        ReasonCode::Unchanged => "asked for",
         _ => "other",
     }
 }
@@ -722,6 +776,8 @@ pub(super) fn in_target(
     });
     let mut empty = latest.snapshot.clone();
     empty.nodes.clear();
+    // Source checks passed in another target's warehouse vouch for nothing here.
+    empty.sources.clear();
     (Some(StoredSnapshot::new(latest.id, empty)), true)
 }
 
@@ -832,12 +888,129 @@ fn check_relations<I: RelationInspector + ?Sized>(
     Ok(options.relations_checked())
 }
 
-/// Each node's checks digest.
+/// Each node's and source's checks digest.
 fn checks_by_node(project: &ods_state::Project) -> BTreeMap<String, Option<String>> {
     project
         .nodes
         .iter()
         .map(|n| (n.id.clone(), n.checks.clone()))
+        .chain(
+            project
+                .sources
+                .iter()
+                .map(|s| (s.id.clone(), s.checks.clone())),
+        )
+        .collect()
+}
+
+/// Which sources' checks run with this command (#232): those in the selection whose
+/// data is new or unknown since they last passed in this target, or all of them with
+/// `all`. Every source with checks in the selection is listed, with why it runs or not.
+pub(super) fn plan_source_checks(
+    args: &ArgMatches,
+    project: &ods_state::Project,
+    latest: Option<&StoredSnapshot>,
+    all: bool,
+) -> Result<Vec<SourceCheck>, CliError> {
+    let scope = ods_state::select_sources(project, &select_specs(args))
+        .map_err(|e| CliError::new(ExitStatus::Usage, codes::LINEAGE_TARGET, e))?;
+    let checks = ods_state::source_checks(project, latest.map(|s| &s.snapshot), &scope, all);
+    for check in &checks {
+        tracing::debug!(
+            source = %check.name,
+            action = ?check.action,
+            why = check.reasons.first().map_or("", |r| r.message.as_str()),
+            "source tests"
+        );
+    }
+    Ok(checks)
+}
+
+/// A build's source checks: like `dbt build`, a build with tests runs the sources'
+/// tests too (#232); one without runs none.
+fn build_source_checks(
+    tested: bool,
+    args: &ArgMatches,
+    project: &ods_state::Project,
+    latest: Option<&StoredSnapshot>,
+) -> Result<Vec<SourceCheck>, CliError> {
+    if tested {
+        plan_source_checks(args, project, latest, false)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// The sources whose checks run.
+pub(super) fn source_requests(checks: &[SourceCheck]) -> Vec<RequestedNode> {
+    checks
+        .iter()
+        .filter(|c| c.action == SourceCheckAction::Test)
+        .map(|c| RequestedNode::new(c.source.clone(), c.name.clone()))
+        .collect()
+}
+
+/// What an execution shows about each requested source's checks: passed only when
+/// they all ran and passed, failed when one failed; a source whose checks didn't all
+/// run keeps what it had.
+pub(super) fn source_results(execution: &ExecutionReport) -> Vec<TestResult> {
+    execution
+        .sources
+        .iter()
+        .filter_map(|s| {
+            if s.status == ExecutionStatus::Failed || !s.checks_failed.is_empty() {
+                Some(TestResult::new(s.node.clone(), false, s.completed_at))
+            } else if s.fully_checked() {
+                Some(TestResult::new(s.node.clone(), true, s.completed_at))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The source checks' rows for people: what ran and how it ended, or, if nothing ran,
+/// what would run.
+pub(super) fn source_rows(
+    checks: &[SourceCheck],
+    execution: Option<&ExecutionReport>,
+) -> Vec<Vec<Vec<Span>>> {
+    checks
+        .iter()
+        .map(|c| {
+            let ran = execution.and_then(|e| e.sources.iter().find(|s| s.node == c.source));
+            let result = match (c.action, ran) {
+                (SourceCheckAction::Skip, _) => Span::toned("skipped", Tone::Success),
+                (_, None) => Span::toned("to test", Tone::Warning),
+                (_, Some(s)) if s.fully_checked() => Span::toned("passed", Tone::Success),
+                (_, Some(s)) if !s.checks_failed.is_empty() => Span::toned(
+                    format!(
+                        "failed: {}",
+                        s.checks_failed
+                            .iter()
+                            .map(|t| display_name(t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    Tone::Error,
+                ),
+                (_, Some(s)) => Span::toned(
+                    s.message.clone().unwrap_or_else(|| "didn't run".to_owned()),
+                    Tone::Warning,
+                ),
+            };
+            vec![
+                vec![Span::toned(c.name.as_str(), Tone::Code)],
+                vec![result],
+                vec![Span::plain(
+                    c.reasons
+                        .iter()
+                        .map(|r| r.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )],
+            ]
+        })
         .collect()
 }
 
@@ -891,7 +1064,7 @@ fn count(n: usize, noun: &str) -> String {
 
 /// Step 1: refresh the artifacts and measure sources, unless told not to. Returns what
 /// the executor reported and whether to read `sources.json`.
-fn prepare(
+pub(super) fn prepare(
     args: &ArgMatches,
     executor: &DbtExecutor,
     warnings: &mut Vec<String>,
@@ -951,6 +1124,11 @@ fn record(
             node.checks.clone_from(checks);
         }
     }
+    for source in &mut built.project.sources {
+        if let Some(checks) = planned_checks.get(&source.id) {
+            source.checks.clone_from(checks);
+        }
+    }
     if built.invocation_id.as_deref() != Some(execution.run_id.as_str()) {
         return Err(CliError::new(
             ExitStatus::Failure,
@@ -997,16 +1175,28 @@ fn record(
         sources_recorded,
     );
     recorded.snapshot.target = target.cloned();
+    // Source tests (#232): recorded against the data measured before the run.
+    let source_tests = ods_state::record_source_checks(
+        &mut recorded.snapshot,
+        &built.project,
+        &source_results(execution),
+        execution.finished_at,
+        sources_recorded,
+    );
     tracing::info!(
         run = %execution.run_id,
         advanced = recorded.advanced.len(),
         kept = recorded.kept.len(),
+        source_tests_passed = source_tests.passed.len(),
+        source_tests_failed = source_tests.failed.len(),
         "recording the run"
     );
     for (node, why) in &recorded.kept {
         tracing::debug!(node = %node, why = %why, "kept its last state");
     }
-    let snapshot = if recorded.advanced.is_empty() {
+    let sources_changed = latest.map_or_else(BTreeMap::new, |s| s.snapshot.sources.clone())
+        != recorded.snapshot.sources;
+    let snapshot = if recorded.advanced.is_empty() && !sources_changed {
         None
     } else {
         Some(
@@ -1026,6 +1216,7 @@ fn record(
         snapshot,
         sources_recorded,
         recorded,
+        source_tests,
     })
 }
 
@@ -1065,6 +1256,9 @@ pub(super) struct RunRecord {
     sources_recorded: bool,
     #[serde(flatten)]
     recorded: Recorded,
+    /// Which sources' tests passed or failed (#232).
+    #[serde(skip_serializing_if = "RecordedSources::is_empty")]
+    source_tests: RecordedSources,
 }
 
 #[derive(Debug, Serialize)]
@@ -1084,6 +1278,9 @@ pub(super) struct RunReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     prepared: Option<PrepareReport>,
     plan: ExecutionPlan,
+    /// Every selected source with tests, and whether they run and why (#232).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_tests: Vec<SourceCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     execution: Option<ExecutionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1211,6 +1408,7 @@ impl RunReport {
                 kind,
             ));
         }
+        let source_tests = build_source_checks(tested, args, &ws.project, latest.as_ref())?;
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
@@ -1222,6 +1420,7 @@ impl RunReport {
             left_out,
             prepared,
             plan,
+            source_tests,
             execution: None,
             record: None,
             warnings,
@@ -1242,7 +1441,9 @@ impl RunReport {
             steps.note("dry run: nothing is built or recorded");
             return Ok((report, None));
         }
-        let (Some(store), false) = (store, requested.is_empty()) else {
+        let checked_sources = source_requests(&report.source_tests);
+        let (Some(store), false) = (store, requested.is_empty() && checked_sources.is_empty())
+        else {
             steps.note("nothing to build, so dbt doesn't run again");
             report.outcome = RunOutcome::NothingToBuild;
             return Ok((report, None));
@@ -1251,7 +1452,7 @@ impl RunReport {
         report.execute(
             (args, settings),
             &executor,
-            requested,
+            (requested, checked_sources),
             sources,
             latest.as_ref(),
             &store,
@@ -1265,7 +1466,7 @@ impl RunReport {
         mut self,
         (args, settings): (&ArgMatches, &StateSettings),
         executor: &DbtExecutor,
-        requested: Vec<RequestedNode>,
+        (requested, checked_sources): (Vec<RequestedNode>, Vec<RequestedNode>),
         sources: Sources,
         latest: Option<&StoredSnapshot>,
         store: &SqliteStateStore,
@@ -1277,6 +1478,7 @@ impl RunReport {
             ExecutionMode::Run
         };
         let request = ExecutionRequest::new(requested, mode)
+            .with_sources(checked_sources)
             .with_full_refresh(full_refresh(args))
             .with_engine_args(dbt_args(args));
         let execution = block_on(executor.execute(&request))?.map_err(|e| {
@@ -1485,6 +1687,26 @@ impl RunReport {
             });
         }
         if let Some(record) = &self.record {
+            if !record.source_tests.failed.is_empty() {
+                blocks.push(ViewNode::Notice {
+                    level: Level::Warning,
+                    message: vec![Span::plain(format!(
+                        "source tests failed on {}: as with `dbt build`, the nodes reading {} weren't built, and the tests run again next time",
+                        record
+                            .source_tests
+                            .failed
+                            .iter()
+                            .map(|s| display_name(s))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        if record.source_tests.failed.len() == 1 {
+                            "it"
+                        } else {
+                            "them"
+                        }
+                    ))],
+                });
+            }
             if !record.recorded.kept.is_empty() {
                 blocks.push(ViewNode::Notice {
                     level: Level::Info,
@@ -1530,6 +1752,13 @@ impl Present for RunReport {
             self.summary(),
             self.table(),
         ];
+        if !self.source_tests.is_empty() {
+            blocks.push(ViewNode::Table {
+                title: Some("source tests".into()),
+                columns: vec!["source".into(), "tests".into(), "why".into()],
+                rows: source_rows(&self.source_tests, self.execution.as_ref()),
+            });
+        }
         blocks.extend(self.notices());
         ViewNode::Group(blocks)
     }
