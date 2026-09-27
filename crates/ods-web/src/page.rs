@@ -77,21 +77,23 @@ fn replace(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let mut builder = tempfile::Builder::new();
     // Temporary files are private (0600). A site is published, often served by a web
     // server running as another user, so the file gets the mode `fs::write` would give
     // it: 0666 less the umask, or the mode of the file it replaces.
     #[cfg(unix)]
-    let existing = {
+    let mut temporary = {
         use std::os::unix::fs::PermissionsExt;
-        builder.permissions(fs::Permissions::from_mode(0o666));
-        fs::metadata(path).ok().map(|m| m.permissions())
+        let existing = fs::metadata(path).ok().map(|m| m.permissions());
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o666))
+            .tempfile_in(dir)?;
+        if let Some(permissions) = existing {
+            temporary.as_file().set_permissions(permissions)?;
+        }
+        temporary
     };
-    let mut temporary = builder.tempfile_in(dir)?;
-    #[cfg(unix)]
-    if let Some(permissions) = existing {
-        temporary.as_file().set_permissions(permissions)?;
-    }
+    #[cfg(not(unix))]
+    let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
     std::io::Write::write_all(&mut temporary, contents)?;
     temporary.persist(path).map(drop).map_err(|e| e.error)
 }
