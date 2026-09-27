@@ -809,9 +809,9 @@ ods state graph --changed          # what would be built, as a Mermaid graph
   - a parent that was rebuilt.
 
   This comes from what the snapshots record, so past decisions stay explainable. A
-  rebuild where nothing recorded changed is shown as such. Full refreshes, missing
-  relations and target changes aren't kept in snapshots, so a rebuild for one of
-  those reasons appears this way. Without `NODE`, `history` lists snapshots as before.
+  rebuild where nothing recorded changed is shown as such. Full refreshes and missing
+  relations aren't kept in snapshots, so a rebuild for one of those reasons appears
+  this way; a change of dbt target is recorded, and shown. Without `NODE`, `history` lists snapshots as before.
 - **`graph`** writes the plan as a graph: each node with its action, and an edge to
   each node that reads it.
   - `--changed` keeps only the nodes that would be built.
@@ -821,7 +821,7 @@ ods state graph --changed          # what would be built, as a Mermaid graph
 
 All of them work with `--json`: the explanation is a tree of plan entries (`entry`,
 `causes`), history is a list of `built`, `tested` and `dropped` events with typed
-`changes` (`code`, `code_unknown`, `data`, `upstream`), and a diff lists `added`,
+`changes` (`code`, `code_unknown`, `data`, `target`, `upstream`), and a diff lists `added`,
 `removed` and `changed` nodes.
 
 ## Recovering state

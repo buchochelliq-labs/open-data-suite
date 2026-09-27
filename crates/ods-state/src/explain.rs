@@ -5,7 +5,7 @@
 //! History is explained from what snapshots record (fingerprints with their
 //! components, the data versions a build read, the runs of the parents it read), so a
 //! past rebuild stays explainable without keeping past plans. What those records can't
-//! show (a full refresh, a missing relation, another target) is said to be unrecorded,
+//! show (a full refresh, a missing relation) is said to be unrecorded,
 //! never guessed (AGENTS.md rule 3).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,23 +14,33 @@ use ods_core::state::{
     ExecutionPlan, NodeState, PlanAction, PlanEntry, ReasonCode, SnapshotId, StateSnapshot,
     Timestamp,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Project;
+use crate::planner::is_code_change;
 
-/// Reasons that come from a parent's decision, so the parent's own reasons explain them.
-fn from_upstream(code: ReasonCode) -> bool {
-    matches!(
-        code,
-        ReasonCode::UpstreamCodeChanged
-            | ReasonCode::UnknownDependency
-            | ReasonCode::UpstreamFullRefresh
-            | ReasonCode::NewUpstreamData
-    )
+/// Whether a parent built for `parent` is what the planner counts for a child built
+/// for `child`, as it decides: only those parents are the child's causes. A parent that
+/// builds for another reason isn't one (e.g. a parent with new data, for a child built
+/// because another parent's code changed).
+fn caused_by(child: ReasonCode, parent: ReasonCode) -> bool {
+    let refresh = |c| {
+        matches!(
+            c,
+            ReasonCode::FullRefreshRequested | ReasonCode::UpstreamFullRefresh
+        )
+    };
+    match child {
+        ReasonCode::UpstreamCodeChanged => is_code_change(parent),
+        ReasonCode::UpstreamFullRefresh => refresh(parent),
+        ReasonCode::NewUpstreamData => !is_code_change(parent) && !refresh(parent),
+        // Its unknown parents aren't planned, so no planned parent explains it.
+        _ => false,
+    }
 }
 
 /// A node's decision, with the decisions upstream that caused it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct Explanation {
@@ -39,7 +49,7 @@ pub struct Explanation {
     /// The parents that build and are why this one does, each explained in turn.
     pub causes: Vec<Explanation>,
     /// Already explained above, through another path: its causes aren't repeated.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repeated: bool,
 }
 
@@ -60,18 +70,20 @@ fn trace<'a>(
     seen: &mut BTreeSet<&'a str>,
 ) -> Explanation {
     let repeated = !seen.insert(entry.node.as_str());
-    let upstream =
-        entry.action == PlanAction::Build && entry.reasons.iter().any(|r| from_upstream(r.code));
-    let causes = if repeated || !upstream {
-        Vec::new()
-    } else {
-        entry
+    // The planner gives a build one reason: the one that decided it.
+    let reason = entry.reasons.first().map(|r| r.code);
+    let causes = match reason {
+        Some(child) if !repeated && entry.action == PlanAction::Build => entry
             .depends_on
             .iter()
             .filter_map(|p| entries.get(p.as_str()))
-            .filter(|p| p.action == PlanAction::Build)
+            .filter(|p| {
+                p.action == PlanAction::Build
+                    && p.reasons.first().is_some_and(|r| caused_by(child, r.code))
+            })
             .map(|p| trace(p, entries, seen))
-            .collect()
+            .collect(),
+        _ => Vec::new(),
     };
     Explanation {
         entry: entry.clone(),
@@ -81,7 +93,7 @@ fn trace<'a>(
 }
 
 /// One thing that differs between two recorded builds of a node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum Change {
@@ -106,6 +118,14 @@ pub enum Change {
         /// The version before, if one was known.
         before: Option<String>,
         /// The version after, if one is known.
+        after: Option<String>,
+    },
+    /// The target it was built in (another host, account, database or profile), as
+    /// the snapshots record it: its state then started afresh.
+    Target {
+        /// The target before, if one was recorded.
+        before: Option<String>,
+        /// The target after, if one was recorded.
         after: Option<String>,
     },
     /// A parent it read was rebuilt.
@@ -180,7 +200,7 @@ fn data_changes(
 }
 
 /// Something that happened to a node, as snapshots record it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "event")]
 #[non_exhaustive]
 pub enum NodeEvent {
@@ -195,7 +215,7 @@ pub enum NodeEvent {
         /// Its first recorded build: nothing to compare with.
         first: bool,
         /// What differs from the build before. Empty for a rebuild the records can't
-        /// explain (e.g. a full refresh, a missing relation or another target).
+        /// explain (e.g. a full refresh or a missing relation).
         changes: Vec<Change>,
     },
     /// Its build passed its checks in a later run.
@@ -219,7 +239,8 @@ pub enum NodeEvent {
 /// later test, and when its state was dropped. Newest first.
 pub fn node_history(snapshots: &[(SnapshotId, &StateSnapshot)], node: &str) -> Vec<NodeEvent> {
     let mut events = Vec::new();
-    let mut last: Option<&NodeState> = None;
+    // The node's last recorded state, and the snapshot that recorded it.
+    let mut last: Option<(&NodeState, &StateSnapshot)> = None;
     for (id, snapshot) in snapshots {
         let Some(state) = snapshot.nodes.get(node) else {
             if last.take().is_some() {
@@ -228,7 +249,7 @@ pub fn node_history(snapshots: &[(SnapshotId, &StateSnapshot)], node: &str) -> V
             continue;
         };
         match last {
-            Some(before) if before.run_id == state.run_id => {
+            Some((before, _)) if before.run_id == state.run_id => {
                 let was = before.tested.as_ref().map(|t| &t.run_id);
                 if let Some(t) = &state.tested
                     && was != Some(&t.run_id)
@@ -245,17 +266,31 @@ pub fn node_history(snapshots: &[(SnapshotId, &StateSnapshot)], node: &str) -> V
                 run_id: state.run_id.clone(),
                 built_at: state.built_at,
                 first: last.is_none(),
-                changes: last.map(|b| changes(b, state)).unwrap_or_default(),
+                changes: last
+                    .map(|(b, then)| {
+                        let mut found = changes(b, state);
+                        found.extend(target_change(then, snapshot));
+                        found
+                    })
+                    .unwrap_or_default(),
             }),
         }
-        last = Some(state);
+        last = Some((state, snapshot));
     }
     events.reverse();
     events
 }
 
+/// The target change between two snapshots, if their recorded targets differ.
+fn target_change(before: &StateSnapshot, after: &StateSnapshot) -> Option<Change> {
+    (before.target != after.target).then(|| Change::Target {
+        before: before.target.as_ref().map(ToString::to_string),
+        after: after.target.as_ref().map(ToString::to_string),
+    })
+}
+
 /// How a node differs between two states.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct NodeDiff {
@@ -268,7 +303,7 @@ pub struct NodeDiff {
 }
 
 /// How two states, or a state and the project now, differ.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct StateDiff {
@@ -300,10 +335,12 @@ pub fn diff_states(before: &StateSnapshot, after: &StateSnapshot) -> StateDiff {
             continue;
         };
         if b.run_id != a.run_id {
+            let mut found = changes(b, a);
+            found.extend(target_change(before, after));
             diff.changed.push(NodeDiff {
                 node: id.clone(),
                 rebuilt: true,
-                changes: changes(b, a),
+                changes: found,
             });
         }
     }
@@ -321,6 +358,7 @@ pub fn diff_project(recorded: &StateSnapshot, project: &Project) -> StateDiff {
         .iter()
         .map(|s| (s.id.as_str(), s.version.as_ref().map(|v| v.value.clone())))
         .collect();
+    let reads = sources_read(project);
     let mut diff = StateDiff {
         added: now
             .keys()
@@ -353,8 +391,13 @@ pub fn diff_project(recorded: &StateSnapshot, project: &Project) -> StateDiff {
             }
             Err(why) => node_changes.push(Change::CodeUnknown { why: why.clone() }),
         }
+        let reads = reads.get(id.as_str());
         node_changes.extend(data_changes(&state.inputs, |source| {
-            sources.get(source).cloned()
+            // Only sources it still reads: another node's source isn't its data.
+            reads
+                .is_some_and(|r| r.contains(source))
+                .then(|| sources.get(source).cloned())
+                .flatten()
         }));
         if !node_changes.is_empty() {
             diff.changed.push(NodeDiff {
@@ -365,6 +408,46 @@ pub fn diff_project(recorded: &StateSnapshot, project: &Project) -> StateDiff {
         }
     }
     diff
+}
+
+/// The sources each node reads now, directly or through its ancestors.
+fn sources_read(project: &Project) -> BTreeMap<&str, BTreeSet<&str>> {
+    fn visit<'a>(
+        id: &'a str,
+        nodes: &BTreeMap<&'a str, &'a crate::Node>,
+        sources: &BTreeSet<&'a str>,
+        done: &mut BTreeMap<&'a str, BTreeSet<&'a str>>,
+        visiting: &mut BTreeSet<&'a str>,
+    ) -> BTreeSet<&'a str> {
+        if let Some(found) = done.get(id) {
+            return found.clone();
+        }
+        let mut found = BTreeSet::new();
+        // A cycle can't be planned; stop rather than loop.
+        if !visiting.insert(id) {
+            return found;
+        }
+        if let Some(node) = nodes.get(id) {
+            for parent in &node.parents {
+                if sources.contains(parent.as_str()) {
+                    found.insert(parent.as_str());
+                } else {
+                    found.extend(visit(parent, nodes, sources, done, visiting));
+                }
+            }
+        }
+        visiting.remove(id);
+        done.insert(id, found.clone());
+        found
+    }
+    let nodes: BTreeMap<&str, &crate::Node> =
+        project.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let sources: BTreeSet<&str> = project.sources.iter().map(|s| s.id.as_str()).collect();
+    let mut done = BTreeMap::new();
+    for id in nodes.keys() {
+        visit(id, &nodes, &sources, &mut done, &mut BTreeSet::new());
+    }
+    done
 }
 
 fn keys_missing<V>(from: &BTreeMap<String, V>, other: &BTreeMap<String, V>) -> Vec<String> {
@@ -555,5 +638,126 @@ mod tests {
         );
         let same = snapshot(vec![("m", state("v1", "r1", "d9"))]);
         assert!(diff_project(&same, &project).is_empty());
+    }
+
+    #[test]
+    fn only_the_parents_behind_the_reason_are_causes() {
+        // `c` builds because `a`'s code changed; `b` builds for new data, which
+        // doesn't decide `c` (its lag tolerance might even have waited for it).
+        let plan = ExecutionPlan::new(
+            None,
+            Timestamp::from_unix(0),
+            vec![
+                entry("a", PlanAction::Build, ReasonCode::CodeChanged, &[]),
+                entry("b", PlanAction::Build, ReasonCode::NewUpstreamData, &[]),
+                entry(
+                    "c",
+                    PlanAction::Build,
+                    ReasonCode::UpstreamCodeChanged,
+                    &["a", "b"],
+                ),
+                entry("d", PlanAction::Build, ReasonCode::NewUpstreamData, &["b"]),
+                entry(
+                    "r",
+                    PlanAction::Build,
+                    ReasonCode::FullRefreshRequested,
+                    &[],
+                ),
+                entry(
+                    "e",
+                    PlanAction::Build,
+                    ReasonCode::UpstreamFullRefresh,
+                    &["a", "r"],
+                ),
+            ],
+        );
+        let causes = |n: &str| -> Vec<String> {
+            explain(&plan, n)
+                .unwrap()
+                .causes
+                .into_iter()
+                .map(|c| c.entry.node)
+                .collect()
+        };
+        assert_eq!(causes("c"), ["a"]);
+        assert_eq!(causes("d"), ["b"]);
+        assert_eq!(causes("e"), ["r"]);
+    }
+
+    #[test]
+    fn a_recorded_target_change_explains_a_rebuild() {
+        let s1 = snapshot(vec![("m", state("v1", "r1", "d1"))])
+            .with_target(Some(ods_core::state::TargetIdentity::new("dev")));
+        let mut again = state("v1", "r2", "d1");
+        again.parents = s1.nodes["m"].parents.clone();
+        let s2 = snapshot(vec![("m", again)])
+            .with_target(Some(ods_core::state::TargetIdentity::new("prod")));
+        let events = node_history(&[(SnapshotId(1), &s1), (SnapshotId(2), &s2)], "m");
+        let NodeEvent::Built { changes, .. } = &events[0] else {
+            panic!("{events:#?}")
+        };
+        assert!(
+            matches!(&changes[..], [Change::Target { before: Some(b), after: Some(a) }] if b.starts_with("dev") && a.starts_with("prod")),
+            "{changes:#?}"
+        );
+        let diff = diff_states(&s1, &s2);
+        assert!(
+            diff.changed[0]
+                .changes
+                .iter()
+                .any(|c| matches!(c, Change::Target { .. }))
+        );
+    }
+
+    #[test]
+    fn a_source_the_node_no_longer_reads_isnt_its_data() {
+        let recorded = snapshot(vec![("m", state("v1", "r1", "d1"))]);
+        // `m` now reads nothing; another node still reads the source, which has new data.
+        let project = Project::new(
+            vec![
+                Node::new(
+                    "m",
+                    "m",
+                    "model",
+                    vec![],
+                    Ok(Fingerprint::from_content([
+                        ("file", "v1"),
+                        ("config", "{}"),
+                    ])),
+                    FreshnessPolicy::conservative(),
+                ),
+                Node::new(
+                    "other",
+                    "other",
+                    "model",
+                    vec!["source.p.raw".into()],
+                    Ok(Fingerprint::from_content([("file", "x")])),
+                    FreshnessPolicy::conservative(),
+                ),
+            ],
+            vec![Source::new(
+                "source.p.raw",
+                "raw",
+                Some(DataVersion::new("d9", Exactness::Semantic, "sources.json")),
+            )],
+        );
+        let diff = diff_project(&recorded, &project);
+        assert!(diff.changed.is_empty(), "{diff:#?}");
+        assert_eq!(diff.added, ["other"]);
+    }
+
+    #[test]
+    fn results_read_back_from_json() {
+        let s1 = snapshot(vec![("m", state("v1", "r1", "d1"))]);
+        let s2 = snapshot(vec![("m", state("v2", "r2", "d2"))]);
+        let diff = diff_states(&s1, &s2);
+        let json = serde_json::to_string(&diff).unwrap();
+        assert_eq!(serde_json::from_str::<StateDiff>(&json).unwrap(), diff);
+        let events = node_history(&[(SnapshotId(1), &s1), (SnapshotId(2), &s2)], "m");
+        let json = serde_json::to_string(&events).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<NodeEvent>>(&json).unwrap(),
+            events
+        );
     }
 }

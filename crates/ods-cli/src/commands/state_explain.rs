@@ -436,6 +436,11 @@ fn change_text(change: &Change) -> String {
             after.as_deref().unwrap_or("unknown")
         ),
         Change::Upstream { parent, .. } => format!("{} was rebuilt", display_name(parent)),
+        Change::Target { before, after } => format!(
+            "target: {} → {}",
+            before.as_deref().unwrap_or("not recorded"),
+            after.as_deref().unwrap_or("not recorded")
+        ),
         _ => "changed".to_owned(),
     }
 }
@@ -470,7 +475,7 @@ impl Present for NodeHistoryReport {
                     vec![Span::plain(if *first {
                         "first recorded build".to_owned()
                     } else if changes.is_empty() {
-                        "nothing recorded changed: rebuilt for a reason snapshots don't keep (e.g. a full refresh, a missing relation or another target)".to_owned()
+                        "nothing recorded changed: rebuilt for a reason snapshots don't keep (e.g. a full refresh or a missing relation)".to_owned()
                     } else {
                         changes_text(changes)
                     })],
