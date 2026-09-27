@@ -9,6 +9,11 @@ use ods_lineage::GraphDocument;
 /// replaced, the page fetches the graph from `graph.json` (static site) or the API
 /// (server), as named by [`SOURCE_PLACEHOLDER`].
 const EXPLORER: &str = include_str!("../assets/explorer.html");
+/// The layout library, @dagrejs/dagre 1.1.8 (MIT, see `assets/vendor/LICENSE-dagre`).
+/// It's inlined into the page rather than served beside it, so the single offline file
+/// works and the server's CSP (inline scripts only) holds.
+const DAGRE: &str = include_str!("../assets/vendor/dagre.min.js");
+const DAGRE_PLACEHOLDER: &str = "/*__ODS_DAGRE__*/";
 const GRAPH_PLACEHOLDER: &str = "/*__ODS_GRAPH__*/";
 const SOURCE_PLACEHOLDER: &str = "__ODS_SOURCE__";
 const GENERATION_PLACEHOLDER: &str = "__ODS_GENERATION__";
@@ -31,7 +36,10 @@ pub(crate) fn page(
         Some(document) => embeddable(document)?,
         None => String::new(),
     };
+    // dagre goes in first: its placeholder precedes the graph's, and dagre itself holds no
+    // placeholder, so a graph value can never be mistaken for one.
     Ok(EXPLORER
+        .replacen(DAGRE_PLACEHOLDER, DAGRE, 1)
         .replacen(GRAPH_PLACEHOLDER, &graph, 1)
         .replacen(SOURCE_PLACEHOLDER, source, 1)
         .replacen(GENERATION_PLACEHOLDER, &generation.to_string(), 1))
@@ -129,5 +137,20 @@ mod tests {
         replace(&kept, b"page").unwrap();
         assert_eq!(mode(&kept), 0o640, "a replaced file keeps its mode");
         assert_eq!(fs::read(&kept).unwrap(), b"page");
+    }
+
+    #[test]
+    fn pages_inline_the_layout_library() {
+        assert!(
+            !DAGRE.contains("__ODS_"),
+            "dagre can't collide with a placeholder"
+        );
+        assert!(
+            !DAGRE.to_ascii_lowercase().contains("</script"),
+            "dagre can't end its element early"
+        );
+        let page = page(None, "graph.json", 0).unwrap();
+        assert!(page.contains(&format!("<script>{DAGRE}</script>")));
+        assert!(!page.contains(DAGRE_PLACEHOLDER));
     }
 }

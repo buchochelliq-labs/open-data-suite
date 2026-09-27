@@ -47,7 +47,14 @@ neutral `Snapshot`. The same crate later serves State, ERD and Usage views.
   - it can't compute impact without re-implementing our planner in JS.
 
 We may revisit WASM for a queryable index later (the ODS index ADR), but the page stays
-dependency-free.
+free of a JS build and of runtime fetches.
+
+*Amended 2026-09-27:* the page inlines one vendored, permissively licensed library, the
+layered graph layout [dagre](https://github.com/dagrejs/dagre) (MIT, in
+`crates/ods-web/assets/vendor/` with its licence). It replaces a hand-written layout. It
+is checked in as released, with no npm build, and inlined into the page, so the page
+still works offline and under the server's inline-only CSP. Any further vendored library
+must also be permissively licensed and inlined the same way.
 
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE

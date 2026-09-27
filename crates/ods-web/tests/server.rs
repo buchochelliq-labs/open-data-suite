@@ -227,6 +227,30 @@ fn standalone_pages_embed_the_graph_and_static_sites_fetch_it() {
 }
 
 #[test]
+fn every_delivery_mode_inlines_the_layout_library() {
+    let dagre = include_str!("../assets/vendor/dagre.min.js");
+    let inlined = format!("<script>{dagre}</script>");
+    let snapshot = snapshot();
+    assert!(
+        standalone_page(&snapshot.document)
+            .unwrap()
+            .contains(&inlined)
+    );
+
+    let dir = std::env::temp_dir().join(format!("ods-web-dagre-{}", std::process::id()));
+    let files = export_site(&snapshot.document, &dir).unwrap();
+    assert!(
+        std::fs::read_to_string(&files[0])
+            .unwrap()
+            .contains(&inlined)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+
+    let addr = start_with(snapshot, "");
+    assert!(get(addr, "/").2.contains(&inlined), "served without a CDN");
+}
+
+#[test]
 fn search_ranks_prefix_matches_first_and_needs_every_term() {
     let document = snapshot().document;
     let labels = |q: &str| -> Vec<String> {

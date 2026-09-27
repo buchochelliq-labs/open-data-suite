@@ -361,9 +361,12 @@ fn view_writes_a_self_contained_offline_page() {
         .map(|(i, _)| &page[i..(i + 30).min(page.len())])
         .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
         .collect();
+    // Besides the SVG namespace, the one URL is a source comment in the inlined layout
+    // library (dagre), citing where its box-intersection formula comes from.
     assert!(
         urls.iter()
-            .all(|u| u.starts_with("http://www.w3.org/2000/svg")),
+            .all(|u| u.starts_with("http://www.w3.org/2000/svg")
+                || u.starts_with("http://math.stackexchange.com/")),
         "only the SVG namespace, no remote URLs: {urls:?}"
     );
 }
