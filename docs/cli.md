@@ -202,7 +202,10 @@ format = "json"
   - `output.format` (`human`, `plain` or `json`), `output.color` (`auto`, `always` or
     `never`) and `output.width` (at least 20)
   - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
-  - `providers.<name>.kind` and `providers.<name>.settings`
+  - `state.db` and `state.environment`: see [State settings](#state-settings-in-odstoml)
+  - `providers.<name>.kind` and `providers.<name>.settings`. For `kind = "dbt"` the
+    settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
+    `target_dir`, all strings; any other key is an error
   - `policy.rules`
 
   Unknown keys are errors.
@@ -475,10 +478,10 @@ stdout carries only the report (one JSON document with `--json`).
 | `--dry-run` | prepare and plan, but build and record nothing (`compile` always does just that) |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
-| `--dbt PROGRAM` | the dbt executable; default `dbt` |
-| `--project-dir DIR` | dbt's; also where ODS finds the artifacts: `DIR/target` unless `--target-dir` says otherwise. Default `DBT_PROJECT_DIR`, then `.` |
-| `--profiles-dir DIR`, `--target NAME` | dbt's; default `DBT_PROFILES_DIR`, `DBT_TARGET` |
-| `--dbt-profile NAME` | dbt's `--profile`: the `profiles.yml` profile to use instead of the project's; default `DBT_PROFILE`. (ODS's own `--profile` picks its [configuration profile](#configuration)) |
+| `--dbt PROGRAM` | the dbt executable; default the configured `program`, then `dbt` |
+| `--project-dir DIR` | dbt's; also where ODS finds the artifacts: `DIR/target` unless `--target-dir` says otherwise. Default `DBT_PROJECT_DIR`, then the configured `project_dir`, then `.` |
+| `--profiles-dir DIR`, `--target NAME` | dbt's; default `DBT_PROFILES_DIR`, `DBT_TARGET`, then the configured `profiles_dir`, `target` |
+| `--dbt-profile NAME` | dbt's `--profile`: the `profiles.yml` profile to use instead of the project's; default `DBT_PROFILE`, then the configured `profile`. (ODS's own `--profile` picks its [configuration profile](#configuration)) |
 | `--dbt-output stderr\|capture` | show dbt's output on stderr (default), or capture it and quote the end on failure |
 
 ### dbt settings from the environment
@@ -496,6 +499,50 @@ it handles the flag (#227):
 
 The report says which settings were in effect and where each came from, e.g.
 `dbt: target prod (DBT_TARGET), target_dir target (default)`; `-v` logs it too.
+
+### State settings in `ods.toml`
+
+A project can keep its settings in [configuration](#configuration), so every `ods state`
+command is one word (#214):
+
+```toml
+[state]
+db = ".ods/state.db"          # --state-db
+environment = "dev"           # --environment
+
+[providers.dbt]
+kind = "dbt"
+
+[providers.dbt.settings]
+program = ".venv/bin/dbt"     # --dbt
+project_dir = "transform"     # --project-dir
+profiles_dir = "transform"    # --profiles-dir
+profile = "warehouse"         # --dbt-profile
+target = "dev"                # --target
+target_dir = "transform/target"   # --target-dir
+
+[profiles.ci.providers.dbt.settings]
+target = "ci"
+```
+
+- **Precedence**, highest first: the flag; the `DBT_*` variable dbt itself would read
+  (`DBT_TARGET`, …); configuration, with its own layers (`ODS__…` variables, the active
+  profile, `.ods/local.toml`, `ods.toml`, the user file); the default. So
+  `DBT_TARGET=prod ods state run` builds in `prod` whatever `ods.toml` says, and
+  `ods state run --target qa` beats both.
+- **Paths** in a file are read against that file's directory, so `ods.toml` means the
+  same from any directory below it. `program` is a path only if it names a directory;
+  `program = "dbt"` is looked up on `PATH`.
+- **Environment:** `--environment`, else `state.environment`, else the dbt target,
+  else `default`. Setting `state.environment` stops the target from choosing it: ODS
+  still checks which target the state was built in, so another target's state is
+  never reused (#227).
+- **Only one** `kind = "dbt"` provider may be configured; its name is yours to choose.
+- **No credentials:** dbt's own `profiles.yml` holds those; nothing here is one.
+
+`ods config explain state.environment` says where a value came from, and the report's
+`dbt` line names each setting's source (`project config`, `profile ci`,
+`ODS__STATE__ENVIRONMENT`, …).
 
 ### What you see while it runs
 

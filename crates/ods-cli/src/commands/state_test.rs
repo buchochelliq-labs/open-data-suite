@@ -23,6 +23,7 @@ use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, select_specs, store_error,
 };
 use super::state_run::{LeftOut, Steps, dbt_args, dbt_options, executor, narrow};
+use super::state_settings::StateSettings;
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -114,7 +115,8 @@ fn same_target(
 impl TestReport {
     /// Runs the tests and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let report = Self::build(args, ctx.progress)?;
+        let settings = StateSettings::resolve(args, ctx.config)?;
+        let report = Self::build(args, &settings, ctx.progress)?;
         if report.outcome == TestOutcome::Incomplete {
             let error = CliError::new(
                 ExitStatus::Failure,
@@ -144,14 +146,17 @@ impl TestReport {
         ctx.emit(&report)
     }
 
-    fn build(args: &ArgMatches, progress: ProgressSettings) -> Result<Self, CliError> {
-        let target_dir = super::state_plan::target_dir(args);
+    fn build(
+        args: &ArgMatches,
+        settings: &StateSettings,
+        progress: ProgressSettings,
+    ) -> Result<Self, CliError> {
         let compiles = !args.get_flag("no-compile");
         // The target check, the compile, and the test.
         let steps = Steps::new(progress, usize::from(compiles) + 2);
-        let executor = steps.attach(executor(args, &target_dir));
+        let executor = steps.attach(executor(args, settings));
         let mut warnings = Vec::new();
-        let dbt = super::state_run::check_settings(args, &executor, &target_dir, &mut warnings)?;
+        let dbt = super::state_run::check_settings(args, settings, &executor, &mut warnings)?;
         if compiles {
             block_on(executor.prepare(&PrepareRequest::new()))?.map_err(|e| {
                 CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
@@ -159,7 +164,7 @@ impl TestReport {
             })?;
         }
         let target = super::state_run::identify(&executor)?;
-        let ws = Workspace::load(args, Sources::AsGiven)?;
+        let ws = Workspace::load(args, settings, Sources::AsGiven)?;
         let no_state = || {
             CliError::new(
                 ExitStatus::Failure,

@@ -135,7 +135,10 @@ where
     };
     inputs.profile_flag.clone_from(&globals.profile);
     inputs.flags = globals.output.flag_values();
-    let loaded = match ods_config::load(&inputs) {
+    let loaded = match ods_config::load(&inputs).and_then(|loaded| {
+        crate::commands::validate_provider_settings(&loaded)?;
+        Ok(loaded)
+    }) {
         Ok(loaded) => loaded,
         Err(err) => {
             let settings = globals.output.resolve(io.stdout_is_terminal);

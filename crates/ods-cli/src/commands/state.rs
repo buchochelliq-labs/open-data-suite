@@ -95,11 +95,13 @@ impl Module for State {
             return state_run::RunReport::run(kind, args, ctx);
         }
         match matches.subcommand() {
-            Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args)?),
+            Some(("policies", args)) => ctx.emit(&PoliciesReport::build(args, ctx.config)?),
             Some(("test", args)) => state_test::TestReport::run(args, ctx),
-            Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args)?),
-            Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args)?),
-            Some(("history", args)) => ctx.emit(&state_plan::HistoryReport::build(args)?),
+            Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args, ctx.config)?),
+            Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args, ctx.config)?),
+            Some(("history", args)) => {
+                ctx.emit(&state_plan::HistoryReport::build(args, ctx.config)?)
+            }
             _ => Planned::new("state", ABOUT, MILESTONE).run(matches, ctx),
         }
     }
@@ -132,8 +134,8 @@ struct SourceFreshness {
 }
 
 impl PoliciesReport {
-    fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let target_dir = super::state_plan::target_dir(args);
+    fn build(args: &ArgMatches, config: &ods_config::Loaded) -> Result<Self, CliError> {
+        let target_dir = super::state_settings::StateSettings::resolve(args, config)?.target_dir();
         let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
             Some("json") => ArtifactPreference::Json,
             Some("info-schema") => ArtifactPreference::InfoSchema,
