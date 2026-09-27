@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use clap::parser::ValueSource;
 use clap::{Arg, ArgAction, ArgMatches, Command};
+use ods_config::Loaded;
 use ods_core::state::{
     DataVersion, Exactness, ExecutionPlan, PlanAction, SnapshotId, StateSnapshot, Timestamp,
 };
@@ -20,10 +20,9 @@ use ods_state::{Node, Outcome, Project, Recorded, RunResult, Source};
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
+use super::state_settings::{DEFAULT_STORE, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
-
-const DEFAULT_STORE: &str = ".ods/state.db";
 
 /// Arguments every State command takes.
 pub(super) fn common(command: Command) -> Command {
@@ -57,13 +56,13 @@ pub(super) fn common(command: Command) -> Command {
                 .long("state-db")
                 .value_name("PATH")
                 .default_value(DEFAULT_STORE)
-                .help("SQLite state database (created if missing)"),
+                .help("SQLite state database (created if missing) [config: state.db]"),
         )
         .arg(
             Arg::new("environment")
                 .long("environment")
                 .value_name("NAME")
-                .help("Keep separate state per environment, e.g. dev and prod [default: the dbt target, else `default`]"),
+                .help("Keep separate state per environment, e.g. dev and prod [config: state.environment; default: the dbt target, else `default`]"),
         )
         .arg(
             Arg::new("target")
@@ -168,30 +167,13 @@ pub(super) struct Workspace {
     pub(super) source_errors: Vec<String>,
 }
 
-/// Where dbt writes the artifacts ODS reads, as dbt resolves it: `--target-dir`, or
-/// `DBT_TARGET_PATH` relative to the project (#227), or the project's `target`.
-pub(super) fn target_dir(args: &ArgMatches) -> PathBuf {
-    let project = args
-        .try_get_one::<String>("project-dir")
-        .ok()
-        .flatten()
-        .map(PathBuf::from);
-    match args.get_one::<String>("target-dir") {
-        // dbt reads a relative target path against the project, not where it runs.
-        Some(dir)
-            if args.value_source("target-dir") == Some(ValueSource::EnvVariable)
-                && Path::new(dir).is_relative() =>
-        {
-            project.map_or_else(|| PathBuf::from(dir), |p| p.join(dir))
-        }
-        Some(dir) => PathBuf::from(dir),
-        None => project.map_or_else(|| PathBuf::from("target"), |p| p.join("target")),
-    }
-}
-
 impl Workspace {
-    pub(super) fn load(args: &ArgMatches, sources: Sources) -> Result<Self, CliError> {
-        let target_dir = target_dir(args);
+    pub(super) fn load(
+        args: &ArgMatches,
+        settings: &StateSettings,
+        sources: Sources,
+    ) -> Result<Self, CliError> {
+        let target_dir = settings.target_dir();
         let preference = match args.get_one::<String>("artifacts").map(String::as_str) {
             Some("json") => ArtifactPreference::Json,
             Some("info-schema") => ArtifactPreference::InfoSchema,
@@ -228,11 +210,7 @@ impl Workspace {
             .with_hint("use artifacts from dbt 1.7 or later (their metadata has `project_name`)")
         })?;
         // Separate state per dbt target, unless told otherwise (#227).
-        let environment = args
-            .get_one::<String>("environment")
-            .or_else(|| args.get_one::<String>("target"))
-            .map_or("default", String::as_str);
-        let scope = StateScope::new(&project_name, environment)
+        let scope = StateScope::new(&project_name, &settings.environment.value)
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?;
         let policies = resolve(manifest);
         let nodes = plan_nodes(manifest, &policies);
@@ -255,10 +233,7 @@ impl Workspace {
             })
             .collect();
         Ok(Self {
-            state_db: PathBuf::from(
-                args.get_one::<String>("state-db")
-                    .map_or(DEFAULT_STORE, String::as_str),
-            ),
+            state_db: settings.state_db(),
             sources_taken_at,
             invocation_id: manifest.invocation_id.clone(),
             source_errors: freshness
@@ -489,8 +464,9 @@ pub(super) fn dbt_command(plan: &ExecutionPlan) -> Option<String> {
 }
 
 impl PlanReport {
-    pub(super) fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let ws = Workspace::load(args, Sources::AsGiven)?;
+    pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
+        let settings = StateSettings::resolve(args, config)?;
+        let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
         let now = match args.get_one::<String>("now") {
             Some(at) => Timestamp::parse(at)
                 .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?,
@@ -508,7 +484,7 @@ impl PlanReport {
         // with `ods state record`) is planned as recorded, and the plan says so.
         let recorded_target = latest.as_ref().and_then(|l| l.snapshot.target.clone());
         let mut notes = Vec::new();
-        let other = match (&recorded_target, args.get_one::<String>("target")) {
+        let other = match (&recorded_target, settings.target.as_ref().map(|t| &t.value)) {
             (None, _) if latest.is_some() => {
                 notes.push("the recorded state doesn't say which target it was built in: reuse assumes dbt still builds in the same one (`ods state run` checks, and rebuilds if it can't tell)".to_owned());
                 None
@@ -652,8 +628,9 @@ pub(super) struct RecordReport {
 }
 
 impl RecordReport {
-    pub(super) fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let ws = Workspace::load(args, Sources::AsGiven)?;
+    pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
+        let settings = StateSettings::resolve(args, config)?;
+        let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
         let results_path = args
             .get_one::<String>("run-results")
             .map_or_else(|| ws.target_dir.join("run_results.json"), PathBuf::from);
@@ -864,12 +841,10 @@ pub(super) struct HistoryReport {
 }
 
 impl HistoryReport {
-    pub(super) fn build(args: &ArgMatches) -> Result<Self, CliError> {
-        let state_db = PathBuf::from(
-            args.get_one::<String>("state-db")
-                .map_or(DEFAULT_STORE, String::as_str),
-        );
-        let ws = Workspace::load(args, Sources::AsGiven)?;
+    pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
+        let settings = StateSettings::resolve(args, config)?;
+        let state_db = settings.state_db();
+        let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
         let limit = args.get_one::<usize>("limit").copied().unwrap_or(20);
         let snapshots = if Path::new(&state_db).is_file() {
             let store = ws.open_store()?;

@@ -134,14 +134,21 @@ impl Project {
     fn ods_bare(&self, args: &[&str]) -> (i32, Value, String) {
         let db = self.db();
         let mut all: Vec<&str> = args.to_vec();
-        all.extend(["--state-db", db.to_str().unwrap(), "--json"]);
+        all.extend(["--state-db", db.to_str().unwrap()]);
+        self.ods_in(&self.dir, &all)
+    }
+
+    /// `ods <args> --json` run in `cwd`, with nothing else added: settings come from
+    /// the environment and configuration (#214).
+    fn ods_in(&self, cwd: &Path, args: &[&str]) -> (i32, Value, String) {
         let out = Command::new(env!("CARGO_BIN_EXE_ods"))
-            .args(&all)
+            .args(args)
+            .arg("--json")
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("XDG_CONFIG_HOME", &self.dir)
             .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .current_dir(&self.dir)
+            .current_dir(cwd)
             .output()
             .unwrap();
         let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
@@ -1667,4 +1674,155 @@ fn a_failed_target_check_only_stops_what_records() {
     let (code, json) = failing.run(&[]);
     assert_eq!(code, 1, "{json:#}");
     assert_eq!(failing.history().len(), 1, "nothing recorded");
+}
+
+/// Writes `ods.toml` in the project, configuring the fake dbt, and returns a
+/// subdirectory to run ODS in: configured paths are read against `ods.toml`'s
+/// directory, not where ODS runs (#214).
+fn configure(project: &Project, extra: &str) -> PathBuf {
+    let dbt = fixture("fake-dbt/dbt");
+    std::fs::write(
+        project.dir.join("ods.toml"),
+        format!(
+            "[state]\ndb = \"state/ods.db\"\n\n[providers.dbt]\nkind = \"dbt\"\n\n\
+             [providers.dbt.settings]\nprogram = \"{}\"\nproject_dir = \"proj\"\n\
+             target = \"prod\"\n{extra}",
+            dbt.display()
+        ),
+    )
+    .unwrap();
+    let sub = project.dir.join("models");
+    std::fs::create_dir_all(&sub).unwrap();
+    sub
+}
+
+/// #214: a configured project runs with no options at all.
+#[test]
+fn ods_toml_configures_state_commands() {
+    let project = Project::new("configured");
+    let sub = configure(&project, "");
+    let build = [
+        "state",
+        "build",
+        "--exclude-resource-type",
+        "test",
+        "--dbt-output",
+        "capture",
+    ];
+    let (code, json, _) = project.ods_in(&sub, &build);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    let dir = project.dir.display();
+    assert_eq!(result["scope"], "jaffle_ods/prod");
+    assert_eq!(
+        setting(result, "program").map(|s| s.1),
+        Some("project config".into())
+    );
+    assert_eq!(
+        setting(result, "target"),
+        Some(("prod".into(), "project config".into()))
+    );
+    assert_eq!(
+        setting(result, "project_dir"),
+        Some((format!("{dir}/proj"), "project config".into()))
+    );
+    assert_eq!(
+        setting(result, "target_dir"),
+        Some((format!("{dir}/proj/target"), "project_dir".into()))
+    );
+    assert!(project.dir.join("proj/target/manifest.json").is_file());
+    assert!(project.dir.join("state/ods.db").is_file());
+
+    // `plan` and `history` read the same settings.
+    let (code, plan, _) = project.ods_in(&sub, &["state", "plan"]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["result"]["scope"], "jaffle_ods/prod");
+    assert_eq!(plan["result"]["reuse"], 13, "{plan:#}");
+    let (code, history, _) = project.ods_in(&sub, &["state", "history"]);
+    assert_eq!(code, 0, "{history:#}");
+    assert_eq!(history["result"]["snapshots"].as_array().unwrap().len(), 1);
+}
+
+/// #214: a flag beats dbt's variable, which beats `ODS__…` variables, which beat the
+/// file; `ods config explain` says where a value came from.
+#[test]
+fn flags_beat_the_environment_which_beats_ods_toml() {
+    let project = Project::new("config-precedence");
+    let sub = configure(&project, "");
+    let text = std::fs::read_to_string(project.dir.join("ods.toml")).unwrap();
+    std::fs::write(
+        project.dir.join("ods.toml"),
+        text.replace("[state]\n", "[state]\nenvironment = \"from-file\"\n"),
+    )
+    .unwrap();
+    let plan = |project: &Project, args: &[&str]| {
+        let mut all = vec!["state", "plan"];
+        all.extend(args);
+        let (code, json, _) = project.ods_in(&sub, &all);
+        assert_eq!(code, 0, "{json:#}");
+        json["result"]["scope"].as_str().unwrap().to_owned()
+    };
+    // The file's environment beats the one the target gives.
+    let (code, json, _) = project.ods_in(&sub, &["state", "compile", "--dbt-output", "capture"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(plan(&project, &[]), "jaffle_ods/from-file");
+    let project = project.with("ODS__STATE__ENVIRONMENT", "from-env");
+    assert_eq!(plan(&project, &[]), "jaffle_ods/from-env");
+    assert_eq!(
+        plan(&project, &["--environment", "from-flag"]),
+        "jaffle_ods/from-flag"
+    );
+    let (code, explain, _) = project.ods_in(&sub, &["config", "explain", "state.environment"]);
+    assert_eq!(code, 0, "{explain:#}");
+    let text = explain.to_string();
+    assert!(text.contains("ODS__STATE__ENVIRONMENT"), "{text}");
+    assert!(text.contains("from-file"), "{text}");
+
+    // dbt's settings: the flag beats `DBT_TARGET`, which beats the file.
+    let build = |project: &Project, args: &[&str]| {
+        let mut all = vec![
+            "state",
+            "build",
+            "--dry-run",
+            "--exclude-resource-type",
+            "test",
+            "--dbt-output",
+            "capture",
+        ];
+        all.extend(args);
+        let (code, json, _) = project.ods_in(&sub, &all);
+        assert_eq!(code, 0, "{json:#}");
+        setting(&json["result"], "target").unwrap()
+    };
+    assert_eq!(
+        build(&project, &[]),
+        ("prod".into(), "project config".into())
+    );
+    let project = project.with("DBT_TARGET", "dev");
+    assert_eq!(build(&project, &[]), ("dev".into(), "DBT_TARGET".into()));
+    assert_eq!(
+        build(&project, &["--target", "qa"]),
+        ("qa".into(), "flag".into())
+    );
+}
+
+/// #214: dbt's settings are checked like the rest of the configuration.
+#[test]
+fn unknown_dbt_settings_are_configuration_errors() {
+    let project = Project::new("config-typo");
+    let sub = configure(&project, "progam = \"dbt\"\n");
+    let (code, json, _) = project.ods_in(&sub, &["state", "plan"]);
+    assert_eq!(code, 4, "{json:#}");
+    let text = json.to_string();
+    assert!(text.contains("ODS-E0102"), "{text}");
+    assert!(text.contains("providers.dbt.settings.progam"), "{text}");
+    assert!(text.contains("expected one of program"), "{text}");
+
+    let sub = configure(&project, "\n[providers.other]\nkind = \"dbt\"\n");
+    let (code, json, _) = project.ods_in(&sub, &["state", "plan"]);
+    assert_eq!(code, 4, "{json:#}");
+    assert!(
+        json.to_string().contains("more than one dbt provider"),
+        "{json:#}"
+    );
 }

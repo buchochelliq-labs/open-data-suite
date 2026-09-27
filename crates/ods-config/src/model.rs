@@ -31,6 +31,9 @@ pub struct Config {
     /// Logging defaults; `-v`/`-q` and `ODS_LOG` override them.
     #[serde(default)]
     pub log: LogConfig,
+    /// State settings, used by `ods state` (#214); flags override them.
+    #[serde(default)]
+    pub state: StateConfig,
     /// Named provider instances, e.g. `providers.warehouse`.
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
@@ -47,6 +50,21 @@ pub struct ProjectConfig {
     /// Display name of the project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// `[state]`: defaults for `ods state` commands (#214).
+///
+/// Relative paths are read against the directory of the file that sets them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct StateConfig {
+    /// The state database, as in `--state-db`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<String>,
+    /// The environment whose state is kept, as in `--environment`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
 }
 
 /// `[output]`.

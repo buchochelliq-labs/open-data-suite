@@ -94,6 +94,7 @@ The typed schema lives in `ods-config` (a foundation crate, per ADR-0001):
 - `[project] name`
 - `[output] format | color | width`
 - `[log] level`
+- `[state] db | environment` (added by #214)
 - `[providers.<name>] kind` plus a `settings` table
 - `[policy] rules` table
 
@@ -104,6 +105,14 @@ ignored. Errors name the dotted key and the layer that set it, e.g.
 Provider `settings` and policy `rules` are opaque tables. The provider (#2) or policy
 engine (#9) that consumes them validates their contents. Core never branches on a
 provider's `kind` (rule 1); the CLI uses `kind` to pick an implementation.
+
+*Amended by #214:* the dbt provider names its settings (`program`, `project_dir`,
+`profiles_dir`, `profile`, `target`, `target_dir`; all strings), and the CLI checks
+every `kind = "dbt"` instance against them when configuration loads, so an unknown key
+is ODS-E0102 like any other. `ods state` commands read their settings with the flag
+first, then the `DBT_*` variable dbt would read, then configuration, then the default;
+relative paths in a file are read against its directory. Other kinds' settings are
+still unchecked until their providers use them.
 
 ### 4. Secrets
 - A credential is written as a **reference**: `token = { secret = "env:DATABRICKS_TOKEN" }`.
@@ -168,7 +177,7 @@ immediately rather than when a feature first reads it.
   - Every command pays the cost of loading config (a few small files).
 - **Follow-up work:**
   - #126: `SecretProvider` contract and resolvers (`env`, keychain, cloud).
-  - #2: providers validate their `settings`.
+  - #2: providers validate their `settings` (dbt's: #214).
   - #9: policy validates `rules`.
   - #11: State snapshots store configuration fingerprints and references only.
 

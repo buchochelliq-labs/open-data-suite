@@ -306,6 +306,21 @@ pub fn override_args(report: &EnvReport, command: &str) -> Vec<String> {
     args
 }
 
+/// The `kind` of a `[providers.<name>]` instance in ODS's configuration that configures
+/// dbt (#214, ADR-0005).
+pub const KIND: &str = "dbt";
+
+/// The settings such an instance may have, each with the ODS option it is the default
+/// of. All are strings; none is a credential: dbt's own `profiles.yml` holds those.
+pub const CONFIG_SETTINGS: [(&str, &str); 6] = [
+    ("program", "--dbt"),
+    ("profile", "--dbt-profile"),
+    ("profiles_dir", "--profiles-dir"),
+    ("project_dir", "--project-dir"),
+    ("target", "--target"),
+    ("target_dir", "--target-dir"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

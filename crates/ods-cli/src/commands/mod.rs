@@ -12,6 +12,7 @@ mod serve;
 mod state;
 mod state_plan;
 mod state_run;
+mod state_settings;
 mod state_test;
 mod version;
 
@@ -23,6 +24,7 @@ pub use mcp::Mcp;
 pub use planned::Planned;
 pub use serve::Serve;
 pub use state::State;
+pub(crate) use state_settings::validate as validate_provider_settings;
 pub use version::Version;
 
 use crate::module::Registry;

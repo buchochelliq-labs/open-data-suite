@@ -526,3 +526,31 @@ fn keys_containing_dots_are_quoted_in_errors() {
     let err = load(&inputs(None, Some(project), None)).unwrap_err();
     assert!(err.to_string().contains("providers.\"a.b\".kind"), "{err}");
 }
+
+#[test]
+fn state_settings_are_validated_and_layered() {
+    let dir = Dir::new();
+    let project = dir.write(
+        "ods.toml",
+        "[state]\ndb = \"state/ods.db\"\nenvironment = \"dev\"\n",
+    );
+    let mut i = inputs(None, Some(project.clone()), None);
+    let loaded = load(&i).unwrap();
+    assert_eq!(loaded.config.state.db.as_deref(), Some("state/ods.db"));
+    assert_eq!(loaded.config.state.environment.as_deref(), Some("dev"));
+
+    i.env = env(&[("ODS__STATE__ENVIRONMENT", "ci")]);
+    let loaded = load(&i).unwrap();
+    assert_eq!(loaded.config.state.environment.as_deref(), Some("ci"));
+    assert_eq!(
+        loaded.effective(&key("state.environment")).unwrap().source,
+        Source::Env {
+            var: "ODS__STATE__ENVIRONMENT".to_owned()
+        }
+    );
+
+    let typo = dir.write("typo/ods.toml", "[state]\nmode = \"auto\"\n");
+    let err = load(&inputs(None, Some(typo), None)).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0102");
+    assert!(err.to_string().contains("unknown field `mode`"), "{err}");
+}

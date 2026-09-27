@@ -42,6 +42,7 @@ use serde::Serialize;
 use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, plan_against, select_specs, store_error,
 };
+use super::state_settings::{Origin, Setting, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -316,51 +317,54 @@ pub(super) fn narrow(
 pub(super) struct DbtSetting {
     name: &'static str,
     value: String,
-    /// `flag`, the `DBT_*` variable it was read from, or `default`.
+    /// `flag`, the `DBT_*` variable it was read from, the configuration that set it
+    /// (e.g. `project config`), the setting it follows (e.g. `project_dir`), or
+    /// `default`.
     source: String,
 }
 
 /// The dbt settings ODS passes to dbt, and where each came from: ODS's option, the
-/// dbt variable it reads as that option's default, or a default.
-pub(super) fn dbt_settings(args: &ArgMatches, target_dir: &Path) -> Vec<DbtSetting> {
-    let source = |id: &str, env: &str| match args.value_source(id) {
-        Some(clap::parser::ValueSource::EnvVariable) => env.to_owned(),
-        Some(clap::parser::ValueSource::CommandLine) => "flag".to_owned(),
-        _ => "default".to_owned(),
+/// dbt variable it reads as that option's default, ODS's configuration (#214), or a
+/// default.
+pub(super) fn dbt_settings(args: &ArgMatches, settings: &StateSettings) -> Vec<DbtSetting> {
+    let from = |name, setting: &Setting| DbtSetting {
+        name,
+        value: setting.value.clone(),
+        source: setting.origin.label(),
     };
-    let mut settings = Vec::new();
-    for (name, id, env) in [
-        ("target", "target", "DBT_TARGET"),
-        ("profile", "dbt-profile", "DBT_PROFILE"),
-        ("profiles_dir", "profiles-dir", "DBT_PROFILES_DIR"),
-        ("project_dir", "project-dir", "DBT_PROJECT_DIR"),
-        ("vars", "vars", ""),
+    let mut out = Vec::new();
+    if settings.program.origin != Origin::Default {
+        out.push(from("program", &settings.program));
+    }
+    for (name, setting) in [
+        ("target", &settings.target),
+        ("profile", &settings.profile),
+        ("profiles_dir", &settings.profiles_dir),
+        ("project_dir", &settings.project_dir),
     ] {
-        if let Some(value) = args.try_get_one::<String>(id).ok().flatten() {
-            settings.push(DbtSetting {
-                name,
-                value: value.clone(),
-                source: source(id, env),
-            });
+        if let Some(setting) = setting {
+            out.push(from(name, setting));
         }
     }
-    settings.push(DbtSetting {
-        name: "target_dir",
-        value: target_dir.display().to_string(),
-        source: match args.value_source("target-dir") {
-            Some(_) => source("target-dir", "DBT_TARGET_PATH"),
-            None if args.value_source("project-dir").is_some() => "project_dir".to_owned(),
-            None => "default".to_owned(),
-        },
-    });
-    if full_refresh(args) {
-        settings.push(DbtSetting {
-            name: "full_refresh",
-            value: "true".to_owned(),
-            source: source("full-refresh", "DBT_FULL_REFRESH"),
+    if let Some(value) = args.try_get_one::<String>("vars").ok().flatten() {
+        out.push(DbtSetting {
+            name: "vars",
+            value: value.clone(),
+            source: "flag".to_owned(),
         });
     }
-    settings
+    out.push(from("target_dir", &settings.target_dir));
+    if full_refresh(args) {
+        out.push(DbtSetting {
+            name: "full_refresh",
+            value: "true".to_owned(),
+            source: match args.value_source("full-refresh") {
+                Some(clap::parser::ValueSource::EnvVariable) => "DBT_FULL_REFRESH".to_owned(),
+                _ => "flag".to_owned(),
+            },
+        });
+    }
+    out
 }
 
 /// The settings on one line, for people: `target prod (DBT_TARGET), …`.
@@ -384,11 +388,11 @@ pub(super) fn settings_line(settings: &[DbtSetting]) -> String {
 /// compiled with other vars.
 pub(super) fn check_settings(
     args: &ArgMatches,
+    resolved: &StateSettings,
     executor: &DbtExecutor,
-    target_dir: &Path,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<DbtSetting>, CliError> {
-    let settings = dbt_settings(args, target_dir);
+    let settings = dbt_settings(args, resolved);
     // Not the vars: the log may go further than the report.
     let logged: Vec<DbtSetting> = settings
         .iter()
@@ -404,7 +408,7 @@ pub(super) fn check_settings(
     for warning in executor
         .env_warnings()
         .into_iter()
-        .chain(vars_mismatch(args, target_dir))
+        .chain(vars_mismatch(args, &resolved.target_dir()))
     {
         // The report shows it; the log only when asked for.
         tracing::debug!("{warning}");
@@ -422,29 +426,25 @@ pub(super) fn dbt_args(args: &ArgMatches) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn executor(args: &ArgMatches, target_dir: &PathBuf) -> DbtExecutor {
-    let mut executor = DbtExecutor::new(
-        args.get_one::<String>("dbt").map_or("dbt", String::as_str),
-        target_dir,
-    )
-    .output(
+pub(super) fn executor(args: &ArgMatches, settings: &StateSettings) -> DbtExecutor {
+    let mut executor = DbtExecutor::new(&settings.program.value, settings.target_dir()).output(
         if args.get_one::<String>("dbt-output").map(String::as_str) == Some("capture") {
             DbtOutput::Capture
         } else {
             DbtOutput::Stderr
         },
     );
-    if let Some(dir) = args.get_one::<String>("project-dir") {
-        executor = executor.project_dir(dir);
+    if let Some(dir) = &settings.project_dir {
+        executor = executor.project_dir(&dir.value);
     }
-    if let Some(dir) = args.get_one::<String>("profiles-dir") {
-        executor = executor.profiles_dir(dir);
+    if let Some(dir) = &settings.profiles_dir {
+        executor = executor.profiles_dir(&dir.value);
     }
-    if let Some(target) = args.get_one::<String>("target") {
-        executor = executor.target(target);
+    if let Some(target) = &settings.target {
+        executor = executor.target(&target.value);
     }
-    if let Some(profile) = args.get_one::<String>("dbt-profile") {
-        executor = executor.profile(profile);
+    if let Some(profile) = &settings.profile {
+        executor = executor.profile(&profile.value);
     }
     if let Some(vars) = args.get_one::<String>("vars") {
         executor = executor.vars(vars);
@@ -725,15 +725,27 @@ pub(super) fn in_target(
     (Some(StoredSnapshot::new(latest.id, empty)), true)
 }
 
+/// The state store and its latest snapshot. A dry run with no database yet has
+/// neither: it plans as a first run, and creates nothing.
+fn open_state(
+    ws: &Workspace,
+    dry_run: bool,
+) -> Result<(Option<SqliteStateStore>, Option<StoredSnapshot>), CliError> {
+    if dry_run && !ws.state_db.is_file() {
+        return Ok((None, None));
+    }
+    let store = ws.open_store()?;
+    let latest = ws.latest(&store)?;
+    Ok((Some(store), latest))
+}
+
 /// How many dbt commands a run will make if it builds.
-fn step_count(args: &ArgMatches, builds: bool) -> usize {
+fn step_count(args: &ArgMatches, settings: &StateSettings, builds: bool) -> usize {
     let compiles = !args.get_flag("no-compile");
     let measures = compiles && !args.get_flag("no-source-freshness");
     // Whether there is state, and so reuse to check: a guess made before anything
     // runs, for the count only.
-    let checks = args
-        .get_one::<String>("state-db")
-        .is_some_and(|db| Path::new(db).is_file());
+    let checks = settings.state_db().is_file();
     // The target check always runs.
     1 + [measures, compiles, checks, builds]
         .into_iter()
@@ -921,7 +933,7 @@ fn prepare(
 /// Step 4: record the run from the artifacts it wrote, which describe the code it
 /// built. Only successes advance; if none did, nothing is committed.
 fn record(
-    args: &ArgMatches,
+    (args, settings): (&ArgMatches, &StateSettings),
     tested: bool,
     sources: Sources,
     execution: &ExecutionReport,
@@ -929,7 +941,7 @@ fn record(
     store: &SqliteStateStore,
     planned_checks: &BTreeMap<String, Option<String>>,
 ) -> Result<RunRecord, CliError> {
-    let mut built = Workspace::load(args, sources)?;
+    let mut built = Workspace::load(args, settings, sources)?;
     // Each node's checks as planned. The manifest dbt writes while building keeps the
     // compiled SQL only of the tests that invocation ran, so digests computed from it
     // depend on what ran; the plan's (from `dbt compile`, just before this build, so
@@ -1097,7 +1109,8 @@ impl RunReport {
         args: &ArgMatches,
         ctx: &mut Context<'_>,
     ) -> Result<(), CliError> {
-        let (report, record_error) = Self::build(kind, args, ctx.progress)?;
+        let settings = StateSettings::resolve(args, ctx.config)?;
+        let (report, record_error) = Self::build(kind, args, &settings, ctx.progress)?;
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);
         }
@@ -1136,14 +1149,14 @@ impl RunReport {
     fn build(
         kind: Kind,
         args: &ArgMatches,
+        settings: &StateSettings,
         progress: ProgressSettings,
     ) -> Result<(Self, Option<CliError>), CliError> {
-        let target_dir = super::state_plan::target_dir(args);
         let builds = kind != Kind::Compile;
-        let steps = Steps::new(progress, step_count(args, builds));
-        let executor = steps.attach(executor(args, &target_dir));
+        let steps = Steps::new(progress, step_count(args, settings, builds));
+        let executor = steps.attach(executor(args, settings));
         let mut warnings = Vec::new();
-        let dbt = check_settings(args, &executor, &target_dir, &mut warnings)?;
+        let dbt = check_settings(args, settings, &executor, &mut warnings)?;
 
         // 1. Prepare: the code as it is, and the target dbt builds in.
         let (prepared, sources) = prepare(args, &executor, &mut warnings)?;
@@ -1151,17 +1164,9 @@ impl RunReport {
         let target = target_for(&executor, dry_run, &mut warnings)?;
 
         // 2. Plan.
-        let mut ws = Workspace::load(args, sources)?;
+        let mut ws = Workspace::load(args, settings, sources)?;
         let tested = execution_tested(kind, args);
-        let store = if dry_run && !ws.state_db.is_file() {
-            None
-        } else {
-            Some(ws.open_store()?)
-        };
-        let latest = match &store {
-            Some(store) => ws.latest(store)?,
-            None => None,
-        };
+        let (store, latest) = open_state(&ws, dry_run)?;
         let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
         // One clock for the check and the plan, so they agree on what is due.
         let now = Timestamp::now();
@@ -1240,7 +1245,14 @@ impl RunReport {
             return Ok((report, None));
         };
 
-        report.execute(args, &executor, requested, sources, latest.as_ref(), &store)
+        report.execute(
+            (args, settings),
+            &executor,
+            requested,
+            sources,
+            latest.as_ref(),
+            &store,
+        )
     }
 
     /// Steps 3 and 4: build the requested nodes with dbt, then record the run. A
@@ -1248,7 +1260,7 @@ impl RunReport {
     /// did.
     fn execute(
         mut self,
-        args: &ArgMatches,
+        (args, settings): (&ArgMatches, &StateSettings),
         executor: &DbtExecutor,
         requested: Vec<RequestedNode>,
         sources: Sources,
@@ -1277,7 +1289,7 @@ impl RunReport {
 
         // 4. Record.
         let recorded = record(
-            args,
+            (args, settings),
             self.tests,
             sources,
             &execution,
