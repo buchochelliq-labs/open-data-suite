@@ -17,7 +17,18 @@ impl ExecutorHarness for Harness {
     async fn executor(&self) -> Arc<dyn Executor> {
         let executor = FakeExecutor::new(FakeClock::new(), ["model.suite.a", "model.suite.b"])
             .failing("model.suite.broken")
-            .with_checks("model.suite.checked", ["test.suite.checked_unique"]);
+            .with_checks("model.suite.checked", ["test.suite.checked_unique"])
+            .with_source(
+                "source.suite.raw.good",
+                ["test.suite.source_not_null_good"],
+                ["model.suite.a"],
+            )
+            .with_source(
+                "source.suite.raw.bad",
+                ["test.suite.source_not_null_bad"],
+                ["model.suite.b"],
+            )
+            .failing_source("source.suite.raw.bad");
         *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some(executor.clone());
         Arc::new(executor)
     }
@@ -40,6 +51,17 @@ impl ExecutorHarness for Harness {
         ))
     }
 
+    fn checked_source(&self) -> Option<RequestedNode> {
+        Some(RequestedNode::new("source.suite.raw.good", "raw.good"))
+    }
+
+    fn failing_source(&self) -> Option<(RequestedNode, RequestedNode)> {
+        Some((
+            RequestedNode::new("source.suite.raw.bad", "raw.bad"),
+            RequestedNode::new("model.suite.b", "b"),
+        ))
+    }
+
     async fn built(&self) -> Option<Vec<String>> {
         self.last
             .lock()
@@ -53,5 +75,5 @@ impl ExecutorHarness for Harness {
 async fn conforms() {
     let report = run(&Harness::default()).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 9, "{report:?}");
+    assert_eq!(report.passed.len(), 11, "{report:?}");
 }
