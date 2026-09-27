@@ -264,3 +264,22 @@ async fn a_backup_is_a_state_database_and_set_aside_starts_afresh() {
         store.close().await;
     }
 }
+
+#[tokio::test]
+async fn closing_a_store_closes_every_connection() {
+    // SQLite removes the WAL files when the last connection closes; any left behind
+    // mean a connection outlived `close`, which on Windows stops `set_aside`.
+    let scope = StateScope::new("p", "dev").unwrap();
+    for _ in 0..20 {
+        let db = TempDb::new("close");
+        let store = SqliteStateStore::open(&db.path).await.unwrap();
+        store.commit(&scope, &snapshot(None, "run")).await.unwrap();
+        assert!(store.latest(&scope).await.unwrap().is_some());
+        store.close().await;
+        for suffix in ["-wal", "-shm"] {
+            let mut side = db.path.as_os_str().to_owned();
+            side.push(suffix);
+            assert!(!PathBuf::from(side).exists(), "{suffix} left open");
+        }
+    }
+}
