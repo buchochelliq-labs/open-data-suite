@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+hex.workspace = true
 jiff.workspace = true
 petgraph.workspace = true
 serde.workspace = true

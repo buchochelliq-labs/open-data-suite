@@ -17,6 +17,7 @@ sqlx.workspace = true
 
 [dev-dependencies]
 ods-sdk = { workspace = true, features = ["conformance"] }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

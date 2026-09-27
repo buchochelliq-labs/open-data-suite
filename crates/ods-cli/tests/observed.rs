@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
@@ -22,23 +21,17 @@ fn export() -> String {
         .to_string()
 }
 
-struct Temp(PathBuf);
+/// A scratch directory, removed when dropped.
+struct Temp(tempfile::TempDir);
 
 impl Temp {
     fn new() -> Self {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path =
-            std::env::temp_dir().join(format!("ods-cli-observed-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
+        let dir = tempfile::tempdir().unwrap();
+        Self(dir)
     }
-}
 
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 }
 
@@ -48,9 +41,9 @@ fn ods(args: &[&str]) -> (i32, Value) {
     let out = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(args)
         .arg("--json")
-        .current_dir(&home.0)
+        .current_dir(home.path())
         .env_clear()
-        .env("XDG_CONFIG_HOME", &home.0)
+        .env("XDG_CONFIG_HOME", home.path())
         .output()
         .unwrap();
     // Usage errors come from the argument parser, on stderr only.
@@ -143,8 +136,12 @@ fn with_python_model() -> Temp {
     let node = &mut manifest["nodes"]["model.jaffle_ods.customer_order_rank"];
     node["language"] = "python".into();
     node["compiled_code"] = "def model(dbt, session):\n    return dbt.ref('orders')\n".into();
-    fs::write(dir.0.join("manifest.json"), manifest.to_string()).unwrap();
-    fs::copy(target().join("catalog.json"), dir.0.join("catalog.json")).unwrap();
+    fs::write(dir.path().join("manifest.json"), manifest.to_string()).unwrap();
+    fs::copy(
+        target().join("catalog.json"),
+        dir.path().join("catalog.json"),
+    )
+    .unwrap();
     dir
 }
 
@@ -168,17 +165,18 @@ fn python_models_take_observed_lineage_but_only_trust_makes_impact_skip_them() {
     let rank = "model.jaffle_ods.customer_order_rank";
 
     // Without observed lineage the Python model is opaque: it runs.
-    let plain = impact_on_order_status(&python.0, &[]);
+    let plain = impact_on_order_status(python.path(), &[]);
     assert!(plain["run"].as_array().unwrap().iter().any(|r| r == rank));
 
     // Observed lineage is shown, but impact stays conservative.
-    let shown = impact_on_order_status(&python.0, &["--observed", &export]);
+    let shown = impact_on_order_status(python.path(), &["--observed", &export]);
     assert!(shown["run"].as_array().unwrap().iter().any(|r| r == rank));
     assert_eq!(shown["summary"]["observed"]["stitched"][0], rank);
     assert_eq!(shown["summary"]["observed"]["trusted"], false);
 
     // Trusted: it only reads orders' amount, customer_id and order_date, so it's skipped.
-    let trusted = impact_on_order_status(&python.0, &["--observed", &export, "--trust-observed"]);
+    let trusted =
+        impact_on_order_status(python.path(), &["--observed", &export, "--trust-observed"]);
     assert!(!trusted["run"].as_array().unwrap().iter().any(|r| r == rank));
     assert!(
         trusted["impact"]["pruned"]
@@ -192,7 +190,7 @@ fn python_models_take_observed_lineage_but_only_trust_makes_impact_skip_them() {
         "lineage",
         "columns",
         "--target-dir",
-        python.0.to_str().unwrap(),
+        python.path().to_str().unwrap(),
         "--model",
         "customer_order_rank",
         "--observed",

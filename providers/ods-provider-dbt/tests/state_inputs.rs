@@ -141,15 +141,17 @@ fn run_results_give_status_and_completion_per_node() {
     assert!(orders.completed_at.is_some());
 }
 
-fn temp(name: &str, content: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("ods-dbt-{}-{name}", std::process::id()));
+/// A file named `name` holding `content`, in a directory removed when the guard drops.
+fn temp(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
     std::fs::write(&path, content).unwrap();
-    path
+    (dir, path)
 }
 
 #[test]
 fn source_freshness_keeps_measured_sources_and_reports_errors() {
-    let path = temp(
+    let (_dir, path) = temp(
         "sources.json",
         r#"{
           "metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/sources/v3.json",
@@ -163,7 +165,6 @@ fn source_freshness_keeps_measured_sources_and_reports_errors() {
         }"#,
     );
     let freshness = SourceFreshness::read(&path).unwrap();
-    std::fs::remove_file(&path).ok();
     assert_eq!(
         freshness.generated_at.as_deref(),
         Some("2026-09-25T03:00:00.000000Z")
@@ -177,12 +178,11 @@ fn source_freshness_keeps_measured_sources_and_reports_errors() {
 
 #[test]
 fn unsupported_run_results_versions_are_errors() {
-    let path = temp(
+    let (_dir, path) = temp(
         "run_results.json",
         r#"{"metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v99.json"}, "results": []}"#,
     );
     let error = RunResults::read(&path).unwrap_err().to_string();
-    std::fs::remove_file(&path).ok();
     assert!(error.contains("v99"), "{error}");
 }
 

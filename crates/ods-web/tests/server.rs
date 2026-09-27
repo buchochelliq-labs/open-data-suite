@@ -212,7 +212,8 @@ fn standalone_pages_embed_the_graph_and_static_sites_fetch_it() {
     assert!(page.contains(r#"content="embedded""#));
     assert!(page.contains("model.orders"));
 
-    let dir = std::env::temp_dir().join(format!("ods-web-site-{}", std::process::id()));
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("site");
     let files = export_site(&snapshot.document, &dir).unwrap();
     assert_eq!(files, [dir.join("index.html"), dir.join("graph.json")]);
     let index = std::fs::read_to_string(&files[0]).unwrap();
@@ -223,7 +224,6 @@ fn standalone_pages_embed_the_graph_and_static_sites_fetch_it() {
     );
     let graph = json(&std::fs::read_to_string(&files[1]).unwrap());
     assert_eq!(graph, serde_json::to_value(&snapshot.document).unwrap());
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

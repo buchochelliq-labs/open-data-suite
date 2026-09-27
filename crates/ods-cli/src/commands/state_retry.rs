@@ -53,24 +53,14 @@ pub(super) struct LastRun {
 
 impl LastRun {
     /// The command line to show: `ods state build -s +orders`.
+    ///
+    /// Quoted as a POSIX shell reads it back, so `$(…)`, `$HOME` or `*` stay literal.
     pub(super) fn shown(&self) -> String {
-        let mut words = vec!["ods".to_owned(), "state".to_owned(), self.command.clone()];
-        words.extend(self.args.iter().map(|a| quoted(a)));
-        words.join(" ")
-    }
-}
-
-/// `word` as a POSIX shell reads it back: as it is if it holds only characters no shell
-/// treats specially, else in single quotes, so `$(…)`, `$HOME` or `*` stay literal.
-fn quoted(word: &str) -> String {
-    let plain = !word.is_empty()
-        && word
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
-    if plain {
-        word.to_owned()
-    } else {
-        format!("'{}'", word.replace('\'', "'\\''"))
+        let words = ["ods", "state", self.command.as_str()]
+            .into_iter()
+            .chain(self.args.iter().map(String::as_str));
+        // Only a NUL byte can't be quoted, and a command line can't hold one.
+        shlex::try_join(words.clone()).unwrap_or_else(|_| words.collect::<Vec<_>>().join(" "))
     }
 }
 
@@ -142,12 +132,15 @@ fn write(path: &Path, last: &LastRun) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_vec_pretty(last).map_err(std::io::Error::other)?;
-    // Written whole, then renamed: a reader never sees half of it.
-    let mut partial = path.as_os_str().to_owned();
-    partial.push(format!(".{}.partial", std::process::id()));
-    let partial = PathBuf::from(partial);
-    std::fs::write(&partial, json)?;
-    std::fs::rename(&partial, path)
+    // Written whole to a temporary file beside it, then renamed: a reader never sees
+    // half of it, and a failed write leaves nothing behind.
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut partial = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut partial, &json)?;
+    partial.persist(path).map(drop).map_err(|e| e.error)
 }
 
 /// The last run for the state database `args` and `config` name, and the command line
@@ -305,7 +298,7 @@ mod tests {
         };
         assert_eq!(
             odd.shown(),
-            "ods state build -- --log-path '$(id)' 'it'\\''s' +orders ''"
+            "ods state build -- --log-path '$(id)' \"it's\" +orders ''"
         );
     }
 }
