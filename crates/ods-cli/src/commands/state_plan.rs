@@ -127,12 +127,19 @@ pub(super) fn history_command() -> Command {
 }
 
 pub(super) fn store_error(error: &ProviderError) -> CliError {
-    let code = if matches!(error, ProviderError::Conflict(_)) {
-        codes::STATE_CONFLICT
-    } else {
-        codes::STATE_STORE
-    };
-    CliError::new(ExitStatus::Failure, code, error.to_string())
+    match error {
+        ProviderError::Conflict(_) => CliError::new(
+            ExitStatus::Failure,
+            codes::STATE_CONFLICT,
+            error.to_string(),
+        ),
+        ProviderError::Corrupt(_) => {
+            CliError::new(ExitStatus::Failure, codes::STATE_DAMAGED, error.to_string()).with_hint(
+                "nothing was changed; `ods state doctor` says what is wrong and how to recover",
+            )
+        }
+        _ => CliError::new(ExitStatus::Failure, codes::STATE_STORE, error.to_string()),
+    }
 }
 
 /// Runs the store's async API from these synchronous commands.
@@ -247,8 +254,12 @@ impl Workspace {
     }
 
     pub(super) fn open_store(&self) -> Result<SqliteStateStore, CliError> {
-        block_on(SqliteStateStore::open(&self.state_db))?.map_err(|e| {
-            store_error(&e).with_hint(format!("check `--state-db {}`", self.state_db.display()))
+        block_on(SqliteStateStore::open(&self.state_db))?.map_err(|e| match e {
+            // Its own hint says what to do.
+            ProviderError::Corrupt(_) => store_error(&e),
+            _ => {
+                store_error(&e).with_hint(format!("check `--state-db {}`", self.state_db.display()))
+            }
         })
     }
 

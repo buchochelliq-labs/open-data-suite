@@ -9,7 +9,7 @@ use ods_core::state::{
 };
 
 use super::Report;
-use crate::contracts::state_store::{StateScope, StateStore};
+use crate::contracts::state_store::{ScopeSummary, StateScope, StateStore};
 use crate::error::ProviderError;
 
 /// What the suite needs from a store under test.
@@ -155,6 +155,48 @@ async fn scopes_are_isolated(store: &dyn StateStore) {
     assert_eq!(store.latest(&a).await.unwrap().unwrap().id, in_a);
 }
 
+async fn a_fresh_store_is_sound(store: &dyn StateStore) {
+    let check = store.check().await.expect("check: runs on a fresh store");
+    assert!(check.is_sound(), "check: a fresh store is sound: {check:?}");
+    assert!(
+        check.scopes.is_empty(),
+        "check: a fresh store has no scopes"
+    );
+    if let Some(schema) = check.schema {
+        assert_eq!(
+            schema.version, schema.latest,
+            "check: a store this build created is at its latest storage version"
+        );
+    }
+}
+
+async fn failed_commits_leave_the_store_sound(store: &dyn StateStore) {
+    let (a, b) = (scope("sound-a"), scope("sound-b"));
+    let first = store.commit(&a, &snapshot(None, "run-1")).await.unwrap();
+    let second = store
+        .commit(&a, &snapshot(Some(first), "run-2"))
+        .await
+        .unwrap();
+    // Refused commits: a stale parent, and a parent from another scope.
+    assert!(is_conflict(
+        &store.commit(&a, &snapshot(Some(first), "run-x")).await
+    ));
+    assert!(is_conflict(
+        &store.commit(&b, &snapshot(Some(first), "run-y")).await
+    ));
+    let only_b = store.commit(&b, &snapshot(None, "run-b")).await.unwrap();
+    let check = store.check().await.expect("check: runs");
+    assert!(check.is_sound(), "check: sound after conflicts: {check:?}");
+    assert_eq!(
+        check.scopes,
+        [
+            ScopeSummary::new("suite/sound-a", Some(second), 2),
+            ScopeSummary::new("suite/sound-b", Some(only_b), 1),
+        ],
+        "check: every scope, sorted, with its head and snapshot count"
+    );
+}
+
 /// Runs every case against fresh stores from `harness`.
 ///
 /// # Panics
@@ -173,5 +215,9 @@ pub async fn run(harness: &dyn StateStoreHarness) -> Report {
     report.passed.push("history_is_newest_first_and_limited");
     scopes_are_isolated(harness.store().await.as_ref()).await;
     report.passed.push("scopes_are_isolated");
+    a_fresh_store_is_sound(harness.store().await.as_ref()).await;
+    report.passed.push("a_fresh_store_is_sound");
+    failed_commits_leave_the_store_sound(harness.store().await.as_ref()).await;
+    report.passed.push("failed_commits_leave_the_store_sound");
     report
 }
