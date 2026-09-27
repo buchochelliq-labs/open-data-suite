@@ -5,12 +5,45 @@
 
 use std::path::{Path, PathBuf};
 
-use clap::ArgMatches;
 use clap::parser::ValueSource;
+use clap::{Arg, ArgMatches, Command};
 use ods_config::{ConfigError, Loaded, Source, display_key};
 use ods_provider_dbt::settings::{CONFIG_SETTINGS, KIND};
 
 use crate::exit::{CliError, ExitStatus};
+
+/// `--target-dir` and `--project-dir`, for commands that read dbt's artifacts without
+/// running dbt (`lineage`, `erd`, `serve`, `mcp`): they find the artifacts as `ods state`
+/// does, so a configured project needs neither.
+pub(super) fn artifact_dir_args(command: Command, about: &'static str) -> Command {
+    command
+        .arg(
+            Arg::new("target-dir")
+                .long("target-dir")
+                .value_name("DIR")
+                .env("DBT_TARGET_PATH")
+                .hide_env_values(true)
+                .help(format!(
+                    "dbt target directory with {about} [default: the configured target_dir, else <project-dir>/target]"
+                )),
+        )
+        .arg(
+            Arg::new("project-dir")
+                .long("project-dir")
+                .value_name("DIR")
+                .env("DBT_PROJECT_DIR")
+                .hide_env_values(true)
+                .help("The dbt project, whose target directory ODS reads [default: the configured project_dir, else .]"),
+        )
+}
+
+/// Where a command made with [`artifact_dir_args`] reads dbt's artifacts.
+///
+/// # Errors
+/// The configuration names more than one dbt provider.
+pub(super) fn artifacts_dir(args: &ArgMatches, config: &Loaded) -> Result<PathBuf, CliError> {
+    Ok(StateSettings::resolve(args, config)?.target_dir())
+}
 
 /// The state database when nothing else names one.
 pub(super) const DEFAULT_STORE: &str = ".ods/state.db";

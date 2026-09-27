@@ -12,7 +12,7 @@
 //! | `LineageSink` | #74, #92 | planned (ADR-0008) |
 //! | `ArtifactProvider` | #12 | planned (needs the #4 semantic graph) |
 //! | `MetadataProvider` | #15 | planned |
-//! | [`StateStore`](state_store::StateStore) | #11, #25 | defined (ADR-0013) |
+//! | [`StateStore`](state_store::StateStore) | #11, #25, #188 | defined (ADR-0013, ADR-0018) |
 //! | `FingerprintProvider` | #13 | planned |
 //! | [`Executor`](executor::Executor) | #23, #24 | defined (ADR-0014) |
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |

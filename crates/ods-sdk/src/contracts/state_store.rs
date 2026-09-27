@@ -11,6 +11,16 @@
 //! - Scopes are independent: a snapshot from one is never visible in another.
 //! - A snapshot is returned exactly as committed. A store refuses to return a snapshot
 //!   whose `schema_version` this build can't read, rather than guessing.
+//!
+//! # Durability and recovery (0.2, #188, ADR-0018)
+//! - A store that can't be read, or holds a record it can't decode, fails with
+//!   [`ProviderError::Corrupt`], never with a guess; callers then build everything.
+//! - A failed or interrupted commit leaves no trace: the previous head stays.
+//! - A store's own storage format carries a version. Opening a store migrates it
+//!   forward, all or nothing, after keeping a copy where the storage allows; a store
+//!   written by a newer build is refused, never downgraded.
+//! - [`check`](StateStore::check) reads the whole store without changing it and reports
+//!   every problem it finds, so a person can decide how to recover.
 
 use std::fmt;
 
@@ -25,7 +35,7 @@ use crate::provider::{Contract, Provider};
 /// The `state_store` contract.
 pub const STATE_STORE: Contract = Contract {
     name: "state_store",
-    version: SchemaVersion::new(0, 1),
+    version: SchemaVersion::new(0, 2),
 };
 
 /// Whose state: `<project>/<environment>`, e.g. `jaffle_shop/prod`.
@@ -138,6 +148,123 @@ impl SnapshotSummary {
     }
 }
 
+/// The version of a store's own storage format (not of the snapshots it holds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct StoreSchema {
+    /// The version the store is at.
+    pub version: u32,
+    /// The latest version this build knows.
+    pub latest: u32,
+}
+
+impl StoreSchema {
+    /// A store's storage version, and the latest this build knows.
+    pub fn new(version: u32, latest: u32) -> Self {
+        Self { version, latest }
+    }
+}
+
+/// What kind of problem [`StateStore::check`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ProblemKind {
+    /// The storage itself is damaged, or isn't a state store.
+    Damaged,
+    /// Written by a newer build: this one can't read it.
+    NewerSchema,
+    /// A snapshot can't be decoded, or is a schema version this build can't read.
+    UnreadableSnapshot,
+    /// A snapshot's summary (e.g. what history lists) disagrees with its document.
+    InconsistentSnapshot,
+    /// A scope's head points at a snapshot that is missing or in another scope.
+    DanglingHead,
+    /// A snapshot's parent is missing or in another scope.
+    BrokenChain,
+}
+
+/// One problem [`StateStore::check`] found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct StoreProblem {
+    /// What kind.
+    pub kind: ProblemKind,
+    /// What exactly, for people: which scope or snapshot, and what is wrong.
+    pub detail: String,
+}
+
+impl StoreProblem {
+    /// A problem, for stores to report.
+    pub fn new(kind: ProblemKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A scope in the store: its head and how many snapshots it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ScopeSummary {
+    /// The scope.
+    pub scope: String,
+    /// Its head, if it has one.
+    pub head: Option<SnapshotId>,
+    /// How many snapshots it has.
+    pub snapshots: usize,
+}
+
+impl ScopeSummary {
+    /// A scope's summary, for stores to report.
+    pub fn new(scope: impl Into<String>, head: Option<SnapshotId>, snapshots: usize) -> Self {
+        Self {
+            scope: scope.into(),
+            head,
+            snapshots,
+        }
+    }
+}
+
+/// What [`StateStore::check`] found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct StoreCheck {
+    /// The store's storage version, if it has one.
+    pub schema: Option<StoreSchema>,
+    /// Every scope, sorted.
+    pub scopes: Vec<ScopeSummary>,
+    /// Every problem found, sorted; empty if the store is sound.
+    pub problems: Vec<StoreProblem>,
+}
+
+impl StoreCheck {
+    /// A check result, for stores to return. Scopes and problems are sorted.
+    pub fn new(
+        schema: Option<StoreSchema>,
+        mut scopes: Vec<ScopeSummary>,
+        mut problems: Vec<StoreProblem>,
+    ) -> Self {
+        scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
+        problems.sort_by(|a, b| (a.kind, &a.detail).cmp(&(b.kind, &b.detail)));
+        Self {
+            schema,
+            scopes,
+            problems,
+        }
+    }
+
+    /// Whether no problem was found.
+    pub fn is_sound(&self) -> bool {
+        self.problems.is_empty()
+    }
+}
+
 /// Checks a stored document's version before returning it.
 ///
 /// # Errors
@@ -196,6 +323,15 @@ pub trait StateStore: Provider {
         scope: &StateScope,
         limit: usize,
     ) -> Result<Vec<SnapshotSummary>, ProviderError>;
+
+    /// Reads the whole store, changing nothing, and reports every problem found:
+    /// damaged storage, snapshots that can't be read, heads and parents that point
+    /// nowhere (0.2, #188).
+    ///
+    /// # Errors
+    /// Returns [`ProviderError`] only if the check couldn't run at all; problems it
+    /// finds are in the result.
+    async fn check(&self) -> Result<StoreCheck, ProviderError>;
 }
 
 #[cfg(test)]

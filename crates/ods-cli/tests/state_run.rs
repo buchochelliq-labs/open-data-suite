@@ -1954,3 +1954,77 @@ fn a_test_run_has_no_dry_run_retry() {
     assert_eq!(code, 2, "{json:#}");
     assert!(json.to_string().contains("has no dry run"), "{json:#}");
 }
+
+/// #188: the documented recovery procedure. `doctor` checks without changing anything;
+/// a damaged database stops the commands that read it, with a pointer to `doctor`;
+/// `reset` sets it aside; a copy from `backup` restores it.
+#[test]
+fn a_damaged_state_database_is_diagnosed_and_recovered() {
+    let project = Project::new("recovery");
+    let db = project.db();
+    let db_arg = ["--state-db", db.to_str().unwrap()];
+    let state = |command: &str, extra: &[&str]| {
+        let mut all = vec!["state", command];
+        all.extend(db_arg);
+        all.extend(extra);
+        project.ods_in(&project.dir, &all)
+    };
+
+    let (code, json, _) = state("doctor", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["exists"], false);
+
+    project.run_ok(&[]);
+    let (code, json, _) = state("doctor", &[]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["schema"]["version"], result["schema"]["latest"]);
+    assert_eq!(result["scopes"][0]["scope"], "jaffle_ods/default");
+    assert_eq!(result["scopes"][0]["snapshots"], 1);
+
+    let copy = project.dir.join("copy.db");
+    let (code, json, _) = state("backup", &["--to", copy.to_str().unwrap()]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(copy.is_file());
+
+    // A disk fault, or another program, overwrites it. SQLite's journal goes too:
+    // committed pages may still be there (on macOS they often are), and SQLite rightly
+    // reads them, so a damaged main file alone isn't the same damage everywhere.
+    std::fs::write(&db, vec![0x5a; 8192]).unwrap();
+    for journal in ["-wal", "-shm"] {
+        let mut name = db.clone().into_os_string();
+        name.push(journal);
+        let _ = std::fs::remove_file(name);
+    }
+    let (code, json) = project.ods(&["state", "plan"]);
+    assert_eq!(code, 1, "{json:#}");
+    let text = json.to_string();
+    assert!(
+        text.contains("ODS-E0405") && text.contains("ods state doctor"),
+        "{text}"
+    );
+
+    let (code, json, _) = state("doctor", &[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["result"]["problems"][0]["kind"], "damaged", "{json:#}");
+    assert!(json.to_string().contains("ODS-E0405"), "{json:#}");
+    assert_eq!(
+        std::fs::read(&db).unwrap(),
+        vec![0x5a; 8192],
+        "doctor changes nothing"
+    );
+
+    let (code, json, _) = state("reset", &[]);
+    assert_eq!(code, 2, "reset needs --yes: {json:#}");
+    let (code, json, _) = state("reset", &["--yes"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(!db.exists());
+    let aside = json["result"]["set_aside"][0].as_str().unwrap();
+    assert!(Path::new(aside).is_file(), "{json:#}");
+
+    // Restore the copy, as docs/cli.md says: the state is back.
+    std::fs::copy(&copy, &db).unwrap();
+    let (code, plan) = project.ods(&["state", "plan"]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["result"]["reuse"], 13, "{plan:#}");
+}

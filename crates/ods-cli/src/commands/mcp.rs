@@ -6,7 +6,6 @@
 //! local; tools that mirror a CLI command run that command in-process with `--json`, so
 //! an MCP result is exactly what `ods … --json` prints.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{ArgMatches, Command};
@@ -19,6 +18,7 @@ use serde_json::{Map, Value};
 
 use super::lineage::{LoadOptions, common_args};
 use super::mcp_tools::{self, Project};
+use super::state_settings::artifacts_dir;
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 
@@ -56,11 +56,7 @@ impl Module for Mcp {
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let project = Arc::new(Project::new(
-            PathBuf::from(
-                matches
-                    .get_one::<String>("target-dir")
-                    .map_or("target", String::as_str),
-            ),
+            artifacts_dir(matches, ctx.config)?,
             LoadOptions::from_args(matches),
             match matches.get_one::<String>("artifacts").map(String::as_str) {
                 Some("json") => ArtifactPreference::Json,
