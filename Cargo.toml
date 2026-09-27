@@ -37,6 +37,8 @@ clap_complete = "4"
 # Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
 csv = "1"
 insta = "1"
+# Date and time: parsing and printing `Timestamp`. No time zone database needed (UTC only).
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
 # compression codecs dbt may use.
 parquet = { version = "60", default-features = false, features = ["zstd", "snap", "lz4", "flate2-zlib-rs"] }
