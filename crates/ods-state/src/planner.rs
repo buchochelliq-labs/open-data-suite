@@ -334,15 +334,22 @@ fn decide_on_data(
             .unix()
             .saturating_add(i64::try_from(lag).unwrap_or(i64::MAX));
         if lag > 0 && now.unix() < due {
+            // A lag beyond the last representable time means never: don't show a date
+            // at which the node would, in fact, still be reused.
+            let deadline = Timestamp::from_unix(due);
+            let when = if deadline.unix() == due {
+                format!("due at {deadline}")
+            } else {
+                "never due".to_owned()
+            };
             return (
                 PlanAction::Reuse,
                 vec![Reason::new(
                     ReasonCode::WithinLagTolerance,
                     format!(
-                        "new data in {new}, but it was built at {} and tolerates {} of lag: due at {}",
+                        "new data in {new}, but it was built at {} and tolerates {} of lag: {when}",
                         before.built_at,
                         format_duration(lag),
-                        Timestamp::from_unix(due)
                     ),
                 )],
             );
