@@ -1712,7 +1712,10 @@ fn ods_toml_configures_state_commands() {
     let (code, json, _) = project.ods_in(&sub, &build);
     assert_eq!(code, 0, "{json:#}");
     let result = &json["result"];
-    let dir = project.dir.display();
+    // As ODS finds `ods.toml`: through the working directory, with symlinks resolved
+    // (macOS's temporary directory is under one).
+    let dir = project.dir.canonicalize().unwrap();
+    let dir = dir.display();
     assert_eq!(result["scope"], "jaffle_ods/prod");
     assert_eq!(
         setting(result, "program").map(|s| s.1),
