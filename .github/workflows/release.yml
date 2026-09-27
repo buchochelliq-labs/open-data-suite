@@ -98,8 +98,10 @@ jobs:
           # glibc wheels: pip on a glibc Linux only installs manylinux-tagged wheels.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, manylinux: "2_17", archive: false, run: false }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, manylinux: "2_17", archive: false, run: false }
-          - { target: x86_64-apple-darwin, os: macos-latest, archive: true, run: false }
-          - { target: aarch64-apple-darwin, os: macos-latest, archive: true, run: true }
+          # macos-15 is an arm64 image: the arm64 build runs natively and is executed;
+          # the x86_64 build is cross-compiled there and never executed.
+          - { target: x86_64-apple-darwin, os: macos-15, archive: true, run: false }
+          - { target: aarch64-apple-darwin, os: macos-15, archive: true, run: true }
           - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: true, run: true }
     runs-on: ${{ matrix.os }}
     env:
@@ -168,7 +170,7 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
-          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-15, target: aarch64-apple-darwin }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     env:
