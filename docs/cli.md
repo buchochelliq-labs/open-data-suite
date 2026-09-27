@@ -739,7 +739,8 @@ ODS protects it ([ADR-0018](adr/0018-state-store-migrations-and-recovery.md), #1
   only its successes; if it fails, is interrupted or loses a race, the last good state
   stays as it was.
 - **Upgrades:** a newer ODS migrates the database forward the first time it opens it,
-  in one transaction. It first keeps a copy beside it, `state.db.v<version>-<time>.bak`.
+  in one transaction. It first keeps a copy beside it,
+  `state.db.v<version>-<time>-<process>.bak`.
   If the migration fails, nothing changes and the error names the copy.
 - **Downgrades:** an older ODS refuses a database a newer one wrote (`ODS-E0401`,
   "upgrade ODS"). It never guesses. To go back, restore the copy kept when it was
@@ -751,15 +752,16 @@ ODS protects it ([ADR-0018](adr/0018-state-store-migrations-and-recovery.md), #1
 ```sh
 ods state doctor                 # check; changes nothing; exit 1 (ODS-E0405) if damaged
 ods state backup                 # consistent copy: state.db.<time>.bak (or --to PATH)
-ods state reset --yes            # set it aside: state.db.<time>.set-aside; deletes nothing
+ods state reset --yes            # set it aside: state.db-<time>-<process>.set-aside; deletes nothing
 ```
 
 `doctor` reports:
 - the database's schema version, and the latest this ODS knows;
 - every scope, with its head snapshot and how many snapshots it has;
 - every problem: `damaged` (SQLite's integrity check failed, or it isn't a state
-  database), `newer schema`, `unreadable snapshot`, `dangling head` or `broken chain`
-  (a head or parent that points at a missing snapshot);
+  database), `newer schema`, `unreadable snapshot`, `inconsistent snapshot` (what
+  `history` lists disagrees with the snapshot itself), `dangling head` or
+  `broken chain` (a head or parent that points at a missing snapshot);
 - any copies it finds beside the database, and what to do.
 
 `backup` works while runs use the database. Take one before anything risky, or on a
@@ -770,7 +772,7 @@ To recover a damaged database:
 2. `ods state reset --yes`: the damaged database moves aside, so it can still be
    inspected (and its `-wal`/`-shm` files move with it, so it still opens).
 3. Either restore a copy, by copying it over the database (e.g.
-   `cp .ods/state.db.v1-1790000000.bak .ods/state.db`) and running `ods state doctor`
+   `cp .ods/state.db.v1-1790000000-4242.bak .ods/state.db`) and running `ods state doctor`
    again; or start afresh by doing nothing more. With no state, the next run builds
    every node and records new state.
 

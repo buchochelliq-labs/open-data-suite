@@ -208,6 +208,7 @@ fn problem_label(kind: ProblemKind) -> &'static str {
         ProblemKind::Damaged => "damaged",
         ProblemKind::NewerSchema => "newer schema",
         ProblemKind::UnreadableSnapshot => "unreadable snapshot",
+        ProblemKind::InconsistentSnapshot => "inconsistent snapshot",
         ProblemKind::DanglingHead => "dangling head",
         ProblemKind::BrokenChain => "broken chain",
         _ => "problem",

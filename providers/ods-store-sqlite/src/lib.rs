@@ -84,11 +84,39 @@ fn is_corruption(code: Option<&str>, message: &str) -> bool {
 /// Where a copy of the database at `path` is kept before it is migrated from
 /// `version`: next to it, named after the version and the time.
 fn backup_path(path: &Path, version: i64) -> PathBuf {
-    let name = path
-        .file_name()
-        .map_or_else(|| "state.db".into(), |n| n.to_string_lossy().into_owned());
-    let at = Timestamp::now().unix();
-    path.with_file_name(format!("{name}.v{version}-{at}.bak"))
+    unused(path, &format!(".v{version}"), ".bak", &[""])
+}
+
+/// `<path><infix>-<time>-<process><suffix>`, with `-<n>` added until no file has that
+/// name, nor that name followed by any of `also` (e.g. `-wal`). The process id keeps two
+/// processes apart; the count, which never repeats within a process, two calls in one.
+/// Never an existing file.
+fn unused(path: &Path, infix: &str, suffix: &str, also: &[&str]) -> PathBuf {
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let first = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = format!(
+        "{}{infix}-{}-{}",
+        path.display(),
+        Timestamp::now().unix(),
+        std::process::id()
+    );
+    (first..first.saturating_add(10_000))
+        .map(|n| {
+            let count = if n == 0 {
+                String::new()
+            } else {
+                format!("-{n}")
+            };
+            PathBuf::from(format!("{stem}{count}{suffix}"))
+        })
+        .find(|candidate| {
+            also.iter().all(|end| {
+                let mut name = candidate.as_os_str().to_owned();
+                name.push(end);
+                !Path::new(&name).exists()
+            })
+        })
+        .unwrap_or_else(|| PathBuf::from(format!("{stem}{suffix}")))
 }
 
 /// A state store in a SQLite file.
@@ -241,7 +269,6 @@ impl SqliteStateStore {
     /// Returns [`ProviderError`] if a file can't be moved; files moved before it stay
     /// moved, and the error names them.
     pub fn set_aside(path: &Path) -> Result<Vec<PathBuf>, ProviderError> {
-        let at = Timestamp::now().unix();
         let mut moved = Vec::new();
         // The journal files keep their suffix after the new name, so SQLite still finds
         // them: the set-aside database opens with everything that was committed.
@@ -250,7 +277,8 @@ impl SqliteStateStore {
             name.push(suffix);
             PathBuf::from(name)
         };
-        let aside = with(path, &format!(".{at}.set-aside"));
+        // A name none of the three files has, so a move never replaces an earlier copy.
+        let aside = unused(path, "", ".set-aside", &["", "-wal", "-shm"]);
         for suffix in ["", "-wal", "-shm"] {
             let (from, to) = (with(path, suffix), with(&aside, suffix));
             if !from.exists() {
@@ -334,12 +362,17 @@ impl SqliteStateStore {
         let backup = match path {
             Some(path) if applied > 0 => {
                 let to = backup_path(path, applied);
-                self.backup(&to).await.map_err(|e| {
-                    ProviderError::Other(format!(
+                if let Err(e) = self.backup(&to).await {
+                    // Another opener may have migrated it meanwhile: then there is
+                    // nothing left to do.
+                    if self.schema_version().await? == known {
+                        return Ok(());
+                    }
+                    return Err(ProviderError::Other(format!(
                         "the state database `{}` needs migrating from schema version {applied} to {known}, but a copy couldn't be kept first, so it was left as it is: {e}",
                         self.location
-                    ))
-                })?;
+                    )));
+                }
                 Some(to)
             }
             _ => None,
@@ -480,6 +513,43 @@ impl Drop for WriteTx {
     }
 }
 
+/// The first column `history` and the chain read that disagrees with the document the
+/// snapshot was committed with: they are written together, so a difference is damage.
+fn disagreement(
+    snapshot: &StateSnapshot,
+    row: &sqlx::sqlite::SqliteRow,
+    parent: Option<i64>,
+) -> Option<&'static str> {
+    let created: String = row.get(4);
+    let run_id: String = row.get(5);
+    let nodes: i64 = row.get(6);
+    let (major, minor): (i64, i64) = (row.get(7), row.get(8));
+    let document_parent = snapshot.parent.map(|p| i64::try_from(p.0).unwrap_or(-1));
+    [
+        ("parent", parent == document_parent),
+        (
+            "created_at",
+            Timestamp::parse(&created).ok() == Some(snapshot.created_at),
+        ),
+        ("run_id", run_id == snapshot.run_id),
+        (
+            "nodes",
+            usize::try_from(nodes).ok() == Some(snapshot.nodes.len()),
+        ),
+        (
+            "schema_version",
+            (major, minor)
+                == (
+                    i64::from(snapshot.schema_version.major),
+                    i64::from(snapshot.schema_version.minor),
+                ),
+        ),
+    ]
+    .into_iter()
+    .find(|(_, agrees)| !agrees)
+    .map(|(field, _)| field)
+}
+
 fn newer_schema(location: &str, applied: i64, known: i64) -> ProviderError {
     ProviderError::Other(format!(
         "the state database `{location}` has schema version {applied}, but this ODS knows up to {known}; upgrade ODS"
@@ -570,7 +640,9 @@ impl StateStore for SqliteStateStore {
                 Ok(SnapshotSummary::new(
                     SnapshotId(unsigned(r.get(0))?),
                     parent.map(unsigned).transpose()?.map(SnapshotId),
-                    Timestamp::parse(&created).map_err(ProviderError::Other)?,
+                    Timestamp::parse(&created).map_err(|e| {
+                        ProviderError::Corrupt(format!("snapshot history can't be read: {e}"))
+                    })?,
                     r.get::<String, _>(3),
                     usize::try_from(nodes).unwrap_or_default(),
                 ))
@@ -655,7 +727,10 @@ impl SqliteStateStore {
         &self,
         problems: &mut Vec<StoreProblem>,
     ) -> Result<Vec<ScopeSummary>, ProviderError> {
-        let rows = sqlx::query("SELECT id, scope, parent, document FROM snapshots ORDER BY id")
+        let rows = sqlx::query(
+            "SELECT id, scope, parent, document, created_at, run_id, nodes, schema_major, schema_minor
+             FROM snapshots ORDER BY id",
+        )
             .fetch_all(&self.pool)
             .await
             .map_err(|e| db_error(&e))?;
@@ -668,13 +743,23 @@ impl SqliteStateStore {
         for row in &rows {
             let (id, scope): (i64, String) = (row.get(0), row.get(1));
             *counts.entry(scope.clone()).or_default() += 1;
-            if let Err(e) = Self::decode(id, row.get(3)) {
-                problems.push(StoreProblem::new(
+            let parent: Option<i64> = row.get(2);
+            match Self::decode(id, row.get(3)) {
+                Err(e) => problems.push(StoreProblem::new(
                     ProblemKind::UnreadableSnapshot,
                     format!("snapshot {id} of `{scope}`: {e}"),
-                ));
+                )),
+                Ok(stored) => {
+                    if let Some(field) = disagreement(&stored.snapshot, row, parent) {
+                        problems.push(StoreProblem::new(
+                            ProblemKind::InconsistentSnapshot,
+                            format!(
+                                "snapshot {id} of `{scope}`: its `{field}` column doesn't match its document"
+                            ),
+                        ));
+                    }
+                }
             }
-            let parent: Option<i64> = row.get(2);
             if let Some(parent) = parent
                 && owners.get(&parent) != Some(&scope)
             {
@@ -850,6 +935,26 @@ mod tests {
         assert_eq!(check.problems.len(), 1, "{check:?}");
         assert_eq!(check.problems[0].kind, ProblemKind::NewerSchema);
         assert_eq!(store.schema_version().await.unwrap(), 3);
+        let _ = std::fs::remove_dir_all(db.parent().unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_openers_upgrading_at_once_both_succeed() {
+        let db = temp_db("racing-upgrade");
+        let scope = StateScope::new("p", "dev").unwrap();
+        let id = {
+            let store = SqliteStateStore::open_with(&db, &MIGRATIONS[..1])
+                .await
+                .unwrap();
+            store.commit(&scope, &snapshot("run-1")).await.unwrap()
+        };
+        let (a, b) = tokio::join!(
+            SqliteStateStore::open_with(&db, V2),
+            SqliteStateStore::open_with(&db, V2)
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_eq!(a.schema_version().await.unwrap(), 2);
+        assert_eq!(b.latest(&scope).await.unwrap().unwrap().id, id);
         let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 

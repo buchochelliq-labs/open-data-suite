@@ -198,6 +198,8 @@ async fn damaged_records_are_errors_and_the_check_names_them() {
         "UPDATE snapshots SET document = '{' WHERE run_id = 'run-2'",
         "UPDATE snapshots SET parent = 999 WHERE run_id = 'run-b'",
         "UPDATE heads SET snapshot_id = 998 WHERE scope = 'p/b'",
+        // Intact document, altered summary: history would show a run that isn't recorded.
+        "UPDATE snapshots SET run_id = 'someone-else' WHERE run_id = 'run-1'",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -211,6 +213,9 @@ async fn damaged_records_are_errors_and_the_check_names_them() {
         kinds,
         [
             ProblemKind::UnreadableSnapshot,
+            // run-b's parent column, and run-1's run_id, no longer match their documents.
+            ProblemKind::InconsistentSnapshot,
+            ProblemKind::InconsistentSnapshot,
             ProblemKind::DanglingHead,
             ProblemKind::BrokenChain
         ],
@@ -250,4 +255,19 @@ async fn a_backup_is_a_state_database_and_set_aside_starts_afresh() {
     // What was set aside is still the old state.
     let old = SqliteStateStore::open_existing(&moved[0]).await.unwrap();
     assert_eq!(old.latest(&scope).await.unwrap().unwrap().id, id);
+    old.close().await;
+
+    // Set aside again at once: the first copy is never replaced.
+    fresh
+        .commit(&scope, &snapshot(None, "run-2"))
+        .await
+        .unwrap();
+    fresh.close().await;
+    let again = SqliteStateStore::set_aside(&db.0).unwrap();
+    assert_ne!(again[0], moved[0]);
+    for copy in [&moved[0], &again[0]] {
+        let store = SqliteStateStore::open_existing(copy).await.unwrap();
+        assert!(store.latest(&scope).await.unwrap().is_some(), "{copy:?}");
+        store.close().await;
+    }
 }

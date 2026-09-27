@@ -44,7 +44,7 @@ that never happened. People decide; ODS tells them what it found.
   - the store's storage version, and the latest this build knows;
   - every scope, with its head and number of snapshots;
   - every problem, as one of: `damaged`, `newer_schema`, `unreadable_snapshot`,
-    `dangling_head`, `broken_chain`.
+    `inconsistent_snapshot`, `dangling_head`, `broken_chain`.
   It fails only if it can't run at all. Damage it finds is a result, not an error.
 - A new error, `ProviderError::Corrupt`. A store returns it when its storage can't be
   read, or when a record can't be decoded. It never guesses: callers stop, and never
@@ -62,8 +62,10 @@ that never happened. People decide; ODS tells them what it found.
 - A migration runs in one transaction. If any statement fails, nothing changes, and
   the error says so.
 - Before migrating a database that already holds data, the store writes a copy next
-  to it with `VACUUM INTO`: `<db>.v<version>-<unix time>.bak`. If the copy can't be
-  written, the store doesn't migrate.
+  to it with `VACUUM INTO`: `<db>.v<version>-<unix time>-<process id>.bak`, with a
+  count added if that name is taken, so two openers never pick the same name. If the
+  copy can't be written, the store doesn't migrate, unless another opener migrated it
+  meanwhile.
 - The migration count is re-read under the write lock, so two ODS processes opening
   the same database at once migrate it only once.
 
@@ -73,7 +75,8 @@ that never happened. People decide; ODS tells them what it found.
 - `check()` runs:
   - SQLite's `PRAGMA quick_check`;
   - a check that the store's tables exist;
-  - a decode of every snapshot;
+  - a decode of every snapshot, and a comparison of the columns `history` and the
+    chain read (`parent`, `created_at`, `run_id`, node count, schema version) with it;
   - a check that every head and every parent points at a snapshot in the same scope.
 - If the storage version is newer, `check()` reports that and reads no further,
   because its tables may mean something else now.
@@ -86,7 +89,8 @@ that never happened. People decide; ODS tells them what it found.
 - `ods state backup` writes a consistent copy with `VACUUM INTO`. This works while
   other runs are using the database.
 - `ods state reset --yes` moves the database and its `-wal`/`-shm` files aside. It
-  deletes nothing, and the files keep their suffixes so the moved database still opens.
+  deletes nothing: it picks a name no file has, so it never replaces an earlier copy.
+  The files keep their suffixes so the moved database still opens.
   The next run then builds everything: the conservative outcome.
 - Restoring means copying a backup over the database; `docs/cli.md` gives the steps.
 

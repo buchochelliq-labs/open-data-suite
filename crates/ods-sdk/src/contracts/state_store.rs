@@ -177,6 +177,8 @@ pub enum ProblemKind {
     NewerSchema,
     /// A snapshot can't be decoded, or is a schema version this build can't read.
     UnreadableSnapshot,
+    /// A snapshot's summary (e.g. what history lists) disagrees with its document.
+    InconsistentSnapshot,
     /// A scope's head points at a snapshot that is missing or in another scope.
     DanglingHead,
     /// A snapshot's parent is missing or in another scope.
