@@ -33,14 +33,28 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 // ---------------------------------------------------------------------------- time
 
-/// A point in time, to the second, in UTC. Serialized as RFC 3339 (`…Z`).
+/// A point in time, to the second, in UTC, between the years -9999 and 9999. Serialized
+/// as RFC 3339 (`…Z`), which reads back as the same value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(i64);
 
 impl Timestamp {
-    /// Seconds since the Unix epoch.
+    /// The earliest time jiff represents: -9999-01-02T01:59:59Z.
+    const MIN_UNIX: i64 = -377_705_023_201;
+    /// The latest time jiff represents: 9999-12-30T22:00:00Z.
+    const MAX_UNIX: i64 = 253_402_207_200;
+
+    /// Seconds since the Unix epoch. A time outside the years -9999 to 9999 (only
+    /// saturating arithmetic produces one, e.g. "never due") becomes the nearest
+    /// representable time, so every `Timestamp` prints and parses back exactly.
     pub const fn from_unix(seconds: i64) -> Self {
-        Self(seconds)
+        if seconds < Self::MIN_UNIX {
+            Self(Self::MIN_UNIX)
+        } else if seconds > Self::MAX_UNIX {
+            Self(Self::MAX_UNIX)
+        } else {
+            Self(seconds)
+        }
     }
 
     /// Seconds since the Unix epoch.
@@ -82,13 +96,8 @@ impl Timestamp {
 
 impl fmt::Display for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // jiff covers the years -9999 to 9999; anything outside is shown at the edge
-        // rather than failing to print.
-        let seconds = self.0.clamp(
-            jiff::Timestamp::MIN.as_second(),
-            jiff::Timestamp::MAX.as_second(),
-        );
-        let instant = jiff::Timestamp::from_second(seconds).map_err(|_| fmt::Error)?;
+        // `from_unix` keeps every value in jiff's range, so this always succeeds.
+        let instant = jiff::Timestamp::from_second(self.0).map_err(|_| fmt::Error)?;
         write!(f, "{instant}")
     }
 }
@@ -761,6 +770,23 @@ mod tests {
             -1
         );
         assert_eq!(Timestamp::from_unix(-1).to_string(), "1969-12-31T23:59:59Z");
+        assert_eq!(Timestamp::MIN_UNIX, jiff::Timestamp::MIN.as_second());
+        assert_eq!(Timestamp::MAX_UNIX, jiff::Timestamp::MAX.as_second());
+        for edge in [
+            Timestamp::from_unix(i64::MIN),
+            Timestamp::from_unix(i64::MAX),
+        ] {
+            let json = serde_json::to_string(&edge).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Timestamp>(&json).unwrap(),
+                edge,
+                "{json}"
+            );
+        }
+        assert_eq!(
+            Timestamp::from_unix(i64::MAX).to_string(),
+            "9999-12-30T22:00:00Z"
+        );
         assert!(Timestamp::parse("yesterday").is_err());
         assert!(Timestamp::parse("2026-13-01T00:00:00Z").is_err());
         assert!(Timestamp::parse("2026-02-30T00:00:00Z").is_err());
