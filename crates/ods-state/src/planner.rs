@@ -15,8 +15,9 @@ use crate::{Node, Project, RelationFact, Source};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlanError {
-    /// The dependency graph has a cycle through these nodes.
-    #[error("the dependency graph has a cycle through {}", .0.join(", "))]
+    /// The dependency graph has a cycle: each node depends on the one before it, and
+    /// the first on the last.
+    #[error("the dependency graph has a cycle: {}", ods_core::graph::Cycle(.0.clone()))]
     Cycle(Vec<String>),
     /// Two nodes share an id.
     #[error("node `{0}` is defined twice")]
@@ -44,55 +45,14 @@ fn order(project: &Project) -> Result<Vec<(&Node, u32)>, PlanError> {
             return Err(PlanError::Duplicate(node.id.clone()));
         }
     }
-    let mut waiting: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for node in &project.nodes {
-        let parents: BTreeSet<&str> = node
-            .parents
-            .iter()
-            .map(String::as_str)
-            .filter(|p| by_id.contains_key(p))
-            .collect();
-        waiting.insert(&node.id, parents.len());
-        for parent in parents {
-            children.entry(parent).or_default().push(&node.id);
-        }
-    }
-    let mut depth: BTreeMap<&str, u32> = BTreeMap::new();
-    let mut ready: BTreeSet<&str> = waiting
+    // Parents that aren't nodes (sources, unknown ids) don't order anything.
+    let edges = project
+        .nodes
         .iter()
-        .filter(|(_, n)| **n == 0)
-        .map(|(id, _)| *id)
-        .collect();
-    let mut out = Vec::with_capacity(project.nodes.len());
-    while let Some(id) = ready.pop_first() {
-        let node = by_id[id];
-        let d = node
-            .parents
-            .iter()
-            .filter_map(|p| depth.get(p.as_str()))
-            .max()
-            .map_or(0, |d| d + 1);
-        depth.insert(id, d);
-        out.push((node, d));
-        for child in children.get(id).into_iter().flatten() {
-            let n = waiting.get_mut(child).expect("every child is a node");
-            *n -= 1;
-            if *n == 0 {
-                ready.insert(child);
-            }
-        }
-    }
-    if out.len() < project.nodes.len() {
-        let stuck = waiting
-            .iter()
-            .filter(|(id, _)| !depth.contains_key(*id))
-            .map(|(id, _)| (*id).to_owned())
-            .collect();
-        return Err(PlanError::Cycle(stuck));
-    }
-    out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.id.cmp(&b.0.id)));
-    Ok(out)
+        .flat_map(|n| n.parents.iter().map(move |p| (p.as_str(), n.id.as_str())));
+    let order = ods_core::graph::layers(by_id.keys().copied(), edges)
+        .map_err(|cycle| PlanError::Cycle(cycle.0))?;
+    Ok(order.into_iter().map(|(id, d)| (by_id[id], d)).collect())
 }
 
 /// What a node's parents say, and what is known about its sources.

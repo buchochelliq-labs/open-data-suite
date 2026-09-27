@@ -1,7 +1,7 @@
 //! `ods state plan`, `ods state record` and `ods state history` (#11, #20, #22, #25;
 //! ADR-0013). This is where dbt artifacts, the planner and the state store meet.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -287,14 +287,10 @@ fn plan_nodes(
     // Ephemeral models are never built: their SQL is inlined into their readers'
     // compiled SQL (so it is in their fingerprints), and their readers depend on
     // their parents instead.
-    let ephemeral: BTreeMap<&str, &[String]> = manifest
-        .nodes
-        .iter()
-        .filter(|n| {
-            n.resource_type == ResourceType::Model && n.materialized.as_deref() == Some("ephemeral")
-        })
-        .map(|n| (n.unique_id.as_str(), n.depends_on.as_slice()))
-        .collect();
+    let ephemeral = |n: &ods_provider_dbt::ManifestNode| {
+        n.resource_type == ResourceType::Model && n.materialized.as_deref() == Some("ephemeral")
+    };
+    let by_id = manifest.nodes_by_id();
     manifest
         .nodes
         .iter()
@@ -302,14 +298,17 @@ fn plan_nodes(
             matches!(
                 n.resource_type,
                 ResourceType::Model | ResourceType::Seed | ResourceType::Snapshot
-            ) && !ephemeral.contains_key(n.unique_id.as_str())
+            ) && !ephemeral(n)
         })
         .map(|n| {
             let node = Node::new(
                 n.unique_id.clone(),
                 node_name(n),
                 kind_word(n.resource_type),
-                through_ephemeral(&n.depends_on, &ephemeral),
+                ods_provider_dbt::Manifest::dependencies_through(&by_id, &n.depends_on, ephemeral)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
                 fingerprint(manifest, n),
                 policies
                     .nodes
@@ -337,25 +336,6 @@ fn plan_nodes(
             }
         })
         .collect()
-}
-
-/// Parents, with ephemeral models replaced by their own parents.
-fn through_ephemeral(parents: &[String], ephemeral: &BTreeMap<&str, &[String]>) -> Vec<String> {
-    let mut out = BTreeSet::new();
-    let mut stack: Vec<&str> = parents.iter().map(String::as_str).collect();
-    let mut seen = BTreeSet::new();
-    while let Some(p) = stack.pop() {
-        if !seen.insert(p) {
-            continue;
-        }
-        match ephemeral.get(p) {
-            Some(grandparents) => stack.extend(grandparents.iter().map(String::as_str)),
-            None => {
-                out.insert(p.to_owned());
-            }
-        }
-    }
-    out.into_iter().collect()
 }
 
 /// A node's name as dbt selects it: `orders`, or `orders.v2` for a model version.

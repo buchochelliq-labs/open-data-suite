@@ -401,6 +401,12 @@ fn cycles_and_duplicates_are_errors() {
         plan(&cyclic, None, &all(&cyclic), Timestamp::from_unix(T0)).unwrap_err(),
         PlanError::Cycle(vec!["model.p.a".into(), "model.p.b".into()])
     );
+    assert_eq!(
+        plan(&cyclic, None, &all(&cyclic), Timestamp::from_unix(T0))
+            .unwrap_err()
+            .to_string(),
+        "the dependency graph has a cycle: model.p.a → model.p.b → model.p.a"
+    );
     let twice = Project::new(vec![node("a", &[], "a"), node("a", &[], "b")], vec![]);
     assert!(matches!(
         plan(&twice, None, &all(&twice), Timestamp::from_unix(T0)),
