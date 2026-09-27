@@ -179,6 +179,22 @@ is what the caller needs to see which nodes failed.
 - `--exclude` and `--resource-type` narrow the BUILD set. What they leave out keeps its
   last state, stays "to build", and is listed as `left_out`.
 
+### Source checks (#232), contract 0.3
+- `ExecutionRequest::sources` names sources whose checks run too, in `build` and
+  `test` modes. `ExecutionReport::sources` lists each once, in request order:
+  `success` only when fully checked, `failed` when a check failed (also in
+  `checks_failed`), `skipped` otherwise, and always in `run` mode, which runs no
+  checks. `succeeded` needs every source's checks to pass. A request is empty when it
+  has neither nodes nor sources; in `run` mode, one without nodes is refused too.
+- In `build` mode, a requested node reading a source whose check failed isn't built
+  (`skipped`), as when a parent fails. Two conformance cases cover this (11 in all).
+- The dbt executor selects each source's data tests (from the manifest: the tests
+  that read it) exactly, as `fqn:<fqn>,resource_type:test`, in the same `dbt build`
+  or `dbt test` invocation. dbt runs them before the models and skips the selected
+  models downstream of a source whose test failed, exactly as a plain `dbt build`
+  does (checked against dbt 1.10 with DuckDB in the real-dbt tests). ADR-0013 says
+  when ODS asks for them.
+
 ## Consequences
 - Positive: `ods state run` is the M1 flow end to end. The flow is tested without dbt
   (fake executor, fake dbt script) and against real dbt with DuckDB (`ODS_TEST_DBT`).
