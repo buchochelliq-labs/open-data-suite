@@ -13,8 +13,12 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+  # On a PR, only when someone adds the `databricks` label: one run of the commit they
+  # looked at. A pull_request run takes its workflow and scripts from the PR, and gets
+  # the environment's credentials, so a later push must never re-run it on its own
+  # (no `synchronize`). To test a new commit, remove and re-add the label.
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [labeled]
 
 permissions:
   contents: read
@@ -27,10 +31,10 @@ concurrency:
 
 jobs:
   smoke:
-    # On PRs, only when labelled `databricks`, and never from forks.
+    # On PRs, only for the `databricks` label just added, and never from forks.
     if: >-
       github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'databricks') &&
+      (github.event.label.name == 'databricks' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 20

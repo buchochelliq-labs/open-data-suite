@@ -3,7 +3,7 @@
 ODS's Databricks code is tested two ways:
 
 - **Everywhere:** against fixtures in `fixtures/databricks/`, as part of `cargo test`.
-- **Nightly, on demand, or on a PR labelled `databricks`:** against a real Databricks
+- **Nightly, on demand, or when a PR is labelled `databricks`:** against a real Databricks
   Free Edition workspace, by the `databricks` workflow (#294). This page covers the
   second.
 
@@ -69,9 +69,17 @@ masked in the logs.
 If neither audience variable is set, federation asks for the workspace's token endpoint
 as its audience. The policy must then list that endpoint.
 
-**Deployment branches:** allow `main`. To test a PR against the workspace, label it
-`databricks`; if the environment then refuses the PR's branch, allow that branch too.
-Fork PRs never run the job.
+**Testing a PR against the workspace:** add the `databricks` label. Each time the
+label is added, the commit the PR is at gets one run.
+- **Review that commit first.** A PR run uses the PR's own workflow and scripts, and
+  they get the environment's credentials.
+- **A later push doesn't run again.** To test a new commit, remove the label and add it
+  again.
+- **Fork PRs never run the job.**
+
+**Protecting the environment:** under **Deployment protection rules**, add yourself as
+a **required reviewer**, so every run also waits for your approval. Under **Deployment
+branches**, allow `main` and only the PR branches you are testing.
 
 ## Running it yourself
 The script only needs Python 3.10 or later and the standard library. The `token` step
