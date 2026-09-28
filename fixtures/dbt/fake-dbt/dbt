@@ -21,6 +21,14 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_TARGET_FAIL  the target check fails, as when the profile can't be rendered
   FAKE_DBT_SEEN  file to append, per call, its arguments and the names of the DBT_*
                  variables it was given, as one JSON line
+  FAKE_DBT_SOURCES  add two sources, `raw.orders` (read by stg_orders) and
+                    `raw.payments` (read by stg_payments), each with a not_null source
+                    test (`source_not_null_raw_<table>_id`), to the manifest (#232)
+  FAKE_DBT_LOADED_AT  `source freshness` results: comma-separated
+                      `raw.orders=2026-01-01T00:00:00Z`; a source not listed isn't
+                      measured. When the project has sources, `source freshness` takes
+                      its measurement in a second of its own, after earlier commands'
+                      and before later ones', as time passes between real commands.
 """
 
 import datetime
@@ -28,6 +36,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -122,6 +131,48 @@ def selects(token, node):
     return True
 
 
+def add_sources(manifest):
+    """FAKE_DBT_SOURCES: two sources with a test each, read by the staging models."""
+    nodes = manifest["nodes"]
+    template = nodes["test.jaffle_ods.not_null_stg_orders_order_id.81cfe2fe64"]
+    for table, reader in (("orders", "stg_orders"), ("payments", "stg_payments")):
+        source_id = f"source.jaffle_ods.raw.{table}"
+        manifest["sources"][source_id] = {
+            "unique_id": source_id, "resource_type": "source", "package_name": "jaffle_ods",
+            "name": table, "source_name": "raw", "fqn": ["jaffle_ods", "raw", table],
+            "original_file_path": "models/sources.yml", "config": {"enabled": True},
+            "relation_name": f'"jaffle_ods"."main"."raw_{table}"',
+            "loaded_at_field": "loaded_at",
+        }
+        name = f"source_not_null_raw_{table}_id"
+        test = json.loads(json.dumps(template))
+        test.update({
+            "name": name, "unique_id": f"test.jaffle_ods.{name}.0000000000",
+            "fqn": ["jaffle_ods", name], "alias": name, "column_name": "id",
+            "original_file_path": "models/sources.yml", "attached_node": None,
+            "refs": [], "sources": [["raw", table]],
+            "compiled_code": f'select id from "jaffle_ods"."main"."raw_{table}" where id is null',
+        })
+        test["depends_on"]["nodes"] = [source_id]
+        test["test_metadata"]["kwargs"] = {
+            "column_name": "id", "model": f"{{{{ get_where_subquery(source('raw', '{table}')) }}}}",
+        }
+        nodes[test["unique_id"]] = test
+        nodes[f"model.jaffle_ods.{reader}"]["depends_on"]["nodes"].append(source_id)
+
+
+def loaded_at():
+    """FAKE_DBT_LOADED_AT, by source name."""
+    pairs = (p.split("=", 1) for p in os.environ.get("FAKE_DBT_LOADED_AT", "").split(",") if "=" in p)
+    return {name: at for name, at in pairs}
+
+
+def next_second():
+    """Waits for the next whole second: ODS compares times to the second."""
+    t = time.time()
+    time.sleep(int(t) + 1 - t + 0.01)
+
+
 def dropped():
     path = os.environ.get("FAKE_DBT_DROPPED")
     if not path or not os.path.exists(path):
@@ -182,6 +233,9 @@ def main():
         manifest = json.load(f)
     manifest["metadata"]["invocation_id"] = invocation
     manifest["metadata"]["generated_at"] = now()
+    manifest.setdefault("sources", {})
+    if os.environ.get("FAKE_DBT_SOURCES"):
+        add_sources(manifest)
 
     if words[:1] == ["show"]:
         return show(options, manifest, target)
@@ -209,8 +263,16 @@ def main():
             node.pop("compiled_code", None)
             node["compiled"] = False
         write(os.path.join(target, "manifest.json"), manifest)
-        doc = {"metadata": metadata("sources", 3, invocation, started), "results": [], "elapsed_time": 0}
+        if manifest["sources"]:
+            next_second()
+        measured = loaded_at()
+        results = [{"unique_id": source_id, "status": "pass", "max_loaded_at": measured[f"raw.{s['name']}"],
+                    "snapshotted_at": now()}
+                   for source_id, s in manifest["sources"].items() if f"raw.{s['name']}" in measured]
+        doc = {"metadata": metadata("sources", 3, invocation, started), "results": results, "elapsed_time": 0}
         write(os.path.join(target, "sources.json"), doc)
+        if manifest["sources"]:
+            next_second()
         return 0
 
     if not (words[:1] == ["build"] and os.environ.get("FAKE_DBT_KEEP_MANIFEST")):
@@ -248,6 +310,10 @@ def main():
             return "skipped"
         return "fail" if test["name"] in fail_tests else "pass"
 
+    # Tests selected themselves, e.g. a source's (#232).
+    direct = [i for i, n in nodes.items()
+              if n["resource_type"] == "test" and "test" not in excluded
+              and any(selects(t, n) for t in options.get("select", []))]
     outcome, results = {}, []
     if words[:1] == ["test"]:
         # Tests of the selected nodes (eager indirect selection); nothing is built.
@@ -255,23 +321,34 @@ def main():
             deps = test.get("depends_on", {}).get("nodes", [])
             if os.environ.get("FAKE_DBT_NO_TESTS"):
                 break
-            if test["resource_type"] == "test" and any(d in chosen for d in deps):
+            if test["resource_type"] == "test" and (any(d in chosen for d in deps) or test_id in direct):
                 results.append(result(test_id, test_status(test), started))
         doc = {"metadata": metadata("run-results", 6, invocation, started),
                "results": results, "elapsed_time": 0, "args": {"which": "test", "vars": run_vars}}
         write(os.path.join(target, "run_results.json"), doc)
         return 1 if any(r["status"] == "fail" for r in results) else 0
+    # Source tests first: like `dbt build`, a failing one skips the selected nodes that
+    # read the source, and theirs.
+    failed_sources = set()
+    for test_id in direct:
+        deps = nodes[test_id].get("depends_on", {}).get("nodes", [])
+        if deps and all(d.startswith("source.") for d in deps):
+            status = test_status(nodes[test_id])
+            results.append(result(test_id, status, started))
+            if status == "fail":
+                failed_sources.update(deps)
     # Parents first, as dbt runs them.
     pending = list(chosen)
     while pending:
         progressed = False
         for node_id in list(pending):
-            parents = [p for p in nodes[node_id].get("depends_on", {}).get("nodes", []) if p in chosen]
+            depends = nodes[node_id].get("depends_on", {}).get("nodes", [])
+            parents = [p for p in depends if p in chosen]
             if any(p not in outcome for p in parents):
                 continue
             pending.remove(node_id)
             progressed = True
-            if any(outcome[p] != "success" for p in parents):
+            if any(outcome[p] != "success" for p in parents) or failed_sources & set(depends):
                 status = "skipped"
             elif nodes[node_id]["name"] in fail:
                 status = "error"

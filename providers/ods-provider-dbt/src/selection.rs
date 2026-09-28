@@ -8,6 +8,8 @@
 //! - A node is selected by `fqn:<its fqn>,resource_type:<its type>`. The resource type
 //!   keeps tests, sources and other kinds out of the direct selection; tests of the
 //!   selected nodes still run through dbt's indirect selection, as with any selection.
+//!   A data test can be selected the same way (`resource_type:test`): a source's tests
+//!   (#232), which no node selection reaches, since ODS never selects sources.
 //! - If that would also match another node of the same type, the node's file narrows
 //!   it: `path:<file>,fqn:<fqn>,resource_type:<type>`. That only works for the root
 //!   project's own files. A package node that can't be selected exactly is an error:
@@ -27,6 +29,8 @@ fn type_name(t: ResourceType) -> Option<&'static str> {
         ResourceType::Model => Some("model"),
         ResourceType::Seed => Some("seed"),
         ResourceType::Snapshot => Some("snapshot"),
+        // A source's data tests (#232), which only direct selection reaches.
+        ResourceType::Test => Some("test"),
         _ => None,
     }
 }
@@ -125,7 +129,7 @@ pub fn exact_selectors(manifest: &Manifest, requested: &[String]) -> Result<Vec<
             continue;
         };
         let Some(kind) = type_name(node.resource_type) else {
-            problems.push(format!("{id} isn't a model, seed or snapshot"));
+            problems.push(format!("{id} isn't a model, seed, snapshot or data test"));
             continue;
         };
         if node.fqn.is_empty() || node.fqn.iter().any(|p| p.contains('.') || !is_literal(p)) {

@@ -7,6 +7,8 @@
 //! - [`record`] turns a finished run into the next snapshot, advancing only the nodes
 //!   that succeeded (AGENTS.md rule 5);
 //! - [`select`] resolves dbt-style `+name+` selectors;
+//! - [`source_checks`] decides which sources' checks run (their data is new or
+//!   unknown), and [`record_source_checks`] records their results (#232);
 //! - [`explain`], [`node_history`], [`diff_states`] and [`diff_project`] explain
 //!   decisions, past builds and differences (#21).
 //!
@@ -16,6 +18,7 @@ mod explain;
 mod planner;
 mod recorder;
 mod selection;
+mod sources;
 
 pub use explain::{
     Change, Explanation, NodeDiff, NodeEvent, StateDiff, changes, diff_project, diff_states,
@@ -23,7 +26,10 @@ pub use explain::{
 };
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
-pub use selection::select;
+pub use selection::{select, select_sources};
+pub use sources::{
+    RecordedSources, SourceCheck, SourceCheckAction, record_source_checks, source_checks,
+};
 
 use ods_core::FreshnessPolicy;
 use ods_core::state::{DataVersion, Fingerprint, NodeState, Timestamp};
@@ -145,6 +151,9 @@ pub struct Source {
     /// When `version` was observed. A version only says something about data a node
     /// hasn't seen if it was observed after the node was built.
     pub observed_at: Option<Timestamp>,
+    /// The digest of its checks (e.g. dbt source tests) as they are now (#232), as
+    /// for [`Node::checks`]. `None` when it has none, or they can't be identified.
+    pub checks: Option<String>,
 }
 
 impl Source {
@@ -159,6 +168,7 @@ impl Source {
             name: name.into(),
             version,
             observed_at: None,
+            checks: None,
         }
     }
 
@@ -166,6 +176,13 @@ impl Source {
     #[must_use]
     pub fn observed_at(mut self, at: Option<Timestamp>) -> Self {
         self.observed_at = at;
+        self
+    }
+
+    /// Sets the digest of its checks.
+    #[must_use]
+    pub fn with_checks(mut self, checks: Option<String>) -> Self {
+        self.checks = checks;
         self
     }
 }

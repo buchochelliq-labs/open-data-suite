@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
-- **Issues:** #11 (state model), #13 (fingerprints; formatting-insensitive SQL #209; hooks #218), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store)
+- **Issues:** #11 (state model), #13 (fingerprints; formatting-insensitive SQL #209; hooks #218), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store), #232 (source tests)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -125,6 +125,31 @@ graph LR
   ODS can't tell whether the relation still holds the recorded build (someone else may
   have rebuilt it), so "tested" means "the relation passed these checks after this
   build was recorded", not a proof about the recorded build's exact rows.
+
+### Tested sources (#232)
+*Amendment.* `dbt build` runs the tests defined on sources; ODS builds no sources, so
+without this its selection would silently drop raw-data checks.
+- A source is an input with checks. `StateSnapshot.sources` (schema **1.2**, absent
+  when empty, so 1.0 and 1.1 documents still read) maps a source id to a
+  `SourceState`: the `TestRecord` of its checks' last pass (run, time, checks digest,
+  computed as for nodes) and the data version (`max_loaded_at`) measured *before*
+  they ran, with when it was measured. A pass after no prior measurement is recorded
+  without a version and vouches for none. The SQLite schema is unchanged: snapshots
+  are JSON documents, and the new field is additive.
+- `ods state build` (with tests) and `ods state test` run a source's checks, first
+  match wins, when: there is no record (never passed, or failed last time:
+  `not_tested`); the digest differs (`checks_changed`); its data version now is below
+  `semantic`, or was measured no later than the last pass, or the record has none
+  (`missing_data_evidence`, rule 3); the version moved (`new_upstream_data`).
+  Otherwise they are skipped (`unchanged`). `ods_state::source_checks` decides and
+  `record_source_checks` records; both are provider-neutral. A failure removes the
+  record; a pass replaces it. Node builds and test-only runs carry the records over,
+  and a change of target drops them, as it drops the builds (ADR-0017).
+- The checks run in the same execution as the builds (`executor` contract 0.3,
+  ADR-0014). A failing one fails the command, and in a build the nodes that read the
+  source are skipped, as `dbt build` does; they keep their last state.
+- With `--select`, only sources a `+name` selector reaches as ancestors are
+  considered, as in dbt.
 
 ### Fingerprints (#13)
 - A fingerprint is a map from component name to SHA-256 digest, plus a digest of

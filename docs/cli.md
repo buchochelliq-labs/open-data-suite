@@ -462,6 +462,44 @@ ods state build --resource-type seed --exclude big_model
 ods state run --full-refresh -- --threads 8    # anything after `--` goes to dbt
 ```
 
+### Source tests
+
+`dbt build` also runs the tests defined on sources (e.g. `not_null` on a raw table).
+ODS never builds sources, so no node selection reaches those tests; instead
+`ods state build` (unless `--exclude-resource-type test`) and `ods state test` run a
+source's tests when (#232):
+
+- they haven't passed since ODS started recording them, or they failed last time;
+- they changed (one was added, removed or edited);
+- its data version is unknown: `dbt source freshness` didn't measure it (no
+  `loaded_at_field`/`freshness`), or measured it before the tests last passed;
+- its `max_loaded_at` moved since they last passed: the source has new data.
+
+Otherwise they are skipped: they already passed on this data. Their last pass is
+recorded in the target's state against the `max_loaded_at` measured before they ran,
+just as a node's tests are recorded against its build. With `--select`, only the
+sources a `+name` selector reaches as ancestors are considered (a node selected alone
+doesn't bring in its sources' tests, as in dbt). `ods state test --all` runs every
+source's tests.
+
+Sources don't need anything built first: `ods state test` on a state database with
+nothing recorded yet runs the sources' tests (and no node's) and records them, with
+`based_on: null` in JSON. With no sources to test either, it still fails with "ODS has
+no recorded builds to test". When a source test fails in `ods state test`, the nodes'
+tests that passed in the same run are still recorded as passed: the failing source test
+explains the failed run.
+
+The tests run in the same dbt invocation as the nodes, selected exactly
+(`fqn:<test fqn>,resource_type:test`). A failing source test fails the command
+(`ODS-E0404`), and, as with `dbt build`, the nodes being built that read the source,
+and theirs, are skipped: they keep their last state and build next time. The report
+lists every source with tests, whether its tests ran and why (e.g. "`raw.orders` has
+new data"), and how they ended; in JSON, `source_tests` holds the decisions (`source`,
+`name`, `action`: `test` or `skip`, `reasons` with codes `not_tested`,
+`checks_changed`, `missing_data_evidence`, `new_upstream_data` or `unchanged`, and
+`evidence`), `execution.sources` each source's outcome, and `record.source_tests` the
+sources whose tests `passed` or `failed`.
+
 It exits 0 when everything built and every test passed, or when there was nothing to
 build. It exits 1 with `ODS-E0404` when dbt couldn't run or when nodes or tests
 failed; the successes are recorded either way. If recording fails after dbt ran (for
@@ -588,7 +626,10 @@ each starting with dbt's usual `Running with dbt=…` banner:
 | 2 | `dbt compile` | compiled SQL for every node, which the fingerprints need | `--no-compile` |
 | 3 | the command's namesake with `--select …`: `dbt run`, `seed`, `snapshot` or `build` (`build --exclude-resource-type test --exclude-resource-type unit_test` without tests) | build exactly the plan's BUILD set | `compile`, `--dry-run`, or nothing to build |
 
-`ods state test` runs 1 and 2 the same way, then `dbt test --select …`.
+`ods state test` runs 1 and 2 the same way, then `dbt test --select …`. In both, the
+dbt command's step line counts the sources whose tests run with it, e.g. `dbt build:
+8 nodes and their tests, and the tests of 1 source`, and the plan summary names them
+(`source tests to run: raw.orders (new data)`).
 
 - **ODS's step lines** on stderr say which dbt command is about to run and why, since
   dbt starts each one with the same banner; the plan is summed up between them:
@@ -667,8 +708,11 @@ and the command exits 1 with `ODS-E0404`. Builds are unchanged: failing tests do
 make a node rebuild unless its code or data changes. A rebuild that fails, or whose
 tests fail, clears the node's tested mark, since the warehouse may now hold that
 build. Tests check what is in the warehouse now, with the tests as they are now.
-It takes `-s`/`--select`, `--exclude`, `--no-compile`, the dbt options and `-- DBT_ARGS`
-as `ods state run` does, plus `--all`.
+It also runs the tests of sources whose data is new or unknown since they last
+passed, as `ods state build` does ([Source tests](#source-tests)): it measures sources
+first, unless `--no-source-freshness` or `--no-compile`.
+It takes `-s`/`--select`, `--exclude`, `--no-compile`, `--no-source-freshness`, the dbt
+options and `-- DBT_ARGS` as `ods state run` does, plus `--all`.
 
 ## State: plan, record, history
 

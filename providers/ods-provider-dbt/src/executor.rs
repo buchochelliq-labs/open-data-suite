@@ -7,7 +7,9 @@
 //!   manifest so that no other node matches; [`ExecutionMode::Run`] leaves out data tests and unit tests
 //!   (`--exclude-resource-type`, dbt 1.8+). Outcomes come from the `run_results.json`
 //!   that invocation wrote; a file left by an earlier invocation is never read as this
-//!   one's.
+//!   one's. Requested sources' data tests (#232) are selected themselves, exactly, in
+//!   the same invocation: `dbt build` runs them first and skips the selected nodes that
+//!   read a source whose test failed, as it does for any `dbt build`.
 //!
 //! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
 //!   asks the adapter which relations exist (#230).
@@ -66,11 +68,15 @@ pub enum DbtStep {
         nodes: usize,
         /// Whether their tests run too.
         tests: bool,
+        /// How many sources' tests run too (#232).
+        sources: usize,
     },
-    /// `dbt test` of `nodes` nodes' tests.
+    /// `dbt test` of `nodes` nodes' tests, and `sources` sources'.
     Test {
         /// How many nodes' tests are selected.
         nodes: usize,
+        /// How many sources' tests are selected (#232).
+        sources: usize,
     },
     /// `dbt compile --inline`: which target dbt builds in.
     Identify,
@@ -663,9 +669,9 @@ impl<'r> Checks<'r> {
     }
 }
 
-/// In a test run nothing is built: each node's outcome is its checks'.
+/// Outcomes that are only their checks': every node in a test run, and every source.
 fn test_outcomes(
-    request: &ExecutionRequest,
+    requested: &[RequestedNode],
     run: &RunResults,
     checks: &Checks<'_>,
 ) -> Vec<NodeExecution> {
@@ -673,8 +679,7 @@ fn test_outcomes(
         .generated_at
         .as_deref()
         .and_then(|t| Timestamp::parse(t).ok());
-    request
-        .nodes
+    requested
         .iter()
         .map(|n| {
             let failed = checks.failed_on(&n.id);
@@ -701,15 +706,29 @@ fn test_outcomes(
         .collect()
 }
 
-/// Each requested node's outcome, the failed checks, and the nodes built unrequested.
-fn outcomes(
-    request: &ExecutionRequest,
-    run: &RunResults,
-    manifest: &Path,
-) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
+/// Each requested node's and source's outcome, the failed checks, and the nodes built
+/// unrequested.
+fn outcomes(request: &ExecutionRequest, run: &RunResults, manifest: &Path) -> Outcomes {
     let checks = Checks::new(request, run, manifest);
+    // In run mode no checks ran: sources are skipped.
+    let sources = if request.mode == ExecutionMode::Run {
+        request
+            .sources
+            .iter()
+            .map(|s| {
+                NodeExecution::new(
+                    s.id.clone(),
+                    ExecutionStatus::Skipped,
+                    None,
+                    Some("no checks run without tests".to_owned()),
+                )
+            })
+            .collect()
+    } else {
+        test_outcomes(&request.sources, run, &checks)
+    };
     let (nodes, failed, unrequested) = node_outcomes(request, run, checks);
-    for n in &nodes {
+    for n in nodes.iter().chain(&sources) {
         tracing::debug!(
             node = %n.node,
             status = ?n.status,
@@ -719,7 +738,34 @@ fn outcomes(
             "dbt result"
         );
     }
-    (nodes, failed, unrequested)
+    Outcomes {
+        nodes,
+        sources,
+        checks_failed: failed,
+        unrequested,
+    }
+}
+
+/// What [`outcomes`] found.
+struct Outcomes {
+    nodes: Vec<NodeExecution>,
+    sources: Vec<NodeExecution>,
+    checks_failed: Vec<String>,
+    unrequested: Vec<String>,
+}
+
+/// The data tests on `sources` (#232), from the manifest: those that read one.
+fn source_tests(manifest: &crate::Manifest, sources: &[RequestedNode]) -> Vec<String> {
+    let mut tests: Vec<String> = sources
+        .iter()
+        .flat_map(|s| crate::fingerprint::checks_of(manifest, &s.id))
+        // Sources have no unit tests; only data tests can be selected by type.
+        .filter(|id| id.starts_with("test."))
+        .map(str::to_owned)
+        .collect();
+    tests.sort();
+    tests.dedup();
+    tests
 }
 
 fn node_outcomes(
@@ -729,7 +775,7 @@ fn node_outcomes(
 ) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
     if request.mode == ExecutionMode::Test {
         return (
-            test_outcomes(request, run, &checks),
+            test_outcomes(&request.nodes, run, &checks),
             checks.failed,
             Vec::new(),
         );
@@ -970,8 +1016,9 @@ impl Executor for DbtExecutor {
     }
 
     async fn execute(&self, request: &ExecutionRequest) -> Result<ExecutionReport, ProviderError> {
-        // dbt reads an empty selection as "everything".
-        if request.nodes.is_empty() {
+        // dbt reads an empty selection as "everything". Run mode runs no checks, so
+        // sources alone are nothing to run either.
+        if request.is_empty() || (request.mode == ExecutionMode::Run && request.nodes.is_empty()) {
             return Err(ProviderError::Other(
                 "nothing to execute: the request names no nodes".to_owned(),
             ));
@@ -983,7 +1030,20 @@ impl Executor for DbtExecutor {
             ))
         })?;
         let ids: Vec<String> = request.nodes.iter().map(|n| n.id.clone()).collect();
-        let selectors = crate::selection::exact_selectors(&manifest, &ids).map_err(|why| {
+        // A source's tests are selected themselves: dbt reaches them through no node.
+        let tests = if request.mode == ExecutionMode::Run {
+            Vec::new()
+        } else {
+            source_tests(&manifest, &request.sources)
+        };
+        let selected: Vec<String> = ids.iter().chain(&tests).cloned().collect();
+        if selected.is_empty() {
+            // Only sources without tests: dbt would read no selection as everything.
+            return Err(ProviderError::Other(
+                "nothing to execute: the requested sources have no tests".to_owned(),
+            ));
+        }
+        let selectors = crate::selection::exact_selectors(&manifest, &selected).map_err(|why| {
             ProviderError::Other(format!("can't select exactly the planned nodes: {why}"))
         })?;
         refuse_engine_args(&request.engine_args)?;
@@ -1012,15 +1072,22 @@ impl Executor for DbtExecutor {
         let command = self.display(&args);
         let results_path = self.artifact("run_results.json");
         let before = invocation_of(&results_path);
+        let sources = if tests.is_empty() {
+            0
+        } else {
+            request.sources.len()
+        };
         self.step(if request.mode == ExecutionMode::Test {
             DbtStep::Test {
                 nodes: request.nodes.len(),
+                sources,
             }
         } else {
             DbtStep::Build {
                 command: dbt_command,
                 nodes: request.nodes.len(),
                 tests: request.mode == ExecutionMode::Build,
+                sources,
             }
         });
         let (ok, tail) = self.invoke(&args).await?;
@@ -1033,8 +1100,7 @@ impl Executor for DbtExecutor {
                 ));
             }
         };
-        let (nodes, checks_failed, unrequested) =
-            outcomes(request, &run, &self.artifact("manifest.json"));
+        let outcomes = outcomes(request, &run, &self.artifact("manifest.json"));
         let finished = run
             .generated_at
             .as_deref()
@@ -1046,10 +1112,11 @@ impl Executor for DbtExecutor {
                 .as_deref()
                 .and_then(|t| Timestamp::parse(t).ok()),
             finished,
-            nodes,
-            checks_failed,
+            outcomes.nodes,
+            outcomes.checks_failed,
         )
-        .with_unrequested(unrequested)
+        .with_sources(outcomes.sources)
+        .with_unrequested(outcomes.unrequested)
         .with_command(command);
         Ok(if ok { report } else { report.failed() })
     }
