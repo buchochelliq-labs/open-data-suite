@@ -96,4 +96,5 @@ nav:
       - adr/0018-state-store-migrations-and-recovery.md
       - adr/0019-release-and-versioning.md
       - adr/0020-dbt-state-interop-and-favor-state.md
+      - adr/0021-databricks-authentication.md
   - Legal and trademarks: legal.md
