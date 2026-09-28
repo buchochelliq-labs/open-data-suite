@@ -48,19 +48,27 @@ pub struct RetrySplit {
 /// built by the retry either, and isn't listed here.
 ///
 /// A node to retry is held back, with its parent, when a parent it reads needs
-/// building but isn't built by the retry: a node changed since, one left out, or one
-/// held back itself. Plans list parents before children, so holding back cascades.
+/// building but isn't built by the retry: a node changed since, one left out, one
+/// held back itself, or one outside the command's selection. Plans list parents
+/// before children, so holding back cascades.
+///
+/// `upstream` holds the decision for every node of the project, including those the
+/// command didn't select (a plan leaves them out): a parent outside `plan` that needs
+/// building makes its children stale too. A parent in neither, such as a source, is
+/// judged by the child's own plan decision.
 #[must_use]
 pub fn split_retry(
     plan: &ExecutionPlan,
     retry: &BTreeSet<String>,
     buildable: &BTreeSet<String>,
+    upstream: &BTreeMap<String, PlanAction>,
 ) -> RetrySplit {
-    let actions: BTreeMap<&str, PlanAction> = plan
-        .entries
+    let mut actions: BTreeMap<&str, PlanAction> = upstream
         .iter()
-        .map(|e| (e.node.as_str(), e.action))
+        .map(|(id, action)| (id.as_str(), *action))
         .collect();
+    // The command's own plan wins for what it selected, e.g. a full refresh.
+    actions.extend(plan.entries.iter().map(|e| (e.node.as_str(), e.action)));
     let mut split = RetrySplit::default();
     let mut built: BTreeSet<&str> = BTreeSet::new();
     for entry in &plan.entries {
@@ -89,7 +97,7 @@ pub fn split_retry(
             _ => {}
         }
     }
-    let planned: BTreeSet<&str> = actions.keys().copied().collect();
+    let planned: BTreeSet<&str> = plan.entries.iter().map(|e| e.node.as_str()).collect();
     split.not_planned = retry
         .iter()
         .filter(|id| !planned.contains(id.as_str()))
@@ -141,6 +149,7 @@ mod tests {
             &plan,
             &set(&["a", "b", "fixed", "left", "gone"]),
             &set(&["a", "b", "other"]),
+            &BTreeMap::new(),
         );
         assert_eq!(split.retried, ["a", "b"]);
         assert_eq!(split.reused, ["fixed"]);
@@ -167,6 +176,7 @@ mod tests {
             &plan,
             &set(&["x", "y", "z", "left"]),
             &set(&["changed", "x", "y", "z"]),
+            &BTreeMap::new(),
         );
         assert!(split.retried.is_empty(), "{split:?}");
         let held: Vec<(&str, &str)> = split
@@ -177,5 +187,37 @@ mod tests {
         // `y` waits on `x`, held back itself; `z` on `left`, which isn't buildable.
         assert_eq!(held, [("x", "changed"), ("y", "x"), ("z", "left")]);
         assert_eq!(split.changed_since, ["changed"]);
+    }
+
+    #[test]
+    fn holds_back_a_node_whose_unselected_parent_needs_building() {
+        use PlanAction::{Build, Reuse};
+        // The command selected only `c`; its parent `p` changed since the failed run.
+        let plan = ExecutionPlan::new(
+            None,
+            Timestamp::from_unix(0),
+            vec![entry("c", Build, &["p", "q"])],
+        );
+        let upstream = BTreeMap::from([
+            ("p".to_owned(), Build),
+            ("q".to_owned(), Reuse),
+            ("c".to_owned(), Build),
+        ]);
+        let split = split_retry(&plan, &set(&["c"]), &set(&["c"]), &upstream);
+        assert!(split.retried.is_empty(), "{split:?}");
+        let held: Vec<(&str, &str)> = split
+            .held_back
+            .iter()
+            .map(|h| (h.node.as_str(), h.parent.as_str()))
+            .collect();
+        assert_eq!(held, [("c", "p")]);
+        // `p` isn't in the retry's plan, so it isn't reported as changed since.
+        assert!(split.changed_since.is_empty());
+        assert!(split.not_planned.is_empty());
+
+        // Once `p` is reused, `c` is retried.
+        let upstream = BTreeMap::from([("p".to_owned(), Reuse), ("q".to_owned(), Reuse)]);
+        let split = split_retry(&plan, &set(&["c"]), &set(&["c"]), &upstream);
+        assert_eq!(split.retried, ["c"]);
     }
 }

@@ -1356,22 +1356,59 @@ pub(super) struct RetryReport {
     failed_sources: BTreeSet<String>,
 }
 
+/// Plans every node of the project, not just the selection, so a retry can see which
+/// unselected parents need building. A full refresh applies only to what the command
+/// selected, so it is left out here.
+fn plan_upstream(
+    ws: &Workspace,
+    latest: Option<&StoredSnapshot>,
+    now: Timestamp,
+    mut options: ods_state::PlanOptions,
+) -> Result<ExecutionPlan, CliError> {
+    options.full_refresh = false;
+    let all: BTreeSet<String> = ws.project.nodes.iter().map(|n| n.id.clone()).collect();
+    ods_state::plan_with(
+        &ws.project,
+        latest.map(|s| (s.id, &s.snapshot)),
+        &all,
+        now,
+        options,
+    )
+    .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))
+}
+
 impl RetryReport {
     /// Narrows `requested`, what the command would build of `plan`, to what failed in
     /// the run `failed` retries, through [`ods_state::split_retry`]. Without `failed`,
     /// `requested` is unchanged.
+    ///
+    /// `upstream` plans every node of the project, so a parent the command didn't
+    /// select still holds back a child that would read it stale. It is only called
+    /// when retrying.
     fn narrow(
         failed: Option<&RetryFailed>,
         plan: &ExecutionPlan,
         requested: Vec<RequestedNode>,
-    ) -> (Vec<RequestedNode>, Option<Self>) {
+        upstream: impl FnOnce() -> Result<ExecutionPlan, CliError>,
+    ) -> Result<(Vec<RequestedNode>, Option<Self>), CliError> {
         let Some(failed) = failed else {
-            return (requested, None);
+            return Ok((requested, None));
         };
         let buildable: BTreeSet<String> = requested.iter().map(|n| n.id.clone()).collect();
-        let split = ods_state::split_retry(plan, &failed.outcome.nodes(), &buildable);
-        let entries: BTreeMap<&str, &ods_core::state::PlanEntry> =
-            plan.entries.iter().map(|e| (e.node.as_str(), e)).collect();
+        let upstream = upstream()?;
+        let actions: BTreeMap<String, PlanAction> = upstream
+            .entries
+            .iter()
+            .map(|e| (e.node.clone(), e.action))
+            .collect();
+        let split = ods_state::split_retry(plan, &failed.outcome.nodes(), &buildable, &actions);
+        // The command's own entries win; unselected parents are named from `upstream`.
+        let entries: BTreeMap<&str, &ods_core::state::PlanEntry> = upstream
+            .entries
+            .iter()
+            .chain(&plan.entries)
+            .map(|e| (e.node.as_str(), e))
+            .collect();
         let why = |id: &str| {
             entries
                 .get(id)
@@ -1414,7 +1451,7 @@ impl RetryReport {
             source_tests_changed_since: Vec::new(),
             failed_sources: failed.outcome.failed_source_tests.clone(),
         };
-        (requested, Some(report))
+        Ok((requested, Some(report)))
     }
 
     /// Keeps in `checks` only the sources whose tests failed in the run retried; the
@@ -1569,7 +1606,8 @@ impl RunReport {
             &types,
             &format!("ods state {}", kind.name()),
         )?;
-        let (requested, retry) = RetryReport::narrow(retry, &plan, requested);
+        let every_node = || plan_upstream(&ws, latest.as_ref(), now, options);
+        let (requested, retry) = RetryReport::narrow(retry, &plan, requested, every_node)?;
         if builds {
             warnings.extend(unbuilt_parents(
                 &ws.project,

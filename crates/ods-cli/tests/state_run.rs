@@ -2287,6 +2287,34 @@ fn retry_failed_holds_back_what_reads_a_parent_it_does_not_build() {
     assert!(names(&json["result"]["retry"]["held_back"]).contains(&"orders".to_owned()));
 }
 
+/// #292: a parent outside the failed run's selection counts too. It isn't built by the
+/// retry, so a node to retry that reads it after it changed is held back.
+#[test]
+fn retry_failed_holds_back_what_reads_an_unselected_parent() {
+    let mut project = Project::new("retry-failed-unselected");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.orders");
+    project = project.with("FAKE_DBT_FAIL", "orders");
+    let (code, json) = project.run(&["-s", "orders"]);
+    assert_eq!(code, 1, "{json:#}");
+    project.env.retain(|(k, _)| k != "FAKE_DBT_FAIL");
+    project.change_code("model.jaffle_ods.stg_orders");
+
+    let (code, json, _) = retry(&project, &["--failed", "--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["build"], 0, "{json:#}");
+    let held = &result["retry"]["held_back"];
+    assert_eq!(names(held), ["orders"], "{json:#}");
+    assert!(
+        held[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("reads `stg_orders`, which needs building (code changed"),
+        "{json:#}"
+    );
+}
+
 /// #292: a last-run file from before #292 (version 1.0, no outcome) still reads:
 /// `retry` runs it, and `retry --failed` says there is nothing recorded to retry.
 #[test]
