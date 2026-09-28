@@ -100,7 +100,7 @@ Rewrite `prod/manifest.json` so built nodes point at this target.
   `state:modified` comparisons. Two developers would overwrite each other. There is no
   record of what changed. Rejected.
 
-### Option D — `ods state export --dbt <dir>` (chosen)
+### Option D — `ods state export --dbt-state <dir>` (chosen)
 Write a new state directory that points each node at the right place, and explain
 every choice.
 - Pros: dbt is unchanged, and so is the upstream artifact. The choice uses what ODS
@@ -110,26 +110,58 @@ every choice.
   step. The directory is only as current as the last export.
 
 ## Decision
-**`ods state export --dbt <dir> --upstream <state dir>` writes a dbt state directory. It
-is the upstream `manifest.json` with one change: nodes that ODS recorded as successfully
-built in this target, and can show still exist there, point at this target's relation.
-Every other node keeps the upstream pointer. `ods state import --dbt <target dir>`
-records a plain dbt run.**
+**`ods state export --dbt-state <dir> --upstream <state dir>` writes a dbt state
+directory. It is the upstream `manifest.json` with one change: nodes that ODS recorded as
+successfully built in this target, and can show still exist there, point at this
+target's relation. Every other node keeps the upstream pointer. By default it also holds
+the previous run's `run_results.json`, so `dbt retry --state <dir>` works.
+`ods state import --from <target dir>` records a plain dbt run.**
 
 ### 1. The export command
 ```sh
-ods state export --dbt .ods/dbt-state --upstream prod/ --target dev
-dbt retry --state .ods/dbt-state     # or the invocation the test shows (§7)
+ods state export --dbt-state .ods/dbt-state --upstream prod/ --target dev
+dbt retry --state .ods/dbt-state     # to be confirmed by the reproduction test (§7)
 ```
+- **Option names.** `--dbt PROGRAM` already means the dbt executable on every
+  `ods state` command (`docs/cli.md`), and it keeps that meaning here. The export's
+  directory is `--dbt-state <dir>`, named after dbt's `--state`. The import's source is
+  `--from <target dir>`.
 - `--upstream` names the directory holding the upstream `manifest.json`, e.g. prod's.
   It is required: ODS doesn't guess where prod is.
 - The scope is the usual one (`--target`, `--environment`, ADR-0017).
 - The upstream manifest must be for the same project (`metadata.project_name` and
   `metadata.project_id` match the current manifest's). Otherwise the export is refused.
-- The target directory is written atomically: files go to a temporary directory next
-  to it, which is then renamed. A failed export leaves the previous one intact
-  (rule 5's spirit).
 - It never writes into the upstream directory.
+
+**How the directory is refreshed.** Renaming a whole directory over a non-empty one
+isn't atomic on any platform, and swapping a symlink may need admin rights on Windows.
+So the directory stays put, and each file in it is replaced atomically:
+1. ODS takes a lock file, `.ods-export.lock`, in the directory. A second export to the
+   same directory waits, then fails. dbt never reads that file.
+2. It writes every new file in full to a temporary file in the same directory (so on
+   the same filesystem), and flushes it. A maintained crate does this (`tempfile`'s
+   `persist`, already a dev-dependency).
+3. It renames the files over the old ones in this order: `ods-export.json`, then
+   `run_results.json` (or deletes an old one the new export doesn't include), and
+   **`manifest.json` last**. A rename is atomic on POSIX. On Windows, `MoveFileEx`
+   with `REPLACE_EXISTING` replaces the file in one step, but fails while another
+   process holds it open. ODS retries briefly, then fails and names the file.
+
+What a dbt reader can see during a refresh:
+- **No file is ever partly written.** dbt reads each file whole when it starts, so it
+  gets either the old or the new version of each.
+- **The manifest decides where refs resolve, and it changes last,** in a single step.
+  A dbt run that starts during a refresh either uses the whole previous export or the
+  whole new one.
+- A reader can pair the new `run_results.json` with the old `manifest.json`. Both
+  still come from recorded runs in this scope. The old manifest's pointers were each
+  checked when it was written. The worst case is a retry that selects from the newer
+  results and resolves refs as the previous export did. `ods-export.json` records the
+  SHA-256 of the manifest it describes, so ODS (and the docs' troubleshooting) can
+  tell when the files disagree.
+- If any step fails, the export exits non-zero and says which files were replaced.
+  Before step 3 nothing has changed. Rerunning the export repairs a partial refresh.
+  The upstream directory and ODS state are never touched (rule 5).
 
 ### 2. The per-node rule
 It applies to each node in the upstream manifest's `nodes`. First match wins. Each
@@ -165,14 +197,28 @@ outcome has a reason code.
   `relation_name` are replaced. Nothing is added, removed or reordered on purpose,
   including `metadata`. A test diffs the output against the upstream and allows only
   those four fields to differ.
-- **`run_results.json`:** only with `--run-results <file>`, for `dbt retry`, which
-  needs the previous run's results. The file is copied unchanged, after checking that
-  its `metadata.invocation_id` is a run recorded in this scope. ODS never writes run
-  results itself.
+- **`run_results.json`, by default:** `dbt retry --state <dir>` reads the previous
+  run's results from that directory (see "What we are unsure of"). So the export copies
+  the project's latest `run_results.json` from the dbt target path (`--target-dir`,
+  default `target/`), or the file named by `--run-results <file>`.
+  - It is copied unchanged, and only if its `metadata.invocation_id` is a run recorded
+    in this scope: an `ods state` run, or one recorded by `import`/`record`. Otherwise
+    it is left out, with a warning that says why and how to retry without it.
+  - `--no-run-results` leaves it out.
+  - ODS never writes run results itself.
+
+  **The documented retry, and its alternative.** We document `dbt retry --state <dir>`
+  with the run results inside the export. The other form keeps the results where dbt
+  wrote them, and passes only the manifest:
+  `dbt retry --state target/ --defer-state <dir>`. It works only if `dbt retry` honours
+  `--defer-state` over its saved arguments, which we don't know. The reproduction test
+  (§7) runs both forms. The docs will show the form it confirms, and the export's
+  default changes if only the second one works.
 - **`ods-export.json`:** ODS's own sidecar, which dbt doesn't read. It holds
   `schema_version`, when and from which snapshot the export was made, the target
-  identity's non-secret form (ADR-0017), the upstream manifest's `invocation_id`, and
-  each node's choice and reason.
+  identity's non-secret form (ADR-0017), the upstream manifest's `invocation_id`, the
+  SHA-256 of the `manifest.json` and `run_results.json` it was written with, and each
+  node's choice and reason.
 - **Supported versions:** manifest **v12** and run results **v6**, the versions the
   fixtures in `fixtures/dbt/` use (dbt 1.10.23 and 2.0.5 both write manifest v12) and
   that dbt 1.11 and 1.12 in the `real-dbt` job write. The export keeps the upstream's
@@ -205,7 +251,7 @@ outcome has a reason code.
   directory like the upstream state directory it came from.
 
 ### 6. Importing a plain dbt run
-`ods state import --dbt <target dir>` records a `dbt build`, `run`, `seed`,
+`ods state import --from <target dir>` records a `dbt build`, `run`, `seed`,
 `snapshot` or `retry` made outside ODS.
 - It is `ods state record` (ADR-0013) given a directory. It reads `manifest.json`,
   `run_results.json` and, if present, `sources.json`, with the same refusals: commands
@@ -230,16 +276,21 @@ outcome has a reason code.
    - Assert that `b` read **prod's** `a` (its marker, and the relation in its compiled
      SQL). The test pins today's behaviour, so a dbt release that changes it is
      noticed.
-   - The same test settles each point under "What we are unsure of". It tries the
-     retry with the export as `--state` and as `--defer-state`, and records which
-     works.
-2. **Then the fix:** the same scenario through `ods state build` (or `ods state
-   import`), then `ods state export --dbt`, then `dbt retry`. Assert that `b` read
-   **dev's** `a`.
-3. **Unit and snapshot tests** with no dbt: each rule in §2 with a fake store and
-   inspector; the four-field diff against the fixture manifests; refusal of other
-   schema versions and of another project's manifest; `insta` snapshots of the JSON
-   and plain output; a check that no ODS key appears in `manifest.json`.
+   - The same test settles each point under "What we are unsure of". It runs both
+     retry forms from §3: `dbt retry --state <export>` with the copied run results,
+     and `dbt retry --state target/ --defer-state <export>`. It records which works.
+2. **Then the fix:** the same scenario through `ods state build` (or
+   `ods state import --from`), then `ods state export --dbt-state`, then `dbt retry`.
+   Assert that `b` read **dev's** `a`.
+3. **Unit and snapshot tests** with no dbt:
+   - each rule in §2, with a fake store and inspector;
+   - the four-field diff against the fixture manifests;
+   - refusal of other schema versions and of another project's manifest;
+   - run results copied only when their invocation is recorded;
+   - the refresh: file order, a failure before and during the renames, and a second
+     export blocked by the lock;
+   - `insta` snapshots of the JSON and plain output;
+   - a check that no ODS key appears in `manifest.json`.
 4. **Databricks:** the same scenario in the `databricks` workflow (#294), once dbt runs
    there.
 
