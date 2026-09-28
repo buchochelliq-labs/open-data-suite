@@ -37,7 +37,7 @@ jobs:
       (github.event.label.name == 'databricks' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     environment: databricks-free
     permissions:
       contents: read
@@ -56,8 +56,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: "3.11"
+      # Everything that runs no Databricks code comes before the token exists.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build ods
+        run: |
+          cargo build -p ods-cli
+          echo "ODS=$PWD/target/debug/ods" >> "$GITHUB_ENV"
+      - name: Cache the dbt-databricks virtualenv
+        id: venv
+        uses: actions/cache@v4
+        with:
+          path: ~/dbt-databricks-venv
+          key: dbt-databricks-venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('.github/dbt/requirements-databricks.txt') }}
+      - name: Install dbt-core and dbt-databricks
+        if: steps.venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv ~/dbt-databricks-venv
+          # Exactly the pinned packages: nothing resolved at install time.
+          ~/dbt-databricks-venv/bin/pip install --no-deps -r .github/dbt/requirements-databricks.txt
+          ~/dbt-databricks-venv/bin/pip check
       - name: Authenticate (federation, else service principal secret)
         env:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
@@ -71,6 +92,16 @@ jobs:
           python .github/databricks/ci.py sql "CREATE TABLE \`$CATALOG\`.\`$SCHEMA\`.smoke AS SELECT 1 AS id, 'ok' AS status"
           python .github/databricks/ci.py sql "SELECT * FROM \`$CATALOG\`.\`$SCHEMA\`.smoke"
           python .github/databricks/ci.py sql "DESCRIBE HISTORY \`$CATALOG\`.\`$SCHEMA\`.smoke"
+      # `ods state` on the demo project, in the run's schema. Its styled output is also
+      # in the log between `ods-transcript` markers, for the docs' screenshots
+      # (scripts/render-transcripts.py).
+      - name: ods state on the demo project
+        run: |
+          export PATH="$HOME/dbt-databricks-venv/bin:$PATH"
+          # dbt-databricks authenticates with DATABRICKS_TOKEN alone: the Databricks
+          # SDK refuses a second method it would find in these.
+          unset DATABRICKS_CLIENT_ID DATABRICKS_ACCOUNT_ID DATABRICKS_TOKEN_AUDIENCE DATABRICKS_OAUTH_SCOPES
+          ODS_CI_CATALOG="$CATALOG" ODS_CI_SCHEMA="$SCHEMA" bash .github/databricks/demo.sh
       - name: Drop the run's schema
         if: always() && env.DATABRICKS_TOKEN != ''
         run: python .github/databricks/ci.py sql "DROP SCHEMA IF EXISTS \`$CATALOG\`.\`$SCHEMA\` CASCADE"
