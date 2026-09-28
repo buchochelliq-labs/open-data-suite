@@ -49,6 +49,53 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
+  # The tests that check ODS against real dbt with DuckDB (#233): exact selection, test
+  # accounting, dbt-shaped commands, the environment dbt reads, and more. They skip
+  # unless ODS_TEST_DBT names a dbt executable. Each supported dbt minor is pinned, with
+  # all its dependencies, in .github/dbt/requirements-<minor>.txt; bump them there.
+  real-dbt:
+    name: real-dbt (dbt ${{ matrix.dbt }})
+    strategy:
+      fail-fast: false
+      matrix:
+        dbt: ["1.11", "1.12"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: "3.11"
+      - name: Cache the dbt virtualenv
+        id: venv
+        uses: actions/cache@v4
+        with:
+          path: ~/dbt-venv
+          key: dbt-venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles(format('.github/dbt/requirements-{0}.txt', matrix.dbt)) }}
+      - name: Install dbt ${{ matrix.dbt }} and dbt-duckdb
+        if: steps.venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv ~/dbt-venv
+          # Exactly the pinned packages: nothing resolved at install time.
+          ~/dbt-venv/bin/pip install --no-deps -r .github/dbt/requirements-${{ matrix.dbt }}.txt
+          ~/dbt-venv/bin/pip check
+      - run: echo "ODS_TEST_DBT=$HOME/dbt-venv/bin/dbt" >> "$GITHUB_ENV"
+      - run: '"$ODS_TEST_DBT" --version'
+      # A filter that matches nothing passes, so check that the tests ran.
+      - name: Real-dbt tests
+        shell: bash
+        run: |
+          cargo test -p ods-cli --test state_run real_dbt 2>&1 | tee real-dbt.log
+          grep -q '^test real_dbt \.\.\. ok' real-dbt.log
+      - name: dbt's settings are all classified (#227)
+        shell: bash
+        run: |
+          cargo test -p ods-provider-dbt --test env_params 2>&1 | tee env-params.log
+          grep -q '^test every_setting_the_installed_dbt_reads_is_classified \.\.\. ok' env-params.log
+
   msrv:
     runs-on: ubuntu-latest
     steps:

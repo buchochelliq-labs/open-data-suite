@@ -11,6 +11,10 @@
 //! - [`EnvClass::Refused`]: would change what is built or recorded, and nothing beats
 //!   it: ODS refuses to run until it is unset.
 //!
+//! dbt 1.11 and later also read each setting as `DBT_ENGINE_<rest>`, and prefer that
+//! spelling; [`class`] treats it as the setting it spells, except that ODS reads only
+//! the `DBT_` spelling of the settings it has options for, so it refuses the other.
+//!
 //! Any other `DBT_*` name isn't a dbt setting (e.g. `DBT_ENV_SECRET_*`, or a project's
 //! own variable read by `env_var()`) and passes through: its effect on the code is in
 //! the compiled SQL, which is fingerprinted.
@@ -46,12 +50,13 @@ const CHANGES_SELECTION: &str = "it changes which nodes dbt builds, and ODS sele
 const NOT_REAL: &str = "it makes dbt build something other than the real thing (empty, sampled or one time window), which ODS can't record as a build";
 const BEATS_FLAGS: &str = "this old spelling beats dbt's own flags (dbt maps it over --no-defer and --no-favor-state), so ODS can't override it";
 const STALE_PARSE: &str = "it makes dbt parse the project from a file of changes instead of the files themselves, so ODS could plan and fingerprint code that isn't what runs";
+const OWNED_ALIAS: &str = "dbt 1.11+ reads it in place of the DBT_ variable that ODS reads as one of its own options, so dbt and ODS would disagree; set that DBT_ variable, or the option, instead";
 const REPLAYS: &str = "in replay mode dbt answers from a recording instead of the warehouse, so nothing ODS records would be real";
 
-/// Every dbt setting ODS knows, by variable name, sorted. dbt 1.10's `params.py` names
-/// are all here (a test checks the installed dbt), plus the recorder's, which dbt reads
-/// outside it.
-pub const DBT_ENV: [(&str, EnvClass); 61] = [
+/// Every dbt setting ODS knows, by variable name, sorted. The names in `params.py` of
+/// dbt 1.10 to 1.12 are all here (a test checks the installed dbt), plus the
+/// recorder's, which dbt reads outside it.
+pub const DBT_ENV: [(&str, EnvClass); 67] = [
     ("DBT_ARTIFACT_STATE_PATH", Overridden { flag: "--no-defer" }),
     ("DBT_CACHE_SELECTED_ONLY", Harmless),
     ("DBT_CLEAN_PROJECT_FILES_ONLY", Harmless),
@@ -60,7 +65,17 @@ pub const DBT_ENV: [(&str, EnvClass); 61] = [
     ("DBT_DEFER_STATE", Overridden { flag: "--no-defer" }),
     ("DBT_DEFER_TO_STATE", Refused { why: BEATS_FLAGS }),
     ("DBT_EMPTY", Overridden { flag: "--no-empty" }),
+    ("DBT_ENGINE_HINTS_ENABLED", Harmless),
+    // dbt records a seed bigger than this by path instead of content hash; ODS treats
+    // such a seed as changed on every run.
+    ("DBT_ENGINE_MAXIMUM_SEED_SIZE_MIB", Harmless),
     ("DBT_ENGINE_RECORDER_MODE", Refused { why: REPLAYS }),
+    ("DBT_ENGINE_SNOWFLAKE_PROJECTS_OTEL", Harmless),
+    ("DBT_ENGINE_SQLPARSE", Harmless),
+    // Another parser, like DBT_STATIC_PARSER: ODS reads and fingerprints the artifacts
+    // it writes, as with dbt's own.
+    ("DBT_ENGINE_USE_V2_PARSER", Harmless),
+    ("DBT_ENGINE_V2_PARSER", Harmless),
     ("DBT_EVENT_TIME_END", Refused { why: NOT_REAL }),
     ("DBT_EVENT_TIME_START", Refused { why: NOT_REAL }),
     (
@@ -182,12 +197,29 @@ pub const OUTSIDE_PARAMS: [&str; 3] = [
     "DBT_RECORDER_MODE",
 ];
 
-/// What ODS does with `name`, or `None` if it isn't a dbt setting.
+/// What ODS does with `name`, or `None` if it isn't a dbt setting. A
+/// `DBT_ENGINE_<rest>` name is the setting `DBT_<rest>`, as dbt 1.11+ reads it; one
+/// that stands for a setting ODS owns is refused.
 pub fn class(name: &str) -> Option<EnvClass> {
+    listed(name).or_else(|| match listed(&canonical(name))? {
+        Owned { .. } => Some(Refused { why: OWNED_ALIAS }),
+        other => Some(other),
+    })
+}
+
+fn listed(name: &str) -> Option<EnvClass> {
     DBT_ENV
         .binary_search_by(|(n, _)| (*n).cmp(name))
         .ok()
         .map(|i| DBT_ENV[i].1)
+}
+
+/// `DBT_<rest>` for dbt 1.11+'s `DBT_ENGINE_<rest>`; any other name as it is.
+fn canonical(name: &str) -> String {
+    match name.strip_prefix("DBT_ENGINE_") {
+        Some(rest) if listed(name).is_none() => format!("DBT_{rest}"),
+        _ => name.to_owned(),
+    }
 }
 
 /// Whether `name` set to `value` changes what dbt does. For dbt's booleans, a false
@@ -196,7 +228,7 @@ pub fn class(name: &str) -> Option<EnvClass> {
 fn is_set(name: &str, value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
     if matches!(
-        name,
+        canonical(name).as_str(),
         "DBT_DEFER"
             | "DBT_DEFER_TO_STATE"
             | "DBT_EMPTY"
@@ -339,6 +371,30 @@ mod tests {
         // A project's own variable, and dbt's secret-prefixed ones.
         assert_eq!(class("DBT_SCHEMA"), None);
         assert_eq!(class("DBT_ENV_SECRET_TOKEN"), None);
+    }
+
+    #[test]
+    fn engine_spellings_are_the_settings_they_spell() {
+        assert_eq!(
+            class("DBT_ENGINE_DEFER"),
+            Some(Overridden { flag: "--no-defer" })
+        );
+        assert_eq!(class("DBT_ENGINE_SAMPLE"), class("DBT_SAMPLE"));
+        assert_eq!(class("DBT_ENGINE_LOG_LEVEL"), Some(Harmless));
+        // ODS reads only the DBT_ spelling of its own options' variables.
+        assert!(matches!(class("DBT_ENGINE_TARGET"), Some(Refused { .. })));
+        assert_eq!(class("DBT_ENGINE_SCHEMA"), None);
+        let report = EnvReport::of([
+            ("DBT_ENGINE_DEFER", "false"),
+            ("DBT_ENGINE_EMPTY", "1"),
+            ("DBT_ENGINE_TARGET", "prod"),
+        ]);
+        assert_eq!(
+            report.overridden,
+            [("DBT_ENGINE_EMPTY".to_owned(), "--no-empty")]
+        );
+        assert_eq!(report.refused.len(), 1);
+        assert_eq!(report.refused[0].0, "DBT_ENGINE_TARGET");
     }
 
     #[test]

@@ -6,6 +6,17 @@ use std::process::Command;
 
 use ods_provider_dbt::settings::{DBT_ENV, OUTSIDE_PARAMS};
 
+/// Settings only newer dbt versions read, with the first (major, minor) that does: on
+/// an older dbt they aren't stale. CI runs this against each pinned dbt minor (#233).
+const SINCE: [(&str, (u32, u32)); 6] = [
+    ("DBT_ENGINE_HINTS_ENABLED", (1, 12)),
+    ("DBT_ENGINE_MAXIMUM_SEED_SIZE_MIB", (1, 12)),
+    ("DBT_ENGINE_SNOWFLAKE_PROJECTS_OTEL", (1, 12)),
+    ("DBT_ENGINE_SQLPARSE", (1, 11)),
+    ("DBT_ENGINE_USE_V2_PARSER", (1, 12)),
+    ("DBT_ENGINE_V2_PARSER", (1, 12)),
+];
+
 #[test]
 fn every_setting_the_installed_dbt_reads_is_classified() {
     let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
@@ -23,7 +34,8 @@ fn every_setting_the_installed_dbt_reads_is_classified() {
     let out = Command::new(python)
         .args([
             "-c",
-            "import dbt.cli.params as p; print(open(p.__file__).read())",
+            "import dbt.cli.params as p, dbt.version as v; \
+             print(v.__version__); print(open(p.__file__).read())",
         ])
         .output()
         .unwrap();
@@ -32,7 +44,11 @@ fn every_setting_the_installed_dbt_reads_is_classified() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let source = String::from_utf8(out.stdout).unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let (version, source) = stdout.split_once('\n').unwrap();
+    let mut parts = version.trim().split('.').map(|p| p.parse::<u32>().unwrap());
+    let version = (parts.next().unwrap(), parts.next().unwrap());
+    let newer = |n: &str| SINCE.iter().any(|(s, since)| *s == n && version < *since);
     let mut read: Vec<&str> = source
         .split("envvar=\"")
         .skip(1)
@@ -49,7 +65,7 @@ fn every_setting_the_installed_dbt_reads_is_classified() {
     );
     let stale: Vec<&&str> = known
         .iter()
-        .filter(|n| !read.contains(n) && !OUTSIDE_PARAMS.contains(n))
+        .filter(|n| !read.contains(n) && !OUTSIDE_PARAMS.contains(n) && !newer(n))
         .collect();
     assert!(stale.is_empty(), "no longer read by dbt: {stale:?}");
 }
