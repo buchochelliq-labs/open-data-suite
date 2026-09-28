@@ -8,6 +8,9 @@ and Databricks, and every decision it makes can be explained.
 >
 > **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
 > `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
+>
+> **Install:** from v0.1.0, `pip install opendatasuite` puts `ods` on your PATH next to
+> dbt. Homebrew, `cargo binstall` and direct downloads: [`docs/install.md`](docs/install.md).
 
 | Module | What it does | Target |
 |---|---|---|

@@ -34,6 +34,11 @@ State MVP. Entries below record changes since the changelog was introduced.
   pull request (#287, #233).
 - A release and versioning policy: one version for `ods`, a version for each interface,
   this changelog, and a deprecation window (#101).
+- Release builds of `ods` for Linux (x86_64 and arm64, static), macOS (Intel and Apple
+  silicon) and Windows, from the first release on. Install with `pip install
+  opendatasuite`, Homebrew, `cargo binstall` or a direct download; each archive comes
+  with `SHA256SUMS`, a build provenance attestation, the licence and third-party licence
+  notices. See the Install page of the documentation (#212).
 
 ### Changed
 - State snapshots are now schema version 1.2: they record each source's last passing

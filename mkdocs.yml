@@ -66,6 +66,7 @@ validation:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Install: install.md
   - Column-level lineage: lineage.md
   - More capabilities: capabilities.md
   - CLI reference: cli.md

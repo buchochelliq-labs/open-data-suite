@@ -7,8 +7,16 @@
 
 ## 1. Install
 
-There are no prebuilt binaries yet. Build from source with Rust 1.90 or newer
-([rustup.rs](https://rustup.rs)):
+From the first release (v0.1.0), install next to dbt with pip:
+
+```sh
+pip install opendatasuite
+ods version
+```
+
+Homebrew, cargo-binstall and direct downloads with checksums are on the
+[Install](install.md) page. Until v0.1.0 is out, build from source with Rust 1.90 or
+newer ([rustup.rs](https://rustup.rs)):
 
 ```sh
 cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suite ods-cli
