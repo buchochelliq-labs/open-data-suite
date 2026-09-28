@@ -21,6 +21,14 @@ State MVP. Entries below record changes since the changelog was introduced.
   is 0.3 (#288, #232).
 
 ### Added
+- `ods state retry --failed` reruns the last command, but builds only the nodes that
+  failed, or were skipped because of a failure, and tests only the sources whose tests
+  failed, as `dbt retry` does. They are still planned: a node the plan now reuses is
+  reused, with why; a node whose parent isn't built with it is held back rather than
+  run on stale input. Nodes that changed since aren't built, and are listed as
+  "changed since, not retried". If the last run succeeded, or kept no outcome,
+  `--failed` says so and exits with `ODS-E0403` without running dbt. JSON output gains
+  a `retry` object (#292).
 - `ods state build` (with tests) and `ods state test` run the tests defined on sources,
   as `dbt build` does, but only when they could find something new: the source has new
   data, its data version is unknown, its tests changed, or they haven't passed yet. A
@@ -41,6 +49,10 @@ State MVP. Entries below record changes since the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- The last-run file beside the state database (`<state-db>.last-run.json`) is now
+  format 1.1: it also keeps which nodes failed or were skipped, and which sources'
+  tests failed. Files written at 1.0 still read; an older ODS refuses a 1.1 file, as
+  written by a newer ODS (#292).
 - State snapshots are now schema version 1.2: they record each source's last passing
   tests against its data version. Snapshots written at 1.0 and 1.1 still read (#288).
 - `ods state test` names failed checks by test name rather than by their hash (#288).

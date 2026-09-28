@@ -131,7 +131,7 @@ impl Module for State {
                 }
             }
             Some(("retry", args)) => {
-                let (last, line) = state_retry::last_run(args, ctx.config)?;
+                let (last, line, failed) = state_retry::last_run(args, ctx.config)?;
                 let matches = self.command().try_get_matches_from(&line).map_err(|e| {
                     CliError::new(
                         ExitStatus::Usage,
@@ -144,9 +144,30 @@ impl Module for State {
                     )
                     .with_hint("run the command you want yourself; retry will then use it")
                 })?;
-                state_run::Steps::new(ctx.progress, 0)
-                    .note(&format!("retrying `{}`", last.shown()));
-                self.run(&matches, ctx)
+                state_run::Steps::new(ctx.progress, 0).note(&format!(
+                    "retrying {}`{}`",
+                    if failed.is_some() {
+                        "what failed in "
+                    } else {
+                        ""
+                    },
+                    last.shown()
+                ));
+                // `--failed` refuses a last `test`, so the command is one that builds.
+                let kind = matches
+                    .subcommand()
+                    .and_then(|(name, sub)| Some((state_run::Kind::named(name)?, sub)));
+                match (failed, kind) {
+                    (Some(failed), Some((kind, sub))) => {
+                        state_run::RunReport::run_with(kind, sub, ctx, Some(&failed))
+                    }
+                    (Some(_), None) => Err(CliError::new(
+                        ExitStatus::Failure,
+                        codes::INTERNAL,
+                        format!("`{}` can't be retried with --failed", last.shown()),
+                    )),
+                    (None, _) => self.run(&matches, ctx),
+                }
             }
             Some(("doctor", args)) => state_doctor::DoctorReport::run(args, ctx),
             Some(("backup", args)) => {
