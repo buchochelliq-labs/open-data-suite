@@ -72,6 +72,7 @@ nav:
   - CLI reference: cli.md
   - Principles: principles.md
   - Architecture: architecture.md
+  - Testing against Databricks: contributing-databricks.md
   - Roadmap:
       - Overview: roadmap.md
       - Full plan: ROADMAP.md

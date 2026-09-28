@@ -1,0 +1,71 @@
+# Integration tests against a real Databricks Free Edition workspace (#294).
+#
+# Runs in the `databricks-free` environment, which holds the workspace settings; fork
+# PRs get none of them. Authenticates with workload identity federation (GitHub OIDC,
+# no secret) and falls back to the CI service principal's OAuth secret. Set-up and
+# local runs: docs/contributing-databricks.md.
+#
+# Not a required check: Free Edition quotas and warehouse cold starts must not block
+# unrelated PRs.
+name: databricks
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+# Free Edition has one 2X-Small warehouse: one run at a time, and never cancel a run
+# mid-way, which would leave its schema behind.
+concurrency:
+  group: databricks-free
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    # On PRs, only when labelled `databricks`, and never from forks.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'databricks') &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: databricks-free
+    permissions:
+      contents: read
+      id-token: write # workload identity federation
+    env:
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ vars.DATABRICKS_HTTP_PATH }}
+      DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID }}
+      DATABRICKS_TOKEN_AUDIENCE: ${{ vars.DATABRICKS_TOKEN_AUDIENCE }}
+      CATALOG: ${{ vars.DATABRICKS_CATALOG || 'workspace' }}
+      SCHEMA: ods_ci_${{ github.run_id }}_${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Authenticate (federation, else service principal secret)
+        env:
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: python .github/databricks/ci.py token
+      - name: Identity
+        run: python .github/databricks/ci.py whoami
+      - name: Warehouse answers
+        run: python .github/databricks/ci.py sql "SELECT current_user() AS who, current_catalog() AS catalog, current_version().dbsql_version AS dbsql"
+      - name: Create the run's schema
+        run: python .github/databricks/ci.py sql "CREATE SCHEMA \`$CATALOG\`.\`$SCHEMA\` COMMENT 'ODS CI run ${{ github.run_id }}; dropped at the end of the run'"
+      - name: Write and read a table
+        run: |
+          python .github/databricks/ci.py sql "CREATE TABLE \`$CATALOG\`.\`$SCHEMA\`.smoke AS SELECT 1 AS id, 'ok' AS status"
+          python .github/databricks/ci.py sql "SELECT * FROM \`$CATALOG\`.\`$SCHEMA\`.smoke"
+          python .github/databricks/ci.py sql "DESCRIBE HISTORY \`$CATALOG\`.\`$SCHEMA\`.smoke"
+      - name: Drop the run's schema
+        if: always() && env.DATABRICKS_TOKEN != ''
+        run: python .github/databricks/ci.py sql "DROP SCHEMA IF EXISTS \`$CATALOG\`.\`$SCHEMA\` CASCADE"
