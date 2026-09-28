@@ -24,7 +24,32 @@ ODS's Databricks code is tested two ways:
      in it;
    - dropping that schema. This step runs even if an earlier one failed.
 
-Runs are serialised, because Free Edition has a single 2X-Small warehouse. The job isn't
+3. **It runs `ods state` on the demo project**, `.github/databricks/demo.sh`, in the
+   run's schema, with the pinned dbt-databricks in
+   `.github/dbt/requirements-databricks.txt`:
+   - it seeds and builds everything;
+   - it checks that nothing is left to build;
+   - it changes `customers`, and checks that the plan is exactly `customers` and the
+     view reading it;
+   - it builds those.
+
+   `.github/databricks/prepare-project.py` copies `fixtures/dbt/jaffle-ods` for
+   Databricks. It leaves out the Python model, which uses DuckDB's relation API, and the
+   DuckDB-typed contracts. To rehearse on DuckDB, set `ODS_CI_PROFILES_YML` to a DuckDB
+   `profiles.yml` and put a dbt with dbt-duckdb on the `PATH`.
+
+Runs are serialised, because Free Edition has a single 2X-Small warehouse.
+
+## Screenshots for the docs
+The demo prints each command's styled output between `ods-transcript-begin NAME` and
+`ods-transcript-end NAME` in the job log. To refresh the screenshots in `docs/images/`,
+download the job's log and render it:
+
+```bash
+python scripts/render-transcripts.py job.log docs/images plan-after-change build-after-change
+```
+
+This needs Node.js with Playwright and its Chromium. The job isn't
 a required check.
 
 ## Setting up the workspace
