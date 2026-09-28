@@ -14,7 +14,7 @@ pip install opendatasuite
 ods version
 ```
 
-Homebrew, cargo-binstall and direct downloads with checksums are on the
+cargo-binstall and direct downloads with checksums (Homebrew coming soon) are on the
 [Install](install.md) page. Until v0.1.0 is out, build from source with Rust 1.90 or
 newer ([rustup.rs](https://rustup.rs)):
 
