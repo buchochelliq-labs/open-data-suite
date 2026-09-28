@@ -64,6 +64,54 @@ pub fn select(project: &Project, specs: &[String]) -> Result<BTreeSet<String>, S
     }
 }
 
+/// The sources `specs` reach, whose checks a run may include (#232): every source when
+/// `specs` is empty; otherwise the sources a `+name` selector reaches as ancestors, as
+/// dbt's selection would. A node selected alone doesn't bring in its sources.
+///
+/// # Errors
+/// As [`select`].
+pub fn select_sources(project: &Project, specs: &[String]) -> Result<BTreeSet<String>, String> {
+    let sources: BTreeSet<&str> = project.sources.iter().map(|s| s.id.as_str()).collect();
+    if specs.is_empty() {
+        return Ok(sources.into_iter().map(str::to_owned).collect());
+    }
+    // Validates the specs, as the node selection does.
+    select(project, specs)?;
+    let parents: BTreeMap<&str, &[String]> = project
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.parents.as_slice()))
+        .collect();
+    let mut reached = BTreeSet::new();
+    for spec in specs.iter().flat_map(|s| s.split_whitespace()) {
+        let Some(rest) = spec.strip_prefix('+') else {
+            continue;
+        };
+        let name = rest.strip_suffix('+').unwrap_or(rest);
+        let mut stack: Vec<&str> = project
+            .nodes
+            .iter()
+            .filter(|n| n.id == name || n.name == name)
+            .map(|n| n.id.as_str())
+            .collect();
+        let mut seen: BTreeSet<&str> = stack.iter().copied().collect();
+        while let Some(at) = stack.pop() {
+            for parent in parents.get(at).copied().unwrap_or_default() {
+                let parent = parent.as_str();
+                if !seen.insert(parent) {
+                    continue;
+                }
+                if sources.contains(parent) {
+                    reached.insert(parent.to_owned());
+                } else {
+                    stack.push(parent);
+                }
+            }
+        }
+    }
+    Ok(reached)
+}
+
 /// Adds everything reachable from `start` through `next` that is a node.
 fn walk<'a>(
     start: &'a str,

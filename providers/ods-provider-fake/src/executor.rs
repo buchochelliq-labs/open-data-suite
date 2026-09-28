@@ -33,8 +33,17 @@ pub struct FakeExecutor {
     nodes: BTreeSet<String>,
     failing: BTreeSet<String>,
     checks: BTreeMap<String, Vec<String>>,
+    sources: BTreeMap<String, FakeSource>,
     inspection_fails: bool,
     inner: Arc<Mutex<Inner>>,
+}
+
+/// A source with checks (#232).
+#[derive(Debug, Clone, Default)]
+struct FakeSource {
+    checks: Vec<String>,
+    readers: BTreeSet<String>,
+    failing: bool,
 }
 
 impl FakeExecutor {
@@ -45,6 +54,7 @@ impl FakeExecutor {
             nodes: nodes.into_iter().map(Into::into).collect(),
             failing: BTreeSet::new(),
             checks: BTreeMap::new(),
+            sources: BTreeMap::new(),
             inspection_fails: false,
             inner: Arc::default(),
         }
@@ -71,6 +81,34 @@ impl FakeExecutor {
         self.nodes.insert(node.clone());
         self.checks
             .insert(node, checks.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Gives `source` checks, which pass whenever they run, and the nodes that read it
+    /// (#232).
+    #[must_use]
+    pub fn with_source(
+        mut self,
+        source: impl Into<String>,
+        checks: impl IntoIterator<Item = impl Into<String>>,
+        readers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.sources.insert(
+            source.into(),
+            FakeSource {
+                checks: checks.into_iter().map(Into::into).collect(),
+                readers: readers.into_iter().map(Into::into).collect(),
+                failing: false,
+            },
+        );
+        self
+    }
+
+    /// Makes every check on `source` fail. In `Build` mode, the requested nodes that
+    /// read it directly are then skipped.
+    #[must_use]
+    pub fn failing_source(mut self, source: impl Into<String>) -> Self {
+        self.sources.entry(source.into()).or_default().failing = true;
         self
     }
 
@@ -124,7 +162,7 @@ impl Executor for FakeExecutor {
     }
 
     async fn execute(&self, request: &ExecutionRequest) -> Result<ExecutionReport, ProviderError> {
-        if request.nodes.is_empty() {
+        if request.is_empty() || (request.mode == ExecutionMode::Run && request.nodes.is_empty()) {
             return Err(ProviderError::Other(
                 "nothing to execute: the request names no nodes".to_owned(),
             ));
@@ -136,6 +174,39 @@ impl Executor for FakeExecutor {
         let mut inner = self.inner();
         inner.runs += 1;
         let run_id = format!("fake-run-{}", inner.runs);
+        // Source checks run first, as `dbt build` runs them (#232).
+        let mut checks_failed = Vec::new();
+        let mut blocked = BTreeSet::new();
+        let sources = request
+            .sources
+            .iter()
+            .map(|s| {
+                let Some(source) = self.sources.get(&s.id).filter(|f| !f.checks.is_empty()) else {
+                    return NodeExecution::new(
+                        s.id.clone(),
+                        ExecutionStatus::Skipped,
+                        Some(finished),
+                        Some("no checks".to_owned()),
+                    );
+                };
+                if request.mode == ExecutionMode::Run {
+                    NodeExecution::new(
+                        s.id.clone(),
+                        ExecutionStatus::Skipped,
+                        None,
+                        Some("no checks run without tests".to_owned()),
+                    )
+                } else if source.failing {
+                    checks_failed.extend(source.checks.iter().cloned());
+                    blocked.extend(source.readers.iter().cloned());
+                    NodeExecution::new(s.id.clone(), ExecutionStatus::Failed, Some(finished), None)
+                        .with_checks_failed(source.checks.clone())
+                } else {
+                    NodeExecution::new(s.id.clone(), ExecutionStatus::Success, Some(finished), None)
+                        .with_checks_passed(source.checks.clone())
+                }
+            })
+            .collect();
         let nodes = request
             .nodes
             .iter()
@@ -143,6 +214,11 @@ impl Executor for FakeExecutor {
                 let checks = self.checks.get(&n.id).cloned().unwrap_or_default();
                 let (status, message) = if !self.nodes.contains(&n.id) {
                     (ExecutionStatus::Failed, Some("unknown node".to_owned()))
+                } else if request.mode == ExecutionMode::Build && blocked.contains(&n.id) {
+                    (
+                        ExecutionStatus::Skipped,
+                        Some("a source it reads failed its checks".to_owned()),
+                    )
                 } else if self.failing.contains(&n.id) {
                     (ExecutionStatus::Failed, Some("failed".to_owned()))
                 } else if request.mode == ExecutionMode::Test {
@@ -163,13 +239,10 @@ impl Executor for FakeExecutor {
                     .with_checks_passed(if ran_checks { checks } else { Vec::new() })
             })
             .collect();
-        Ok(ExecutionReport::new(
-            run_id,
-            Some(started),
-            finished,
-            nodes,
-            Vec::new(),
-        ))
+        Ok(
+            ExecutionReport::new(run_id, Some(started), finished, nodes, checks_failed)
+                .with_sources(sources),
+        )
     }
 }
 

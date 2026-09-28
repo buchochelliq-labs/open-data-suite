@@ -17,8 +17,8 @@ use crate::SchemaVersion;
 use crate::freshness::FreshnessPolicy;
 
 /// Version of [`StateSnapshot`] and [`ExecutionPlan`] documents.
-/// 1.1 adds [`StateSnapshot::target`].
-pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
+/// 1.1 adds [`StateSnapshot::target`]; 1.2 adds [`StateSnapshot::sources`].
+pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 2);
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -430,6 +430,41 @@ pub struct StateSnapshot {
     /// Where it was built, if known. A build is only reused in the same target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetIdentity>,
+    /// Source id → the data its checks last passed on (#232). ODS doesn't build
+    /// sources, but it runs their checks (e.g. dbt source tests) when their data is new.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, SourceState>,
+}
+
+/// The last time a source's checks all passed, and on which data (#232). A source is
+/// an input with checks: they vouch for a version of its data, as a node's checks vouch
+/// for a build.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct SourceState {
+    /// The data version measured before the checks ran. `None` when unknown: the
+    /// record then vouches for no version, and the checks run again.
+    pub version: Option<DataVersion>,
+    /// When the version was measured.
+    pub observed_at: Option<Timestamp>,
+    /// The checks that passed, and when.
+    pub tested: TestRecord,
+}
+
+impl SourceState {
+    /// Checks that passed on `version` of a source's data, measured at `observed_at`.
+    pub fn new(
+        version: Option<DataVersion>,
+        observed_at: Option<Timestamp>,
+        tested: TestRecord,
+    ) -> Self {
+        Self {
+            version,
+            observed_at,
+            tested,
+        }
+    }
 }
 
 /// Which warehouse target builds went to, without anything secret: enough to tell
@@ -533,6 +568,7 @@ impl StateSnapshot {
             run_id: run_id.into(),
             nodes,
             target: None,
+            sources: BTreeMap::new(),
         }
     }
 
@@ -599,6 +635,10 @@ pub enum ReasonCode {
     /// It would be reused, but whether its relation is still in the warehouse couldn't
     /// be checked.
     RelationUnverified,
+    /// Its checks haven't passed since ODS started recording them, or failed last time.
+    NotTested,
+    /// Its checks were added, removed or edited since they last passed.
+    ChecksChanged,
 }
 
 /// One reason for a decision.
@@ -839,11 +879,12 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(
             json["schema_version"],
-            serde_json::json!({"major": 1, "minor": 1})
+            serde_json::json!({"major": 1, "minor": 2})
         );
         assert_eq!(json["parent"], 3);
-        // No target: left out, so 1.0 readers' documents and ours look alike.
+        // No target or sources: left out, so older documents and ours look alike.
         assert!(json.get("target").is_none());
+        assert!(json.get("sources").is_none());
         assert_eq!(
             json["nodes"]["model.p.a"]["built_at"],
             "1970-01-01T00:00:10Z"
@@ -873,6 +914,47 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<StateSnapshot>(json).unwrap(),
             targeted
+        );
+        // A 1.1 document, as stored before source checks were recorded, reads with
+        // none (#232).
+        let old = serde_json::json!({
+            "schema_version": {"major": 1, "minor": 1},
+            "parent": null,
+            "created_at": "1970-01-01T00:00:20Z",
+            "run_id": "run-0",
+            "nodes": {},
+            "target": {"name": "prod", "profile": null, "kind": null, "location": null,
+                       "location_digest": null, "database": null}
+        });
+        let old: StateSnapshot = serde_json::from_value(old).unwrap();
+        assert!(STATE_SCHEMA_VERSION.can_read(old.schema_version));
+        assert!(old.sources.is_empty());
+        // With source checks, it round-trips.
+        let mut checked = targeted;
+        checked.sources.insert(
+            "source.p.raw.orders".to_owned(),
+            SourceState::new(
+                Some(DataVersion::new(
+                    "2026-01-01T00:00:00Z",
+                    Exactness::Semantic,
+                    "sources.json",
+                )),
+                Some(Timestamp::from_unix(15)),
+                TestRecord::new("run-1", Timestamp::from_unix(20), "checks"),
+            ),
+        );
+        let json = serde_json::to_value(&checked).unwrap();
+        assert_eq!(
+            json["sources"]["source.p.raw.orders"]["version"]["value"],
+            "2026-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            json["sources"]["source.p.raw.orders"]["tested"]["checks"],
+            "checks"
+        );
+        assert_eq!(
+            serde_json::from_value::<StateSnapshot>(json).unwrap(),
+            checked
         );
     }
 }

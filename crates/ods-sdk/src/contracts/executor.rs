@@ -9,7 +9,8 @@
 //!   [check](ExecutionReport::checks_failed), never as a node. A failed check is also
 //!   listed on each requested node it checks ([`NodeExecution::checks_failed`]); if the
 //!   executor can't tell which nodes a failed check covers, it lists it on all of them.
-//! - An empty request is refused with [`ProviderError::Other`] and runs nothing: some
+//! - An [empty](ExecutionRequest::is_empty) request is refused with
+//!   [`ProviderError::Other`] and runs nothing: some
 //!   engines read "no selection" as "everything".
 //! - A node that fails is reported as [`ExecutionStatus::Failed`] in an `Ok` report;
 //!   `Err` means the execution couldn't be started or its outcome can't be known. The
@@ -33,6 +34,16 @@
 //!   [`ExecutionRequest::engine_args`] passes options through to the engine as they
 //!   are. An executor refuses engine arguments that would change which nodes run, or
 //!   where their results are written.
+//! - [`ExecutionRequest::sources`] (0.3, #232) asks for the checks on sources (inputs
+//!   nothing builds, e.g. dbt source tests) to run too, in [`ExecutionMode::Build`]
+//!   and [`ExecutionMode::Test`]. The report lists each requested source once, in
+//!   request order, in [`ExecutionReport::sources`]: `success` only when it is
+//!   [fully checked](NodeExecution::fully_checked), `failed` when a check on it failed
+//!   (also listed in [`ExecutionReport::checks_failed`]), `skipped` otherwise,
+//!   including every source in [`ExecutionMode::Run`], which runs no checks. In
+//!   `Build` mode, a requested node that reads a source whose checks failed, directly
+//!   or through other requested nodes, isn't built: it is `skipped`, as when a parent
+//!   fails. A request with neither nodes nor sources is empty.
 
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
@@ -45,7 +56,7 @@ use crate::provider::{Contract, Provider};
 /// The `executor` contract.
 pub const EXECUTOR: Contract = Contract {
     name: "executor",
-    version: SchemaVersion::new(0, 2),
+    version: SchemaVersion::new(0, 3),
 };
 
 /// What [`Executor::prepare`] should do besides refreshing metadata.
@@ -139,6 +150,9 @@ pub struct ExecutionRequest {
     pub full_refresh: bool,
     /// Options for the engine, passed through as they are.
     pub engine_args: Vec<String>,
+    /// Sources whose checks run too (not in [`ExecutionMode::Run`]), in the order the
+    /// report lists them.
+    pub sources: Vec<RequestedNode>,
 }
 
 impl ExecutionRequest {
@@ -149,7 +163,20 @@ impl ExecutionRequest {
             mode,
             full_refresh: false,
             engine_args: Vec::new(),
+            sources: Vec::new(),
         }
+    }
+
+    /// Runs the checks on these sources too.
+    #[must_use]
+    pub fn with_sources(mut self, sources: Vec<RequestedNode>) -> Self {
+        self.sources = sources;
+        self
+    }
+
+    /// Whether it asks for nothing: no nodes and no sources.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.sources.is_empty()
     }
 
     /// Rebuilds incremental state from scratch.
@@ -271,6 +298,9 @@ pub struct ExecutionReport {
     pub finished_at: Timestamp,
     /// Every requested node, once, in request order.
     pub nodes: Vec<NodeExecution>,
+    /// Every requested source, once, in request order: how its checks ended.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<NodeExecution>,
     /// Checks that failed (in [`ExecutionMode::Build`]), by id.
     pub checks_failed: Vec<String>,
     /// Nodes the engine built although they weren't requested, e.g. because a name
@@ -300,11 +330,21 @@ impl ExecutionReport {
             started_at,
             finished_at,
             nodes,
+            sources: Vec::new(),
             checks_failed,
             unrequested: Vec::new(),
             succeeded,
             command: None,
         }
+    }
+
+    /// Lists how the requested sources' checks ended. The execution only succeeded if
+    /// every source's did.
+    #[must_use]
+    pub fn with_sources(mut self, sources: Vec<NodeExecution>) -> Self {
+        self.succeeded &= sources.iter().all(|s| s.status == ExecutionStatus::Success);
+        self.sources = sources;
+        self
     }
 
     /// Marks the execution failed, e.g. because the engine exited with an error.
@@ -339,7 +379,7 @@ pub trait Executor: Provider {
     /// Returns [`ProviderError`] if the metadata couldn't be refreshed.
     async fn prepare(&self, request: &PrepareRequest) -> Result<PrepareReport, ProviderError>;
 
-    /// Builds exactly the requested nodes.
+    /// Builds exactly the requested nodes, and runs the requested sources' checks.
     ///
     /// # Errors
     /// Returns [`ProviderError`] if the request is empty, or the execution couldn't be
@@ -380,6 +420,25 @@ mod tests {
             !ExecutionReport::new("r", None, at, vec![node(ExecutionStatus::Success)], vec![])
                 .failed()
                 .succeeded
+        );
+        // Sources whose checks didn't all pass fail it too (#232).
+        let source = |status| NodeExecution::new("source.a.raw.x", status, None, None);
+        assert!(
+            ExecutionReport::new("r", None, at, vec![], vec![])
+                .with_sources(vec![source(ExecutionStatus::Success)])
+                .succeeded
+        );
+        assert!(
+            !ExecutionReport::new("r", None, at, vec![], vec![])
+                .with_sources(vec![source(ExecutionStatus::Skipped)])
+                .succeeded
+        );
+        let request = ExecutionRequest::new(Vec::new(), ExecutionMode::Test);
+        assert!(request.is_empty());
+        assert!(
+            !request
+                .with_sources(vec![RequestedNode::new("source.a.raw.x", "raw.x")])
+                .is_empty()
         );
     }
 }

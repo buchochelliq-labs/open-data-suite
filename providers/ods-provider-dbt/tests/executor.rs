@@ -56,9 +56,28 @@ struct Harness {
 impl ExecutorHarness for Harness {
     async fn executor(&self) -> Arc<dyn Executor> {
         let dir = scratch("suite");
-        let executor = executor(&dir);
+        // With sources and their tests (#232), compiled into the target directory, as
+        // after `dbt compile`.
+        let executor = executor(&dir)
+            .env("FAKE_DBT_SOURCES", "1")
+            .env("FAKE_DBT_FAIL_TEST", "source_not_null_raw_payments_id");
+        executor.prepare(&PrepareRequest::new()).await.unwrap();
         *self.dir.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir);
         Arc::new(executor)
+    }
+
+    fn checked_source(&self) -> Option<RequestedNode> {
+        Some(RequestedNode::new(
+            "source.jaffle_ods.raw.orders",
+            "raw.orders",
+        ))
+    }
+
+    fn failing_source(&self) -> Option<(RequestedNode, RequestedNode)> {
+        Some((
+            RequestedNode::new("source.jaffle_ods.raw.payments", "raw.payments"),
+            RequestedNode::new("model.jaffle_ods.stg_payments", "stg_payments"),
+        ))
     }
 
     fn buildable(&self) -> Vec<RequestedNode> {
@@ -97,7 +116,69 @@ impl ExecutorHarness for Harness {
 async fn conforms() {
     let report = run(&Harness::default()).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 9, "{report:?}");
+    assert_eq!(report.passed.len(), 11, "{report:?}");
+}
+
+/// A source's tests are selected exactly, by `fqn:` and type, alongside the nodes, in
+/// one `dbt build` (#232); in run mode they aren't selected at all.
+#[tokio::test]
+async fn source_tests_are_selected_exactly() {
+    let dir = scratch("source-tests");
+    let executor = crate::executor(&dir)
+        .env("FAKE_DBT_FAIL", "")
+        .env("FAKE_DBT_SOURCES", "1");
+    executor.prepare(&PrepareRequest::new()).await.unwrap();
+    let orders = RequestedNode::new("source.jaffle_ods.raw.orders", "raw.orders");
+    let report = executor
+        .execute(
+            &ExecutionRequest::new(
+                vec![RequestedNode::new(
+                    "model.jaffle_ods.stg_orders",
+                    "stg_orders",
+                )],
+                ExecutionMode::Build,
+            )
+            .with_sources(vec![orders.clone()]),
+        )
+        .await
+        .unwrap();
+    let command = report.command.as_deref().unwrap();
+    assert!(
+        command.contains(
+            "--select fqn:jaffle_ods.source_not_null_raw_orders_id,resource_type:test fqn:jaffle_ods.staging.stg_orders,resource_type:model"
+        ),
+        "{command}"
+    );
+    assert!(report.succeeded, "{report:?}");
+    assert_eq!(
+        report.sources[0].checks_passed,
+        ["test.jaffle_ods.source_not_null_raw_orders_id.0000000000"]
+    );
+    assert_eq!(report.nodes[0].status, ExecutionStatus::Success);
+    // Run mode: no tests, so the source isn't checked.
+    let report = executor
+        .execute(
+            &ExecutionRequest::new(
+                vec![RequestedNode::new(
+                    "model.jaffle_ods.stg_orders",
+                    "stg_orders",
+                )],
+                ExecutionMode::Run,
+            )
+            .with_sources(vec![orders]),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !report
+            .command
+            .as_deref()
+            .unwrap()
+            .contains("resource_type:test"),
+        "{report:?}"
+    );
+    assert_eq!(report.sources[0].status, ExecutionStatus::Skipped);
+    assert!(!report.succeeded, "a source asked for wasn't checked");
 }
 
 #[tokio::test]

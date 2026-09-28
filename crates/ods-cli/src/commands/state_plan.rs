@@ -245,6 +245,8 @@ impl Workspace {
                     });
                 Source::new(n.unique_id.clone(), display_name(&n.unique_id), version)
                     .observed_at(sources_taken_at)
+                    // Its data tests (#232), identified as a node's are.
+                    .with_checks(checks_digest(manifest, &n.unique_id))
             })
             .collect();
         Ok(Self {
@@ -347,7 +349,8 @@ fn node_name(n: &ods_provider_dbt::ManifestNode) -> String {
     }
 }
 
-/// `model.shop.orders` → `orders`; `source.shop.raw.orders` → `raw.orders`.
+/// `model.shop.orders` → `orders`; `source.shop.raw.orders` → `raw.orders`;
+/// `test.shop.not_null_orders_id.1a2b3c4d5e` → `not_null_orders_id`.
 pub(super) fn display_name(id: &str) -> String {
     let mut parts = id.splitn(3, '.');
     let kind = parts.next().unwrap_or_default();
@@ -355,6 +358,9 @@ pub(super) fn display_name(id: &str) -> String {
     let rest = parts.next().unwrap_or(id);
     if kind == "source" {
         rest.to_owned()
+    } else if kind == "test" {
+        // `test.shop.not_null_orders_id.1a2b3c4d5e`: the name, not the hash after it.
+        rest.split('.').next().unwrap_or(rest).to_owned()
     } else {
         rest.rsplit('.').next().unwrap_or(rest).to_owned()
     }
@@ -502,6 +508,7 @@ impl PlanReport {
                 notes.push(note);
                 let mut empty = latest.snapshot.clone();
                 empty.nodes.clear();
+                empty.sources.clear();
                 (
                     Some(StoredSnapshot::new(latest.id, empty)),
                     options.target_changed(),
@@ -894,5 +901,20 @@ impl Present for HistoryReport {
                     .collect(),
             },
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_name;
+
+    #[test]
+    fn display_names_are_what_people_select_by() {
+        assert_eq!(display_name("model.shop.marts.orders"), "orders");
+        assert_eq!(display_name("source.shop.raw.orders"), "raw.orders");
+        assert_eq!(
+            display_name("test.shop.not_null_orders_id.1a2b3c4d5e"),
+            "not_null_orders_id"
+        );
     }
 }

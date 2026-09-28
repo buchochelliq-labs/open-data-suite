@@ -31,6 +31,18 @@ pub trait ExecutorHarness: Send + Sync {
     fn checked_and_unchecked(&self) -> Option<(RequestedNode, RequestedNode)> {
         None
     }
+
+    /// A source with checks that pass, if the harness can arrange one; `None` skips the
+    /// case that needs it (#232).
+    fn checked_source(&self) -> Option<RequestedNode> {
+        None
+    }
+
+    /// A source with a check that fails, and a buildable node that reads it, if the
+    /// harness can arrange them; `None` skips the case that needs them (#232).
+    fn failing_source(&self) -> Option<(RequestedNode, RequestedNode)> {
+        None
+    }
 }
 
 fn ids(nodes: &[RequestedNode]) -> Vec<String> {
@@ -237,6 +249,71 @@ async fn only_checks_that_ran_vouch_for_a_node(
     assert_built(harness, case, &[]).await;
 }
 
+/// A source's checks run when asked, and it is reported once, apart from the nodes
+/// (#232). Run mode runs no checks, so sources alone are nothing to run.
+async fn source_checks_are_reported_per_source(
+    harness: &dyn ExecutorHarness,
+    source: RequestedNode,
+) {
+    let case = "source_checks_are_reported_per_source";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(
+            &ExecutionRequest::new(Vec::new(), ExecutionMode::Test)
+                .with_sources(vec![source.clone()]),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert!(report.nodes.is_empty(), "{case}: {report:?}");
+    assert_eq!(report.sources.len(), 1, "{case}: {report:?}");
+    let checked = &report.sources[0];
+    assert_eq!(checked.node, source.id, "{case}: source");
+    assert!(
+        checked.fully_checked(),
+        "{case}: a source whose checks passed is fully checked: {checked:?}"
+    );
+    assert!(report.succeeded, "{case}: {report:?}");
+    let run_only = executor
+        .execute(&ExecutionRequest::new(Vec::new(), ExecutionMode::Run).with_sources(vec![source]))
+        .await;
+    assert!(run_only.is_err(), "{case}: {run_only:?}");
+    assert_built(harness, case, &[]).await;
+}
+
+/// A failing source check fails the execution, and in a build the requested nodes that
+/// read the source aren't built, as when a parent fails (#232).
+async fn a_failing_source_check_skips_its_readers(
+    harness: &dyn ExecutorHarness,
+    source: RequestedNode,
+    reader: RequestedNode,
+) {
+    let case = "a_failing_source_check_skips_its_readers";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(
+            &ExecutionRequest::new(vec![reader.clone()], ExecutionMode::Build)
+                .with_sources(vec![source.clone()]),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(report.sources.len(), 1, "{case}: {report:?}");
+    assert_eq!(report.sources[0].node, source.id, "{case}: source");
+    assert_eq!(
+        report.sources[0].status,
+        ExecutionStatus::Failed,
+        "{case}: {report:?}"
+    );
+    assert!(!report.checks_failed.is_empty(), "{case}: {report:?}");
+    assert_eq!(report.nodes.len(), 1, "{case}: {report:?}");
+    assert_eq!(
+        report.nodes[0].status,
+        ExecutionStatus::Skipped,
+        "{case}: the reader isn't built: {report:?}"
+    );
+    assert!(!report.succeeded, "{case}: {report:?}");
+    assert_built(harness, case, &[]).await;
+}
+
 /// Runs every case. Panics with the case name on the first failure.
 pub async fn run(harness: &dyn ExecutorHarness) -> Report {
     let mut report = Report::default();
@@ -274,6 +351,28 @@ pub async fn run(harness: &dyn ExecutorHarness) -> Report {
         None => report.skipped.push((
             "only_checks_that_ran_vouch_for_a_node",
             "the harness can't arrange a node with checks and one without".to_owned(),
+        )),
+    }
+    match harness.checked_source() {
+        Some(source) => {
+            source_checks_are_reported_per_source(harness, source).await;
+            report.passed.push("source_checks_are_reported_per_source");
+        }
+        None => report.skipped.push((
+            "source_checks_are_reported_per_source",
+            "the harness can't arrange a source with checks".to_owned(),
+        )),
+    }
+    match harness.failing_source() {
+        Some((source, reader)) => {
+            a_failing_source_check_skips_its_readers(harness, source, reader).await;
+            report
+                .passed
+                .push("a_failing_source_check_skips_its_readers");
+        }
+        None => report.skipped.push((
+            "a_failing_source_check_skips_its_readers",
+            "the harness can't arrange a source whose check fails".to_owned(),
         )),
     }
     report
