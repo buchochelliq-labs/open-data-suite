@@ -62,6 +62,10 @@ Settings → Environments → `databricks-free`:
 | Variable | `DATABRICKS_CATALOG` | optional; defaults to `workspace` |
 | Secret | `DATABRICKS_CLIENT_SECRET` | optional: the fallback secret |
 
+Settings can also be stored as environment secrets: the workflow reads each one as a
+variable first, then as a secret. Variables are easier to check, because secrets are
+masked in the logs.
+
 If neither audience variable is set, federation asks for the workspace's token endpoint
 as its audience. The policy must then list that endpoint.
 

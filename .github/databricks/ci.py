@@ -43,8 +43,9 @@ def env(name: str, required: bool = True) -> str:
     value = os.environ.get(name, "").strip()
     if required and not value:
         raise Failed(
-            f"{name} is not set. Add it to the `databricks-free` environment "
-            "(Settings → Environments); see docs/contributing-databricks.md."
+            f"{name} is not set. Add it to the `databricks-free` environment as a "
+            "variable or secret (Settings → Environments); see "
+            "docs/contributing-databricks.md."
         )
     return value
 

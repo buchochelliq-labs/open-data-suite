@@ -38,13 +38,15 @@ jobs:
     permissions:
       contents: read
       id-token: write # workload identity federation
+    # Settings are read as variables, or as secrets if stored that way; a secret is
+    # masked in the logs, which is fine for these.
     env:
-      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-      DATABRICKS_HTTP_PATH: ${{ vars.DATABRICKS_HTTP_PATH }}
-      DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
-      DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID }}
-      DATABRICKS_TOKEN_AUDIENCE: ${{ vars.DATABRICKS_TOKEN_AUDIENCE }}
-      CATALOG: ${{ vars.DATABRICKS_CATALOG || 'workspace' }}
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST || secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ vars.DATABRICKS_HTTP_PATH || secrets.DATABRICKS_HTTP_PATH }}
+      DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID || secrets.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
+      DATABRICKS_TOKEN_AUDIENCE: ${{ vars.DATABRICKS_TOKEN_AUDIENCE || secrets.DATABRICKS_TOKEN_AUDIENCE }}
+      CATALOG: ${{ vars.DATABRICKS_CATALOG || secrets.DATABRICKS_CATALOG || 'workspace' }}
       SCHEMA: ods_ci_${{ github.run_id }}_${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
