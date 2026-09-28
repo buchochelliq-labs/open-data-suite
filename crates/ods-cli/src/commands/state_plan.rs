@@ -603,9 +603,13 @@ impl Present for PlanReport {
         if self.reuse > 0 {
             blocks.push(ViewNode::Notice {
                 level: Level::Info,
-                message: vec![Span::plain(
-                    "reuse assumes each relation built earlier still exists; ODS doesn't check the warehouse yet",
-                )],
+                message: vec![
+                    Span::plain("reuse assumes each relation built earlier still exists: "),
+                    Span::toned("ods state plan", Tone::Code),
+                    Span::plain(" doesn't check the warehouse; "),
+                    Span::toned("ods state build --dry-run", Tone::Code),
+                    Span::plain(" does"),
+                ],
             });
         }
         for warning in &self.warnings {

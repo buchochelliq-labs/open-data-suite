@@ -127,6 +127,37 @@ impl Project {
         )
     }
 
+    /// `ods <args> -o plain` against the fake dbt, as a person sees it: its stdout.
+    fn ods_plain(&self, args: &[&str]) -> String {
+        let target = self.dir.join("target");
+        let db = self.db();
+        let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+            .args(args)
+            .args([
+                "--target-dir",
+                target.to_str().unwrap(),
+                "--state-db",
+                db.to_str().unwrap(),
+                "-o",
+                "plain",
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("XDG_CONFIG_HOME", &self.dir)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .current_dir(&self.dir)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout
+    }
+
     /// Like [`ods_with_stderr`](Self::ods_with_stderr), without `--target-dir`, so
     /// ODS finds the target directory itself (#227).
     fn ods_bare(&self, args: &[&str]) -> (i32, Value, String) {
@@ -950,6 +981,29 @@ fn when_the_relation_check_fails_candidates_are_built() {
     assert!(
         stderr.contains("couldn't check the warehouse: "),
         "the plan groups them: {stderr}"
+    );
+}
+
+/// Reuse checked in the warehouse isn't reuse on trust: a run that checked says
+/// nothing more, while `ods state plan`, which runs no dbt, says it didn't check.
+#[test]
+fn only_unchecked_reuse_says_the_warehouse_wasnt_checked() {
+    let project = Project::new("reuse-notice");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.orders");
+    let dbt = fixture("fake-dbt/dbt");
+    let dbt = dbt.to_str().unwrap();
+    for command in ["build", "run"] {
+        let shown = project.ods_plain(&["state", command, "--dry-run", "--dbt", dbt]);
+        assert!(shown.contains("to reuse"), "{shown}");
+        assert!(!shown.contains("0 to reuse"), "{shown}");
+        assert!(!shown.contains("check the warehouse"), "{command}: {shown}");
+    }
+    let planned = project.ods_plain(&["state", "plan"]);
+    assert!(
+        planned.contains("doesn't check the warehouse")
+            && planned.contains("ods state build --dry-run"),
+        "{planned}"
     );
 }
 
