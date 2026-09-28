@@ -12,7 +12,7 @@ codes).
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
 | `ods state compile\|run\|seed\|snapshot\|build` | available (preview): each runs the dbt command it's named after, on only what needs building, and records what succeeded, see [below](#state-run) |
 | `ods state test` | available (preview): test what was built but not yet tested, see [below](#state-test) |
-| `ods state retry` | available (preview): run the last `run`, `seed`, `snapshot`, `build` or `test` again with its options, see [below](#retrying-a-run) |
+| `ods state retry` | available (preview): run the last `run`, `seed`, `snapshot`, `build` or `test` again with its options; `--failed` builds only what failed, see [below](#retrying-a-run) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
@@ -600,7 +600,8 @@ ods state retry --dry-run        # plan the retry; build and record nothing
 ```
 
 - **Planned afresh:** unlike `dbt retry`, it doesn't replay a list of failed nodes.
-  The plan picks up a fix made in between, and reuses what already succeeded.
+  The plan picks up a fix made in between, and reuses what already succeeded. To build
+  only what failed, use `--failed` ([below](#retrying-only-what-failed)).
 - **What it keeps:** every `run`, `seed`, `snapshot`, `build` and `test` that isn't a
   dry run keeps its command line beside the state database, in
   `.ods/state.db.last-run.json`. Only what was typed is kept, including `-- DBT_ARGS`.
@@ -614,6 +615,45 @@ ods state retry --dry-run        # plan the retry; build and record nothing
   another. `--dry-run` plans without building, except after `ods state test`, which has
   no dry run.
 - **Nothing to retry:** with no run kept yet, `retry` fails with `ODS-E0403`.
+
+#### Retrying only what failed
+
+`ods state retry --failed` is closer to `dbt retry` (#292): it reruns the same command,
+but builds only the nodes that failed, or were skipped because of a failure, in the
+last run, and runs the tests only of the sources whose tests failed. Nothing that
+changed since builds.
+
+```sh
+ods state build                  # customer_segments fails; segment_summary is skipped
+# … fix customer_segments, and meanwhile edit order_events …
+ods state retry --failed         # builds customer_segments and segment_summary only
+ods state retry --failed --dry-run   # plan it; build and record nothing
+```
+
+- **What it keeps:** once dbt has built, the last-run file also keeps the outcome:
+  the ids of the nodes that failed (or whose tests failed), those skipped, and the
+  sources whose tests failed. A run whose results couldn't be recorded counts every node
+  it ran as failed. The file is format 1.1; a 1.0 file from an older ODS still reads.
+- **Still planned:** every node goes through the planner, as in any run. A failed node
+  the plan now reuses (e.g. its last successful build still matches) is reused, and the
+  report says why.
+- **Nothing new:** nodes the plan would build that weren't among the failures are not
+  built. The report lists them as *changed since, not retried*; `ods state retry`
+  without `--failed`, or the command itself, builds them.
+- **Never on stale input:** a node to retry that reads a node the plan builds but the
+  retry doesn't (one changed since, or held back itself) is *held back*: not built, with
+  the parent it waits on. It stays in the outcome, so the next `retry --failed` tries it
+  again.
+- **Nothing to retry:** if the last run succeeded, or its file doesn't keep an outcome
+  (written by an older ODS, or the run stopped before dbt finished), `--failed` says so
+  and fails with `ODS-E0403` without running dbt. After `ods state test`, which already
+  runs only the tests that haven't passed, `--failed` is a usage error (exit 2); plain
+  `retry` reruns it.
+- **JSON:** the report of a `--failed` retry has a `retry` object: `of` (the command
+  line retried), `retried` (node ids built again), `reused`, `held_back` and
+  `changed_since` (each `{node, reason}`), `not_planned` (failed nodes the plan no longer
+  has), `source_tests` and `source_tests_changed_since` (source ids). Empty lists are
+  left out. Without `--failed` the report has no `retry` object.
 
 ### What you see while it runs
 

@@ -2144,6 +2144,214 @@ fn a_test_run_has_no_dry_run_retry() {
     assert!(json.to_string().contains("has no dry run"), "{json:#}");
 }
 
+/// `ods state retry <extra>` against the project's database, from its directory.
+fn retry(project: &Project, extra: &[&str]) -> (i32, Value, String) {
+    let db = project.db();
+    let mut args = vec!["state", "retry", "--state-db", db.to_str().unwrap()];
+    args.extend(extra);
+    project.ods_in(&project.dir, &args)
+}
+
+/// #292: `retry --failed` builds exactly what failed or was skipped because of a
+/// failure in the last run, still planned, and reports what changed since instead of
+/// building it.
+#[test]
+fn retry_failed_builds_only_what_failed() {
+    let mut project = Project::new("retry-failed");
+    let failing = project.with("FAKE_DBT_FAIL", "customer_segments");
+    let (code, json) = failing.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    project = failing;
+    project.env.retain(|(k, _)| k != "FAKE_DBT_FAIL");
+
+    // The last-run file keeps what failed, and what was skipped because of it.
+    let path = project.dir.join(".ods/state.db.last-run.json");
+    let kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        kept["schema_version"],
+        serde_json::json!({"major": 1, "minor": 1}),
+        "{kept:#}"
+    );
+    assert_eq!(
+        kept["outcome"]["failed"],
+        serde_json::json!(["model.jaffle_ods.customer_segments"]),
+        "{kept:#}"
+    );
+    assert_eq!(
+        kept["outcome"]["skipped"],
+        serde_json::json!(["model.jaffle_ods.segment_summary"]),
+        "{kept:#}"
+    );
+
+    // An unrelated model changes in between.
+    project.change_code("model.jaffle_ods.order_events");
+
+    // Without --failed, retry is unchanged: planned afresh, the change builds too.
+    let (code, json, _) = retry(&project, &["--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(json["result"].get("retry").is_none(), "{json:#}");
+    assert_eq!(json["result"]["build"], 3, "{json:#}");
+
+    // A dry run plans the retry, and builds and records nothing.
+    let history = project.history().len();
+    let (code, json, _) = retry(&project, &["--failed", "--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["outcome"], "dry_run", "{json:#}");
+    assert_eq!(json["result"]["build"], 2, "{json:#}");
+    assert_eq!(project.history().len(), history);
+
+    let (code, json, stderr) = retry(&project, &["--failed"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(
+        stderr.contains("retrying what failed in `ods state build"),
+        "{stderr}"
+    );
+    let result = &json["result"];
+    assert_eq!(result["outcome"], "succeeded", "{json:#}");
+    assert_eq!(
+        names(&result["execution"]["nodes"]),
+        ["customer_segments", "segment_summary"]
+    );
+    assert_eq!(
+        names(&result["retry"]["changed_since"]),
+        ["order_events"],
+        "{json:#}"
+    );
+    // The JSON a retry adds, with the paths of this run taken out.
+    let mut shown = serde_json::json!({
+        "outcome": result["outcome"],
+        "build": result["build"],
+        "reuse": result["reuse"],
+        "retry": result["retry"],
+    });
+    let of = shown["retry"]["of"].as_str().unwrap().to_owned();
+    shown["retry"]["of"] = Value::String(
+        of.replace(fixture("fake-dbt/dbt").to_str().unwrap(), "<fake-dbt>")
+            .replace(project.dir.to_str().unwrap(), "<project>"),
+    );
+    for entry in shown["retry"]["changed_since"].as_array_mut().unwrap() {
+        let reason = entry["reason"].as_str().unwrap();
+        // Run ids are fresh each time.
+        let (before, after) = reason.split_once("since run ").unwrap();
+        entry["reason"] = Value::String(format!("{before}since run <run>{}", &after[36..]));
+    }
+    insta::assert_snapshot!(serde_json::to_string_pretty(&shown).unwrap());
+
+    // What changed since still builds with the next plain run.
+    let (code, json, _) = retry(&project, &["--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["build"], 1, "{json:#}");
+
+    // The retry succeeded: nothing is left to retry, and dbt doesn't run.
+    std::fs::remove_file(project.dir.join("target/run_results.json")).unwrap();
+    let (code, json, _) = retry(&project, &["--failed"]);
+    assert_eq!(code, 1, "{json:#}");
+    let text = json.to_string();
+    assert!(text.contains("ODS-E0403"), "{text}");
+    assert!(text.contains("succeeded: nothing failed"), "{text}");
+    assert!(!project.dir.join("target/run_results.json").exists());
+}
+
+/// #292: a node to retry whose parent changed since, and so isn't built by the retry,
+/// isn't built on the parent's stale table: it is held back, with why, and stays to
+/// retry.
+#[test]
+fn retry_failed_holds_back_what_reads_a_parent_it_does_not_build() {
+    let mut project = Project::new("retry-failed-held").with("FAKE_DBT_FAIL", "orders");
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    project.env.retain(|(k, _)| k != "FAKE_DBT_FAIL");
+    project.change_code("model.jaffle_ods.stg_orders");
+
+    let (code, json, _) = retry(&project, &["--failed"]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["outcome"], "nothing_to_build", "{json:#}");
+    // stg_orders changed, and order_events reads it.
+    assert_eq!(
+        names(&result["retry"]["changed_since"]),
+        ["order_events", "stg_orders"]
+    );
+    let held = &result["retry"]["held_back"];
+    assert!(names(held).contains(&"orders".to_owned()), "{json:#}");
+    assert!(
+        held[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("reads `stg_orders`"),
+        "{json:#}"
+    );
+    // Still to retry.
+    let (code, json, _) = retry(&project, &["--failed", "--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(names(&json["result"]["retry"]["held_back"]).contains(&"orders".to_owned()));
+}
+
+/// #292: a parent outside the failed run's selection counts too. It isn't built by the
+/// retry, so a node to retry that reads it after it changed is held back.
+#[test]
+fn retry_failed_holds_back_what_reads_an_unselected_parent() {
+    let mut project = Project::new("retry-failed-unselected");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.orders");
+    project = project.with("FAKE_DBT_FAIL", "orders");
+    let (code, json) = project.run(&["-s", "orders"]);
+    assert_eq!(code, 1, "{json:#}");
+    project.env.retain(|(k, _)| k != "FAKE_DBT_FAIL");
+    project.change_code("model.jaffle_ods.stg_orders");
+
+    let (code, json, _) = retry(&project, &["--failed", "--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["build"], 0, "{json:#}");
+    let held = &result["retry"]["held_back"];
+    assert_eq!(names(held), ["orders"], "{json:#}");
+    assert!(
+        held[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("reads `stg_orders`, which needs building (code changed"),
+        "{json:#}"
+    );
+}
+
+/// #292: a last-run file from before #292 (version 1.0, no outcome) still reads:
+/// `retry` runs it, and `retry --failed` says there is nothing recorded to retry.
+#[test]
+fn retry_failed_reads_a_last_run_file_without_an_outcome() {
+    let mut project = Project::new("retry-failed-old").with("FAKE_DBT_FAIL", "customer_segments");
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    project.env.retain(|(k, _)| k != "FAKE_DBT_FAIL");
+    let path = project.dir.join(".ods/state.db.last-run.json");
+    let mut kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    kept["schema_version"] = serde_json::json!({"major": 1, "minor": 0});
+    kept.as_object_mut().unwrap().remove("outcome");
+    std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+
+    let (code, json, _) = retry(&project, &["--failed"]);
+    assert_eq!(code, 1, "{json:#}");
+    let text = json.to_string();
+    assert!(text.contains("ODS-E0403"), "{text}");
+    assert!(text.contains("nothing is recorded to retry"), "{text}");
+
+    let (code, json, _) = retry(&project, &["--dry-run"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["build"], 2, "{json:#}");
+}
+
+/// #292: `--failed` retries builds; `ods state test` already reruns only what hasn't
+/// passed.
+#[test]
+fn retry_failed_refuses_a_test_run() {
+    let project = Project::new("retry-failed-test");
+    project.run_ok(&["--test"]);
+    project.test_ok(&[]);
+    let (code, json, _) = retry(&project, &["--failed"]);
+    assert_eq!(code, 2, "{json:#}");
+    assert!(json.to_string().contains("only ran tests"), "{json:#}");
+}
+
 /// #188: the documented recovery procedure. `doctor` checks without changing anything;
 /// a damaged database stops the commands that read it, with a pointer to `doctor`;
 /// `reset` sets it aside; a copy from `backup` restores it.
