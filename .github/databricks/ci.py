@@ -5,7 +5,6 @@ Standard library only, so the job needs nothing installed before it authenticate
 
     ci.py token            get a short-lived workspace token and export it, masked
     ci.py sql STATEMENT    run STATEMENT on the warehouse and print the rows
-    ci.py whoami           print who the token belongs to
 
 Authentication, in order:
 
@@ -31,6 +30,9 @@ import urllib.request
 
 TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 JWT = "urn:ietf:params:oauth:token-type:jwt"
+# Tried in order until one is granted: a scoped service principal secret may only
+# carry `sql`, which is all the smoke check needs. `DATABRICKS_OAUTH_SCOPES` overrides.
+DEFAULT_SCOPES = ("all-apis", "sql")
 # Statements poll for up to this long: a stopped serverless warehouse takes a while.
 STATEMENT_TIMEOUT_S = 600
 
@@ -98,6 +100,30 @@ def github_oidc_token(audience: str) -> str:
     return got["value"]
 
 
+def scopes() -> list[str]:
+    configured = env("DATABRICKS_OAUTH_SCOPES", required=False)
+    return [configured] if configured else list(DEFAULT_SCOPES)
+
+
+def with_scopes(get_token) -> str:
+    """Asks for each scope in turn while Databricks says it isn't assigned."""
+    refused = []
+    for scope in scopes():
+        try:
+            return get_token(scope)
+        except Failed as e:
+            if "are not assigned" not in str(e):
+                raise
+            refused.append(scope)
+    raise Failed(f"none of the scopes {refused} is assigned to the service principal")
+
+
+def claims(jwt: str) -> dict:
+    """The claims of a JWT, unverified: only to say what a policy must match."""
+    payload = jwt.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
 def federated_token(workspace: str, client_id: str) -> str:
     # The audience must be one the federation policy lists. Databricks' default for a
     # service principal policy is the account ID.
@@ -108,18 +134,32 @@ def federated_token(workspace: str, client_id: str) -> str:
     )
     print(f"federation: requesting a GitHub OIDC token for audience {audience}")
     subject = github_oidc_token(audience)
-    got = request(
-        "POST",
-        f"{workspace}/oidc/v1/token",
-        form={
-            "grant_type": TOKEN_EXCHANGE,
-            "client_id": client_id,
-            "subject_token": subject,
-            "subject_token_type": JWT,
-            "scope": "all-apis",
-        },
-    )
-    return got["access_token"]
+
+    def exchange(scope: str) -> str:
+        got = request(
+            "POST",
+            f"{workspace}/oidc/v1/token",
+            form={
+                "grant_type": TOKEN_EXCHANGE,
+                "client_id": client_id,
+                "subject_token": subject,
+                "subject_token_type": JWT,
+                "scope": scope,
+            },
+        )
+        return got["access_token"]
+
+    try:
+        return with_scopes(exchange)
+    except Failed:
+        # Say exactly what a federation policy must match. These claims name the
+        # repository and environment; they aren't credentials.
+        c = claims(subject)
+        summary(
+            "**Federation policy this job needs:** "
+            f"issuer `{c.get('iss')}`, subject `{c.get('sub')}`, audience `{c.get('aud')}`"
+        )
+        raise
 
 
 def secret_token(workspace: str, client_id: str) -> str:
@@ -127,13 +167,17 @@ def secret_token(workspace: str, client_id: str) -> str:
     if not secret:
         raise Failed("no DATABRICKS_CLIENT_SECRET to fall back to")
     basic = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
-    got = request(
-        "POST",
-        f"{workspace}/oidc/v1/token",
-        form={"grant_type": "client_credentials", "scope": "all-apis"},
-        headers={"Authorization": f"Basic {basic}"},
-    )
-    return got["access_token"]
+
+    def grant(scope: str) -> str:
+        got = request(
+            "POST",
+            f"{workspace}/oidc/v1/token",
+            form={"grant_type": "client_credentials", "scope": scope},
+            headers={"Authorization": f"Basic {basic}"},
+        )
+        return got["access_token"]
+
+    return with_scopes(grant)
 
 
 def export(name: str, value: str) -> None:
@@ -221,13 +265,6 @@ def cmd_sql(statement: str) -> None:
         print("  " + ", ".join(f"{c}={v}" for c, v in zip(columns, row)))
 
 
-def cmd_whoami() -> None:
-    me = request("GET", f"{host()}/api/2.0/preview/scim/v2/Me", headers=token_headers())
-    who = me.get("displayName") or me.get("userName") or me.get("id")
-    print(f"authenticated as {who}")
-    summary(f"**Databricks identity:** {who}")
-
-
 def main(argv: list[str]) -> int:
     try:
         match argv:
@@ -235,8 +272,6 @@ def main(argv: list[str]) -> int:
                 cmd_token()
             case ["sql", statement]:
                 cmd_sql(statement)
-            case ["whoami"]:
-                cmd_whoami()
             case _:
                 print(__doc__, file=sys.stderr)
                 return 2

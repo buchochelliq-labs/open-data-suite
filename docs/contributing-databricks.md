@@ -19,7 +19,7 @@ ODS's Databricks code is tested two ways:
    The job summary says which one it used. The token is masked in the logs and never
    written anywhere else.
 2. **It runs a smoke check** through the SQL Statement API:
-   - who the token belongs to, and that the warehouse answers;
+   - who the token belongs to (`current_user()`), and that the warehouse answers;
    - a schema for the run, `ods_ci_<run id>_<attempt>`, with a table written and read
      in it;
    - dropping that schema. This step runs even if an earlier one failed.
@@ -45,8 +45,13 @@ Do this once, as a workspace admin.
    - **Issuer:** `https://token.actions.githubusercontent.com`
    - **Audience:** your Databricks account ID. If you choose another audience, set it
      as `DATABRICKS_TOKEN_AUDIENCE` below.
-   - **Subject:** `repo:buchochelliq-labs/open-data-suite:environment:databricks-free`
+   - **Subject:** `repo:buchochelliq-labs@285328036/open-data-suite@1382703972:environment:databricks-free`.
+     This repository's OIDC subjects include the owner's and repository's immutable
+     IDs, so the plain `repo:owner/name:…` form doesn't match. When federation is
+     refused, the job summary prints the exact issuer, subject and audience to use.
 5. **Fallback:** Service principals → the service principal → Secrets → Generate secret.
+   A secret scoped to `sql` is enough. The job asks for `all-apis` first, then `sql`;
+   set `DATABRICKS_OAUTH_SCOPES` to ask for something else.
    Skip this if federation works and you'd rather store no secret at all.
 
 ## Setting up the GitHub environment
@@ -60,6 +65,7 @@ Settings → Environments → `databricks-free`:
 | Variable | `DATABRICKS_ACCOUNT_ID` | optional: the federation audience, if it's the account ID |
 | Variable | `DATABRICKS_TOKEN_AUDIENCE` | optional: the federation audience, if it's something else |
 | Variable | `DATABRICKS_CATALOG` | optional; defaults to `workspace` |
+| Variable | `DATABRICKS_OAUTH_SCOPES` | optional; defaults to trying `all-apis`, then `sql` |
 | Secret | `DATABRICKS_CLIENT_SECRET` | optional: the fallback secret |
 
 Settings can also be stored as environment secrets: the workflow reads each one as a
@@ -91,7 +97,6 @@ databricks auth login --host https://<workspace>.cloud.databricks.com
 export DATABRICKS_HOST=https://<workspace>.cloud.databricks.com
 export DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/<id>
 export DATABRICKS_TOKEN="$(databricks auth token --host "$DATABRICKS_HOST" | jq -r .access_token)"
-python .github/databricks/ci.py whoami
 python .github/databricks/ci.py sql "SELECT current_user()"
 ```
 

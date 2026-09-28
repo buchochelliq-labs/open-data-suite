@@ -50,6 +50,7 @@ jobs:
       DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID || secrets.DATABRICKS_CLIENT_ID }}
       DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
       DATABRICKS_TOKEN_AUDIENCE: ${{ vars.DATABRICKS_TOKEN_AUDIENCE || secrets.DATABRICKS_TOKEN_AUDIENCE }}
+      DATABRICKS_OAUTH_SCOPES: ${{ vars.DATABRICKS_OAUTH_SCOPES }}
       CATALOG: ${{ vars.DATABRICKS_CATALOG || secrets.DATABRICKS_CATALOG || 'workspace' }}
       SCHEMA: ods_ci_${{ github.run_id }}_${{ github.run_attempt }}
     steps:
@@ -61,9 +62,7 @@ jobs:
         env:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: python .github/databricks/ci.py token
-      - name: Identity
-        run: python .github/databricks/ci.py whoami
-      - name: Warehouse answers
+      - name: Identity and warehouse
         run: python .github/databricks/ci.py sql "SELECT current_user() AS who, current_catalog() AS catalog, current_version().dbsql_version AS dbsql"
       - name: Create the run's schema
         run: python .github/databricks/ci.py sql "CREATE SCHEMA \`$CATALOG\`.\`$SCHEMA\` COMMENT 'ODS CI run ${{ github.run_id }}; dropped at the end of the run'"
