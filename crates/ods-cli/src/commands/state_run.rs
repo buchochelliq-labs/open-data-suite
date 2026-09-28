@@ -45,6 +45,7 @@ use serde::Serialize;
 use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, plan_against, select_specs, store_error,
 };
+use super::state_retry::{LastOutcome, RetryFailed};
 use super::state_settings::{Origin, Setting, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
@@ -561,11 +562,18 @@ fn plan_notes(report: &RunReport) -> Vec<String> {
     if !report.left_out.is_empty() {
         let _ = write!(summary, ", {} left out", report.left_out.len());
     }
-    let left_out: BTreeSet<&str> = report.left_out.iter().map(|l| l.node.as_str()).collect();
+    if let Some(retry) = &report.retry {
+        let _ = write!(
+            summary,
+            ", {} changed since and not retried",
+            retry.changed_since.len()
+        );
+    }
     // In plan order, so groups and names read upstream first.
     let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
     for entry in report.plan.with_action(PlanAction::Build) {
-        if left_out.contains(entry.node.as_str()) {
+        // Left out, or not retried.
+        if !report.requested.contains(&entry.node) {
             continue;
         }
         let why = entry
@@ -1297,6 +1305,174 @@ pub(super) struct RunReport {
     /// Each node's checks digest when planned, for recording.
     #[serde(skip)]
     planned_checks: BTreeMap<String, Option<String>>,
+    /// The nodes this run builds.
+    #[serde(skip)]
+    requested: BTreeSet<String>,
+    /// With `ods state retry --failed` (#292): what is retried, and what isn't.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry: Option<RetryReport>,
+}
+
+/// A node and why, e.g. why a retry leaves it as it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct NodeWhy {
+    node: String,
+    reason: String,
+}
+
+/// `ods state retry --failed` (#292): the run retried, and how the plan splits for it.
+/// Every list is in plan order.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct RetryReport {
+    /// The command line retried.
+    of: String,
+    /// Nodes that failed or were skipped in it, and are built again.
+    retried: Vec<String>,
+    /// Nodes that failed or were skipped in it that the plan now reuses, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reused: Vec<NodeWhy>,
+    /// Nodes that failed or were skipped in it that aren't built, because a parent
+    /// they read needs building and isn't: they'd run on stale input.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    held_back: Vec<NodeWhy>,
+    /// Nodes the plan builds that weren't in the failed run's failures: they changed
+    /// since, and aren't built. The reason is the plan's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    changed_since: Vec<NodeWhy>,
+    /// Nodes that failed or were skipped in it that the plan doesn't have, e.g.
+    /// removed from the project.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    not_planned: Vec<String>,
+    /// Sources whose tests failed in it and run again (#232).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_tests: Vec<String>,
+    /// Sources whose tests would run now but didn't fail in it: they aren't run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_tests_changed_since: Vec<String>,
+    /// The sources whose tests failed in it.
+    #[serde(skip)]
+    failed_sources: BTreeSet<String>,
+}
+
+/// Plans every node of the project, not just the selection, so a retry can see which
+/// unselected parents need building. A full refresh applies only to what the command
+/// selected, so it is left out here.
+fn plan_upstream(
+    ws: &Workspace,
+    latest: Option<&StoredSnapshot>,
+    now: Timestamp,
+    mut options: ods_state::PlanOptions,
+) -> Result<ExecutionPlan, CliError> {
+    options.full_refresh = false;
+    let all: BTreeSet<String> = ws.project.nodes.iter().map(|n| n.id.clone()).collect();
+    ods_state::plan_with(
+        &ws.project,
+        latest.map(|s| (s.id, &s.snapshot)),
+        &all,
+        now,
+        options,
+    )
+    .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))
+}
+
+impl RetryReport {
+    /// Narrows `requested`, what the command would build of `plan`, to what failed in
+    /// the run `failed` retries, through [`ods_state::split_retry`]. Without `failed`,
+    /// `requested` is unchanged.
+    ///
+    /// `upstream` plans every node of the project, so a parent the command didn't
+    /// select still holds back a child that would read it stale. It is only called
+    /// when retrying.
+    fn narrow(
+        failed: Option<&RetryFailed>,
+        plan: &ExecutionPlan,
+        requested: Vec<RequestedNode>,
+        upstream: impl FnOnce() -> Result<ExecutionPlan, CliError>,
+    ) -> Result<(Vec<RequestedNode>, Option<Self>), CliError> {
+        let Some(failed) = failed else {
+            return Ok((requested, None));
+        };
+        let buildable: BTreeSet<String> = requested.iter().map(|n| n.id.clone()).collect();
+        let upstream = upstream()?;
+        let actions: BTreeMap<String, PlanAction> = upstream
+            .entries
+            .iter()
+            .map(|e| (e.node.clone(), e.action))
+            .collect();
+        let split = ods_state::split_retry(plan, &failed.outcome.nodes(), &buildable, &actions);
+        // The command's own entries win; unselected parents are named from `upstream`.
+        let entries: BTreeMap<&str, &ods_core::state::PlanEntry> = upstream
+            .entries
+            .iter()
+            .chain(&plan.entries)
+            .map(|e| (e.node.as_str(), e))
+            .collect();
+        let why = |id: &str| {
+            entries
+                .get(id)
+                .and_then(|e| e.reasons.first())
+                .map_or_else(String::new, |r| r.message.clone())
+        };
+        let noted = |ids: &[String]| {
+            ids.iter()
+                .map(|id| NodeWhy {
+                    node: id.clone(),
+                    reason: why(id),
+                })
+                .collect()
+        };
+        let held_back = split
+            .held_back
+            .iter()
+            .map(|h| NodeWhy {
+                node: h.node.clone(),
+                reason: format!(
+                    "reads `{}`, which needs building ({}) but isn't built in this retry: it would run on stale input",
+                    entries.get(h.parent.as_str()).map_or(h.parent.as_str(), |e| e.name.as_str()),
+                    why(&h.parent)
+                ),
+            })
+            .collect();
+        let retried: BTreeSet<&str> = split.retried.iter().map(String::as_str).collect();
+        let requested = requested
+            .into_iter()
+            .filter(|n| retried.contains(n.id.as_str()))
+            .collect();
+        let report = Self {
+            of: failed.shown.clone(),
+            reused: noted(&split.reused),
+            held_back,
+            changed_since: noted(&split.changed_since),
+            not_planned: split.not_planned.clone(),
+            retried: split.retried,
+            source_tests: Vec::new(),
+            source_tests_changed_since: Vec::new(),
+            failed_sources: failed.outcome.failed_source_tests.clone(),
+        };
+        Ok((requested, Some(report)))
+    }
+
+    /// Keeps in `checks` only the sources whose tests failed in the run retried; the
+    /// others that would be tested are listed as changed since.
+    fn with_sources(mut self, checks: &mut Vec<SourceCheck>) -> Self {
+        let (retried, others): (Vec<SourceCheck>, Vec<SourceCheck>) = std::mem::take(checks)
+            .into_iter()
+            .partition(|c| self.failed_sources.contains(&c.source));
+        self.source_tests = retried
+            .iter()
+            .filter(|c| c.action == SourceCheckAction::Test)
+            .map(|c| c.source.clone())
+            .collect();
+        self.source_tests_changed_since = others
+            .iter()
+            .filter(|c| c.action == SourceCheckAction::Test)
+            .map(|c| c.source.clone())
+            .collect();
+        *checks = retried;
+        self
+    }
 }
 
 impl RunReport {
@@ -1306,11 +1482,27 @@ impl RunReport {
         args: &ArgMatches,
         ctx: &mut Context<'_>,
     ) -> Result<(), CliError> {
+        Self::run_with(kind, args, ctx, None)
+    }
+
+    /// Runs the whole flow and emits the report; with `retry`, builds only what failed
+    /// in the run it retries (#292).
+    pub(super) fn run_with(
+        kind: Kind,
+        args: &ArgMatches,
+        ctx: &mut Context<'_>,
+        retry: Option<&RetryFailed>,
+    ) -> Result<(), CliError> {
         let settings = StateSettings::resolve(args, ctx.config)?;
-        if kind != Kind::Compile {
-            super::state_retry::remember(&build_command(kind), args, &settings);
+        let remembered = if kind == Kind::Compile {
+            None
+        } else {
+            super::state_retry::remember(&build_command(kind), args, &settings)
+        };
+        let (report, record_error) = Self::build(kind, args, &settings, ctx.progress, retry)?;
+        if let Some(remembered) = remembered {
+            remembered.finish(report.last_outcome());
         }
-        let (report, record_error) = Self::build(kind, args, &settings, ctx.progress)?;
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);
         }
@@ -1344,6 +1536,23 @@ impl RunReport {
         }
     }
 
+    /// What failed, for `ods state retry --failed` (#292): what dbt reports, and, in a
+    /// retry, what it held back. A run that built nothing failed nothing.
+    fn last_outcome(&self) -> LastOutcome {
+        let mut outcome = self
+            .execution
+            .as_ref()
+            .map_or_else(LastOutcome::default, |e| {
+                LastOutcome::of(e, self.record.is_some())
+            });
+        if let Some(retry) = &self.retry {
+            outcome
+                .skipped
+                .extend(retry.held_back.iter().map(|h| h.node.clone()));
+        }
+        outcome
+    }
+
     /// Runs the flow. A failure to record after dbt ran comes back with the report, so
     /// the caller still sees what dbt did.
     fn build(
@@ -1351,6 +1560,7 @@ impl RunReport {
         args: &ArgMatches,
         settings: &StateSettings,
         progress: ProgressSettings,
+        retry: Option<&RetryFailed>,
     ) -> Result<(Self, Option<CliError>), CliError> {
         let builds = kind != Kind::Compile;
         let steps = Steps::new(progress, step_count(args, settings, builds));
@@ -1385,11 +1595,8 @@ impl RunReport {
         let (plan, plan_warnings) =
             plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;
         warnings.extend(plan_warnings);
-        let types = if builds {
-            build_types(kind, args)
-        } else {
-            Vec::new()
-        };
+        // Empty for `compile`, which builds nothing.
+        let types = build_types(kind, args);
         let (requested, left_out) = narrow(
             args,
             &ws.project,
@@ -1399,6 +1606,8 @@ impl RunReport {
             &types,
             &format!("ods state {}", kind.name()),
         )?;
+        let every_node = || plan_upstream(&ws, latest.as_ref(), now, options);
+        let (requested, retry) = RetryReport::narrow(retry, &plan, requested, every_node)?;
         if builds {
             warnings.extend(unbuilt_parents(
                 &ws.project,
@@ -1408,7 +1617,8 @@ impl RunReport {
                 kind,
             ));
         }
-        let source_tests = build_source_checks(tested, args, &ws.project, latest.as_ref())?;
+        let mut source_tests = build_source_checks(tested, args, &ws.project, latest.as_ref())?;
+        let retry = retry.map(|r| r.with_sources(&mut source_tests));
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
@@ -1428,6 +1638,8 @@ impl RunReport {
             target,
             has_sources: !ws.project.sources.is_empty(),
             planned_checks: checks_by_node(&ws.project),
+            requested: requested.iter().map(|n| n.id.clone()).collect(),
+            retry,
         };
         for note in plan_notes(&report) {
             steps.note(&note);
@@ -1550,6 +1762,21 @@ impl RunReport {
                 ))],
             ),
         ];
+        if let Some(retry) = &self.retry {
+            summary.push((
+                "retrying".into(),
+                vec![
+                    Span::plain("what failed in "),
+                    Span::toned(retry.of.as_str(), Tone::Code),
+                    Span::plain(format!(
+                        ": {} retried, {} reused, {} held back",
+                        retry.retried.len(),
+                        retry.reused.len(),
+                        retry.held_back.len()
+                    )),
+                ],
+            ));
+        }
         summary.push(("dbt".into(), vec![Span::plain(settings_line(&self.dbt))]));
         summary.push((
             "target".into(),
@@ -1638,6 +1865,12 @@ impl RunReport {
                         vec![
                             vec![Span::toned(e.name.as_str(), Tone::Code)],
                             vec![match e.action {
+                                PlanAction::Build
+                                    if self.retry.is_some()
+                                        && !self.requested.contains(&e.node) =>
+                                {
+                                    Span::toned("not retried", Tone::Muted)
+                                }
                                 PlanAction::Build => Span::toned("build", Tone::Warning),
                                 _ => Span::toned("reuse", Tone::Success),
                             }],
@@ -1655,8 +1888,80 @@ impl RunReport {
         }
     }
 
-    fn notices(&self) -> Vec<ViewNode> {
+    /// What a retry of failures (#292) reuses, holds back, and leaves unbuilt.
+    fn retry_notices(retry: &RetryReport) -> Vec<ViewNode> {
+        let listed = |nodes: &[NodeWhy]| {
+            nodes
+                .iter()
+                .map(|n| format!("{} ({})", display_name(&n.node), n.reason))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let mut blocks = Vec::new();
+        if !retry.reused.is_empty() {
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(format!(
+                    "failed last time, reused now: {}",
+                    listed(&retry.reused)
+                ))],
+            });
+        }
+        if !retry.held_back.is_empty() {
+            blocks.push(ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(format!(
+                    "not retried, still to build: {}",
+                    listed(&retry.held_back)
+                ))],
+            });
+        }
+        if !retry.changed_since.is_empty() || !retry.source_tests_changed_since.is_empty() {
+            let mut names = listed(&retry.changed_since);
+            if !retry.source_tests_changed_since.is_empty() {
+                if !names.is_empty() {
+                    names.push_str(", ");
+                }
+                let _ = write!(
+                    names,
+                    "the tests of {}",
+                    retry
+                        .source_tests_changed_since
+                        .iter()
+                        .map(|s| display_name(s))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(format!(
+                    "changed since, not retried: {names}; `ods state retry` without --failed builds them"
+                ))],
+            });
+        }
+        if !retry.not_planned.is_empty() {
+            blocks.push(ViewNode::Notice {
+                level: Level::Info,
+                message: vec![Span::plain(format!(
+                    "failed last time, not in the plan now: {}",
+                    retry
+                        .not_planned
+                        .iter()
+                        .map(|n| display_name(n))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))],
+            });
+        }
+        blocks
+    }
+
+    fn notices(&self) -> Vec<ViewNode> {
+        let mut blocks = self
+            .retry
+            .as_ref()
+            .map_or_else(Vec::new, Self::retry_notices);
         if !self.left_out.is_empty() {
             blocks.push(ViewNode::Notice {
                 level: Level::Info,

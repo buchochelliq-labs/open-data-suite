@@ -35,11 +35,10 @@ pipx install opendatasuite       # or: uv tool install opendatasuite
 Wheels exist for the platforms above, and for Linux with glibc 2.17 or newer on x86_64
 and arm64.
 
-## Homebrew (macOS and Linux)
+## Homebrew (macOS and Linux): coming soon
 
-```sh
-brew install buchochelliq-labs/tap/ods
-```
+A Homebrew tap isn't available yet. Until it is, use `pip`, `cargo binstall` or a
+direct download.
 
 ## cargo-binstall
 

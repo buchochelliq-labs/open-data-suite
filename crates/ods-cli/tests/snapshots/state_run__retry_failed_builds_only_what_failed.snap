@@ -1,0 +1,22 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "serde_json::to_string_pretty(&shown).unwrap()"
+---
+{
+  "outcome": "succeeded",
+  "build": 2,
+  "reuse": 10,
+  "retry": {
+    "of": "ods state build --target-dir <project>/target --state-db <project>/.ods/state.db --dbt <fake-dbt> --dbt-output capture --exclude-resource-type test",
+    "retried": [
+      "model.jaffle_ods.customer_segments",
+      "model.jaffle_ods.segment_summary"
+    ],
+    "changed_since": [
+      {
+        "node": "model.jaffle_ods.order_events",
+        "reason": "code changed since run <run>: sql"
+      }
+    ]
+  }
+}

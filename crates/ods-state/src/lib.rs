@@ -7,6 +7,7 @@
 //! - [`record`] turns a finished run into the next snapshot, advancing only the nodes
 //!   that succeeded (AGENTS.md rule 5);
 //! - [`select`] resolves dbt-style `+name+` selectors;
+//! - [`split_retry`] narrows a plan to the nodes a retry of failures builds (#292);
 //! - [`source_checks`] decides which sources' checks run (their data is new or
 //!   unknown), and [`record_source_checks`] records their results (#232);
 //! - [`explain`], [`node_history`], [`diff_states`] and [`diff_project`] explain
@@ -17,6 +18,7 @@
 mod explain;
 mod planner;
 mod recorder;
+mod retry;
 mod selection;
 mod sources;
 
@@ -26,6 +28,7 @@ pub use explain::{
 };
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
+pub use retry::{HeldBack, RetrySplit, split_retry};
 pub use selection::{select, select_sources};
 pub use sources::{
     RecordedSources, SourceCheck, SourceCheckAction, record_source_checks, source_checks,

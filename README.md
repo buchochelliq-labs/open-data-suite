@@ -10,7 +10,7 @@ and Databricks, and every decision it makes can be explained.
 > `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
 >
 > **Install:** from v0.1.0, `pip install opendatasuite` puts `ods` on your PATH next to
-> dbt. Homebrew, `cargo binstall` and direct downloads: [`docs/install.md`](docs/install.md).
+> dbt. `cargo binstall`, direct downloads and Homebrew (coming soon): [`docs/install.md`](docs/install.md).
 
 | Module | What it does | Target |
 |---|---|---|
