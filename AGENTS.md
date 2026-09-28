@@ -115,6 +115,18 @@ unless they pass, or state exactly what failed.
 - New or changed persisted formats, CLI flags, or JSON output require tests and a
   CHANGELOG entry (once #101 defines the format).
 - Update `docs/ROADMAP.md` and `.github/milestones.json` together if milestone scope changes.
+- **Always check for merge conflicts and fix them.** Before pushing, and whenever `main`
+  or another open PR changes, test-merge each open PR you own with its base, and with
+  the other open PRs.
+  - **Conflict with the base:** merge the base in (no rebase or force-push on shared
+    branches) and resolve it keeping both sides' intent. Regenerate `Cargo.lock` with
+    cargo, never by hand. Rerun the checks above, then push.
+  - **Two open PRs conflict with each other:** resolve it before either merges, so it
+    works whichever merges first. Stack one on the other, or pre-resolve the shared
+    lines.
+  - **Stacks and squash merges:** when a stacked PR's base merges, retarget the upper
+    PR to `main` and merge `main` into it right away. Otherwise it can be merged into
+    the dead base branch.
 
 ## Skills & agents available (`.claude/`)
 
