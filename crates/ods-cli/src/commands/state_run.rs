@@ -720,14 +720,17 @@ fn vars_mismatch(args: &ArgMatches, target_dir: &Path) -> Option<String> {
     })
 }
 
-/// How to plan: a full refresh forces what it rebuilds.
-fn plan_options(args: &ArgMatches) -> ods_state::PlanOptions {
-    let options = ods_state::PlanOptions::default();
+/// How to plan: a full refresh forces what it rebuilds, and a change of target says
+/// why nodes build.
+fn plan_options(args: &ArgMatches, target_changed: bool) -> ods_state::PlanOptions {
+    let mut options = ods_state::PlanOptions::default();
     if full_refresh(args) {
-        options.full_refresh()
-    } else {
-        options
+        options = options.full_refresh();
     }
+    if target_changed {
+        options = options.target_changed();
+    }
+    options
 }
 
 /// Which target dbt builds in (#227): asked of dbt, so it is the target every dbt
@@ -1302,6 +1305,10 @@ pub(super) struct RunReport {
     target: Option<TargetIdentity>,
     #[serde(skip)]
     has_sources: bool,
+    /// Whether the warehouse was asked if the nodes to reuse are still there (#230).
+    /// Each reused node's evidence says so already.
+    #[serde(skip)]
+    relations_checked: bool,
     /// Each node's checks digest when planned, for recording.
     #[serde(skip)]
     planned_checks: BTreeMap<String, Option<String>>,
@@ -1585,11 +1592,7 @@ impl RunReport {
             latest.as_ref(),
             &executor,
             now,
-            if target_changed {
-                plan_options(args).target_changed()
-            } else {
-                plan_options(args)
-            },
+            plan_options(args, target_changed),
             &mut warnings,
         )?;
         let (plan, plan_warnings) =
@@ -1637,6 +1640,7 @@ impl RunReport {
             dbt,
             target,
             has_sources: !ws.project.sources.is_empty(),
+            relations_checked: options.relations_checked,
             planned_checks: checks_by_node(&ws.project),
             requested: requested.iter().map(|n| n.id.clone()).collect(),
             retry,
@@ -2030,14 +2034,7 @@ impl RunReport {
                 });
             }
         }
-        if self.reuse > 0 {
-            blocks.push(ViewNode::Notice {
-                level: Level::Info,
-                message: vec![Span::plain(
-                    "reuse assumes each relation built earlier still exists; ODS doesn't check the warehouse yet",
-                )],
-            });
-        }
+        blocks.extend(trusted_reuse_notice(self.reuse, self.relations_checked));
         for warning in &self.warnings {
             blocks.push(ViewNode::Notice {
                 level: Level::Warning,
@@ -2046,6 +2043,18 @@ impl RunReport {
         }
         blocks
     }
+}
+
+/// Says that reuse was taken on trust, if it was: with relations checked, what is
+/// reused was found in the warehouse, and its evidence says so, so there is nothing to
+/// add.
+fn trusted_reuse_notice(reuse: usize, relations_checked: bool) -> Option<ViewNode> {
+    (reuse > 0 && !relations_checked).then(|| ViewNode::Notice {
+        level: Level::Info,
+        message: vec![Span::plain(
+            "reuse assumes each relation built earlier still exists: this run didn't check the warehouse",
+        )],
+    })
 }
 
 impl Present for RunReport {
@@ -2066,5 +2075,24 @@ impl Present for RunReport {
         }
         blocks.extend(self.notices());
         ViewNode::Group(blocks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_reuse_on_trust_gets_a_notice() {
+        assert!(trusted_reuse_notice(0, false).is_none());
+        assert!(trusted_reuse_notice(3, true).is_none());
+        let Some(ViewNode::Notice { level, message }) = trusted_reuse_notice(3, false) else {
+            panic!("reuse without a check has a notice");
+        };
+        assert_eq!(level, Level::Info);
+        assert!(
+            format!("{message:?}").contains("didn't check the warehouse"),
+            "{message:?}"
+        );
     }
 }

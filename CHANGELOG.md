@@ -64,6 +64,10 @@ State MVP. Entries below record changes since the changelog was introduced.
   crossings (#282).
 
 ### Fixed
+- `ods state run` and `ods state build` no longer say that ODS doesn't check the
+  warehouse when they reuse nodes: they do check, and say reuse is taken on trust only
+  when the check didn't run. `ods state plan`, which doesn't check, now points to
+  `ods state build --dry-run`, which does (#301).
 - From dbt 1.11, every dbt setting can also be spelled `DBT_ENGINE_<name>`, and dbt
   prefers that spelling. ODS now treats those names as the setting they spell, so
   e.g. `DBT_ENGINE_DEFER` and `DBT_ENGINE_SAMPLE` no longer get past its checks. The
