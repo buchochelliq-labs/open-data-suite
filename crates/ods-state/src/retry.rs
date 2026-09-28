@@ -8,11 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ods_core::state::{ExecutionPlan, PlanAction};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A node a retry would build, but doesn't, because a parent it reads needs building
 /// and isn't built in this retry: it would run on stale input.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct HeldBack {
@@ -23,7 +23,7 @@ pub struct HeldBack {
 }
 
 /// How a retry splits a plan (#292). Every list is in plan order: upstream first.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct RetrySplit {
