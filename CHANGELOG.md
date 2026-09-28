@@ -17,7 +17,8 @@ State MVP. Entries below record changes since the changelog was introduced.
 ### Breaking
 - The executor contract is now version 0.3: an `ExecutionRequest` carries the sources
   whose tests to run, and an `ExecutionReport` returns their outcomes. Out-of-process
-  executor plugins must be rebuilt against SDK 0.3 (#288, #232).
+  executor plugins must be rebuilt against the current SDK, whose `EXECUTOR` contract
+  is 0.3 (#288, #232).
 
 ### Added
 - `ods state build` (with tests) and `ods state test` run the tests defined on sources,
