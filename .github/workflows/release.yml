@@ -1,0 +1,333 @@
+name: Release
+
+# Builds `ods` for every supported platform and publishes a release (#212, ADR-0019).
+#
+# - A `vX.Y.Z` tag on `main` builds, tests and publishes: a GitHub release whose notes are
+#   the version's CHANGELOG.md section, archives, wheels, SHA256SUMS, build provenance
+#   attestations and a rendered Homebrew formula; then the wheels go to PyPI.
+# - Running it by hand (workflow_dispatch) is a dry run: everything is built, tested and
+#   uploaded as workflow artifacts, and nothing is published. The notes are the
+#   `[Unreleased]` section.
+#
+# One compile per target produces both the wheel (maturin `bin` bindings) and the
+# archive, so pip, Homebrew, cargo-binstall and direct downloads ship the same binary.
+# Admin setup (PyPI trusted publisher, the `pypi` environment, the Homebrew tap) is
+# described in docs/install.md, "For maintainers".
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PYPI_NAME: opendatasuite
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        name: Resolve the version and whether to publish
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME doesn't match the workspace version $version. The release PR bumps workspace.package.version (ADR-0019)."
+              exit 1
+            fi
+            git fetch --quiet origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Tag $GITHUB_REF_NAME isn't on main. Releases are tagged on main (ADR-0019)."
+              exit 1
+            fi
+            publish=true
+            notes=$version
+          else
+            publish=false
+            notes=Unreleased
+          fi
+          python3 scripts/changelog-section.py --self-test
+          python3 scripts/changelog-section.py "$notes" > release-notes.md
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Version $version, publish: $publish, notes from [$notes]" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  notices:
+    # Third-party licence notices, the same for every target (about.toml lists them all).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: cargo about generate --fail --locked about.hbs -o THIRD-PARTY-LICENSES.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notices
+          path: THIRD-PARTY-LICENSES.html
+
+  build:
+    needs: [plan, notices]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux archives are static musl binaries, so they run on any distribution;
+          # they are also the musllinux wheels (Alpine). Built in maturin-action's
+          # rust-musl-cross containers.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, manylinux: musllinux_1_2, archive: true, run: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, manylinux: musllinux_1_2, archive: true, run: false }
+          # glibc wheels: pip on a glibc Linux only installs manylinux-tagged wheels.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, manylinux: "2_17", archive: false, run: false }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, manylinux: "2_17", archive: false, run: false }
+          # macos-15 is an arm64 image: the arm64 build runs natively and is executed;
+          # the x86_64 build is cross-compiled there and never executed.
+          - { target: x86_64-apple-darwin, os: macos-15, archive: true, run: false }
+          - { target: aarch64-apple-darwin, os: macos-15, archive: true, run: true }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: true, run: true }
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Into the repository root, where pyproject.toml's license-files picks it up.
+      - uses: actions/download-artifact@v4
+        with:
+          name: notices
+      - name: Build the wheel (and the binary)
+        uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.15.0
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out wheels
+      - name: Check the wheel ships the licence notices
+        shell: bash
+        run: |
+          python -m zipfile -l wheels/*.whl | tee wheel-contents.txt
+          grep -q 'licenses/LICENSE' wheel-contents.txt
+          grep -q 'licenses/THIRD-PARTY-LICENSES.html' wheel-contents.txt
+      - name: Run the binary
+        if: matrix.run
+        shell: bash
+        run: target/"$TARGET"/release/ods version
+      - name: Archive
+        if: matrix.archive
+        shell: bash
+        run: |
+          name="ods-v$VERSION-$TARGET"
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=".exe"; fi
+          mkdir -p "staging/$name" archives
+          cp "target/$TARGET/release/ods$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.html "staging/$name/"
+          cd staging
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a -tzip "../archives/$name.zip" "$name"
+          else
+            tar -czf "../archives/$name.tar.gz" "$name"
+          fi
+          ls -l ../archives
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: wheels/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: matrix.archive
+        with:
+          name: archive-${{ matrix.target }}
+          path: archives/*
+          if-no-files-found: error
+
+  smoke-test:
+    # Acceptance criterion of #212: `pip install` then `ods version`, on each OS, from
+    # the wheels just built; and the archive for that runner.
+    needs: [plan, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: wheels
+      - uses: actions/download-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: archives
+      - name: pip install, then ods version
+        shell: bash
+        run: |
+          python -m venv venv
+          if [ -d venv/Scripts ]; then bin="$PWD/venv/Scripts"; else bin="$PWD/venv/bin"; fi
+          "$bin/python" -m pip install --no-index --find-links wheels "$PYPI_NAME==$VERSION"
+          export PATH="$bin:$PATH"
+          command -v ods
+          ods version
+          ods version --output json | python -c 'import json, sys; got = json.load(sys.stdin)["ods_version"]; sys.exit(0 if got == sys.argv[1] else f"ods_version {got}, expected {sys.argv[1]}")' "$VERSION"
+      - name: The archive has the binary, the licence and the notices
+        shell: bash
+        run: |
+          cd archives
+          name="ods-v$VERSION-$TARGET"
+          if [ "$RUNNER_OS" = Windows ]; then 7z x "$name.zip"; exe=".exe"; else tar -xzf "$name.tar.gz"; exe=""; fi
+          for f in "ods$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.html; do test -s "$name/$f"; done
+          "$name/ods$exe" version
+
+  package:
+    # Checksums, the Homebrew formula and the release notes. Runs on dry runs too, so the
+    # whole release is exercised before a tag is pushed.
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+      - name: Check every platform is there
+        run: |
+          ls -l dist
+          test "$(ls dist/ods-v"$VERSION"-*.tar.gz dist/ods-v"$VERSION"-*.zip | wc -l)" -eq 5
+          test "$(ls dist/*.whl | wc -l)" -eq 7
+      - name: Render the Homebrew formula
+        run: |
+          (cd dist && sha256sum ods-v*.tar.gz) > archive-sums
+          python3 scripts/render-homebrew-formula.py --self-test
+          python3 scripts/render-homebrew-formula.py --version "$VERSION" --sums archive-sums > dist/ods.rb
+          ruby -c dist/ods.rb
+      - name: SHA256SUMS
+        run: |
+          (cd dist && sha256sum -- * > ../SHA256SUMS)
+          mv SHA256SUMS dist/
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Release notes
+        run: |
+          {
+            cat release-notes.md
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "pip install $PYPI_NAME==$VERSION        # or: pipx install / uv tool install $PYPI_NAME"
+            echo "cargo binstall --git https://github.com/$GITHUB_REPOSITORY ods-cli"
+            echo '```'
+            echo
+            echo "Homebrew, direct downloads and verification: https://buchochelliq-labs.github.io/open-data-suite/install/"
+            echo
+            echo "## Checksums"
+            echo
+            echo '```text'
+            cat dist/SHA256SUMS
+            echo '```'
+          } > release-body.md
+          cat release-body.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: |
+            dist/
+            release-body.md
+          if-no-files-found: error
+
+  publish:
+    if: needs.plan.outputs.publish == 'true'
+    needs: [plan, smoke-test, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.whl
+            dist/ods.rb
+            dist/SHA256SUMS
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "ods $VERSION" \
+            --notes-file release-body.md \
+            $prerelease
+
+  pypi:
+    # Trusted publishing: no token. Needs the PyPI trusted publisher and the `pypi`
+    # environment configured (docs/install.md, "For maintainers").
+    if: needs.plan.outputs.publish == 'true'
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/opendatasuite/${{ needs.plan.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
