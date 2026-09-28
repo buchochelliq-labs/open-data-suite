@@ -70,8 +70,9 @@ Edition workspace.
   an interface we depend on.
 
 ## Decision
-**`ods-provider-databricks` authenticates with a credential chain: U2M through the
-Databricks CLI for people, a service principal's OAuth secret or workload identity
+**`ods-provider-databricks` authenticates with a credential chain: U2M through a
+Databricks CLI profile for people (modelled as delegation to that profile, and
+reported with the profile's own auth type), a service principal's OAuth secret or workload identity
 federation for CI, and a PAT only when asked for by name. Tokens are held in memory,
 never written, and never cross the SDK contract. Configuration holds only references.**
 
@@ -82,26 +83,45 @@ that.
 
 | `auth` | For | How | Holds |
 |---|---|---|---|
-| `u2m` | people | OAuth authorization code with PKCE, done by `databricks auth login`. ODS runs `databricks auth token --profile <p>` (or `--host`) and reads `access_token` and `expiry` from its JSON. The CLI refreshes from its own cache. | a profile name |
+| `cli` | people | **Delegated to a Databricks CLI profile.** U2M (OAuth authorization code with PKCE) is what it is meant for: `databricks auth login` signs in, and ODS runs `databricks auth token --profile <p>` and reads `access_token` and `expiry` from its JSON. The CLI refreshes from its own cache. | a profile name, and `host` |
 | `m2m` | CI, services | `client_credentials` grant at `<host>/oidc/v1/token`, with HTTP Basic auth of the client ID and secret | `client_id`, a `client_secret` reference |
 | `federated` | CI where the account allows it | RFC 8693 token exchange at `<host>/oidc/v1/token`: the CI platform's OIDC token (GitHub's today) for a Databricks token, under the service principal's federation policy | `client_id`, optionally `audience` |
 | `pat` | last resort | a bearer token, sent as is | a `token` reference |
 
-- **U2M details:**
-  - ODS never parses `~/.databrickscfg`. Profiles can hold PATs and client secrets, so
-    the CLI resolves them.
+- **`cli` details:**
+  - **It is modelled as delegation, not as U2M.** A profile can use a PAT, a client
+    secret or other methods as well as a U2M login. Whatever it resolves to is the
+    profile's choice, not ODS's. So `status` reports `delegated`, with the profile name
+    and the profile's own auth type. It claims `user` only when that type is the CLI's
+    U2M login (`databricks-cli`).
+  - **Finding the auth type.** ODS asks the CLI
+    (`databricks auth describe --profile <p> --output json`) and reads only the auth
+    type and host fields. Before this ships, a test against the real CLI checks that
+    this output never contains the profile's secret values. A fake CLI covers it in
+    unit tests. If the type can't be determined, `status` says `unknown`, and a warning
+    says so. ODS never presents an unknown type as U2M.
+  - **A profile that resolves to a PAT is refused.** A PAT is only used when named
+    (`auth = "pat"`, below). The error says so. We believe `auth token` only returns
+    OAuth tokens, but we don't rely on that.
+  - **`host` is required** in ODS's configuration (or `DATABRICKS_HOST`), until host
+    discovery is decided. ODS never parses `~/.databrickscfg`, so a profile alone
+    gives it no host. When `auth describe` reports the profile's host, ODS compares it
+    with `host`. On a mismatch it refuses before sending anything, so a token issued for
+    one workspace is never sent to another.
+  - ODS never parses `~/.databrickscfg`, because profiles can hold PATs and client
+    secrets. The CLI resolves them.
   - ODS never reads or writes the CLI's token cache file, whose format is the CLI's.
   - ODS never runs `databricks auth login` itself. When there is no valid login, the
     error names the command to run, e.g.
     `databricks auth login --profile free`.
-  - The CLI is found on `PATH`, or at the `cli` setting.
+  - The CLI is found on `PATH`, or at the `cli_path` setting.
 - **Choosing a method:**
   - When `auth` is set, only that method is used. There is no fallback. This is
     recommended in CI, so a misconfiguration fails instead of changing identity.
   - When `auth` is unset, methods are tried in this order:
     1. `federated`, only when `client_id` is set and the process has a CI OIDC token;
     2. `m2m`, when `client_id` and `client_secret` are set;
-    3. `u2m`, when `profile` is set or the CLI has a login for `host`.
+    3. `cli`, when `profile` is set.
 
     A method that is refused falls back to the next, as `ci.py` does, and the report
     says why each one was skipped. `pat` is never chosen automatically.
@@ -120,8 +140,8 @@ that.
   starts narrow.
 - #295 verified `all-apis` and `sql`. Any other scope name is checked against a real
   workspace before it becomes a default.
-- U2M tokens carry the scopes the CLI's login requested. ODS can't narrow them, and
-  says so in `status`.
+- Tokens from a CLI profile carry the scopes its login requested. ODS can't narrow
+  them, and says so in `status`.
 
 ### 3. Configuration (ADR-0005)
 ```toml
@@ -130,8 +150,9 @@ kind = "databricks"
 
 [providers.uc.settings]
 host = "https://<workspace>.cloud.databricks.com"
-auth = "u2m"                     # u2m | m2m | federated | pat; unset = automatic
-profile = "free"                 # u2m: a ~/.databrickscfg profile
+auth = "cli"                     # cli | m2m | federated | pat; unset = automatic
+profile = "free"                 # cli: a ~/.databrickscfg profile; host is still required
+cli_path = "databricks"          # cli: optional, default the CLI on PATH
 client_id = "<application id>"  # m2m, federated: not a secret
 client_secret = { secret = "env:DATABRICKS_CLIENT_SECRET" }
 audience = "<account id>"        # federated
@@ -154,7 +175,9 @@ scopes = ["sql"]
   a login hint, or fall back to "configure a reference".
 - **`ods-sdk`:** a contract, `credentials` 0.1:
   - `status() -> AuthStatus`: the method (`user`, `service_secret`, `workload`,
-    `static_token`), the principal if known, the scopes, and when the token expires;
+    `static_token`, or `delegated` with the tool profile's name and its own reported
+    auth type, `unknown` when it can't be told), the principal if known, the scopes,
+    and when the token expires;
   - `login_hint() -> Option<String>`.
 
   **No token crosses the contract.** Providers use their tokens internally.
@@ -185,6 +208,8 @@ scopes = ["sql"]
 | Client secret | configuration, CI logs | A reference only (ADR-0005). In CI, a GitHub environment secret, masked, with required reviewers. Fork PRs never run the job. Federation removes the secret where the account allows it. |
 | An over-broad token | misuse if stolen | Narrowest scope per operation. The CI principal has only `USE CATALOG`, `CREATE SCHEMA` and warehouse use. |
 | A spoofed host | tokens sent to an attacker | HTTPS only, TLS always verified, and no credentialed redirects to another host. |
+| A profile's token sent to another workspace | the configured `host` | When the CLI reports the profile's host, a mismatch with `host` is refused before any request. |
+| A profile that silently uses a PAT or secret | an identity the user didn't expect | `status` reports the profile's own auth type, never an assumed U2M. A PAT-backed profile is refused. |
 | OIDC claims printed on refusal | public CI logs | They name the repository, environment and audience, which aren't secrets. The OIDC token itself is never printed. |
 | A PR changing the CI script | the job's credentials | The `databricks` label runs a PR's own code: review it first (docs/contributing-databricks.md, #295). |
 
@@ -195,7 +220,9 @@ Out of scope: a compromised user account or machine, and memory dumps.
   fake token endpoint covers each grant, scope fallback, expiry and refresh, a refused
   federation, and error messages that never contain a token.
 - **A fake `databricks` CLI** in `fixtures/`, like `fixtures/dbt/fake-dbt`. It covers a
-  valid login, an expired login ("run `databricks auth login`"), and a missing CLI.
+  valid login, an expired login ("run `databricks auth login`"), and a missing CLI. It
+  also covers each auth type `auth describe` can report (U2M, PAT, M2M, unknown), and a
+  host that doesn't match `host`.
 - **Conformance:** the `credentials` suite, run by the fake and Databricks providers.
 - **Live:** U2M by hand against Free Edition, with a CLI profile. M2M in the
   `databricks` CI job (#294). Federation where an account allows it.
@@ -207,8 +234,9 @@ Out of scope: a compromised user account or machine, and memory dumps.
     secret at all.
   - Core sees a capability and a token-free status, nothing vendor-specific.
 - Negative / trade-offs:
-  - U2M needs the Databricks CLI. Its `auth token` JSON becomes an interface we test
-    against.
+  - U2M needs the Databricks CLI. The JSON of `auth token` and `auth describe`
+    becomes an interface we test against.
+  - `host` must be configured even when a profile names one.
   - Free Edition can't use federation, so CI there keeps a service principal secret.
   - Scope names beyond `all-apis` and `sql` are unverified until tested on a real
     workspace.
@@ -216,8 +244,9 @@ Out of scope: a compromised user account or machine, and memory dumps.
 - Follow-up issues:
   - #126: `SecretProvider` with the `env:` scheme, which `client_secret` and `token`
     need.
-  - Read `host` from a CLI profile, if the CLI offers a command that prints it without
-    printing credentials.
+  - Host discovery: make `host` optional for `cli` by reading it from
+    `databricks auth describe`, once a test shows that output never includes
+    credentials. Until then `host` is required.
   - Federation from other CI platforms' OIDC tokens.
   - Move the chain onto an official Databricks SDK for Rust, if one ships under a
     permissive licence.
