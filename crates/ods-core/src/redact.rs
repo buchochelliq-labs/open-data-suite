@@ -205,61 +205,167 @@ pub fn literals(text: &str) -> String {
     numbers(&spans(text))
 }
 
-/// Word sequences that start a SQL statement or clause. A message is cut where one
-/// starts, since what follows is SQL. The words may be separated by any whitespace,
-/// and the last is followed by whitespace, `(` or the end. Chosen so ordinary English
-/// ("could not update the relation") isn't cut.
-const SQL_STARTS: [&[&str]; 14] = [
+/// Word patterns that start SQL. A message is cut where one starts, since what follows
+/// is SQL, which can hold resolved values. Each element is matched in order, separated
+/// by whitespace:
+/// - a word matches itself, whole and case-insensitively;
+/// - `*` matches any one token (an identifier, possibly quoted or dotted);
+/// - `*(` matches a token directly followed by `(`;
+/// - a word ending in `(` matches that word directly followed by `(`.
+///
+/// The last element is followed by whitespace, `(`, `;` or the end. Words that are
+/// ordinary English (`update`, `create`, `from`, `set`, `join`) count only in the shape
+/// of a statement (`update <x> set`, `create table`, `left join`), so "could not update
+/// the relation" isn't cut. Statements that carry no values (`use`, `show`,
+/// `describe`, `commit`) aren't listed.
+const SQL_STARTS: &[&[&str]] = &[
     &["select"],
-    &["insert", "into"],
-    &["insert", "overwrite"],
-    &["delete", "from"],
+    &["insert"],
+    &["upsert"],
+    &["truncate"],
+    &["grant"],
+    &["revoke"],
+    &["unload"],
+    &["where"],
+    &["having"],
+    &["cast("],
+    &["values("],
+    &["values", "("],
     &["merge", "into"],
+    &["group", "by"],
+    &["order", "by"],
+    &["partition", "by"],
+    &["with", "recursive"],
+    &["with", "*", "as"],
+    &["update", "*", "set"],
+    &["delete", "from"],
+    &["replace", "into"],
+    &["replace", "table"],
+    &["rename", "table"],
+    &["rename", "column"],
+    &["copy", "into"],
+    &["copy", "*", "from"],
+    &["call", "*("],
+    &["execute", "immediate"],
+    &["declare", "*"],
+    &["begin", "transaction"],
+    &["left", "join"],
+    &["right", "join"],
+    &["inner", "join"],
+    &["outer", "join"],
+    &["cross", "join"],
+    &["full", "join"],
+    &["join", "*", "on"],
     &["create", "or", "replace"],
+    &["create", "*", "table"],
     &["create", "table"],
     &["create", "view"],
+    &["create", "schema"],
+    &["create", "database"],
+    &["create", "index"],
+    &["create", "function"],
+    &["create", "procedure"],
+    &["create", "stage"],
+    &["create", "sequence"],
+    &["create", "user"],
+    &["create", "role"],
+    &["create", "temp"],
     &["create", "temporary"],
+    &["create", "transient"],
+    &["create", "materialized"],
+    &["create", "external"],
+    &["create", "if"],
     &["alter", "table"],
+    &["alter", "view"],
+    &["alter", "schema"],
+    &["alter", "database"],
+    &["alter", "user"],
+    &["alter", "role"],
+    &["alter", "session"],
+    &["alter", "system"],
     &["drop", "table"],
-    &["where"],
-    &["cast("],
-    &["with", "recursive"],
+    &["drop", "view"],
+    &["drop", "schema"],
+    &["drop", "database"],
+    &["drop", "index"],
+    &["drop", "function"],
+    &["drop", "user"],
+    &["drop", "role"],
+    &["drop", "if"],
+    &["set", "session"],
+    &["set", "role"],
 ];
+
+fn is_token_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'"' | b'`' | b'$' | b'[' | b']')
+}
+
+/// Whether `pattern` matches at byte `at` of `lower`; if so, where it ends.
+fn match_at(lower: &str, at: usize, pattern: &[&str]) -> Option<usize> {
+    let bytes = lower.as_bytes();
+    let mut pos = at;
+    for (i, element) in pattern.iter().enumerate() {
+        if i > 0 {
+            let gap = bytes[pos..]
+                .iter()
+                .take_while(|b| b.is_ascii_whitespace())
+                .count();
+            if gap == 0 && !element.starts_with('(') {
+                return None;
+            }
+            pos += gap;
+        }
+        match *element {
+            "*" | "*(" => {
+                let len = bytes[pos..]
+                    .iter()
+                    .take_while(|b| is_token_char(**b))
+                    .count();
+                if len == 0 {
+                    return None;
+                }
+                pos += len;
+                if *element == "*(" {
+                    if bytes.get(pos) != Some(&b'(') {
+                        return None;
+                    }
+                    pos += 1;
+                }
+            }
+            word => {
+                if !lower[pos..].starts_with(word) {
+                    return None;
+                }
+                pos += word.len();
+                // A whole word: not followed by more of one (unless it ends in `(`).
+                if !word.ends_with('(')
+                    && bytes
+                        .get(pos)
+                        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                {
+                    return None;
+                }
+            }
+        }
+    }
+    let last = pattern.last().copied().unwrap_or_default();
+    let ends = last.ends_with('(')
+        || bytes
+            .get(pos)
+            .is_none_or(|b| b.is_ascii_whitespace() || matches!(b, b'(' | b';'));
+    ends.then_some(pos)
+}
 
 /// Where the first SQL start is in `lower` (ASCII-lowercased), in bytes.
 fn sql_start(lower: &str) -> Option<usize> {
     let bytes = lower.as_bytes();
-    let starts_word = |at: usize| at == 0 || !is_word(char::from(bytes[at - 1]));
-    let mut best: Option<usize> = None;
-    for words in SQL_STARTS {
-        for (at, _) in lower.match_indices(words[0]) {
-            if !starts_word(at) || best.is_some_and(|b| b <= at) {
-                continue;
-            }
-            let mut pos = at + words[0].len();
-            let mut matched = true;
-            for word in &words[1..] {
-                let gap = lower[pos..]
-                    .bytes()
-                    .take_while(u8::is_ascii_whitespace)
-                    .count();
-                if gap == 0 || !lower[pos + gap..].starts_with(word) {
-                    matched = false;
-                    break;
-                }
-                pos += gap + word.len();
-            }
-            let ends = words.last().is_some_and(|w| w.ends_with('('))
-                || lower[pos..]
-                    .bytes()
-                    .next()
-                    .is_none_or(|b| b.is_ascii_whitespace() || b == b'(');
-            if matched && ends {
-                best = Some(at);
-            }
-        }
-    }
-    best
+    (0..bytes.len()).find(|&at| {
+        let starts_word =
+            at == 0 || !(bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_');
+        starts_word
+            && bytes[at].is_ascii_alphabetic()
+            && SQL_STARTS.iter().any(|p| match_at(lower, at, p).is_some())
+    })
 }
 
 /// Cuts `line` where SQL starts. Returns the text before it, and whether it was cut.
@@ -271,8 +377,86 @@ fn cut_sql(line: &str) -> (&str, bool) {
     }
 }
 
+/// Terminal escape sequences (`ESC [ … m` and other `ESC`-led ones) and control
+/// characters become spaces, before anything is looked for: colour codes around a
+/// keyword (`\x1b[1mUPDATE\x1b[0m`) must not hide it.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.next() {
+                // CSI: parameters and intermediates up to a final byte.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: up to BEL or ESC \.
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || (c == '\u{1b}' && chars.peek() == Some(&'\\')) {
+                            if c == '\u{1b}' {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            out.push(' ');
+        } else if c.is_control() {
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Replaces the unquoted value after an assignment (`=`, `:=`, `=>`, `==`, `!=`, `<=`,
+/// `>=`) by [`REMOVED`]: a resolved secret can appear unquoted (`token = sk_live_…`).
+/// The value runs to the next whitespace, `,`, `;` or `)`.
+fn assignments(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        out.push(c);
+        i += 1;
+        if c != '=' {
+            continue;
+        }
+        while i < chars.len() && matches!(chars[i], '=' | '>') {
+            out.push(chars[i]);
+            i += 1;
+        }
+        let mut j = i;
+        while j < chars.len() && chars[j] == ' ' {
+            j += 1;
+        }
+        let value_end = (j..chars.len())
+            .find(|&k| chars[k].is_whitespace() || matches!(chars[k], ',' | ';' | ')'))
+            .unwrap_or(chars.len());
+        let value: String = chars[j..value_end].iter().collect();
+        if value.is_empty() || value.starts_with(REMOVED) || value.starts_with('[') {
+            continue;
+        }
+        out.extend(&chars[i..j]);
+        out.push_str(REMOVED);
+        i = value_end;
+    }
+    out
+}
+
 fn finish(mut clean: String, sql: bool, max_chars: usize) -> String {
     clean.retain(|c| !c.is_control());
+    let clean_trimmed = clean.trim().to_owned();
+    clean = clean_trimmed;
     if sql {
         if !clean.is_empty() {
             clean.push(' ');
@@ -286,27 +470,32 @@ fn finish(mut clean: String, sql: bool, max_chars: usize) -> String {
     clean
 }
 
-/// One line for people from an engine's message: its first non-blank line, cut where a
-/// SQL statement starts, with [`literals`] removed, control characters dropped and at
-/// most `max_chars` characters (ending in `…` when cut). `None` if the message has no
-/// text.
+/// One line for people from an engine's message: its first non-blank line, with
+/// terminal escapes and control characters made spaces, cut where SQL starts, with
+/// [`literals`] and unquoted assigned values removed, and at most `max_chars`
+/// characters (ending in `…` when cut). `None` if the message has no text.
 pub fn summary_line(text: &str, max_chars: usize) -> Option<String> {
-    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let (line, sql) = cut_sql(line);
-    Some(finish(literals(line), sql, max_chars))
+    let line = text
+        .lines()
+        .map(|l| plain(l).trim().to_owned())
+        .find(|l| !l.is_empty())?;
+    let (line, sql) = cut_sql(&line);
+    Some(finish(numbers(&assignments(&spans(line))), sql, max_chars))
 }
 
 /// A value an engine reported (e.g. a query id or a status code), safe to keep: its
-/// first line, cut where SQL starts, with quoted spans removed (numbers are kept: they
-/// are what such values are made of), control characters dropped and at most
-/// `max_chars` characters. `None` if it has no text.
+/// first line, with terminal escapes and control characters made spaces, cut where SQL
+/// starts, with quoted spans and unquoted assigned values removed (numbers are kept:
+/// they are what such values are made of), and at most `max_chars` characters. `None`
+/// if it has no text.
 pub fn value_line(text: &str, max_chars: usize) -> Option<String> {
-    let line = text.lines().next()?.trim();
+    let line = plain(text.lines().next()?);
+    let line = line.trim();
     if line.is_empty() {
         return None;
     }
     let (line, sql) = cut_sql(line);
-    Some(finish(spans(line), sql, max_chars))
+    Some(finish(assignments(&spans(line)), sql, max_chars))
 }
 
 #[cfg(test)]
@@ -366,6 +555,15 @@ mod tests {
     /// output.
     #[test]
     fn nothing_inside_a_quoted_span_survives() {
+        // Unquoted, in SQL or after an assignment, with or without colour codes.
+        for input in [
+            "\u{1b}[1mUPDATE\u{1b}[0m accounts SET token = SECRET_Zq9",
+            "\u{1b}[31mselect\u{1b}[0m SECRET_Zq9",
+            "x = SECRET_Zq9",
+        ] {
+            let out = summary_line(input, 200).unwrap();
+            assert!(!out.contains("SECRET"), "{input:?} => {out:?}");
+        }
         let prefixes = [
             "",
             "Can't ",
@@ -449,7 +647,10 @@ mod tests {
             summary_line("bad: SELECT(secret_col) FROM t", 200).as_deref(),
             Some("bad: [SQL removed]")
         );
-        assert_eq!(summary_line("x INSERT\n", 200).as_deref(), Some("x INSERT"));
+        assert_eq!(
+            summary_line("x inserted 2 files\n", 200).as_deref(),
+            Some("x inserted [value removed] files")
+        );
         assert_eq!(
             summary_line("LINE 35: where cast(secret_col as integer) = ssn_col", 200).as_deref(),
             Some("LINE [value removed]: [SQL removed]")
@@ -459,16 +660,68 @@ mod tests {
             Some("could not update the relation")
         );
         assert_eq!(summary_line("abcdef", 4).as_deref(), Some("abc…"));
-        assert_eq!(
-            summary_line("a\u{1b}[31mb", 200).as_deref(),
-            Some("a[[value removed]")
-        );
+        assert_eq!(summary_line("a\u{1b}[31mb", 200).as_deref(), Some("a b"));
         assert_eq!(summary_line("  \n ", 200), None);
         // Letters whose lowercase is longer (İ) or not ASCII (the Kelvin sign) can't
         // shift the cut.
         let out = summary_line("İİİİİİ select secret_col from t \u{212A}\u{212A}", 200).unwrap();
         assert_eq!(out, "İİİİİİ [SQL removed]");
         assert!(!out.contains("secret_col"));
+    }
+
+    /// Codex review on #326: statements outside the old keyword list, colour codes
+    /// around a keyword, and values assigned without quotes.
+    #[test]
+    fn any_statement_start_and_unquoted_assignments_are_cut() {
+        for input in [
+            "Error: UPDATE accounts SET token = sk_live_SECRET",
+            "Error: \u{1b}[1mUPDATE\u{1b}[0m accounts SET token = sk_live_SECRET",
+            "failed: TRUNCATE TABLE sk_live_SECRET",
+            "failed: truncate\tsk_live_SECRET",
+            "failed: GRANT SELECT ON sk_live_SECRET TO x",
+            "failed: REVOKE ALL ON sk_live_SECRET FROM y",
+            "failed: DELETE\nFROM sk_live_SECRET",
+            "bad: SELECT\u{7}sk_live_SECRET FROM t",
+            "bad: WITH cte AS (select sk_live_SECRET)",
+            "bad: MERGE INTO t USING sk_live_SECRET",
+            "bad: COPY INTO t FROM sk_live_SECRET",
+            "bad: CALL proc(sk_live_SECRET)",
+            "bad: CREATE OR REPLACE TABLE sk_live_SECRET",
+            "bad: DROP TABLE IF EXISTS sk_live_SECRET",
+            "bad: x LEFT JOIN sk_live_SECRET",
+            "bad: VALUES (sk_live_SECRET)",
+            "token = sk_live_SECRET",
+            "token:=sk_live_SECRET and more",
+            "key => sk_live_SECRET, other",
+            "password=sk_live_SECRET",
+        ] {
+            let out = summary_line(input, 200).unwrap();
+            assert!(!out.contains("SECRET"), "{input:?} => {out:?}");
+            let value = value_line(input, 200).unwrap();
+            assert!(!value.contains("SECRET"), "{input:?} => {value:?}");
+        }
+        assert_eq!(
+            summary_line(
+                "Error: \u{1b}[1mUPDATE\u{1b}[0m accounts SET token = sk_live_SECRET",
+                200
+            )
+            .as_deref(),
+            Some("Error: [SQL removed]")
+        );
+        assert_eq!(
+            summary_line("token = sk_live_SECRET", 200).as_deref(),
+            Some("token = [value removed]")
+        );
+        // Ordinary English with those words isn't cut.
+        for fine in [
+            "could not update the relation",
+            "failed to create the target directory",
+            "the column was dropped from the source",
+            "set up the profile and try again",
+            "copy the file first",
+        ] {
+            assert_eq!(summary_line(fine, 200).as_deref(), Some(fine), "{fine}");
+        }
     }
 
     #[test]

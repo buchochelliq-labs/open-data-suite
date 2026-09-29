@@ -57,7 +57,9 @@ the changelog was introduced.
   execute when timed), rows affected, the engine's other reported values, thread, test
   counts and, when it failed, a one-line error summary with quoted values, numbers and
   SQL removed (read failing closed: an apostrophe in `can't` opens no quote, and a line
-  whose quoting can't be read loses everything from its first quote). The engine's
+  whose quoting can't be read loses everything from its first quote; any SQL statement
+  or clause start is cut, after colour codes are removed; unquoted values after `=`
+  are removed). The engine's
   other values and the thread are redacted too. A stat that isn't reported is missing,
   never zero, and the rows total says `rows_at_least` when any node that ran, or may
   have, didn't report rows. Executors with the new

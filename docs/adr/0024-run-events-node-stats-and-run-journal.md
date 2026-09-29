@@ -76,7 +76,8 @@ all):
   run id and the request's scope;
 - every requested node finishes, and its last finish has the status the report gives
   it (unknown if the report doesn't list it): a node finishes a second time only when
-  the report corrects the status reported live; node events come queued, started,
+  the report corrects the status reported live (readers keep every stat the first
+  finish reported that the correction doesn't); node events come queued, started,
   finished; nothing but such a correction follows a node's finish; node
   events name only requested or reported-unrequested nodes;
 - a success has no error, a node starts before it finishes, and error summaries quote
@@ -117,9 +118,15 @@ node the report doesn't list finishes `unknown`.
 
 ### Error summaries
 `ErrorSummary::from_message` is the only way to make one (its fields are private, with
-getters): the first non-blank line of the engine's message, cut where a SQL statement
-or clause starts (`select`, `insert into`, `where`, `cast(`, …, with any whitespace or
-`(` after the keyword), with quoted spans (`'…'`, `"…"`, `` `…` ``, `$$…$$`,
+getters): the first non-blank line of the engine's message, with terminal escape
+sequences and control characters made spaces first (so colour codes can't hide a
+keyword), cut where SQL starts: any DML, DDL, DCL or utility statement start that can
+carry values (`select`, `insert`, `update … set`, `delete from`, `merge into`,
+`truncate`, `grant`, `revoke`, `copy into`, `call x(`, `create … table`, `drop …`,
+…) or clause (`where`, `having`, `group by`, `values (`, `left join`, `cast(`, …),
+matched as whole words in any case with any whitespace between them; English words
+(`update`, `create`, `from`, `set`) count only in a statement's shape. Unquoted values
+after `=`, `:=` or `=>` (`token = sk_live_…`) are removed too, and with quoted spans (`'…'`, `"…"`, `` `…` ``, `$$…$$`,
 `$tag$…$tag$`) and standalone numbers replaced by `[value removed]`, control
 characters dropped, and at most 200 characters. Quoting is read failing closed: an
 apostrophe after a letter or digit (`can't`, `column's`) opens nothing, there are no
