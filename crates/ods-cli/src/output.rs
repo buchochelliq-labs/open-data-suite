@@ -48,8 +48,9 @@ pub struct OutputArgs {
 
 /// Whether `TERM` names a terminal that cannot render styles (`dumb` or `unknown`).
 ///
-/// rs-rich 0.0.7 applies the same rule to its own colour detection. ODS checks it too, so
-/// the ADR-0003 §2 contract holds independently of upstream and also covers log colour.
+/// rs-rich (since 0.0.7) applies the same rule to its own colour detection. ODS checks it
+/// too, so the ADR-0003 §2 contract holds independently of upstream and also covers log
+/// colour.
 pub fn term_is_dumb() -> bool {
     std::env::var_os("TERM").is_some_and(|term| {
         term.eq_ignore_ascii_case("dumb") || term.eq_ignore_ascii_case("unknown")

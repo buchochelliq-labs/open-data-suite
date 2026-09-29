@@ -205,6 +205,11 @@ the changelog was introduced.
   nodes coloured by kind, the same toolbar, legend and side panel. It still works
   offline from one file, with the graph only: the State overlay and impact need
   `ods serve` (#312).
+- The terminal renderer is `rs-rich` 0.0.9, built without its syntax-highlighting and
+  Markdown support, which ODS doesn't use. The `ods` binary is about 140 KB smaller
+  (stripped, Linux x86_64), and the dependency tree no longer carries `syntect`,
+  `pulldown-cmark`, a second `fancy-regex` or the unmaintained `bincode` 1.x. Output is
+  unchanged (ADR-0003).
 
 ### Fixed
 - Lineage diagnostics no longer quote the SQL they couldn't analyze. The SQL is dbt's
