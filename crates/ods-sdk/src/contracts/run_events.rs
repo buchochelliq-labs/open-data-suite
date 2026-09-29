@@ -15,8 +15,10 @@
 //!
 //! Every event carries the run id (the report's), the request's scope and when it
 //! happened. Events are emitted in order and their times never go backwards. Every
-//! requested node gets exactly one `node_finished`, and a node the engine didn't report
-//! on finishes as `skipped` or `unknown`, never `success`.
+//! requested node gets a `node_finished`, and its last one carries the status the
+//! final report gives it: a node finishes again only when the report corrects what was
+//! reported live. A node the engine didn't report on finishes as `skipped` or
+//! `unknown`, never `success`.
 //!
 //! **Missing is never zero.** Every stat an engine doesn't report is `None`: rows
 //! affected in particular, which many engines don't report for views or merges.
@@ -998,6 +1000,36 @@ mod tests {
             let json = serde_json::to_string(&e).unwrap();
             assert!(!json.contains("sk_live_9"), "{json}");
         }
+    }
+
+    /// A node finished again with the report's status: the last finish wins, and keeps
+    /// what the first reported (ADR-0024).
+    #[test]
+    fn a_correcting_finish_wins() {
+        let finish = |at, status| {
+            event(
+                at,
+                RunEventKind::NodeFinished {
+                    node: "a".into(),
+                    stats: NodeRunStats::new(status).with_thread("t1"),
+                },
+            )
+        };
+        let events = vec![
+            event(
+                0,
+                RunEventKind::RunStarted {
+                    nodes: vec!["a".into()],
+                    mode: ExecutionMode::Run,
+                    live: true,
+                },
+            ),
+            finish(1, NodeRunStatus::Unknown),
+            finish(2, NodeRunStatus::Success),
+        ];
+        let run = RunSummary::from_events(&events);
+        assert_eq!(run.get("a").unwrap().stats.status, NodeRunStatus::Success);
+        assert_eq!(run.totals.count(NodeRunStatus::Unknown), 0);
     }
 
     /// A run killed before it said anything about rows: its total is "at least 0", not
