@@ -1107,9 +1107,11 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   for its structured log (`--log-format json --log-level debug`) to read each node's
   progress (#322), and prints dbt's lines as `HH:MM:SS  message`, with the time in
   UTC and dbt's colours dropped, from the level dbt would show: `info`, or what
-  `DBT_LOG_LEVEL`, `-- --log-level`, `-- --debug` or `-- --quiet` ask for. The debug
-  lines, which hold the SQL dbt runs and the options it was given, aren't shown unless
-  asked. A line that should be one of dbt's JSON lines but can't be read (cut short,
+  `DBT_LOG_LEVEL`, `-- --log-level` or `-- --quiet` ask for. Those only filter what is
+  shown: dbt is always asked for `--log-level debug`, so the node progress keeps
+  coming. dbt's debug lines, which hold the SQL it runs and the options it was given,
+  are never shown: `debug`, `-- --debug` and `-- -d` show `info` and above (the full
+  debug log is in `logs/dbt.log`). A line that should be one of dbt's JSON lines but can't be read (cut short,
   or merged with other output), or one with no level, shows as `[an unreadable dbt log
   line is hidden]`; other lines, such as a Python model's `print`, show as they are
   unless they hold a `{`. dbt's own error lines are shown as dbt shows them, and can
@@ -1145,8 +1147,9 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   | `trace` (`-vvv`) | also libraries' logs, e.g. every statement the state store runs |
   | `error` (`-q`), `off` | errors only (or nothing): no step lines |
 
-  dbt's own verbosity is dbt's: pass it through, e.g. `-- --debug` or
-  `-- --log-level debug`. dbt also writes its debug log to `logs/dbt.log`.
+  dbt's own console level can be passed through (`-- --log-level warn`, `-- -q`): it
+  filters what is shown, as above. Its debug lines are never shown; dbt writes its
+  debug log to `logs/dbt.log`.
 
 ### Run stats and the run journal
 

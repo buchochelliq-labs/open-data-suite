@@ -162,7 +162,13 @@ every other line it reads only `info.level`, `info.ts`, `info.msg` and
 What people see is decided failing closed, because dbt's debug lines carry the SQL it
 runs and the options it was given: a JSON line shows its `msg` only when its `level`
 is known and at least the level dbt would have shown (`info`, or what
-`DBT_LOG_LEVEL`, the caller's `--log-level`, `--debug` or `--quiet` ask for); a line
+`DBT_LOG_LEVEL`, the caller's `--log-level` or `--quiet` ask for, but never below
+`info`: debug lines are never shown, and `--debug` shows `info` and above). The
+caller's `--log-level`, `--quiet` and `-q` are taken out of dbt's arguments and
+`--log-level debug` is always passed, which also beats `DBT_LOG_LEVEL`, so dbt keeps
+sending node events whatever is shown. The run starts as `live` only when the log
+reports a node; a log with no node event leaves the run to `run_results.json`, not
+live. A line
 without a level shows nothing; a line that starts with `{` but can't be read (cut
 short, merged with other output, a number out of range) or has no `info` shows as a
 placeholder; any other line (e.g. a Python model's `print`) is shown as it is unless it
