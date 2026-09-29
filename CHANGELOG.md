@@ -226,8 +226,9 @@ the changelog was introduced.
 ### Changed
 - `ods state run`, `build` and `test` show dbt's output from its structured log, as
   `HH:MM:SS  message` with the time in UTC, from the level dbt would show (`info`, or
-  `DBT_LOG_LEVEL`, `-- --log-level`, `--debug` or `--quiet`), never its debug lines
-  unless asked. A structured line that can't be read, or has no level, shows as a
+  `DBT_LOG_LEVEL`, `-- --log-level` or `-- --quiet`, which only filter what is shown:
+  dbt always streams at debug so node progress keeps coming), never its debug lines,
+  which hold SQL and options (`--debug` shows `info` and above). A structured line that can't be read, or has no level, shows as a
   placeholder rather than its text. Pass `-- --log-format text` for dbt's own output,
   without live stats (#322).
 - `--vars` values no longer appear in what `ods state` prints, logs or reports: the
