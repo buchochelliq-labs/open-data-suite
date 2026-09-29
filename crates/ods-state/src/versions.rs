@@ -90,25 +90,26 @@ fn version_from<'r>(
         })
 }
 
-/// Why no reading gave `source` a version through `capability`.
-fn why_not(readings: &[VersionReading], capability: &Capability, source: &str) -> String {
+/// Why no reading gave `source` a version through `capability`, or `None` when no
+/// reading serves it at all.
+fn why_not(readings: &[VersionReading], capability: &Capability, source: &str) -> Option<String> {
     let mut serving = readings
         .iter()
         .filter(|r| r.capabilities.contains(capability))
         .peekable();
-    if serving.peek().is_none() {
-        return format!("nothing read {capability}");
-    }
-    serving
-        .find_map(|r| match r.answers.get(source) {
-            Some(VersionAnswer::Unknown(why)) => Some(why.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| "not reported".to_owned())
+    serving.peek()?;
+    Some(
+        serving
+            .find_map(|r| match r.answers.get(source) {
+                Some(VersionAnswer::Unknown(why)) => Some(why.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "not reported".to_owned()),
+    )
 }
 
 /// Sets each source's data version, when it was observed, and the evidence of where
-/// it came from, from `readings`: a relation version over a freshness measurement,
+/// it came from (the strategy, and the version's own origin, e.g. `delta_history`), from `readings`: a relation version over a freshness measurement,
 /// and no version when neither has one.
 ///
 /// Whatever the source had before is replaced. Versions compare equal only when value,
@@ -143,11 +144,25 @@ pub fn choose_source_versions(sources: &mut [Source], readings: &[VersionReading
                 .as_ref()
                 .map_or(Exactness::None, |v| v.exactness),
         )];
+        // Where the version itself says it came from, e.g. a table's history.
+        if let Some(version) = &source.version {
+            evidence.push(Evidence::new(
+                "source_version_origin",
+                source.id.clone(),
+                Some(version.source.clone()),
+                version.exactness,
+            ));
+        }
         for skipped in chosen.iter().flat_map(|c| &c.skipped) {
-            let why = skipped
+            // A strategy nothing here could serve (e.g. no warehouse has relation
+            // versions) says nothing about this source: it isn't listed.
+            let Some(why) = skipped
                 .missing
                 .first()
-                .map_or_else(String::new, |c| why_not(readings, c, &source.id));
+                .and_then(|c| why_not(readings, c, &source.id))
+            else {
+                continue;
+            };
             evidence.push(Evidence::new(
                 "source_version_skipped",
                 source.id.clone(),
@@ -224,7 +239,10 @@ mod tests {
         assert_eq!(source.observed_at, Some(Timestamp::from_unix(20)));
         assert_eq!(
             values(&source),
-            [pair("source_version_strategy", "relation_versions")]
+            [
+                pair("source_version_strategy", "relation_versions"),
+                pair("source_version_origin", "table_history"),
+            ]
         );
         assert_eq!(source.version_evidence[0].exactness, Exactness::Exact);
     }
@@ -249,6 +267,7 @@ mod tests {
             values(&source),
             [
                 pair("source_version_strategy", "source_freshness"),
+                pair("source_version_origin", "max_loaded_at"),
                 pair(
                     "source_version_skipped",
                     "relation_versions: not a versioned table"
@@ -267,10 +286,20 @@ mod tests {
             [
                 pair("source_version_strategy", "no_version"),
                 pair("source_version_skipped", "relation_versions: not reported"),
-                pair(
-                    "source_version_skipped",
-                    "source_freshness: nothing read source_freshness"
-                ),
+            ]
+        );
+        // A strategy nothing could serve isn't listed: freshness alone, as without a
+        // warehouse that has table versions.
+        let source = chosen(&[reading(
+            Capability::SourceFreshness,
+            10,
+            Some(VersionAnswer::Version(loaded("2026-01-01T00:00:00Z"))),
+        )]);
+        assert_eq!(
+            values(&source),
+            [
+                pair("source_version_strategy", "source_freshness"),
+                pair("source_version_origin", "max_loaded_at"),
             ]
         );
         // And with nothing read at all.
