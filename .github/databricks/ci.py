@@ -197,6 +197,9 @@ def summary(line: str) -> None:
 
 def cmd_token() -> None:
     workspace = host()
+    # The environment's secret masking only hides the value as stored (with its
+    # scheme); ODS and dbt print the bare hostname, so mask that too.
+    print(f"::add-mask::{urllib.parse.urlsplit(workspace).hostname}")
     client_id = env("DATABRICKS_CLIENT_ID")
     method, token, refused = None, None, []
     for name, get in (

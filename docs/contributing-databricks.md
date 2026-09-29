@@ -49,7 +49,11 @@ download the job's log and render it:
 python scripts/render-transcripts.py job.log docs/images plan-after-change build-after-change
 ```
 
-This needs Node.js with Playwright and its Chromium. The job isn't
+Download the log from the run's page (**⋯ → Download log**) or with
+`gh run view <run> --log`. The renderer replaces workspace hostnames with
+`<workspace>`. The job masks the hostname in its own log as well. This needs Node.js
+with Playwright and its Chromium. The screenshots appear on
+[State on Databricks](databricks.md). The job isn't
 a required check.
 
 ## Setting up the workspace
