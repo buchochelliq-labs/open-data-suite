@@ -223,11 +223,7 @@ impl ExportReport {
         // 5: choose, and write.
         let choices =
             ods_state::choose_pointers(&ws.project, &nodes, snapshot, &target, facts.as_ref());
-        let relations: BTreeMap<String, RelationFields> = choices
-            .iter()
-            .filter(|c| c.pointer == Pointer::ThisTarget)
-            .filter_map(|c| Some((c.node.clone(), relation(&c.node)?)))
-            .collect();
+        let relations = pointed_here(&choices, &relation)?;
         let manifest = rewrite_manifest(&upstream.document, &relations).map_err(|e| match e {
             ExportError::Serialize(_) => export_error(e.to_string()),
             _ => input_error(format!(
@@ -330,6 +326,31 @@ fn check_relations(
             facts
         }),
     )
+}
+
+/// The relation fields of each node pointing at this target.
+///
+/// `check_relations` marks nodes without relation fields unverified, so each node
+/// pointing here has them; if one didn't, fail rather than leave it on the upstream
+/// while the record says it points here.
+fn pointed_here(
+    choices: &[PointerChoice],
+    relation: &dyn Fn(&str) -> Option<RelationFields>,
+) -> Result<BTreeMap<String, RelationFields>, CliError> {
+    choices
+        .iter()
+        .filter(|c| c.pointer == Pointer::ThisTarget)
+        .map(|c| {
+            relation(&c.node)
+                .map(|r| (c.node.clone(), r))
+                .ok_or_else(|| {
+                    export_error(format!(
+                        "{} points at this target but its manifest entry names no relation",
+                        c.node
+                    ))
+                })
+        })
+        .collect()
 }
 
 /// How many nodes have each reason, in rule order.

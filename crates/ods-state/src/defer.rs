@@ -326,7 +326,15 @@ fn compare_code(id: &str, node: &Node, state: &NodeState) -> Option<PointerChoic
             );
         }
     };
-    let relation = |f: &Fingerprint| f.components.get(Fingerprint::RELATION).cloned();
+    // A provider may record an absent relation as empty content, to keep existing
+    // fingerprints stable; that names no relation either.
+    let empty = ods_core::state::sha256_hex(b"");
+    let relation = |f: &Fingerprint| {
+        f.components
+            .get(Fingerprint::RELATION)
+            .filter(|digest| **digest != empty)
+            .cloned()
+    };
     // A relation either side doesn't name can't be shown to be the same one.
     let (recorded, named) = (relation(&state.fingerprint), relation(now));
     if recorded.is_none() || named.is_none() || recorded != named {
@@ -676,6 +684,15 @@ mod tests {
             deferrable(),
             Some(Ok(same())),
             Some(fp("select 1", None)),
+            Some(dev()),
+            Some(&present()),
+        );
+        assert_eq!(c.reason, PointerReason::RelationChanged);
+        // So does an empty one on both sides: it names no relation.
+        let c = choose(
+            deferrable(),
+            Some(Ok(fp("select 1", Some("")))),
+            Some(fp("select 1", Some(""))),
             Some(dev()),
             Some(&present()),
         );
