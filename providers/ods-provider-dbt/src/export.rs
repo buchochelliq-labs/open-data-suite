@@ -282,25 +282,25 @@ mod tests {
     }
 
     /// Every path at which `a` and `b` differ, including keys only one has.
-    fn diff(a: &Value, b: &Value, at: &str, out: &mut Vec<String>) {
-        match (a, b) {
-            (Value::Object(x), Value::Object(y)) => {
-                for (k, v) in x {
-                    match y.get(k) {
-                        Some(w) => diff(v, w, &format!("{at}/{k}"), out),
-                        None => out.push(format!("{at}/{k} removed")),
+    fn diff(before: &Value, after: &Value, at: &str, out: &mut Vec<String>) {
+        match (before, after) {
+            (Value::Object(old), Value::Object(new)) => {
+                for (key, value) in old {
+                    match new.get(key) {
+                        Some(changed) => diff(value, changed, &format!("{at}/{key}"), out),
+                        None => out.push(format!("{at}/{key} removed")),
                     }
                 }
-                for k in y.keys().filter(|k| !x.contains_key(*k)) {
-                    out.push(format!("{at}/{k} added"));
+                for key in new.keys().filter(|k| !old.contains_key(*k)) {
+                    out.push(format!("{at}/{key} added"));
                 }
             }
-            (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
-                for (i, (v, w)) in x.iter().zip(y).enumerate() {
-                    diff(v, w, &format!("{at}/{i}"), out);
+            (Value::Array(old), Value::Array(new)) if old.len() == new.len() => {
+                for (i, (value, changed)) in old.iter().zip(new).enumerate() {
+                    diff(value, changed, &format!("{at}/{i}"), out);
                 }
             }
-            _ if a != b => out.push(at.to_owned()),
+            _ if before != after => out.push(at.to_owned()),
             _ => {}
         }
     }

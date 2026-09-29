@@ -301,21 +301,29 @@ fn before_check<'a>(
             "no successful build of it is recorded in this target",
         ));
     };
+    compare_code(id, node, state).ok_or(state)
+}
+
+/// Rules 5 and 6: whether the recorded build is of the node's current relation and
+/// code. `None` when it is.
+fn compare_code(id: &str, node: &Node, state: &NodeState) -> Option<PointerChoice> {
     let now = match &node.fingerprint {
         Ok(fingerprint) => fingerprint,
         Err(why) => {
-            return Ok(PointerChoice::upstream(
-                id,
-                PointerReason::CodeChangedSinceBuild,
-                format!("its code can't be compared with the recorded build: {why}"),
-            )
-            .build(state)
-            .evidence(Evidence::new(
-                "fingerprint",
-                id,
-                Some(why.clone()),
-                Exactness::None,
-            )));
+            return Some(
+                PointerChoice::upstream(
+                    id,
+                    PointerReason::CodeChangedSinceBuild,
+                    format!("its code can't be compared with the recorded build: {why}"),
+                )
+                .build(state)
+                .evidence(Evidence::new(
+                    "fingerprint",
+                    id,
+                    Some(why.clone()),
+                    Exactness::None,
+                )),
+            );
         }
     };
     let relation = |f: &Fingerprint| f.components.get(Fingerprint::RELATION).cloned();
@@ -335,7 +343,7 @@ fn before_check<'a>(
             Exactness::Exact,
         ));
         choice.changed_components = vec![Fingerprint::RELATION.to_owned()];
-        return Ok(choice);
+        return Some(choice);
     }
     let changed: Vec<String> = now
         .diff(&state.fingerprint)
@@ -360,9 +368,9 @@ fn before_check<'a>(
             Exactness::Exact,
         ));
         choice.changed_components = changed;
-        return Ok(choice);
+        return Some(choice);
     }
-    Err(state)
+    None
 }
 
 fn by_id(project: &Project) -> BTreeMap<&str, &Node> {
