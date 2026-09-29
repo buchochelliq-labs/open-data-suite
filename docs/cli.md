@@ -13,6 +13,7 @@ codes).
 | `ods state compile\|run\|seed\|snapshot\|build` | available (preview): each runs the dbt command it's named after, on only what needs building, and records what succeeded, see [below](#state-run) |
 | `ods state test` | available (preview): test what was built but not yet tested, see [below](#state-test) |
 | `ods state retry` | available (preview): run the last `run`, `seed`, `snapshot`, `build` or `test` again with its options; `--failed` builds only what failed, see [below](#retrying-a-run) |
+| `ods state export` | available (preview): write a dbt state directory in which what this target built points here, for `dbt retry --defer-state`, see [below](#state-export-for-dbt-deferral) |
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
@@ -120,9 +121,10 @@ meanings get new numbers.
 | `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
 | `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
 | `ODS-E0402` | Another run recorded state first; plan again and retry. |
-| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. |
+| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. `ods state export`: the upstream manifest can't be read, is another project's or an unsupported version, or `--dbt-state` names the upstream or dbt's target directory. |
 | `ODS-E0405` | The state database is damaged: it can't be read, or holds a record that can't be decoded. Nothing was changed; `ods state doctor` says what is wrong. |
-| `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. |
+| `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
+| `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
 
 ## Environment variables
 
@@ -955,6 +957,91 @@ To recover a damaged database:
    every node and records new state.
 
 Don't reset or restore while a run is using the database.
+
+## State: export for dbt deferral
+
+`dbt retry` and other runs with `--defer --favor-state` send every reference to a model
+the run doesn't select to the state they defer to (e.g. prod's manifest), even when this
+target has just built it. A retry after a failure then builds the failed model on
+**prod's** copy of its parents, not the ones this target built. `ods state export`
+writes a dbt state directory that fixes this, from what ODS recorded
+([ADR-0020](adr/0020-dbt-state-interop-and-favor-state.md), #296):
+
+```sh
+ods state build --target dev                     # a builds, b fails; ODS records a
+ods state export --dbt-state .ods/dbt-state --upstream prod/ --target dev
+dbt retry --defer-state .ods/dbt-state           # b now reads dev's a
+# or any later deferred run: selection still compares with prod
+dbt build -s b --defer --favor-state --state prod/ --defer-state .ods/dbt-state
+```
+
+The directory holds prod's `manifest.json`, in which only the nodes ODS can vouch for
+point at this target, and `ods-export.json`, ODS's record of why. Pass it to dbt as
+**`--defer-state`**.
+
+!!! warning "Not `--state`"
+    `dbt retry --state .ods/dbt-state` does **not** work: the retry then still defers to
+    the state the original run was given (prod), whatever the directory holds. Keep
+    `--state prod/` for `state:modified` selection, and add `--defer-state`.
+
+Each node of the upstream manifest points at this target only if all of these hold;
+otherwise it keeps the upstream pointer, exactly as dbt would have used it. The first
+rule that fails is the node's reason:
+
+| Reason | Why the node points upstream (or is left alone) |
+|---|---|
+| `not_deferrable` | dbt never defers it: a test, an ephemeral model, anything but a model, seed or snapshot. Left unchanged. |
+| `not_in_project` | It isn't in this target's current manifest. |
+| `target_changed` / `target_unknown` | The latest recorded state is for another target, or doesn't say which (`ods state record`). |
+| `not_built_here` | No successful build of it is recorded in this target. |
+| `relation_changed` | It now builds into another table or view than the recorded build did. |
+| `code_changed_since_build` | Its code (SQL, config, macros, …) differs from the recorded build's, or can't be fingerprinted. |
+| `relation_missing` | Its table or view isn't in this target's warehouse any more. |
+| `relation_unverified` | Nothing showed that its table or view is still there: the check failed, or `--no-check-relations`. |
+| `built_here` | Built here by a recorded run, still there: it points at this target. |
+
+- **Options:** the usual scope (`--target`, `--environment`, `--project-dir`,
+  `--target-dir`, `--state-db`) and dbt options (`--dbt`, `--profiles-dir`,
+  `--dbt-profile`, `--vars`, `--dbt-output`). `--upstream` is required: ODS doesn't
+  guess where prod's state is. `--no-check-relations` skips the warehouse check, so
+  every node keeps the upstream pointer.
+- **What runs:** one dbt call to identify the target, and one to check, for all the
+  nodes that could point here, that their tables and views exist. It doesn't run
+  `dbt compile`: that would overwrite `target/run_results.json`, which `dbt retry`
+  reads. It reads the artifacts the last dbt command left in the target directory.
+- **Refused** (`ODS-E0403`): an upstream manifest of another project (by
+  `project_name`, and `project_id` when both have one; a missing id only warns), a
+  manifest version other than v12, `--dbt-state` naming the upstream directory or dbt's
+  target directory, and dbt's Information Schema instead of `manifest.json`. If dbt
+  can't say which target it builds in, the export stops (`ODS-E0404`): it never
+  guesses.
+- **What is written:** the upstream document with only `database`, `schema`, `alias`
+  and `relation_name` replaced, for the `built_here` nodes. Nothing is added, removed or
+  reordered, and no ODS key is added. No `run_results.json`: `dbt retry` reads the
+  previous run's from the target directory. The upstream directory is never written to.
+- **Refreshing it:** each file is written in full to a temporary file in the directory,
+  then renamed over the old one: `ods-export.json` first, `manifest.json` last. A dbt
+  run that starts meanwhile reads the whole previous export or the whole new one. A
+  second export to the same directory waits up to 10 seconds for the lock
+  (`.ods-export.lock`), then fails with `ODS-E0406`, as does a failed write, whose
+  message names the files already replaced. Run the export again to repair it.
+- **Treat it like the upstream state.** The export copies what the upstream manifest
+  holds, including its rendered SQL and `metadata.env`, and adds nothing from profiles
+  or credentials. `ods-export.json` holds the target's identity only in the form
+  `ods state history` shows: never the raw location.
+- **After a deferred compile.** If the last dbt command was itself a deferred run, the
+  artifacts ODS reads were compiled with refs resolved to prod. A node whose SQL names
+  prod's relations then differs from what ODS recorded, and points upstream
+  (`code_changed_since_build`). That is conservative: it can send more nodes upstream
+  than needed, never fewer. Build with `ods state build`, or run `dbt compile` (not
+  deferred) before exporting, to point them here.
+
+`--output json` returns every node's choice (`pointer`: `this_target`, `upstream` or
+`unchanged`), `reason`, the recorded `run_id` and `built_at` it rests on, the fingerprint
+components that changed, and its `evidence`. The same list, with the snapshot and target
+it was made from and the SHA-256 of the `manifest.json` it describes, is in
+`ods-export.json` (`schema_version` 1.0). Plain output counts the reasons and lists the
+nodes that point at this target.
 
 ## Entity-relationship diagrams
 

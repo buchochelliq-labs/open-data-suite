@@ -21,6 +21,18 @@ State MVP. Entries below record changes since the changelog was introduced.
   is 0.3 (#288, #232).
 
 ### Added
+- `ods state export --dbt-state <dir> --upstream <state dir>` writes a dbt state
+  directory for `dbt retry --defer-state <dir>` and other runs with
+  `--defer --favor-state`: the upstream `manifest.json` (e.g. prod's), in which the
+  nodes ODS recorded as built in this target, and whose tables a warehouse check shows
+  are still there, point at this target. Every other node keeps the upstream pointer,
+  with a reason (`--output json`). It fixes a retry after a failure building on prod's
+  copy of a model this target just built. New error code `ODS-E0406` for a held lock
+  or a failed write (#296).
+- `ods-export.json`, written next to the exported `manifest.json`, is a new ODS
+  document at `schema_version` 1.0: when and from which snapshot and target the export
+  was made, the SHA-256 of the manifest it describes, and each node's choice and
+  reason (#296).
 - A "State on Databricks" docs page shows `ods state` on a real Databricks workspace:
   after one model changes, only it and the view reading it are rebuilt. Its screenshots
   come from the nightly Databricks CI job (#302, #294).
