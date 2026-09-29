@@ -489,17 +489,23 @@ impl<'a> Sim<'a> {
                     continue;
                 }
                 let mut stopped_by = Vec::new();
+                let mut upstream_failed = false;
                 for p in &parents {
-                    match &self.done[p] {
-                        (ExecutionStatus::Success, ..) => {}
-                        (ExecutionStatus::Failed, ..) => stopped_by.push((*p).to_owned()),
-                        (_, _, roots) => stopped_by.extend(roots.iter().cloned()),
+                    match self.done.get(p) {
+                        Some((ExecutionStatus::Success, ..)) | None => {}
+                        Some((ExecutionStatus::Failed, ..)) => {
+                            upstream_failed = true;
+                            stopped_by.push((*p).to_owned());
+                        }
+                        Some((_, _, roots)) => {
+                            upstream_failed = true;
+                            stopped_by.extend(roots.iter().cloned());
+                        }
                     }
                 }
-                let upstream_failed = parents
-                    .iter()
-                    .any(|p| self.done[p].0 != ExecutionStatus::Success);
-                let plan = &self.planned[id];
+                let Some(plan) = self.planned.get(id) else {
+                    continue;
+                };
                 if !upstream_failed && plan.runs {
                     continue;
                 }
@@ -563,7 +569,9 @@ impl<'a> Sim<'a> {
 
     /// Ends a node that ran from `start` to `end` on `worker`.
     fn finish(&mut self, (end, worker, id, start): Running<'a>) {
-        let plan = self.planned[id].clone();
+        let Some(plan) = self.planned.get(id).cloned() else {
+            return;
+        };
         let fake = self.executor.stats.get(id).cloned().unwrap_or_default();
         let took = end - start;
         let compile = took / 4;
@@ -692,7 +700,13 @@ impl FakeExecutor {
             .nodes
             .iter()
             .map(|n| {
-                let (status, message, _) = sim.done[n.id.as_str()].clone();
+                // Every requested node is planned and ends in `schedule`; one that
+                // somehow didn't is reported skipped, never a success.
+                let (status, message, _) = sim.done.get(n.id.as_str()).cloned().unwrap_or((
+                    ExecutionStatus::Skipped,
+                    Some("not scheduled".to_owned()),
+                    Vec::new(),
+                ));
                 if status == ExecutionStatus::Success && request.mode != ExecutionMode::Test {
                     inner.built.push(n.id.clone());
                     inner.dropped.remove(&n.id);
@@ -700,7 +714,10 @@ impl FakeExecutor {
                 let ran_checks =
                     status == ExecutionStatus::Success && request.mode != ExecutionMode::Run;
                 let passed = if ran_checks {
-                    sim.planned[n.id.as_str()].checks.clone()
+                    sim.planned
+                        .get(n.id.as_str())
+                        .map(|p| p.checks.clone())
+                        .unwrap_or_default()
                 } else {
                     Vec::new()
                 };

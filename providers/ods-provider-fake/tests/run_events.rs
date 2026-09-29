@@ -118,7 +118,7 @@ async fn a_simulated_run_reports_parallel_nodes_a_failure_and_what_it_stopped() 
     let failed = &run.get("model.shop.customer_segments").unwrap().stats;
     assert_eq!(failed.status, NodeRunStatus::Error);
     let error = failed.error.as_ref().unwrap();
-    assert_eq!(error.message, "KeyError: [value removed]");
+    assert_eq!(error.message(), "KeyError: [value removed]");
     assert_eq!(failed.rows_affected, None);
 
     let skipped = &run.get("model.shop.segment_summary").unwrap().stats;

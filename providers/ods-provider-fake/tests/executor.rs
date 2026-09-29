@@ -18,7 +18,10 @@ struct Harness {
 impl ExecutorHarness for Harness {
     async fn executor(&self) -> Arc<dyn Executor> {
         let executor = FakeExecutor::new(FakeClock::new(), ["model.suite.a", "model.suite.b"])
-            .failing("model.suite.broken")
+            .failing_with(
+                "model.suite.broken",
+                "Can't cast 'SECRET_CONFORMANCE_1' to INT",
+            )
             .with_checks("model.suite.checked", ["test.suite.checked_unique"])
             .with_source(
                 "source.suite.raw.good",
@@ -49,6 +52,10 @@ impl ExecutorHarness for Harness {
 
     fn failing(&self) -> Option<RequestedNode> {
         Some(RequestedNode::new("model.suite.broken", "broken"))
+    }
+
+    fn failing_secret(&self) -> Option<String> {
+        Some("SECRET_CONFORMANCE_1".to_owned())
     }
 
     fn checked_and_unchecked(&self) -> Option<(RequestedNode, RequestedNode)> {

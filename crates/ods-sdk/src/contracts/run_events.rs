@@ -53,6 +53,9 @@ pub const MAX_EXTRA_CHARS: usize = 120;
 /// The most adapter extras a node keeps; the first by key are kept.
 pub const MAX_EXTRAS: usize = 16;
 
+/// The longest an adapter extra's key, or a thread's name, is, in characters.
+pub const MAX_KEY_CHARS: usize = 64;
+
 /// One thing that happened during a run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +90,25 @@ impl RunEvent {
             at,
             kind,
         }
+    }
+
+    /// The event with every text field an engine could have filled redacted again
+    /// (threads, extras, errors). Hosts call it before keeping an event, so a provider
+    /// that bypassed the builders can't leak through them.
+    #[must_use]
+    pub fn sanitized(mut self) -> Self {
+        self.kind = match self.kind {
+            RunEventKind::NodeStarted { node, thread } => RunEventKind::NodeStarted {
+                node,
+                thread: thread.and_then(|t| redact::value_line(&t, MAX_KEY_CHARS)),
+            },
+            RunEventKind::NodeFinished { node, stats } => RunEventKind::NodeFinished {
+                node,
+                stats: stats.sanitized(),
+            },
+            other => other,
+        };
+        self
     }
 
     /// The node the event is about, for node events.
@@ -258,12 +280,12 @@ impl TestCounts {
 pub struct ErrorSummary {
     /// The error's kind, when the message starts with one (`KeyError`, `Binder Error`).
     #[serde(default)]
-    pub kind: Option<String>,
+    kind: Option<String>,
     /// The first line of the message, values and SQL removed.
-    pub message: String,
+    message: String,
     /// Where the full message is, for people (e.g. a log file), if the executor knows.
     #[serde(default)]
-    pub details_at: Option<String>,
+    details_at: Option<String>,
 }
 
 impl ErrorSummary {
@@ -294,11 +316,40 @@ impl ErrorSummary {
         self
     }
 
-    /// Says where the full message is.
+    /// Says where the full message is. Values and SQL are removed from it too.
     #[must_use]
-    pub fn with_details_at(mut self, at: impl Into<String>) -> Self {
-        self.details_at = Some(at.into());
+    pub fn with_details_at(mut self, at: &str) -> Self {
+        self.details_at = redact::value_line(at, MAX_EXTRA_CHARS);
         self
+    }
+
+    /// The error's kind, if known.
+    pub fn kind(&self) -> Option<&str> {
+        self.kind.as_deref()
+    }
+
+    /// The first line of the message, values and SQL removed.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Where the full message is, if known.
+    pub fn details_at(&self) -> Option<&str> {
+        self.details_at.as_deref()
+    }
+
+    /// The summary with every field redacted again, e.g. after it was read back from
+    /// somewhere that could have been edited. Idempotent on a summary made here.
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        let message = redact::summary_line(&self.message, MAX_SUMMARY_CHARS).unwrap_or_default();
+        Self {
+            kind: self.kind.and_then(|k| redact::summary_line(&k, 40)),
+            message,
+            details_at: self
+                .details_at
+                .and_then(|d| redact::value_line(&d, MAX_EXTRA_CHARS)),
+        }
     }
 }
 
@@ -403,20 +454,15 @@ impl NodeRunStats {
         self
     }
 
-    /// Something else the engine reported. The value is cut to its first line and
-    /// [`MAX_EXTRA_CHARS`]; an empty key or value, or one past [`MAX_EXTRAS`], is
-    /// dropped.
+    /// Something else the engine reported. The key and value are redacted
+    /// ([`redact::value_line`]: quoted values and SQL removed, numbers kept) and cut to
+    /// their first line and [`MAX_EXTRA_CHARS`]; an empty key or value, or one past
+    /// [`MAX_EXTRAS`], is dropped.
     #[must_use]
-    pub fn with_extra(mut self, key: impl Into<String>, value: impl AsRef<str>) -> Self {
-        let key: String = key.into().chars().filter(|c| !c.is_control()).collect();
-        let value = value.as_ref().lines().next().unwrap_or_default().trim();
-        let mut value: String = value.chars().filter(|c| !c.is_control()).collect();
-        if value.chars().count() > MAX_EXTRA_CHARS {
-            value = value.chars().take(MAX_EXTRA_CHARS - 1).collect();
-            value.push('…');
-        }
-        if !key.is_empty()
-            && !value.is_empty()
+    pub fn with_extra(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        let key = redact::value_line(key.as_ref(), MAX_KEY_CHARS);
+        let value = redact::value_line(value.as_ref(), MAX_EXTRA_CHARS);
+        if let (Some(key), Some(value)) = (key, value)
             && (self.adapter.len() < MAX_EXTRAS || self.adapter.contains_key(&key))
         {
             self.adapter.insert(key, value);
@@ -424,10 +470,26 @@ impl NodeRunStats {
         self
     }
 
-    /// The worker that ran it.
+    /// The worker that ran it, redacted as an extra is.
     #[must_use]
-    pub fn with_thread(mut self, thread: impl Into<String>) -> Self {
-        self.thread = Some(thread.into());
+    pub fn with_thread(mut self, thread: impl AsRef<str>) -> Self {
+        self.thread = redact::value_line(thread.as_ref(), MAX_KEY_CHARS);
+        self
+    }
+
+    /// The stats with every text field redacted again (thread, extras, error), e.g.
+    /// before they are written somewhere lasting.
+    #[must_use]
+    pub fn sanitized(mut self) -> Self {
+        let adapter = std::mem::take(&mut self.adapter);
+        for (key, value) in &adapter {
+            self = self.with_extra(key, value);
+        }
+        let thread = self.thread.take();
+        if let Some(thread) = thread {
+            self = self.with_thread(thread);
+        }
+        self.error = self.error.map(ErrorSummary::sanitized);
         self
     }
 
@@ -558,6 +620,21 @@ pub fn events_from_report(request: &ExecutionRequest, report: &ExecutionReport) 
             },
         ));
     }
+    // A requested node the report doesn't list: unknown, never assumed to be anything.
+    for missing in request
+        .nodes
+        .iter()
+        .filter(|n| !report.nodes.iter().any(|r| r.node == n.id))
+    {
+        at = at.max(finished);
+        events.push(event(
+            at,
+            RunEventKind::NodeFinished {
+                node: missing.id.clone(),
+                stats: NodeRunStats::new(NodeRunStatus::Unknown),
+            },
+        ));
+    }
     at = at.max(finished);
     for (check, (status, mut covers)) in checks {
         covers.sort();
@@ -618,17 +695,20 @@ pub struct RunTotals {
     /// How many nodes are in each status.
     pub by_status: BTreeMap<NodeRunStatus, usize>,
     /// Rows written, summed over the nodes that reported them. A lower bound when
-    /// [`rows_unreported`](Self::rows_unreported) isn't zero.
+    /// [`rows_at_least`](Self::rows_at_least).
     pub rows_affected: u64,
-    /// Nodes that built but didn't report rows.
+    /// Nodes that ran, or may have (failed, unknown, still running), and didn't report
+    /// rows: each could have written some.
     pub rows_unreported: usize,
+    /// Whether [`rows_affected`](Self::rows_affected) is only "at least": some nodes
+    /// that ran, or may have, didn't report their rows.
+    pub rows_at_least: bool,
 }
 
 impl RunTotals {
-    /// Whether [`rows_affected`](Self::rows_affected) is only "at least": some nodes
-    /// that built didn't report their rows.
+    /// Whether [`rows_affected`](Self::rows_affected) is only "at least".
     pub fn rows_is_lower_bound(&self) -> bool {
-        self.rows_unreported > 0
+        self.rows_at_least
     }
 
     /// How many nodes ended as `status`.
@@ -751,12 +831,18 @@ impl RunSummary {
                 Some(rows) => {
                     run.totals.rows_affected = run.totals.rows_affected.saturating_add(rows);
                 }
-                None if node.stats.status == NodeRunStatus::Success => {
+                // Only a node that never ran (queued, skipped) certainly wrote nothing.
+                None if !matches!(
+                    node.stats.status,
+                    NodeRunStatus::Queued | NodeRunStatus::Skipped
+                ) =>
+                {
                     run.totals.rows_unreported += 1;
                 }
                 None => {}
             }
         }
+        run.totals.rows_at_least = run.totals.rows_unreported > 0;
         run
     }
 
@@ -865,19 +951,123 @@ mod tests {
         assert_eq!(many.adapter.len(), MAX_EXTRAS);
     }
 
+    /// Extras and threads are redacted like error text: quoted values and SQL go,
+    /// numbers (what ids and counts are made of) stay (#322 review).
+    #[test]
+    fn extras_and_threads_are_redacted() {
+        let stats = NodeRunStats::new(NodeRunStatus::Success)
+            .with_extra("query_id", "01ef-42")
+            .with_extra("status", "Can't read 'sk_live_9'")
+            .with_extra("sql", "done: SELECT secret FROM t")
+            .with_extra("k'ey'", "v")
+            .with_thread("Thread-1 'sk_live_9'");
+        assert_eq!(stats.adapter["query_id"], "01ef-42");
+        assert_eq!(stats.adapter["status"], "Can't read [value removed]");
+        assert_eq!(stats.adapter["sql"], "done: [SQL removed]");
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(
+            !json.contains("sk_live_9") && !json.contains("secret"),
+            "{json}"
+        );
+
+        // Stats a provider filled in directly are redacted again by `sanitized`.
+        let mut raw = NodeRunStats::new(NodeRunStatus::Success);
+        raw.adapter.insert("x".into(), "'sk_live_9'".into());
+        raw.thread = Some("'sk_live_9'".into());
+        let event = RunEvent::new(
+            "r",
+            None,
+            TimestampMs::from_unix_millis(0),
+            RunEventKind::NodeFinished {
+                node: "a".into(),
+                stats: raw,
+            },
+        )
+        .sanitized();
+        let started = RunEvent::new(
+            "r",
+            None,
+            TimestampMs::from_unix_millis(0),
+            RunEventKind::NodeStarted {
+                node: "a".into(),
+                thread: Some("t 'sk_live_9'".into()),
+            },
+        )
+        .sanitized();
+        for e in [event, started] {
+            let json = serde_json::to_string(&e).unwrap();
+            assert!(!json.contains("sk_live_9"), "{json}");
+        }
+    }
+
+    /// A run killed before it said anything about rows: its total is "at least 0", not
+    /// an exact 0 (rule 3).
+    #[test]
+    fn a_killed_run_never_totals_an_exact_zero() {
+        let events = vec![
+            event(
+                0,
+                RunEventKind::RunStarted {
+                    nodes: vec!["a".into(), "b".into(), "c".into()],
+                    mode: ExecutionMode::Build,
+                    live: true,
+                },
+            ),
+            event(
+                1,
+                RunEventKind::NodeStarted {
+                    node: "a".into(),
+                    thread: None,
+                },
+            ),
+            event(
+                2,
+                RunEventKind::NodeFinished {
+                    node: "c".into(),
+                    stats: NodeRunStats::new(NodeRunStatus::Error),
+                },
+            ),
+            event(
+                3,
+                RunEventKind::RunFinished {
+                    outcome: RunOutcome::Unknown,
+                },
+            ),
+        ];
+        let run = RunSummary::from_events(&events);
+        assert_eq!(run.get("a").unwrap().stats.status, NodeRunStatus::Unknown);
+        assert_eq!(run.totals.rows_affected, 0);
+        // a and b (unknown: the run ended without saying) and c (failed) may have
+        // written rows.
+        assert_eq!(run.totals.rows_unreported, 3);
+        assert!(run.totals.rows_at_least);
+        let json = serde_json::to_value(&run.totals).unwrap();
+        assert_eq!(json["rows_at_least"], true);
+    }
+
     #[test]
     fn error_summaries_keep_the_kind_and_drop_values() {
         let s = ErrorSummary::from_message("KeyError: 'sk_live_42'\nTraceback").unwrap();
-        assert_eq!(s.kind.as_deref(), Some("KeyError"));
-        assert_eq!(s.message, "KeyError: [value removed]");
+        assert_eq!(s.kind(), Some("KeyError"));
+        assert_eq!(s.message(), "KeyError: [value removed]");
         let s = ErrorSummary::from_message("Binder Error: column \"x\" in select 1").unwrap();
-        assert_eq!(s.kind.as_deref(), Some("Binder Error"));
-        assert!(!s.message.contains("select"));
-        assert_eq!(ErrorSummary::from_message("failed").unwrap().kind, None);
+        assert_eq!(s.kind(), Some("Binder Error"));
+        assert!(!s.message().contains("select"));
+        assert_eq!(ErrorSummary::from_message("failed").unwrap().kind(), None);
         let s = ErrorSummary::from_message("column x not found")
             .unwrap()
             .with_kind("Runtime Error 'x'");
-        assert_eq!(s.kind.as_deref(), Some("Runtime Error [value removed]"));
+        assert_eq!(s.kind(), Some("Runtime Error [value removed]"));
+        let s = s.with_details_at("log 'secret_path'");
+        assert_eq!(s.details_at(), Some("log [value removed]"));
+        // Read back from an edited journal, raw text is redacted again.
+        let raw: ErrorSummary = serde_json::from_value(serde_json::json!({
+            "kind": "K 'x'", "message": "Can't cast 'sk_live_1' to INT", "details_at": "'p'"
+        }))
+        .unwrap();
+        let clean = raw.sanitized();
+        assert!(!serde_json::to_string(&clean).unwrap().contains("sk_live_1"));
+        assert_eq!(clean.details_at(), Some("[value removed]"));
         assert_eq!(ErrorSummary::from_message(""), None);
     }
 
@@ -954,7 +1144,8 @@ mod tests {
         assert_eq!(done.totals.count(NodeRunStatus::Success), 2);
         assert_eq!(done.totals.count(NodeRunStatus::Error), 1);
         assert_eq!(done.totals.rows_affected, 99);
-        assert_eq!(done.totals.rows_unreported, 1);
+        // b built without rows; c failed and d is unknown, so either may have written.
+        assert_eq!(done.totals.rows_unreported, 3);
         assert!(done.totals.rows_is_lower_bound());
         assert_eq!(
             done.nodes
@@ -1016,7 +1207,7 @@ mod tests {
         let b = &run.get("b").unwrap().stats;
         assert_eq!(b.status, NodeRunStatus::Error);
         let error = b.error.as_ref().unwrap();
-        assert!(!error.message.contains("hunter2"), "{error:?}");
+        assert!(!error.message().contains("hunter2"), "{error:?}");
         // The shared check is skipped on b and passed on a: it didn't pass everywhere.
         let check = events
             .iter()
@@ -1031,5 +1222,20 @@ mod tests {
             check,
             (CheckStatus::Skipped, vec!["a".to_owned(), "b".to_owned()])
         );
+
+        // A requested node the report doesn't list finishes unknown.
+        let request = request.clone();
+        let short = ExecutionReport::new(
+            "run-9",
+            None,
+            Timestamp::from_unix(1_790_000_005),
+            vec![],
+            vec![],
+        );
+        let events = events_from_report(&request, &short);
+        let run = RunSummary::from_events(&events);
+        for node in ["a", "b"] {
+            assert_eq!(run.get(node).unwrap().stats.status, NodeRunStatus::Unknown);
+        }
     }
 }
