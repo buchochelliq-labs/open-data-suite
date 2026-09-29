@@ -429,9 +429,10 @@ ods lineage graph --format dot-columns --output-file g.dot && dot -Tsvg g.dot > 
 
 `ods lineage view` writes one self-contained HTML file (no network, no external scripts):
 search models and columns (`/`), click a column to highlight everything upstream (blue)
-and downstream (orange), toggle indirect edges, focus on the selection, and deep-link with
-`lineage.html#node=<id>&column=<name>`. The same page and JSON contract will power the
-VS Code view (#107).
+and downstream (orange), toggle columns and indirect edges, focus on the selection, and
+deep-link with `lineage.html#node=<id>&column=<name>`. It has the graph only: the
+[State overlay](#the-lineage-page) and impact need `ods serve`. The same JSON contract
+will power the VS Code view (#107).
 
 `ods lineage graph --format` writes `json` (the documented graph contract,
 `schema_version` 1), `dot` / `dot-columns` (Graphviz), `mermaid` (Markdown, model level)
@@ -523,7 +524,7 @@ The same page ships three ways ([ADR-0009](adr/0009-hostable-explorer-ods-web.md
 ods lineage view                              # one offline file, graph embedded
 ods lineage view --site public/lineage        # static site: index.html + graph.json
 ods serve                                     # http://127.0.0.1:8765/lineage, live reload
-ods serve --host 0.0.0.0 --port 8080 --base-path /lineage   # behind a reverse proxy
+ods serve --host 0.0.0.0 --port 8080 --base-path /ods   # behind a reverse proxy: /ods/, /ods/lineage
 ```
 
 A static site can go on any static web server (S3, GitHub Pages, nginx). Browsers won't
@@ -531,10 +532,11 @@ fetch `graph.json` from a `file://` page, so use `ods lineage view` for local fi
 
 `ods serve` analyzes the project once, then serves:
 - the [dashboard](#the-dashboard) at `/`;
-- the explorer at `/lineage`, which adds a *What if this changes?* panel that runs
-  impact on the server;
+- the explorer at `/lineage`, inside the dashboard, with the
+  [State overlay](#the-lineage-page) and an *Impact* tab that runs impact on the server;
 - a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
-  `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home` and `/healthz`.
+  `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home`,
+  `/api/lineage/overlay` and `/healthz`.
 
 It checks `manifest.json`, `catalog.json`, the Information Schema and the state
 database and the source freshness results (`--sources`, else
@@ -555,11 +557,58 @@ plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
 |---|---|
 | `--host ADDR` | (`serve`) address to listen on; default `127.0.0.1` |
 | `--port PORT` | (`serve`) default `8765`; `0` picks a free port (the URL is printed) |
-| `--base-path PATH` | (`serve`) URL prefix, e.g. `/lineage`; the page is served at `/lineage/` |
+| `--base-path PATH` | (`serve`) URL prefix, e.g. `/ods`; the dashboard is served at `/ods/` and the explorer at `/ods/lineage` |
 | `--allow-host NAME` | (`serve`) also accept this `Host` name, e.g. the one your reverse proxy forwards; repeatable |
 | `--no-watch` | (`serve`) don't reload when artifacts or the state store change |
 | `--state-db PATH`, `--environment NAME`, `--target NAME`, `--sources PATH` | (`serve`) which state the dashboard shows, as for `ods state plan`; the database is only read, never created or migrated |
 | `--site DIR` | (`lineage view`) write a static site instead of one file |
+
+### The Lineage page
+
+`ods serve` shows the explorer at `/lineage`, inside the dashboard (#312). By default
+it draws the model graph; *Columns* switches to the column-level view. Edges are the
+DAG's: an arrow means a node reads another, not that their tables are related (keys
+and relationships are the ERD's). A dashed arrow is a parent the node only declares
+(e.g. a Python model's `dbt.ref`): how it uses it is unknown.
+
+With the **State overlay** (the *Overlay* picker; *None* turns it off), each model,
+seed and snapshot shows what the next run does with it, as `ods state plan` decides
+against the latest snapshot:
+
+| Pill | Means |
+|---|---|
+| `BUILD` | it will run: its code, checks, target or inputs changed, or a parent's did |
+| `REUSE` | its last successful build is kept: its code and inputs are unchanged, or its new upstream data is within its lag tolerance (the node's summary says which). This page doesn't check the warehouse, so reuse assumes the relation built earlier still exists; `ods state build --dry-run` checks |
+| `NEVER BUILT` | no build is recorded, so it will run |
+| `UNKNOWN` | the evidence to reuse it is missing (or the plan couldn't be made), so it will run |
+
+Sources are read, never built, so they have no pill. Opaque nodes, whose column
+lineage is unknown (e.g. Python models), are drawn dashed. The plan is made again on
+every page load, as on Home. Without a state database, every node shows as never
+built; that is not an error.
+
+Click a node (or tab to it and press Enter) for its side panel:
+- **Why:** the run that last built it (if it is one of the last five), the fingerprint
+  components compared (changed and unchanged), what changed (the code text isn't
+  recorded: `git diff` shows it), for a reused node that its relation wasn't checked,
+  then the decision, its reasons and which of its readers build too; with a link to the
+  decision on the State plan page (`/state/plan?node=<id>`) when the plan has one
+  (without a state store there is none, so `why_href` is null);
+- **General** and **Columns:** what the explorer showed before, ↑ upstream and
+  ↓ downstream; a column traces it through the graph. At an opaque node the trail
+  can't be followed: the panel names where it stops, and every node past it is shown as
+  *may change* (dashed amber), never as unaffected;
+- **Impact:** what must run if its rows or a column change (nothing runs);
+- **Open** goes to its Model page (`/catalog/<id>`); *Copy as JSON* and *Copy selector*
+  copy the node and `+name+`.
+
+`/lineage?node=<id>` (and `&column=<name>`) opens with a node selected; the address bar
+follows the selection. `/api/lineage/overlay` returns the overlay the page shows, as a
+view model at `schema_version` 1: the state, the snapshot the plan compares against,
+the counts, the warnings (including that reuse was taken on trust), and per node its
+`decision`, `summary`, `reasons`, `changed_components`, `components`, `relation`,
+`last_built`, `opaque` and the two links. Beyond loopback it omits error text. The
+graph's `node_edges` say how each edge is known: `"via": "sql"` or `"declared"`.
 
 ### The dashboard
 

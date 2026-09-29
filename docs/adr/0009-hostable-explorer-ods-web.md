@@ -175,6 +175,41 @@ panel), Runs and one Run under `<base>/state/`.
   `/api/catalog/<id>` (`ModelView`, every tab), `GET` only, at `schema_version` 1.
   Beyond loopback they omit file paths and error text.
 
+*Amended 2026-09-29 (#312, the Lineage page):* the explorer at `<base>/lineage` moves
+into the dashboard's shell (a root page, `Frame::search` off: its toolbar has the
+page's search), with a State overlay.
+- **One explorer, two pages:** the explorer's script and stylesheet
+  (`assets/lineage.js`, `assets/lineage.css`) are shared. Served, the page is the shell
+  around them, with the graph, the overlay and a deep-linked selection embedded as
+  JSON (`<` escaped, as before). Offline (`ods lineage view`, `--site`), the same
+  explorer has a small header instead of the shell, and the graph only: no overlay, no
+  impact, no font files. No library is added.
+- **Overlay contract:** `ods_web::lineage::LineageOverlay` at `schema_version` 1,
+  served at `/api/lineage/overlay` (`GET` only). Its decisions come from the shared
+  `Dashboard::plan_at` (see *Planning is shared and bounded* above), on a blocking
+  thread, so the page and the API show the same plan as Home, State and Catalog and as
+  `ods state plan`. Each node gets a `Decision`: `build`, `reuse`,
+  `never_built`, or `unknown` when the evidence to reuse it is missing or the plan
+  couldn't be made (never shown as reuse, AGENTS rule 3), with its reason chain (rule
+  4). Without a state store every node is `never_built`. Sources have no decision.
+  Beyond loopback, error text is omitted.
+- **Links out:** each node links to its Model page, `catalog/<id>`, and to its decision
+  on the State plan page, `state/plan?node=<id>`, relative to the dashboard's root,
+  with the id percent-encoded except for RFC 3986's unreserved characters.
+  `<base>/lineage?node=<id>` selects a node.
+- **Edges are the DAG's** (AGENTS rule 6): the exported graph now also links a node to
+  the parents it declares, so an opaque node (a Python model) is no longer drawn apart;
+  impact already read them. Each `NodeEdge` says how it is known, `via: "sql"` or
+  `"declared"` (additive: the graph stays at `schema_version` 1); declared-only edges
+  are drawn dashed. They are drawn and described as "reads", never as relationships.
+- **Reuse on trust** (rules 3 and 4): as for the Catalog (#313), this plan checks no
+  relation. Each reused node says so (`relation`), and the overlay carries the same
+  warning as `ods state run`; nothing calls it checked. The Why tab lists the compared
+  fingerprint components from the latest snapshot in the `History` (#311).
+- **Column traces stop visibly:** at an opaque node the explorer can't follow a
+  column, so it names the stop and shows every node past it as *may change*, never as
+  unaffected.
+
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE
   crates may depend on anything up to MODULE, and not on providers. `axum` is confined to
@@ -197,6 +232,7 @@ panel), Runs and one Run under `<base>/state/`.
   | `/healthz` | `ok` |
   | `/api/shell`, `/api/home` | the dashboard's view models (amended 2026-09-29) |
   | `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs`, `/api/state/runs/<run_id>` | the State pages' view models (amended 2026-09-29, #311) |
+  | `/api/lineage/overlay` | the Lineage page's State overlay (amended 2026-09-29, #312) |
 
   Breaking changes bump the API version. Additive fields don't.
 - **Safe by default:**
@@ -213,9 +249,11 @@ panel), Runs and one Run under `<base>/state/`.
     `frame-ancestors 'none'`), `nosniff`, `no-referrer` and `no-store`;
   - no route writes anything;
   - the snapshot holds only lineage metadata: names, columns and edges, no SQL results
-    and no credentials.
-- **Reverse proxies:** `--base-path /lineage` serves at `/lineage/`, and `/lineage`
-  redirects there. The page resolves `api/…` and `graph.json` relative to its own URL,
+    and no credentials. The SQL analyzed is compiled and can hold resolved values, so
+    no compiled SQL is served, and analyzer diagnostics name constructs and positions,
+    never quote the SQL (amended 2026-09-29, #312).
+- **Reverse proxies:** `--base-path /ods` serves at `/ods/` (the explorer at
+  `/ods/lineage`, amended by #310), and `/ods` redirects there. The page resolves `api/…` and `graph.json` relative to its own URL,
   so the same asset works at any prefix.
 - **Live reload:** the server polls each artifact's mtime and length every second (no
   `notify` dependency), and loads a change only once it has held for a whole tick, so a

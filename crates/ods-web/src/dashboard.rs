@@ -766,7 +766,7 @@ pub struct ReasonCount {
 
 /// `upstream_code_changed` → `upstream code changed`: the planner's stable code, as
 /// words, so new codes read without a table to keep in step.
-fn reason_label(code: ReasonCode) -> String {
+pub(crate) fn reason_label(code: ReasonCode) -> String {
     serde_json::to_value(code)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
@@ -830,12 +830,12 @@ pub struct CoverageRow {
 // ----------------------------------------------------------------------- building
 
 /// `4c0b5c8f-…` → `4c0b5c8f`.
-fn short(run_id: &str) -> String {
+pub(crate) fn short(run_id: &str) -> String {
     run_id.chars().take(8).collect()
 }
 
 /// `code changed` → `Code changed`.
-fn sentence(text: &str) -> String {
+pub(crate) fn sentence(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()

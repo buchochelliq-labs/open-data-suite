@@ -29,6 +29,9 @@ mod search;
 mod server;
 mod state_pages;
 
+// The Lineage page and its State overlay (#312).
+pub mod lineage;
+
 pub use dashboard::Dashboard;
 pub use page::{export_site, standalone_page};
 pub use search::{SearchHit, search};

@@ -20,6 +20,10 @@ column (press `/`), click it to highlight everything upstream (blue) and downstr
 
 ![The lineage explorer tracing customers.lifetime_value](images/lineage-viewer.png)
 
+`ods serve` shows the same explorer inside the dashboard, where a State overlay
+colours each node by what the next run does with it (build or reuse) and why; see
+[the Lineage page](cli.md#the-lineage-page).
+
 ## Where does each column come from?
 
 ```console

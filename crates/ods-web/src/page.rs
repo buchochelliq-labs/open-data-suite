@@ -5,44 +5,49 @@ use std::path::Path;
 
 use ods_lineage::GraphDocument;
 
-/// The explorer page. The graph JSON replaces [`GRAPH_PLACEHOLDER`]; when it isn't
-/// replaced, the page fetches the graph from `graph.json` (static site) or the API
-/// (server), as named by [`SOURCE_PLACEHOLDER`].
+/// The offline explorer page (no shell, no overlay: those need the server). The graph
+/// JSON replaces [`GRAPH_PLACEHOLDER`]; when it isn't replaced, the page fetches the
+/// graph from `graph.json`, as named by [`SOURCE_PLACEHOLDER`].
 const EXPLORER: &str = include_str!("../assets/explorer.html");
 /// The layout library, @dagrejs/dagre 1.1.8 (MIT, see `assets/vendor/LICENSE-dagre`).
 /// It's inlined into the page rather than served beside it, so the single offline file
 /// works and the server's CSP (inline scripts only) holds.
-const DAGRE: &str = include_str!("../assets/vendor/dagre.min.js");
+pub(crate) const DAGRE: &str = include_str!("../assets/vendor/dagre.min.js");
+/// The dashboard's tokens and base styles, so the offline page looks like the served one.
+const DASHBOARD_CSS: &str = include_str!("../assets/dashboard.css");
+const CSS_PLACEHOLDER: &str = "/*__ODS_CSS__*/";
+const BODY_PLACEHOLDER: &str = "<!--__ODS_BODY__-->";
 const DAGRE_PLACEHOLDER: &str = "/*__ODS_DAGRE__*/";
+const SCRIPT_PLACEHOLDER: &str = "/*__ODS_SCRIPT__*/";
 const GRAPH_PLACEHOLDER: &str = "/*__ODS_GRAPH__*/";
 const SOURCE_PLACEHOLDER: &str = "__ODS_SOURCE__";
 const GENERATION_PLACEHOLDER: &str = "__ODS_GENERATION__";
 
-/// Serializes the graph so it can sit inside a `<script>` element: `<` is escaped, so
-/// no value (e.g. a model named `</script>`) can end the element early.
-fn embeddable(document: &GraphDocument) -> Result<String, serde_json::Error> {
-    Ok(serde_json::to_string(document)?.replace('<', "\\u003c"))
-}
-
-/// The page, with `embedded` as its first paint (if any), loading from `source`
-/// (`embedded`, `graph.json` or `api`) and, when served, knowing the snapshot
-/// `generation` it shows.
+/// The offline page, with `embedded` as its graph (if any), loading from `source`
+/// (`embedded` or `graph.json`).
 pub(crate) fn page(
     embedded: Option<&GraphDocument>,
     source: &str,
     generation: u64,
 ) -> Result<String, serde_json::Error> {
     let graph = match embedded {
-        Some(document) => embeddable(document)?,
+        Some(document) => crate::lineage::embeddable(document)?,
         None => String::new(),
     };
-    // dagre goes in first: its placeholder precedes the graph's, and dagre itself holds no
-    // placeholder, so a graph value can never be mistaken for one.
+    // The inlined assets go in first and hold no placeholder, and the graph goes in
+    // last, so a value in the graph can never be mistaken for one.
     Ok(EXPLORER
-        .replacen(DAGRE_PLACEHOLDER, DAGRE, 1)
-        .replacen(GRAPH_PLACEHOLDER, &graph, 1)
         .replacen(SOURCE_PLACEHOLDER, source, 1)
-        .replacen(GENERATION_PLACEHOLDER, &generation.to_string(), 1))
+        .replacen(GENERATION_PLACEHOLDER, &generation.to_string(), 1)
+        .replacen(
+            CSS_PLACEHOLDER,
+            &format!("{DASHBOARD_CSS}\n{}", crate::lineage::CSS),
+            1,
+        )
+        .replacen(BODY_PLACEHOLDER, &crate::lineage::explorer_markup(false), 1)
+        .replacen(DAGRE_PLACEHOLDER, DAGRE, 1)
+        .replacen(SCRIPT_PLACEHOLDER, crate::lineage::JS, 1)
+        .replacen(GRAPH_PLACEHOLDER, &graph, 1))
 }
 
 /// A single self-contained HTML page with the graph embedded. No network access, no

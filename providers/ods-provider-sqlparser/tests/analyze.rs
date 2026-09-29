@@ -554,3 +554,44 @@ fn composite_and_using_joins_and_what_is_not_a_key() {
         transformed.join_keys
     );
 }
+
+/// Compiled SQL can hold values resolved from `env_var()`, `var()` or macros,
+/// credentials included, and diagnostics are served and exported (`ods serve`,
+/// `ods lineage view`). So no diagnostic ever quotes the SQL: a secret in it, wherever
+/// the analyzer gives up, never comes back out.
+#[test]
+fn diagnostics_never_quote_the_compiled_sql() {
+    const SECRET: &str = "sk_live_ods_TEST_SECRET_42";
+    let cases = [
+        // The parser quotes the token it found.
+        format!("select id from orders where status = '{SECRET}' '{SECRET}'"),
+        format!("select id from orders where status in ('{SECRET}' 'x')"),
+        // Unsupported FROM sources: a table function, UNNEST, PIVOT.
+        format!("select * from table(generator('{SECRET}'))"),
+        format!("select * from unnest(array['{SECRET}']) as t(x)"),
+        format!("select id from orders pivot (sum(id) for status in ('{SECRET}'))"),
+        // Unsupported joins.
+        format!(
+            "select * from orders a asof join orders b match_condition (a.status >= '{SECRET}')"
+        ),
+        format!("select * from orders a cross apply (select '{SECRET}' as x) b"),
+    ];
+    for sql in &cases {
+        let l = analyze(sql);
+        assert!(
+            !l.diagnostics.is_empty(),
+            "{sql}: the case must reach a diagnostic"
+        );
+        let said = format!("{:?}", l.diagnostics);
+        assert!(!said.contains(SECRET), "{sql}\n→ {said}");
+        assert!(!said.contains("sk_live"), "{sql}\n→ {said}");
+    }
+    // The position is kept, so the SQL can still be found.
+    let l = analyze(&cases[0]);
+    assert!(l.opaque);
+    assert!(
+        l.diagnostics[0].starts_with("SQL did not parse (at line: 1, column:"),
+        "{:?}",
+        l.diagnostics
+    );
+}

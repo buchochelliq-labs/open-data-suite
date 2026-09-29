@@ -108,7 +108,7 @@ impl ServeOptions {
         }
     }
 
-    /// Serves under a URL prefix such as `/lineage` or `/tools/lineage`.
+    /// Serves under a URL prefix such as `/ods` or `/tools/ods`.
     ///
     /// # Errors
     /// Returns [`WebError::BasePath`] unless every segment is made of letters, digits,
@@ -187,7 +187,7 @@ pub enum WebError {
     Load(String),
     /// The URL prefix isn't a plain path.
     #[error(
-        "invalid base path `{0}`: use segments of letters, digits, `-`, `.`, `_` or `~`, e.g. /lineage"
+        "invalid base path `{0}`: use segments of letters, digits, `-`, `.`, `_` or `~`, e.g. /ods"
     )]
     BasePath(String),
     /// Binding or serving failed.
@@ -246,6 +246,8 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         .route(&at("/index.html"), get(home))
         // Relative to `lineage`, the explorer's `api/...` resolves to `<base>/api/...`.
         .route(&at("/lineage"), get(explorer))
+        // The Lineage page's State overlay (#312).
+        .route(&at("/api/lineage/overlay"), get(lineage_overlay))
         .route(&at("/healthz"), get(|| async { "ok" }))
         .route(&at("/api/version"), get(version))
         .route(&at("/api/shell"), get(shell))
@@ -384,14 +386,48 @@ async fn font(Path(file): Path<String>) -> Response {
     }
 }
 
-async fn explorer(State(state): State<Shared>) -> Response {
-    // The first paint is embedded, with its generation so the page notices any reload
-    // after it; the page then polls the API.
-    let generation = state.generation.load(Ordering::SeqCst);
-    match crate::page::page(Some(&state.current().document), "api", generation) {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+#[derive(Deserialize)]
+struct LineageQuery {
+    /// A node to select, by id (or unique name): `/lineage?node=<id>`.
+    node: Option<String>,
+}
+
+/// The Lineage page (#312): the explorer in the dashboard's shell, with the State
+/// overlay from the plan every page shares. Built on a blocking thread, as it may plan.
+async fn explorer(State(state): State<Shared>, Query(query): Query<LineageQuery>) -> Response {
+    crate::state_pages::blocking(move || {
+        // The first paint is embedded, with its generation so the page notices any
+        // reload after it.
+        let generation = state.generation.load(Ordering::SeqCst);
+        let snapshot = state.current();
+        let dashboard = snapshot.dashboard();
+        let overlay = dashboard.lineage_overlay(&snapshot.document, state.details);
+        match crate::lineage::lineage_page(
+            &dashboard.shell("lineage"),
+            &snapshot.document,
+            &overlay,
+            query.node.as_deref(),
+            generation,
+        ) {
+            Ok(html) => Html(html).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    })
+    .await
+}
+
+/// `/api/lineage/overlay`: the plan's decision for each node, as the page colours it.
+async fn lineage_overlay(State(state): State<Shared>) -> Response {
+    crate::state_pages::blocking(move || {
+        let snapshot = state.current();
+        Json(
+            snapshot
+                .dashboard()
+                .lineage_overlay(&snapshot.document, state.details),
+        )
+        .into_response()
+    })
+    .await
 }
 
 #[derive(Serialize)]

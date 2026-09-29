@@ -1,0 +1,89 @@
+---
+source: crates/ods-web/tests/lineage.rs
+expression: pretty(&body)
+---
+{
+  "based_on": null,
+  "counts": {
+    "never_built": 4
+  },
+  "error": null,
+  "nodes": {
+    "model.shop.customers": {
+      "changed_components": [],
+      "components": [],
+      "decision": "never_built",
+      "last_built": null,
+      "model_href": "catalog/model.shop.customers",
+      "opaque": null,
+      "reasons": [
+        {
+          "code": "never_built",
+          "label": "never built",
+          "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
+        }
+      ],
+      "relation": null,
+      "summary": "never built",
+      "why_href": null
+    },
+    "model.shop.orders": {
+      "changed_components": [],
+      "components": [],
+      "decision": "never_built",
+      "last_built": null,
+      "model_href": "catalog/model.shop.orders",
+      "opaque": null,
+      "reasons": [
+        {
+          "code": "never_built",
+          "label": "never built",
+          "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
+        }
+      ],
+      "relation": null,
+      "summary": "never built",
+      "why_href": null
+    },
+    "model.shop.segments": {
+      "changed_components": [],
+      "components": [],
+      "decision": "never_built",
+      "last_built": null,
+      "model_href": "catalog/model.shop.segments",
+      "opaque": "Its SQL couldn't be analyzed: column lineage unknown",
+      "reasons": [
+        {
+          "code": "never_built",
+          "label": "never built",
+          "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
+        }
+      ],
+      "relation": null,
+      "summary": "never built",
+      "why_href": null
+    },
+    "seed.shop.countries": {
+      "changed_components": [],
+      "components": [],
+      "decision": "never_built",
+      "last_built": null,
+      "model_href": "catalog/seed.shop.countries",
+      "opaque": null,
+      "reasons": [
+        {
+          "code": "never_built",
+          "label": "never built",
+          "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
+        }
+      ],
+      "relation": null,
+      "summary": "never built",
+      "why_href": null
+    }
+  },
+  "planned_at": null,
+  "schema_version": 1,
+  "state": "no_store",
+  "warnings": []
+}
