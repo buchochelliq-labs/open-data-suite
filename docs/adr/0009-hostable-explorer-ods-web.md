@@ -90,6 +90,118 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
 - **Escaping:** server-rendered text and attributes go through the `html-escape` crate
   (MIT).
 
+*Amended 2026-09-29 (#311, the State pages):* the dashboard gains Plan (with its Why
+panel), Runs and one Run under `<base>/state/`.
+- **Pages below the root:** the shell takes the path back to the root (`../`, `../../`)
+  and prefixes every navigation link, font URL and the script's API calls with it (a
+  `<meta name="ods-root">`), so pages under `state/` work under any base path. The
+  CSP's `base-uri 'none'` rules out a `<base>` element. This one rule serves every page
+  below the root: `state/…` (#311) and `catalog/<id>` (#313). A section may list its
+  pages (`NavSection::items`), shown under it while it is current: State lists Plan and
+  Runs, and History and Policies as planned; Catalog lists Models, and Freshness
+  evidence and Semantic layer as planned (#309). A page with its own search (the
+  Catalog) leaves the header's out (`Frame::search`).
+- **Data:** `Recorded` gains an optional `History`: up to 51 committed snapshots
+  (`StateSnapshot`, newest first; one more than the 50 listed, so the oldest can say
+  what it replaced) and the `LastRun` kept beside the store for `ods state retry`
+  (its redacted command, start time, failed and skipped nodes, scope, run id, and the
+  retry commands). The binary fills both, read-only; `ods-web` stays free of providers
+  and of the store. `ods-web` now depends on `ods-state` (a module, which ADR-0001
+  allows an EDGE crate) for `explain` and `diff_states`, so the Why panel's chain is
+  `ods state explain`'s by construction, and a run's builds are explained as
+  `ods state history <node>` does. `WhyView.explanation` is the `explanation` of
+  `ods state explain --output json`: it tracks that JSON's schema (the `ods_state::
+  Explanation` type), and changes when it does. The watcher also watches
+  `<state-db>.last-run.json`.
+- **The last-run file, version 1.2 (persisted format, additive):** it now also keeps
+  the `scope` the run was for and its `run_id` (the id its snapshot records), written
+  once the run has built. Files at 1.0 and 1.1 still read, without them. The file is
+  kept per state database, which several targets may share, so the pages show the last
+  run only when its scope is the page's; a file without a scope is shown apart, as
+  possibly another target's, and never tied to a run. A run is tied to the snapshot
+  that records its run id; when no listed snapshot does, the page says it *probably*
+  recorded nothing, marked inferred (a clock step or a later `ods state record` could
+  make that wrong).
+- **Secrets (AGENTS rule 9):** the command line reaches `ods-web` redacted by the CLI:
+  option names are kept, and only the values of `--select`, `--exclude`,
+  `--resource-type`, `--exclude-resource-type`, `--target`, `--environment` and
+  `--dbt-output`; every other value (e.g. `--vars`) and everything after `--` reads
+  `<redacted>`. The file itself keeps what was typed, as `ods state retry` needs it,
+  and its `Debug` redacts it the same way.
+- **Planning is shared and bounded:** every page asks `Dashboard::plan_at`, which plans
+  at most once per 30 s time bucket and reload (the memo lives on the reloaded facts,
+  so a reload starts afresh); lag tolerances are whole minutes or more. Pages that may
+  plan are built on a blocking thread. Node names from the graph are built once per
+  reload.
+- **API:** `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs` and
+  `/api/state/runs/<run_id>` return the view models the pages render (`PlanView`,
+  `WhyView`, `RunsView`, `RunPageView`) at `schema_version` 1, `GET` only; beyond
+  loopback without paths, error text or the last run's options.
+
+*Amended 2026-09-29 (#313, the Catalog and model pages):*
+- **Data:** the binary also fills a neutral `ods_web::catalog::CatalogInput` on the
+  `Dashboard`: each node's id, name, type, language, layer, materialization, tags,
+  description, relation, file, parents, columns (type only when recorded, and whether
+  it came from the warehouse or was declared), code and compiled code, and tests; plus
+  each node's last successful build from the latest snapshot, with the snapshot that
+  recorded it. The binary decides what a layer is (the model's first folder under the
+  model paths, from the artifacts) and says so; `ods-web` names no build tool. Decisions
+  come from the shared `Dashboard::plan_at` (see *Planning is shared and bounded*
+  above), on a blocking thread as the State pages do; lineage confidence from the graph
+  document the server already holds. The binary reads the latest snapshot and history
+  once and derives both the planner's input and the last builds from that read, so the
+  builds shown and the decisions can't rest on different snapshots.
+- **Offline decisions:** this plan checks no relation, so a reuse is shown as taken on
+  trust ("its relation isn't checked by this plan; it is when a run starts"), and the
+  view model carries it (`relations_checked: false`, `caveats`).
+- **Pages:** `<base>/catalog` and `<base>/catalog/<id>`, below the root by the rule
+  above (#311). Filters are a plain `GET` form, so the URL is the state and the page
+  works without script. Model pages link to Why (`state/plan?node=`), and the State
+  pages link node names to their model pages.
+- **Inline scripts:** besides the shared script, these pages add small static inline
+  scripts (submit a facet form on change and restore focus; bind `/` to the Catalog's
+  search; filter columns; copy the page's link). They embed no data, so the existing
+  `script-src 'unsafe-inline'` covers them; a CSP hash per script is a possible
+  tightening, not needed for them to work.
+- **API:** `/api/catalog` (`CatalogView`, same query as the page) and
+  `/api/catalog/<id>` (`ModelView`, every tab), `GET` only, at `schema_version` 1.
+  Beyond loopback they omit file paths and error text.
+
+*Amended 2026-09-29 (#312, the Lineage page):* the explorer at `<base>/lineage` moves
+into the dashboard's shell (a root page, `Frame::search` off: its toolbar has the
+page's search), with a State overlay.
+- **One explorer, two pages:** the explorer's script and stylesheet
+  (`assets/lineage.js`, `assets/lineage.css`) are shared. Served, the page is the shell
+  around them, with the graph, the overlay and a deep-linked selection embedded as
+  JSON (`<` escaped, as before). Offline (`ods lineage view`, `--site`), the same
+  explorer has a small header instead of the shell, and the graph only: no overlay, no
+  impact, no font files. No library is added.
+- **Overlay contract:** `ods_web::lineage::LineageOverlay` at `schema_version` 1,
+  served at `/api/lineage/overlay` (`GET` only). Its decisions come from the shared
+  `Dashboard::plan_at` (see *Planning is shared and bounded* above), on a blocking
+  thread, so the page and the API show the same plan as Home, State and Catalog and as
+  `ods state plan`. Each node gets a `Decision`: `build`, `reuse`,
+  `never_built`, or `unknown` when the evidence to reuse it is missing or the plan
+  couldn't be made (never shown as reuse, AGENTS rule 3), with its reason chain (rule
+  4). Without a state store every node is `never_built`. Sources have no decision.
+  Beyond loopback, error text is omitted.
+- **Links out:** each node links to its Model page, `catalog/<id>`, and to its decision
+  on the State plan page, `state/plan?node=<id>`, relative to the dashboard's root,
+  with the id percent-encoded except for RFC 3986's unreserved characters.
+  `<base>/lineage?node=<id>` selects a node.
+- **Edges are the DAG's** (AGENTS rule 6): the exported graph now also links a node to
+  the parents it declares, so an opaque node (a Python model) is no longer drawn apart;
+  impact already read them. Each `NodeEdge` says how it is known, `via: "sql"` or
+  `"declared"` (additive: the graph stays at `schema_version` 1); declared-only edges
+  are drawn dashed. They are drawn and described as "reads", never as relationships.
+- **Reuse on trust** (rules 3 and 4): as for the Catalog (#313), this plan checks no
+  relation. Each reused node says so (`relation`), and the overlay carries the same
+  warning as `ods state run`; nothing calls it checked. The Why tab lists the compared
+  fingerprint components from the latest snapshot in the `History` (#311).
+- **Column traces stop visibly:** at an opaque node the explorer can't follow a
+  column, so it names the stop and shows every node past it as *may change*, never as
+  unaffected.
+
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE
   crates may depend on anything up to MODULE, and not on providers. `axum` is confined to
@@ -111,6 +223,7 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   | `/api/impact?node=&column=&kind=` | `Change` plus `Impact`, with reasons and pruned readers |
   | `/healthz` | `ok` |
   | `/api/shell`, `/api/home` | the dashboard's view models (amended 2026-09-29) |
+  | `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs`, `/api/state/runs/<run_id>` | the State pages' view models (amended 2026-09-29, #311) |
   | `/api/lineage/overlay` | the Lineage page's State overlay (amended 2026-09-29, #312) |
 
   Breaking changes bump the API version. Additive fields don't.
@@ -128,7 +241,9 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
     `frame-ancestors 'none'`), `nosniff`, `no-referrer` and `no-store`;
   - no route writes anything;
   - the snapshot holds only lineage metadata: names, columns and edges, no SQL results
-    and no credentials.
+    and no credentials. The SQL analyzed is compiled and can hold resolved values, so
+    no compiled SQL is served, and analyzer diagnostics name constructs and positions,
+    never quote the SQL (amended 2026-09-29, #312).
 - **Reverse proxies:** `--base-path /ods` serves at `/ods/` (the explorer at
   `/ods/lineage`, amended by #310), and `/ods` redirects there. The page resolves `api/…` and `graph.json` relative to its own URL,
   so the same asset works at any prefix.
@@ -144,41 +259,6 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   - `ods serve [--host] [--port] [--base-path] [--no-watch]` serves it.
 
   Both reuse `ods lineage`'s artifact options.
-
-*Amended 2026-09-29 (#312, the Lineage page):* the explorer at `<base>/lineage` moves
-into the dashboard's shell, with a State overlay.
-- **One explorer, two pages:** the explorer's script and stylesheet
-  (`assets/lineage.js`, `assets/lineage.css`) are shared. Served, the page is the shell
-  around them, with the graph, the overlay and a deep-linked selection embedded as
-  JSON (`<` escaped, as before). Offline (`ods lineage view`, `--site`), the same
-  explorer has a small header instead of the shell, and the graph only: no overlay, no
-  impact, no font files. No library is added.
-- **Overlay contract:** `ods_web::lineage::LineageOverlay` at `schema_version` 1,
-  served at `/api/lineage/overlay` (`GET` only). It is built from the same neutral
-  `Dashboard` as Home and planned again as of each request with its `Planner`, so it
-  matches `ods state plan`. Each node gets a `Decision`: `build`, `reuse`,
-  `never_built`, or `unknown` when the evidence to reuse it is missing or the plan
-  couldn't be made (never shown as reuse, AGENTS rule 3), with its reason chain (rule
-  4). Without a state store every node is `never_built`. Sources have no decision.
-  Beyond loopback, error text is omitted.
-- **Links out:** each node links to its Model page, `catalog/<id>`, and to its decision
-  on the State plan page, `state/plan?node=<id>`, relative to the dashboard's root,
-  with the id percent-encoded except for RFC 3986's unreserved characters.
-  `<base>/lineage?node=<id>` selects a node.
-- **Edges are the DAG's** (AGENTS rule 6): the exported graph now also links a node to
-  the parents it declares, so an opaque node (a Python model) is no longer drawn apart;
-  impact already read them. Each `NodeEdge` says how it is known, `via: "sql"` or
-  `"declared"` (additive: the graph stays at `schema_version` 1); declared-only edges
-  are drawn dashed. They are drawn and described as "reads", never as relationships.
-- **Reuse on trust** (rules 3 and 4): the page's plan doesn't query the warehouse, so a
-  reused node's relation is unchecked. Each reused node says so (`relation`), and the
-  overlay carries the same warning as `ods state run`; nothing calls it checked.
-- **Column traces stop visibly:** at an opaque node the explorer can't follow a
-  column, so it names the stop and shows every node past it as *may change*, never as
-  unaffected.
-- **Cost:** planning runs on a blocking thread (`spawn_blocking`) through the
-  dashboard's shared `plan_at`, so it never holds an async worker; memoising it is the
-  State pages' change (#311), shared by every page.
 
 ## Consequences
 - Positive:
