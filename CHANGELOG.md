@@ -6,8 +6,9 @@ All notable, user-visible changes to ODS. The format follows
 defines what counts as breaking, the compatibility rules for each interface, and the
 deprecation policy.
 
-Before 1.0, a minor release may break. Every break is listed under **Breaking**, with
-what to do.
+Before 1.0, a minor release may break. **While versions are 0.0.x, every release may
+break**, even though 0.0.1 → 0.0.2 looks like a patch: it may change interfaces or
+migrate the state store. Every break is listed under **Breaking**, with what to do.
 
 ## [Unreleased]
 

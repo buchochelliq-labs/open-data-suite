@@ -117,7 +117,9 @@ cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suit
 
 `ods version` prints the ODS version and the versions of the interfaces other tools rely
 on (the plugin SDK and the JSON output). Before 1.0, a minor release may include breaking
-changes; each one is listed under **Breaking** in the
+changes. **While versions are 0.0.x, every release may**, even though 0.0.1 → 0.0.2
+looks like a patch: it may change interfaces or migrate the state store, so read the
+changelog before upgrading. Each break is listed under **Breaking** in the
 [changelog](https://github.com/buchochelliq-labs/open-data-suite/blob/main/CHANGELOG.md),
 with what to do. The release notes of each version are its changelog section.
 [ADR-0019](adr/0019-release-and-versioning.md) has the full policy.

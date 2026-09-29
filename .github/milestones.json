@@ -32,6 +32,7 @@
     },
     {
       "title": "M1 State MVP (v0.0.1)",
+      "renamed_from": ["M1 State MVP (v0.1.0)"],
       "due_on": "2026-12-18T00:00:00Z",
       "description": "First public release (v0.0.1): local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor; code- and data-aware (dbt source freshness, Delta table versions, staleness policies); first dashboard screens (#310-#313).",
       "issues": [
