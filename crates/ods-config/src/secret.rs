@@ -6,11 +6,16 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A reference to a secret held outside ODS, written `{ secret = "<scheme>:<name>" }`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, try_from = "RawSecretRef", into = "RawSecretRef")]
+///
+/// Only that table form deserialises. serde's derived struct deserialisers also accept
+/// a sequence (`["env:X"]`), which would let a value that is not a reference be taken,
+/// and shown, as one; ADR-0005 §4 allows only the table.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(into = "RawSecretRef")]
 pub struct SecretRef {
     scheme: String,
     name: String,
@@ -63,17 +68,42 @@ impl fmt::Display for SecretRef {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Serialize)]
 struct RawSecretRef {
     secret: String,
 }
 
-impl TryFrom<RawSecretRef> for SecretRef {
-    type Error = String;
+impl<'de> Deserialize<'de> for SecretRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(SecretRefVisitor)
+    }
+}
 
-    fn try_from(raw: RawSecretRef) -> Result<Self, Self::Error> {
-        SecretRef::parse(&raw.secret)
+/// Accepts only a map with exactly one key, `secret`, holding a string; everything
+/// else (sequences, scalars, extra keys) is an invalid type. Error messages never
+/// repeat the value, because a mistyped reference may be a pasted secret.
+struct SecretRefVisitor;
+
+impl<'de> Visitor<'de> for SecretRefVisitor {
+    type Value = SecretRef;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(r#"a secret reference `{ secret = "<scheme>:<name>" }`"#)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut reference: Option<String> = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if key != "secret" {
+                return Err(de::Error::unknown_field(&key, &["secret"]));
+            }
+            if reference.is_some() {
+                return Err(de::Error::duplicate_field("secret"));
+            }
+            reference = Some(map.next_value()?);
+        }
+        let reference = reference.ok_or_else(|| de::Error::missing_field("secret"))?;
+        SecretRef::parse(&reference).map_err(de::Error::custom)
     }
 }
 
@@ -219,6 +249,26 @@ mod tests {
         assert_eq!(holder.token, SecretRef::parse("env:T").unwrap());
         let json = serde_json::to_string(&holder).unwrap();
         assert_eq!(json, r#"{"token":{"secret":"env:T"}}"#);
+    }
+
+    #[test]
+    fn only_the_table_form_deserialises() {
+        for value in [
+            r#"["env:T"]"#,
+            r#""env:T""#,
+            r#"{ secret = "env:T", other = 1 }"#,
+            r"{}",
+            r#"{ secret = "not-a-ref" }"#,
+        ] {
+            let table: toml::Table = format!("v = {value}").parse().unwrap();
+            let parsed = table["v"].clone().try_into::<SecretRef>();
+            assert!(parsed.is_err(), "{value} must not be a secret reference");
+        }
+        let err =
+            toml::from_str::<std::collections::BTreeMap<String, SecretRef>>(r#"token = ["a:b@c"]"#)
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("secret reference"), "{err}");
     }
 
     #[test]
