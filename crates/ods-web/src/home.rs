@@ -60,7 +60,7 @@ fn svg(paths: &str, size: u32) -> String {
 const LOGO: &str = r#"<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>"#;
 const SEARCH: &str = r#"<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>"#;
 
-fn nav_item(out: &mut String, section: &NavSection) {
+fn nav_item(out: &mut String, section: &NavSection, root: &str) {
     let icon = svg(icon(section.key), 18);
     let label = format!(r#"<span class="label">{}</span>"#, text(section.label));
     match (section.status, section.href) {
@@ -81,16 +81,51 @@ fn nav_item(out: &mut String, section: &NavSection) {
             let _ = write!(
                 out,
                 r#"<a href="{href}"{current} data-section="{key}">{icon}{label}</a>"#,
-                href = attr(href),
+                // `./` (Home) from below the root is the root itself: `../`, not `.././`.
+                href = attr(&match href.strip_prefix("./") {
+                    Some(rest) if !root.is_empty() => format!("{root}{rest}"),
+                    _ => format!("{root}{href}"),
+                }),
                 key = attr(section.key),
             );
         }
     }
 }
 
+/// Where a page sits in the shell, and what its header says.
+pub(crate) struct Frame<'a> {
+    /// The page's name, for the browser tab.
+    pub(crate) title: &'a str,
+    /// The breadcrumb, as HTML; `None` for `project / title`.
+    pub(crate) crumbs: Option<String>,
+    /// From the page to the dashboard's root, e.g. `../` for `state/plan`, so every
+    /// link, font and API call stays relative and works under any base path.
+    pub(crate) root: &'a str,
+    /// The right of the header, as HTML; `None` for the current snapshot.
+    pub(crate) status: Option<String>,
+    /// The page's own stylesheet and script, after the shell's.
+    pub(crate) css: &'a str,
+    /// See `css`.
+    pub(crate) js: &'a str,
+}
+
 /// The whole page: the shell around `body`, titled `title`.
 fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
+    let frame = Frame {
+        title,
+        crumbs: None,
+        root: "",
+        status: None,
+        css: "",
+        js: "",
+    };
+    framed(shell, &frame, body, generation)
+}
+
+/// The whole page: the shell around `body`, placed as `frame` says.
+pub(crate) fn framed(shell: &ShellView, frame: &Frame<'_>, body: &str, generation: u64) -> String {
     let mut out = String::with_capacity(32 * 1024);
+    let root = frame.root;
     let target = match &shell.target.kind {
         Some(kind) => format!("{} · {}", shell.target.name, kind),
         None => shell.target.name.clone(),
@@ -108,8 +143,9 @@ fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="ods-generation" content="{generation}">
+<meta name="ods-root" content="{root_attr}">
 <title>{title} · {project} · ODS</title>
-<style>{fonts}{CSS}</style>
+<style>{fonts}{CSS}{page_css}</style>
 </head>
 <body>
 <div class="app">
@@ -122,47 +158,58 @@ fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String 
 <button id="tgt" class="picker" type="button" aria-disabled="true" title="Switching targets comes later"><span><span class="{dot}"></span>{target}</span><span class="caret">▾</span></button>
 </div>
 <div class="sections">"#,
-        title = text(title),
+        root_attr = attr(root),
+        title = text(frame.title),
         project = text(&shell.project),
         target = text(&target),
-        fonts = crate::fonts::font_faces(),
+        fonts = crate::fonts::font_faces(root),
+        page_css = frame.css,
     );
     let (bottom, main): (Vec<_>, Vec<_>) = shell.sections.iter().partition(|s| s.key == "settings");
     for section in main {
-        nav_item(&mut out, section);
+        nav_item(&mut out, section, root);
     }
     out.push_str("</div>\n<div class=\"bottom\">");
     for section in bottom {
-        nav_item(&mut out, section);
+        nav_item(&mut out, section, root);
     }
-    let snapshot = match &shell.snapshot {
-        Some(s) => format!(
+    let snapshot = match (&frame.status, &shell.snapshot) {
+        (Some(status), _) => status.clone(),
+        (None, Some(s)) => format!(
             r#"<span class="pill-snap" title="The latest recorded state"><span class="dot"></span>snapshot {id} · <time datetime="{at}" data-relative>{at}</time></span>"#,
             id = s.id,
             at = attr(&s.recorded_at.to_string()),
         ),
-        None => r#"<span class="pill-snap"><span class="dot none"></span>no snapshot yet</span>"#
-            .to_owned(),
+        (None, None) => {
+            r#"<span class="pill-snap"><span class="dot none"></span>no snapshot yet</span>"#
+                .to_owned()
+        }
     };
+    let crumbs = frame.crumbs.clone().unwrap_or_else(|| {
+        format!(
+            r#"<span class="crumb">{project}</span><span class="crumb-sep">/</span><span class="crumb-here">{title}</span>"#,
+            project = text(&shell.project),
+            title = text(frame.title),
+        )
+    });
     let _ = write!(
         out,
         r#"<span class="badge-local" title="Served from this machine; nothing here writes configuration or state">Local · read-only</span></div>
 </nav>
 <main>
 <header class="top">
-<span class="crumb">{project}</span><span class="crumb-sep">/</span><span class="crumb-here">{title}</span>
+{crumbs}
 <label class="search" title="Opens the lineage explorer's search; selectors such as +orders are planned">{SEARCH}<input id="search" aria-label="Search models and columns" placeholder="Search models and columns" autocomplete="off"><kbd>/</kbd></label>
 {snapshot}
 </header>
 {body}
 </main>
 </div>
-<script>{JS}</script>
+<script>{JS}{page_js}</script>
 </body>
 </html>
 "#,
-        project = text(&shell.project),
-        title = text(title),
+        page_js = frame.js,
     );
     out
 }
@@ -188,8 +235,9 @@ fn title_row(b: &mut String, home: &HomeView) {
     if let Some(run) = &home.last_run {
         let _ = write!(
             b,
-            r#"<span class="muted">Last run: <span class="mono" title="run {run_id}">{short}</span> · snapshot {snap} · <span title="{note}">recorded</span></span>"#,
+            r#"<span class="muted">Last run: <a class="mono" href="state/runs/{href}" title="run {run_id}">{short}</a> · snapshot {snap} · <span title="{note}">recorded</span></span>"#,
             note = attr(OUTCOME_NOTE),
+            href = attr(&url_component(&run.run_id)),
             run_id = attr(&run.run_id),
             short = text(&run.short_run_id),
             snap = run.snapshot,
@@ -254,7 +302,7 @@ fn runs(b: &mut String, home: &HomeView) {
         b.push_str("</div></section>");
     } else {
         b.push_str(
-            r#"<section class="card gap12 span2"><div class="card-head"><h2>Recent runs</h2><span class="soon" title="The Runs page is planned">All runs<span class="chip">Planned</span></span></div><table class="runs"><thead><tr><th>Snapshot</th><th>Command</th><th>Built · kept earlier build</th><th>Outcome</th></tr></thead><tbody>"#,
+            r#"<section class="card gap12 span2"><div class="card-head"><h2>Recent runs</h2><a href="state/runs">All runs</a></div><table class="runs"><thead><tr><th>Snapshot</th><th>Command</th><th>Built · kept earlier build</th><th>Outcome</th></tr></thead><tbody>"#,
         );
         for run in &home.runs {
             let all = run.built + run.kept;

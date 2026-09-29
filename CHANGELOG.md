@@ -48,6 +48,26 @@ the changelog was introduced.
 - The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
   served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
   `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
+- The dashboard's State pages (#311). **Plan** (`/state/plan`) lists every planned node
+  with its Build or Reuse pill and reason, filters by action, and opens a **Why** panel
+  for the selected node (`?node=<id>`): its recorded build, which fingerprint parts
+  changed, what it reads (parents' decisions, and each source's version with its
+  strategy and origin, graded exact, semantic, proxy, inferred or unknown), the
+  relation check, the decision and the reason chain, which is exactly
+  `ods state explain`'s. The plan is made offline and again on every request, so
+  reused relations read *not checked*. **Runs** (`/state/runs`) lists the recorded runs,
+  newest first, with outcome, target and date filters and counts; nodes read *built*
+  or *kept earlier build*. Failures are known only for the last run, from the file
+  `ods state retry` keeps beside the store: it shows the failed and skipped nodes, the
+  state kept and `ods state retry --failed`, and ties the run to a snapshot by time,
+  marked *inferred*. **Run** (`/state/runs/<run_id>`) shows a timeline of built and kept
+  nodes, why each was built from what the snapshots record, and the earlier runs.
+  Durations, start times and users read as placeholders; CI runs are a *Planned* tab.
+  The State section of the navigation and Home's *All runs* and last run now link
+  here. JSON routes `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs` and
+  `/api/state/runs/<run_id>` return the same view models at `schema_version` 1 (`GET`
+  only; beyond loopback without paths or error text). The server also reloads when the
+  last run's file changes.
 - `ods doctor` checks that ODS can work in the current project: configuration (files,
   profile, every effective value and where it came from, credentials only as
   references and connection strings without their user, query or options), the dbt

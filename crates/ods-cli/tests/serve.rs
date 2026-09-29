@@ -323,3 +323,150 @@ fn a_source_freshness_file_written_later_reloads_the_dashboard() {
     assert!(message.contains("sources.json"), "{message}");
     assert!(!message.contains("doctor"), "{message}");
 }
+
+/// Runs `ods state build` with the fake dbt in `dir`, with `envs` for the fake dbt.
+#[cfg(unix)]
+fn fake_build(dir: &Path, envs: &[(&str, &str)]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--dbt"])
+        .arg(fixtures("fake-dbt/dbt"))
+        .args(["--dbt-output", "capture", "--target-dir"])
+        .arg(dir.join("target"))
+        .arg("--state-db")
+        .arg(dir.join(".ods/state.db"))
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", dir.join("base"))
+        .envs(envs.iter().copied())
+        .output()
+        .unwrap()
+}
+
+/// A first build with the fake dbt in `dir`, then a change to `orders` whose build
+/// fails; returns the state database.
+#[cfg(unix)]
+fn build_then_fail_orders(dir: &Path) -> PathBuf {
+    fs::create_dir_all(dir.join("base")).unwrap();
+    let base = dir.join("base/manifest.json");
+    fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        &base,
+    )
+    .unwrap();
+    let out = fake_build(dir, &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Change what `orders` computes, then fail to build it.
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&base).unwrap()).unwrap();
+    for field in ["raw_code", "compiled_code"] {
+        let code = &mut manifest["nodes"]["model.jaffle_ods.orders"][field];
+        *code = Value::String(format!("{} union all select 1", code.as_str().unwrap()));
+    }
+    fs::write(&base, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    // Times are kept to the second: a run started in the second a snapshot was
+    // recorded can't be told apart from one before it.
+    std::thread::sleep(Duration::from_millis(1100));
+    let out = fake_build(dir, &[("FAKE_DBT_FAIL", "orders")]);
+    assert!(!out.status.success(), "the build of orders fails");
+    dir.join(".ods/state.db")
+}
+
+/// The State pages (#311) over what `ods state build` recorded: a first build, then a
+/// change to `orders` whose build fails. The Why panel says what `ods state explain`
+/// says, the failed run is shown with the state it kept and the retry, and nothing is
+/// written.
+#[cfg(unix)]
+#[test]
+fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let db = build_then_fail_orders(dir);
+    let before = fs::read(&db).unwrap();
+
+    let server = serve(
+        &dir.join("target"),
+        &["--no-watch", "--state-db", db.to_str().unwrap()],
+    );
+    let (status, body) = get(&server, "api/state/plan");
+    assert_eq!(status, 200, "{body}");
+    let plan: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(plan["based_on"], 1, "{plan}");
+    let orders = plan["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "orders")
+        .unwrap();
+    assert_eq!(orders["action"], "build", "{orders}");
+    assert_eq!(orders["code"], "code_changed", "{orders}");
+
+    // The Why panel says what `ods state explain` says.
+    let (status, body) = get(&server, "api/state/plan/model.jaffle_ods.orders");
+    assert_eq!(status, 200, "{body}");
+    let why: Value = serde_json::from_str(&body).unwrap();
+    let explain = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args([
+            "state",
+            "explain",
+            "orders",
+            "--output",
+            "json",
+            "--target-dir",
+        ])
+        .arg(dir.join("target"))
+        .arg("--state-db")
+        .arg(&db)
+        .current_dir(server.home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", server.home.path())
+        .output()
+        .unwrap();
+    let explained: Value = serde_json::from_slice(&explain.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&explain.stderr)));
+    assert_eq!(why["explanation"], explained["result"]["explanation"]);
+    assert_eq!(why["verdict"], explained["result"]["verdict"]);
+    assert_eq!(why["fingerprint"]["components"][0]["name"], "sql", "{why}");
+    assert_eq!(why["fingerprint"]["components"][0]["changed"], true);
+    let (status, page) = get(&server, "state/plan?node=orders");
+    assert_eq!(status, 200);
+    assert!(page.contains(r#"aria-label="Why orders builds""#), "{page}");
+
+    // One run recorded; the failed one recorded nothing, and says so.
+    let (status, body) = get(&server, "api/state/runs");
+    assert_eq!(status, 200, "{body}");
+    let runs: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 1, "{runs}");
+    assert_eq!(runs["runs"][0]["built"], 13);
+    assert_eq!(runs["runs"][0]["outcome"], "recorded");
+    let last = &runs["last_run"];
+    assert_eq!(
+        last["failed"][0]["node"], "model.jaffle_ods.orders",
+        "{last}"
+    );
+    assert_eq!(last["recorded_nothing"], true);
+    assert_eq!(last["last_good"], 1);
+    assert_eq!(runs["last_run_listed"], true);
+    assert_eq!(runs["failed"], 1);
+    // The retry it suggests is a command this ODS has.
+    assert_eq!(last["next"][0]["command"], "ods state retry --failed");
+    let help = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "retry", "--help"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--failed"));
+    let (_, page) = get(&server, "state/runs");
+    assert!(page.contains("kept 1"), "{page}");
+    assert!(page.contains("Last good state: snapshot 1"));
+    let run_id = runs["runs"][0]["run_id"].as_str().unwrap();
+    let (status, page) = get(&server, &format!("state/runs/{run_id}"));
+    assert_eq!(status, 200);
+    assert!(page.contains("first recorded build"), "{page}");
+    let (status, _) = get(&server, &format!("api/state/runs/{run_id}"));
+    assert_eq!(status, 200);
+    drop(server);
+    assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
+}

@@ -1,0 +1,153 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: pretty(&body)
+---
+{
+  "action": "build",
+  "based_on": 3,
+  "chain": [
+    {
+      "action": "build",
+      "changed": [
+        "sql"
+      ],
+      "depth": 0,
+      "name": "customers",
+      "node": "model.customers",
+      "reasons": [
+        "code changed since run 4c0b5c8f: sql"
+      ],
+      "repeated": false
+    }
+  ],
+  "commands": [
+    {
+      "command": "ods state explain customers",
+      "does": "the same explanation in a terminal (--output json for this panel's data)"
+    }
+  ],
+  "evidence": [
+    {
+      "exactness": "exact",
+      "fact": true,
+      "grade": "exact",
+      "kind": "fingerprint",
+      "subject": "model.customers",
+      "subject_name": "customers",
+      "value": "b1200d05d76f6f02fa3e8c99a4674b9bdf2b2d020830695e77dfae77624eb133"
+    },
+    {
+      "exactness": "exact",
+      "fact": true,
+      "grade": "exact",
+      "kind": "parent_decision",
+      "subject": "seed.raw_orders",
+      "subject_name": "raw_orders",
+      "value": "reuse: unchanged"
+    }
+  ],
+  "explanation": {
+    "causes": [],
+    "entry": {
+      "action": "build",
+      "after": "b1200d05d76f6f02fa3e8c99a4674b9bdf2b2d020830695e77dfae77624eb133",
+      "before": "3b4506d13e2de74da4166b9d86f6c565d828ff978e962470b157c1dbd212f51b",
+      "changed_components": [
+        "sql"
+      ],
+      "depends_on": [
+        "seed.raw_orders"
+      ],
+      "depth": 1,
+      "evidence": [
+        {
+          "exactness": "exact",
+          "kind": "fingerprint",
+          "subject": "model.customers",
+          "value": "b1200d05d76f6f02fa3e8c99a4674b9bdf2b2d020830695e77dfae77624eb133"
+        },
+        {
+          "exactness": "exact",
+          "kind": "parent_decision",
+          "subject": "seed.raw_orders",
+          "value": "reuse: unchanged"
+        }
+      ],
+      "kind": "model",
+      "name": "customers",
+      "node": "model.customers",
+      "policy": {
+        "lag_tolerance_secs": 0,
+        "origin": {
+          "kind": "conservative_default"
+        },
+        "require_fresh_data_from": "any",
+        "unapplied": [],
+        "unknown": []
+      },
+      "reasons": [
+        {
+          "code": "code_changed",
+          "message": "code changed since run 4c0b5c8f-0000-4000-8000-000000000003: sql"
+        }
+      ]
+    }
+  },
+  "fingerprint": {
+    "after": "b1200d05d76f…",
+    "before": "3b4506d13e2d…",
+    "compared": true,
+    "components": [
+      {
+        "changed": true,
+        "name": "sql"
+      },
+      {
+        "changed": false,
+        "name": "config"
+      }
+    ],
+    "summary": "differs in one part"
+  },
+  "kind": "model",
+  "last_build": {
+    "built_at": "2026-09-29T00:02:37Z",
+    "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
+    "short_run_id": "4c0b5c8f",
+    "snapshot": 3,
+    "tested_in": null
+  },
+  "name": "customers",
+  "node": "model.customers",
+  "parents": [
+    {
+      "builds": false,
+      "decision": "reuse: unchanged",
+      "name": "raw_orders",
+      "node": "seed.raw_orders"
+    }
+  ],
+  "readers": [
+    {
+      "name": "customers_view",
+      "node": "model.customers_view"
+    }
+  ],
+  "reasons": [
+    {
+      "code": "code_changed",
+      "label": "code changed",
+      "message": "code changed since run 4c0b5c8f: sql"
+    }
+  ],
+  "relation": {
+    "grade": "not_applicable",
+    "note": "not needed: it builds",
+    "status": "not_needed",
+    "value": null
+  },
+  "schema_version": 1,
+  "sources": [],
+  "verdict": "customers would be built",
+  "warnings": []
+}

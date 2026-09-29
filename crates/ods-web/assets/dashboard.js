@@ -2,8 +2,10 @@
 // The dashboard's only script: relative times, the search shortcut, and reloading when
 // the server loads a new snapshot. The page is complete without it.
 (function () {
-  // Relative to the page's directory, so it works under any base path.
-  const base = location.pathname.replace(/[^/]*$/, "");
+  // The dashboard's root, relative to the page's directory (e.g. "../" from
+  // state/plan), so it works under any base path.
+  const rootMeta = document.querySelector('meta[name="ods-root"]');
+  const base = location.pathname.replace(/[^/]*$/, "") + (rootMeta ? rootMeta.content : "");
 
   // "4 min ago" for every <time data-relative>; the server writes the exact time.
   function ago(iso) {

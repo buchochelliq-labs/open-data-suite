@@ -90,6 +90,30 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
 - **Escaping:** server-rendered text and attributes go through the `html-escape` crate
   (MIT).
 
+*Amended 2026-09-29 (#311, the State pages):* the dashboard gains Plan (with its Why
+panel), Runs and one Run under `<base>/state/`.
+- **Pages below the root:** the shell takes the path back to the root (`../`, `../../`)
+  and prefixes every navigation link, font URL and the script's API calls with it (a
+  `<meta name="ods-root">`), so pages under `state/` work under any base path. The
+  CSP's `base-uri 'none'` rules out a `<base>` element.
+- **Data:** `Recorded` gains an optional `History`: up to 51 committed snapshots
+  (`StateSnapshot`, newest first; one more than the 50 listed, so the oldest can say
+  what it replaced) and the `LastRun` kept beside the store for `ods state retry`
+  (command, start time, failed and skipped nodes, and the retry commands). The binary
+  fills both, read-only; `ods-web` stays free of providers and of the store. `ods-web`
+  now depends on `ods-state` (a module, which ADR-0001 allows an EDGE crate) for
+  `explain` and `diff_states`, so the Why panel's chain is `ods state explain`'s by
+  construction, and a run's builds are explained as `ods state history <node>` does.
+  The watcher also watches `<state-db>.last-run.json`.
+- **Inference is marked:** the last run names no snapshot. It is tied to the only
+  snapshot recorded after it started (strictly: times are kept to the second), and that
+  link is marked inferred; with none after, it recorded nothing. A snapshot can't tell
+  reuse from a node left out or failed, so the pages say *kept earlier build*.
+- **API:** `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs` and
+  `/api/state/runs/<run_id>` return the view models the pages render (`PlanView`,
+  `WhyView`, `RunsView`, `RunPageView`) at `schema_version` 1, `GET` only; beyond
+  loopback without paths, error text or the last run's options.
+
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE
   crates may depend on anything up to MODULE, and not on providers. `axum` is confined to
@@ -111,6 +135,7 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   | `/api/impact?node=&column=&kind=` | `Change` plus `Impact`, with reasons and pruned readers |
   | `/healthz` | `ok` |
   | `/api/shell`, `/api/home` | the dashboard's view models (amended 2026-09-29) |
+  | `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs`, `/api/state/runs/<run_id>` | the State pages' view models (amended 2026-09-29, #311) |
 
   Breaking changes bump the API version. Additive fields don't.
 - **Safe by default:**

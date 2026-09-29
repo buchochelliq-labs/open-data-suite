@@ -55,7 +55,7 @@ impl Snapshot {
 
     /// The dashboard's facts, or, without any, a project named after nothing with no
     /// state store.
-    fn dashboard(&self) -> Dashboard {
+    pub(crate) fn dashboard(&self) -> Dashboard {
         self.dashboard
             .clone()
             .unwrap_or_else(|| Dashboard::new("project", "default"))
@@ -180,17 +180,17 @@ pub enum WebError {
     },
 }
 
-struct AppState {
+pub(crate) struct AppState {
     snapshot: RwLock<Arc<Snapshot>>,
-    generation: AtomicU64,
+    pub(crate) generation: AtomicU64,
     last_error: Mutex<Option<String>>,
     /// Whether `/api/version` may show local paths and error text. Only on loopback:
     /// beyond it, those go to the server log.
-    details: bool,
+    pub(crate) details: bool,
 }
 
 impl AppState {
-    fn current(&self) -> Arc<Snapshot> {
+    pub(crate) fn current(&self) -> Arc<Snapshot> {
         self.snapshot
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -198,7 +198,7 @@ impl AppState {
     }
 }
 
-type Shared = Arc<AppState>;
+pub(crate) type Shared = Arc<AppState>;
 
 /// The router, for embedding or tests. `snapshot` is served until replaced by reloads.
 /// `options` supply the base path and `Host` policy.
@@ -235,6 +235,8 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         .route(&at("/api/search"), get(search_handler))
         .route(&at("/api/node"), get(node))
         .route(&at("/api/impact"), get(impact));
+    // State pages (#311): the plan and its Why panel, the runs, one run.
+    app = crate::state_pages::routes(app, &at);
     if !base_path.is_empty() {
         let target = at("/");
         app = app.route(

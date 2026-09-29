@@ -14,6 +14,7 @@ use ods_core::state::Timestamp;
 use ods_lineage::GraphFilter;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
+use ods_web::dashboard::state::{History, LastOutcome, LastRun, RUNS_LISTED};
 use ods_web::dashboard::{
     ModuleState, ModuleStatus, OpaqueNode, Planner, RECENT_RUNS, Recorded, RunRecord, StateInput,
     StoreLocation, Target,
@@ -70,7 +71,8 @@ impl DashboardSource {
     }
 
     /// Files whose change means new state or a new plan: the database and its
-    /// write-ahead log, where a commit lands first, and the source freshness results
+    /// write-ahead log, where a commit lands first, the last run beside it, and the
+    /// source freshness results
     /// the plan reads (`--sources`, else `<target-dir>/sources.json`). A file that
     /// doesn't exist yet is watched too: creating it is a change.
     pub(super) fn watched(&self) -> Vec<PathBuf> {
@@ -81,7 +83,11 @@ impl DashboardSource {
             || self.settings.target_dir().join("sources.json"),
             PathBuf::from,
         );
-        vec![db, PathBuf::from(wal), sources]
+        // A run that records nothing (everything failed) only changes the last run
+        // kept for `ods state retry`, which the Runs page shows (#311).
+        let mut last_run = db.clone().into_os_string();
+        last_run.push(".last-run.json");
+        vec![db, PathBuf::from(wal), sources, PathBuf::from(last_run)]
     }
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
@@ -178,20 +184,27 @@ impl DashboardSource {
             // Counted up to a bound: the tile says "at least" beyond it.
             let history = db.history(&ws.scope, SNAPSHOTS_COUNTED + 1).await?;
             let mut runs = Vec::new();
-            for summary in history.iter().take(RECENT_RUNS) {
+            // The State pages list more runs than Home, and one more snapshot, so the
+            // oldest listed run can say what it replaced (#311).
+            let mut snapshots = Vec::new();
+            for summary in history.iter().take(RUNS_LISTED + 1) {
                 if let Some(stored) = db.get(&ws.scope, summary.id).await? {
-                    runs.push(RunRecord::of(stored.id.0, &stored.snapshot));
+                    if runs.len() < RECENT_RUNS {
+                        runs.push(RunRecord::of(stored.id.0, &stored.snapshot));
+                    }
+                    snapshots.push((stored.id.0, stored.snapshot));
                 }
             }
             let latest = db.latest(&ws.scope).await?;
             db.close().await;
-            Ok::<_, ods_sdk::ProviderError>((history.len(), runs, latest))
+            Ok::<_, ods_sdk::ProviderError>((history.len(), runs, snapshots, latest))
         });
-        let (counted, runs, latest) = match read {
+        let (counted, runs, snapshots, latest) = match read {
             Ok(Ok(read)) => read,
             Ok(Err(e)) => return unreadable(e.to_string()),
             Err(e) => return unreadable(e.message),
         };
+        let last_run = last_run(&ws.state_db);
         // Plans depend on time (lag tolerances expire), so Home plans again on every
         // request, as of then; this first plan is the fallback.
         let settings = self.settings.clone();
@@ -211,9 +224,37 @@ impl DashboardSource {
             Recorded::new(store, runs, counted.min(SNAPSHOTS_COUNTED), plan)
                 .capped(counted > SNAPSHOTS_COUNTED)
                 .with_warnings(warnings)
-                .with_planner(planner),
+                .with_planner(planner)
+                .with_history(History::new(snapshots).with_last_run(last_run)),
         ))
     }
+}
+
+/// The last run kept beside the store for `ods state retry`, if any: the only record
+/// of which nodes failed (#292), for the State pages (#311).
+fn last_run(state_db: &Path) -> Option<LastRun> {
+    let (path, last) = super::state_retry::peek(state_db)?;
+    let outcome = last.outcome.as_ref().map(|o| {
+        LastOutcome::new(
+            o.failed.iter().cloned().collect(),
+            o.skipped.iter().cloned().collect(),
+            o.failed_source_tests.iter().cloned().collect(),
+        )
+    });
+    Some(
+        LastRun::new(
+            last.shown(),
+            format!("ods state {}", last.command),
+            last.recorded_at,
+            store_location(&path),
+        )
+        .with_outcome(outcome)
+        // Both exist in this ODS (`ods state retry`, #276, and `--failed`, #292).
+        .with_retry(
+            Some("ods state retry".to_owned()),
+            Some("ods state retry --failed".to_owned()),
+        ),
+    )
 }
 
 /// How many snapshots are counted for the Snapshots tile; the store has no count

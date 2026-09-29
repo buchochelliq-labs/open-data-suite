@@ -605,6 +605,45 @@ and every route is `GET`. `/api/shell` and `/api/home` return exactly what the p
 shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served by
 `ods serve` itself (no font CDN), with system fonts as the fallback.
 
+### State pages
+
+The State section (#311) shows the plan and the runs the state store recorded. Like
+Home, it only reads, and every action is a command to copy into a terminal.
+
+| Page | Route | Shows |
+|---|---|---|
+| Plan | `/state/plan` | every planned node with its Build or Reuse pill and reason, the counts to build and reuse, and how many reused relations were checked; `?action=build` or `reuse` filters |
+| Why | `/state/plan?node=<id>` | for one node (its percent-encoded unique id, or a name only one node has): its recorded build, which fingerprint parts changed, what it reads (parents' decisions; each source's version, strategy and origin, ADR-0022), the relation check, the decision, and the reason chain; `&view=json` shows its data |
+| Runs | `/state/runs` | every recorded run, newest first (the newest 50; `ods state history` lists all), filtered by `?outcome=`, `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel |
+| Run | `/state/runs/<run_id>` | a timeline of the nodes it built and the ones that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists them. An unambiguous prefix of the id (8 characters or more) works too |
+
+What the pages claim is what ODS records, and no more:
+- **The plan** is the one `ods state plan` makes, offline, made again on every request.
+  The Why panel's reason chain is exactly `ods state explain <node>`'s (its JSON is in
+  `explanation`). An offline plan doesn't check the warehouse, so reused relations read
+  *not checked*; `ods state build --dry-run` checks them. Evidence below *semantic* is
+  shown as *proxy*, *inferred* or *unknown*, never as fact.
+- **A run** is a committed snapshot: the nodes whose last build is the run's were built
+  by it, and every other node *kept an earlier build*, whether it was reused, left out
+  or failed, as the snapshot can't tell. The outcome reads *recorded*.
+- **Failures** are known only for the last run started from this machine, from
+  `<state-db>.last-run.json`, which `ods state retry` keeps. The Runs page shows its
+  failed and skipped nodes, that the last good snapshot was kept, and
+  `ods state retry --failed`. It names no snapshot, so it is tied to the only snapshot
+  recorded after it started (marked *inferred*), or shown as having recorded nothing
+  when none was; when the times (kept to the second) can't tell, it says so. The server
+  reloads when this file changes.
+- **Not recorded yet:** durations (`[duration]`, `[wall clock]`), start times, who ran a
+  run (`[user]`), the command of earlier runs, and run logs. CI runs are a *Planned* tab
+  until server mode.
+
+The same view models are served as JSON at `schema_version` 1, `GET` only:
+`/api/state/plan` (with the same `?node=` and `?action=`), `/api/state/plan/<node>`
+(404 if not planned), `/api/state/runs` (with the same filters) and
+`/api/state/runs/<run_id>` (404 if not listed). Beyond loopback they leave out local
+paths, error text and the last run's options. Node pages link to the Model page
+(`/catalog/<id>`) and the lineage explorer (`/lineage?node=<id>`).
+
 ## dbt State configuration
 
 ODS reads dbt State configuration exactly as you already write it

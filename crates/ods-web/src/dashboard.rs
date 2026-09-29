@@ -14,6 +14,8 @@ use std::sync::Arc;
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, StateSnapshot, Timestamp};
 use serde::Serialize;
 
+pub mod state;
+
 /// Version of the dashboard view models in `/api/shell` and `/api/home`. Additive
 /// fields don't change it; a removed or retyped field does.
 pub const DASHBOARD_SCHEMA_VERSION: u32 = 1;
@@ -229,6 +231,8 @@ pub struct Recorded {
     pub warnings: Vec<String>,
     /// Plans again as of the time asked; without one, `plan` is shown as made.
     planner: Option<PlannerFn>,
+    /// What the State pages list (#311): more snapshots, and the last run's outcome.
+    history: Option<Arc<state::History>>,
 }
 
 impl Recorded {
@@ -247,7 +251,15 @@ impl Recorded {
             plan,
             warnings: Vec::new(),
             planner: None,
+            history: None,
         }
+    }
+
+    /// Adds what the State pages list (#311).
+    #[must_use]
+    pub fn with_history(mut self, history: state::History) -> Self {
+        self.history = Some(Arc::new(history));
+        self
     }
 
     /// Plans again with `planner` whenever Home is shown.
@@ -488,12 +500,7 @@ const SECTIONS: [Section; 9] = [
     ("home", "Home", Some("./"), None),
     ("catalog", "Catalog", None, None),
     ("lineage", "Lineage", Some("lineage"), None),
-    (
-        "state",
-        "State",
-        None,
-        Some("State pages are planned; the State module works from the CLI (ods state …)"),
-    ),
+    ("state", "State", Some("state/plan"), None),
     (
         "erd",
         "ERD",

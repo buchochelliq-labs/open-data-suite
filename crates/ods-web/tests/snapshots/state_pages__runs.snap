@@ -1,0 +1,188 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: pretty(&body)
+---
+{
+  "ci": "CI runs — coming with server mode",
+  "empty": null,
+  "facets": [
+    {
+      "key": "outcome",
+      "label": "Outcome",
+      "options": [
+        {
+          "count": 3,
+          "label": "All",
+          "selected": true,
+          "value": ""
+        },
+        {
+          "count": 3,
+          "label": "Recorded",
+          "selected": false,
+          "value": "recorded"
+        },
+        {
+          "count": 0,
+          "label": "Succeeded",
+          "selected": false,
+          "value": "succeeded"
+        },
+        {
+          "count": 0,
+          "label": "Failed",
+          "selected": false,
+          "value": "failed"
+        }
+      ],
+      "unavailable": null
+    },
+    {
+      "key": "command",
+      "label": "Command",
+      "options": [
+        {
+          "count": 3,
+          "label": "All",
+          "selected": true,
+          "value": ""
+        }
+      ],
+      "unavailable": "Snapshots don't record their command yet"
+    },
+    {
+      "key": "target",
+      "label": "Target",
+      "options": [
+        {
+          "count": 3,
+          "label": "All",
+          "selected": true,
+          "value": ""
+        },
+        {
+          "count": 3,
+          "label": "dev",
+          "selected": false,
+          "value": "dev"
+        }
+      ],
+      "unavailable": null
+    },
+    {
+      "key": "date",
+      "label": "Date",
+      "options": [
+        {
+          "count": 3,
+          "label": "All",
+          "selected": true,
+          "value": ""
+        },
+        {
+          "count": 3,
+          "label": "Last day",
+          "selected": false,
+          "value": "1d"
+        },
+        {
+          "count": 3,
+          "label": "Last 7 days",
+          "selected": false,
+          "value": "7d"
+        },
+        {
+          "count": 3,
+          "label": "Last 30 days",
+          "selected": false,
+          "value": "30d"
+        }
+      ],
+      "unavailable": null
+    }
+  ],
+  "failed": 0,
+  "last_run": null,
+  "last_run_listed": false,
+  "limit": 50,
+  "listed": 3,
+  "project": "jaffle_ods",
+  "recorded": [
+    "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
+    "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build.",
+    "Failures are only known for the last run started on this machine, kept beside the store for `ods state retry`; it is tied to a snapshot by time, so that link is inferred.",
+    "Durations, start times, commands of earlier runs and who ran them aren't recorded yet."
+  ],
+  "runs": [
+    {
+      "built": 2,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "inferred": false,
+      "kept": 1,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-29T00:02:37Z",
+      "replaces": 2,
+      "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
+      "short_run_id": "4c0b5c8f",
+      "skipped": null,
+      "snapshot": 3,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    },
+    {
+      "built": 2,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "inferred": false,
+      "kept": 1,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-29T00:01:03Z",
+      "replaces": 1,
+      "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+      "short_run_id": "9ea38bd5",
+      "skipped": null,
+      "snapshot": 2,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    },
+    {
+      "built": 1,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "inferred": false,
+      "kept": 0,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-29T00:00:15Z",
+      "replaces": null,
+      "run_id": "e6f54fe3-0000-4000-8000-000000000001",
+      "short_run_id": "e6f54fe3",
+      "skipped": null,
+      "snapshot": 1,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    }
+  ],
+  "schema_version": 1,
+  "scope": "jaffle_ods/dev",
+  "selected": "4c0b5c8f-0000-4000-8000-000000000003",
+  "state": "recorded",
+  "store": {
+    "full": ".ods/state.db",
+    "shown": ".ods/state.db"
+  },
+  "total": 3,
+  "total_capped": false
+}

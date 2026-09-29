@@ -1,0 +1,153 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: "serde_json::to_string_pretty(&why).unwrap()"
+---
+{
+  "schema_version": 1,
+  "node": "model.orders",
+  "name": "orders",
+  "kind": "model",
+  "action": "build",
+  "verdict": "orders would be built",
+  "based_on": 3,
+  "last_build": null,
+  "fingerprint": {
+    "compared": false,
+    "before": null,
+    "after": null,
+    "components": [],
+    "summary": "no recorded build to compare with"
+  },
+  "relation": {
+    "status": "not_needed",
+    "value": null,
+    "grade": "not_applicable",
+    "note": "not needed: it builds"
+  },
+  "sources": [
+    {
+      "source": "source.shop.raw.orders",
+      "name": "source.shop.raw.orders",
+      "version": "2026-09-28T00:00:00Z",
+      "grade": "proxy",
+      "usable": false,
+      "strategy": "freshness",
+      "origin": null,
+      "skipped": []
+    }
+  ],
+  "parents": [
+    {
+      "node": "model.x",
+      "name": "model.x",
+      "decision": "",
+      "builds": false
+    }
+  ],
+  "readers": [],
+  "evidence": [
+    {
+      "kind": "source_data_version",
+      "subject": "source.shop.raw.orders",
+      "subject_name": "source.shop.raw.orders",
+      "value": "2026-09-28T00:00:00Z",
+      "exactness": "proxy",
+      "grade": "proxy",
+      "fact": false
+    },
+    {
+      "kind": "source_version_strategy",
+      "subject": "source.shop.raw.orders",
+      "subject_name": "source.shop.raw.orders",
+      "value": "freshness",
+      "exactness": "proxy",
+      "grade": "proxy",
+      "fact": false
+    },
+    {
+      "kind": "parent_decision",
+      "subject": "model.x",
+      "subject_name": "model.x",
+      "value": null,
+      "exactness": "inferred",
+      "grade": "inferred",
+      "fact": false
+    }
+  ],
+  "reasons": [
+    {
+      "code": "missing_data_evidence",
+      "label": "missing data evidence",
+      "message": "no usable data version for raw.orders: will build"
+    }
+  ],
+  "chain": [
+    {
+      "depth": 0,
+      "node": "model.orders",
+      "name": "orders",
+      "action": "build",
+      "repeated": false,
+      "reasons": [
+        "no usable data version for raw.orders: will build"
+      ],
+      "changed": []
+    }
+  ],
+  "explanation": {
+    "entry": {
+      "node": "model.orders",
+      "name": "orders",
+      "kind": "model",
+      "action": "build",
+      "reasons": [
+        {
+          "code": "missing_data_evidence",
+          "message": "no usable data version for raw.orders: will build"
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "source_data_version",
+          "subject": "source.shop.raw.orders",
+          "value": "2026-09-28T00:00:00Z",
+          "exactness": "proxy"
+        },
+        {
+          "kind": "source_version_strategy",
+          "subject": "source.shop.raw.orders",
+          "value": "freshness",
+          "exactness": "proxy"
+        },
+        {
+          "kind": "parent_decision",
+          "subject": "model.x",
+          "value": null,
+          "exactness": "inferred"
+        }
+      ],
+      "depends_on": [],
+      "before": null,
+      "after": null,
+      "changed_components": [],
+      "policy": {
+        "lag_tolerance_secs": 0,
+        "require_fresh_data_from": "any",
+        "origin": {
+          "kind": "conservative_default"
+        },
+        "unapplied": [],
+        "unknown": []
+      },
+      "depth": 1
+    },
+    "causes": []
+  },
+  "commands": [
+    {
+      "command": "ods state explain orders",
+      "does": "the same explanation in a terminal (--output json for this panel's data)"
+    }
+  ],
+  "warnings": []
+}

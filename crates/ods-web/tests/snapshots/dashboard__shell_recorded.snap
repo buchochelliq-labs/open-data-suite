@@ -30,11 +30,11 @@ expression: pretty(&body)
       "status": "available"
     },
     {
-      "href": null,
+      "href": "state/plan",
       "key": "state",
       "label": "State",
-      "note": "State pages are planned; the State module works from the CLI (ods state …)",
-      "status": "planned"
+      "note": null,
+      "status": "available"
     },
     {
       "href": null,

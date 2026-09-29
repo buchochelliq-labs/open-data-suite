@@ -61,7 +61,8 @@ pub(super) struct LastRun {
     pub(super) command: String,
     /// The options as typed, in the command's order, then `--` and dbt's.
     pub(super) args: Vec<String>,
-    recorded_at: Timestamp,
+    /// When it started.
+    pub(super) recorded_at: Timestamp,
     /// How the run ended, once dbt built (#292, since 1.1). `None` in a file from an
     /// older ODS, or when the run stopped before dbt finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +143,31 @@ impl LastRun {
             .chain(self.args.iter().map(String::as_str));
         // Only a NUL byte can't be quoted, and a command line can't hold one.
         shlex::try_join(words.clone()).unwrap_or_else(|_| words.collect::<Vec<_>>().join(" "))
+    }
+}
+
+/// The last run kept beside `state_db`, and where, for the dashboard (#311): `None`
+/// when there is none, or it can't be read (logged: the dashboard shows the rest).
+pub(super) fn peek(state_db: &Path) -> Option<(PathBuf, LastRun)> {
+    let path = path_for(state_db);
+    let text = match std::fs::read(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), "can't read the last run: {e}");
+            return None;
+        }
+    };
+    match serde_json::from_slice::<LastRun>(&text) {
+        Ok(last) if LAST_RUN_VERSION.can_read(last.schema_version) => Some((path, last)),
+        Ok(_) => {
+            tracing::warn!(path = %path.display(), "the last run was kept by a newer ODS");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(path = %path.display(), "can't read the last run: {e}");
+            None
+        }
     }
 }
 
