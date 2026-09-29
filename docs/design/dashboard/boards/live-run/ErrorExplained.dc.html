@@ -53,7 +53,7 @@ body{margin:0}
 <li>Use <code style="font-family: 'IBM Plex Mono', monospace">given_name</code> in customers.sql, or restore <code style="font-family: 'IBM Plex Mono', monospace">first_name</code> in stg_customers.</li>
 <li>Check what else reads it:</li>
 </ol>
-<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">ods lineage impact stg_customers.first_name</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">ods lineage impact --column stg_customers.first_name=removed</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
 <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">ods state retry --failed</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
 </div>
 

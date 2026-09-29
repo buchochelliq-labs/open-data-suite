@@ -172,7 +172,7 @@ no font files, so it falls back to the system fonts.
 
 ### Live run on the DAG, with follow mode (#322)
 
-The boards are in [`boards/live-run/`](boards/live-run/). `Main.dc.html` there is interactive: it plays a demo run, and the other boards reuse it in fixed states. Screenshots will be added once they are exported from the design canvas.
+The boards are in `docs/design/dashboard/boards/live-run/` in the repository; like every board they are left out of the docs site and open in the Design canvas (see [the design README](../README.md)). `Main.dc.html` there is interactive: it plays a demo run, and the other boards reuse it in fixed states. Screenshots will be added once they are exported from the design canvas.
 
 - **What the page shows:**
   - A **Live** overlay on Lineage while `ods state run` or `build` is running.
@@ -195,7 +195,7 @@ The boards are in [`boards/live-run/`](boards/live-run/). `Main.dc.html` there i
 
 ### Failed node: the error explained (#323)
 
-Board: [`boards/live-run/ErrorExplained.dc.html`](boards/live-run/ErrorExplained.dc.html).
+Board: `boards/live-run/ErrorExplained.dc.html` (in the repository, not on the docs site).
 
 - **What a failed node shows:**
   - a plain-language headline;

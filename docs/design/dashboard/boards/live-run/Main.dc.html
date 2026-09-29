@@ -477,7 +477,7 @@ class Component extends DCLogic {
         { k: 'Thread', v: n.thread ? 'thread ' + n.thread : '—', sub: '', css: '' },
         { k: 'Relation', v: 'jaffle_ods.main.' + n.id, sub: '', css: 'font-family: IBM Plex Mono, monospace; word-break: break-all' },
         { k: 'Why it ran', v: n.plan === 'keep' ? 'Not selected' : n.why, sub: n.plan === 'keep' ? 'Kept its build from run ' + KEPT_RUN + '; relation not checked here' : '', css: '' },
-        { k: 'Tests', v: 'not run in this run', sub: 'ods state build runs tests only with --test', css: 'color: #4A5462' }
+        { k: 'Tests', v: (s === 'error' || s === 'skipped') ? 'not run' : (s === 'success' ? 'run after this node' : '—'), sub: (s === 'error' || s === 'skipped') ? 'the node did not build' : 'ods state build tests each node once it builds (skip with --exclude-resource-type test); ods state run runs no tests', css: 'color: #4A5462' }
       ];
       sel = {
         id: n.id, pill: PILL[s][0], pillCss: PILL[s][1], mat: n.mat,
