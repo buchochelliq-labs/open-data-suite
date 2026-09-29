@@ -723,31 +723,50 @@ fn full_refresh_rebuilds_what_it_changes() {
 /// the same values; with `--no-compile`, artifacts compiled with other vars are named.
 #[test]
 fn vars_reach_every_dbt_command() {
+    const VARS: &str = r#"{"region": "eu", "token": "VARS_SENTINEL_eu"}"#;
     let project = Project::new("vars");
+    let seen = project.dir.join("seen");
+    let project = project.with("FAKE_DBT_SEEN", seen.to_str().unwrap());
     let dbt = fixture("fake-dbt/dbt");
     let (code, json, stderr) = project.ods_with_stderr(&[
         "-v",
         "state",
         "build",
         "--vars",
-        r#"{"region": "eu"}"#,
+        VARS,
         "--dbt",
         dbt.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{json:#}");
+    // dbt got them on every call: freshness, compile, the target check and the build.
+    let calls = project.seen();
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    for (argv, _) in &calls {
+        let at = argv.iter().position(|a| a == "--vars").unwrap();
+        assert_eq!(argv[at + 1], VARS, "{argv:?}");
+    }
+    // Nothing ODS prints or logs shows them (rule 9, #321): not the command lines it
+    // logs, not the report's `dbt` settings or `execution.command`.
     let commands: Vec<&str> = stderr
         .lines()
         .filter(|l| l.contains("running dbt"))
         .collect();
-    // Freshness, compile, the target check and the build.
     assert_eq!(commands.len(), 4, "{stderr}");
     for line in commands {
         assert!(
-            line.contains(r#"--vars {"region": "eu"}"#)
-                || line.contains(r#"--vars '{"region": "eu"}'"#),
+            line.contains("--vars '[value removed]'") || line.contains("--vars [value removed]"),
             "{line}"
         );
     }
+    assert!(!stderr.contains("VARS_SENTINEL"), "{stderr}");
+    assert!(!json.to_string().contains("VARS_SENTINEL"), "{json:#}");
+    assert!(
+        json["result"]["execution"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--vars '[value removed]'"),
+        "{json:#}"
+    );
     // Compiled with `region: eu`; planning from those artifacts with other vars is flagged.
     let (_, other) = project.command("run", &["--no-compile", "--vars", r#"{"region": "us"}"#]);
     assert!(
@@ -756,7 +775,7 @@ fn vars_reach_every_dbt_command() {
             .contains("compiled with vars"),
         "{other:#}"
     );
-    let (_, same) = project.command("run", &["--no-compile", "--vars", r#"{"region": "eu"}"#]);
+    let (_, same) = project.command("run", &["--no-compile", "--vars", VARS]);
     assert!(
         !same["result"]["warnings"]
             .to_string()
@@ -2149,8 +2168,9 @@ fn retry_reruns_the_last_command_with_its_options() {
         "reused: {built:?}"
     );
     let command = result["execution"]["command"].as_str().unwrap();
+    // Retried with its vars, which the command line shows only as given (#321).
     assert!(
-        command.contains("--vars") && command.contains("region"),
+        command.contains("--vars '[value removed]'") && !command.contains("region"),
         "{command}"
     );
     // Only +orders was selected: nothing outside it built.
@@ -3318,8 +3338,25 @@ fn a_failed_run_keeps_a_journal_without_values() {
             "FAKE_DBT_FAIL_MESSAGE",
             "Runtime Error in model customers (models/customers.sql)\n  Conversion Error: Could not convert string 'sk_live_SENTINEL_7' to INT32\n  LINE 3: where cast('sk_live_SENTINEL_7' as integer) = 1",
         );
-    let (code, json) = project.run(&["--vars", r#"{"secret": "VARS_SENTINEL_7"}"#]);
+    let dbt = fixture("fake-dbt/dbt");
+    let (code, json, stderr) = project.ods_with_stderr(&[
+        "-v",
+        "state",
+        "build",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+        "--exclude-resource-type",
+        "test",
+        "--vars",
+        r#"{"secret": "VARS_SENTINEL_7"}"#,
+    ]);
     assert_eq!(code, 1, "{json:#}");
+    // Neither the report (JSON) nor what ODS printed or logged (-v) holds the vars
+    // value; the literal only reaches stderr as dbt's own line would (ADR-0024).
+    assert!(!json.to_string().contains("SENTINEL_7"), "{json:#}");
+    assert!(!stderr.contains("VARS_SENTINEL_7"), "{stderr}");
     let result = &json["result"];
     let (path, events) = journal_of(&project, result);
     let text = std::fs::read_to_string(&path).unwrap();

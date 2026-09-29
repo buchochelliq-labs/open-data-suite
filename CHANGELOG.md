@@ -222,10 +222,16 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
-- `ods state run`, `build` and `test` show dbt's output from its structured log:
-  dbt's lines at `info` and above, as `HH:MM:SS  message` with the time in UTC, and
-  not its debug lines. Pass `-- --log-format text` for dbt's own output, without live
-  stats (#322).
+- `ods state run`, `build` and `test` show dbt's output from its structured log, as
+  `HH:MM:SS  message` with the time in UTC, from the level dbt would show (`info`, or
+  `DBT_LOG_LEVEL`, `-- --log-level`, `--debug` or `--quiet`), never its debug lines
+  unless asked. A structured line that can't be read, or has no level, shows as a
+  placeholder rather than its text. Pass `-- --log-format text` for dbt's own output,
+  without live stats (#322).
+- `--vars` values no longer appear in what `ods state` prints, logs or reports: the
+  command lines logged with `-v`, the report's `dbt` and `ran` lines, `execution.command`
+  and the `dbt` settings in `--json`, and the "compiled with vars" warning show them as
+  `[value removed]`. dbt still receives them (Part of #321, #322).
 - The release plan: the first public release is 0.0.1 (the State MVP and the first
   dashboard screens), and 0.1.0 ships once every dashboard screen is built. `ods state`
   help and "not implemented yet" hints now name "M1 State MVP (v0.0.1)" (#309).

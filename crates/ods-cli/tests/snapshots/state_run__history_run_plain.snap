@@ -9,7 +9,7 @@ scope: jaffle_ods/default
 started: <time>
 outcome: failed
 totals: <took> · 9 built · 1 failed · 3 skipped
-rows: at least 6 (8 nodes didn't report rows)
+rows: at least 6 (9 nodes didn't report rows)
 stats: reported as it ran
 journal: <project>/.ods/state.db.runs/<run>.jsonl
 

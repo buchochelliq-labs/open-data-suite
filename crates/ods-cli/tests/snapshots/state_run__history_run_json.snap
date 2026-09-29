@@ -152,6 +152,7 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
       "skipped": 3
     },
     "rows_affected": 6,
-    "rows_unreported": 8
+    "rows_unreported": 9,
+    "rows_at_least": true
   }
 }

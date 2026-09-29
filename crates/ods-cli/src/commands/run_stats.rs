@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use ods_sdk::contracts::executor::ExecutionMode;
 use ods_sdk::contracts::run_events::{
     NodeRunStats, NodeRunStatus, RunOutcome, RunSummary, RunTotals,
 };
@@ -72,10 +73,19 @@ pub(super) fn rows(stats: &NodeRunStats) -> String {
         .map_or_else(|| MISSING.to_owned(), |r| r.to_string())
 }
 
-/// A status as the run shows it, toned.
-pub(super) fn status(stats: &NodeRunStats) -> Span {
+/// What a success is called: a test run builds nothing, it tests.
+fn success_word(mode: Option<ExecutionMode>) -> &'static str {
+    if mode == Some(ExecutionMode::Test) {
+        "tested"
+    } else {
+        "built"
+    }
+}
+
+/// A status as the run shows it, toned; `mode` is the run's.
+pub(super) fn status(stats: &NodeRunStats, mode: Option<ExecutionMode>) -> Span {
     match stats.status {
-        NodeRunStatus::Success => Span::toned("built", Tone::Success),
+        NodeRunStatus::Success => Span::toned(success_word(mode), Tone::Success),
         NodeRunStatus::Error => Span::toned("failed", Tone::Error),
         NodeRunStatus::Skipped => Span::toned("skipped", Tone::Warning),
         NodeRunStatus::Queued => Span::toned("queued", Tone::Muted),
@@ -88,7 +98,7 @@ pub(super) fn status(stats: &NodeRunStats) -> Span {
 pub(super) fn detail(stats: &NodeRunStats) -> String {
     let mut parts = Vec::new();
     if let Some(error) = &stats.error {
-        parts.push(error.message.clone());
+        parts.push(error.message().to_owned());
     }
     if !stats.blocked_by.is_empty() {
         let names: Vec<String> = stats.blocked_by.iter().map(|n| display_name(n)).collect();
@@ -119,7 +129,7 @@ pub(super) fn totals_line(run: &RunSummary) -> String {
             .map_or_else(|| format!("time {MISSING}"), duration),
     ];
     for (status, word) in [
-        (NodeRunStatus::Success, "built"),
+        (NodeRunStatus::Success, success_word(run.mode)),
         (NodeRunStatus::Error, "failed"),
         (NodeRunStatus::Skipped, "skipped"),
         (NodeRunStatus::Running, "running"),
@@ -134,12 +144,15 @@ pub(super) fn totals_line(run: &RunSummary) -> String {
     parts.join(" · ")
 }
 
-/// Rows affected in total: `298`, `at least 298 (2 didn't report rows)`, or, when no
-/// node reported any, that they weren't reported.
+/// Rows affected in total: `298`, `at least 298 (2 didn't report rows)`, or `—` when
+/// no node that could have written rows reported any: never a made-up 0.
 pub(super) fn rows_line(totals: &RunTotals) -> String {
-    let built = totals.count(NodeRunStatus::Success);
-    if built > 0 && totals.rows_unreported == built {
-        return format!("{MISSING} not reported for any node");
+    if totals.rows_is_lower_bound() && totals.rows_affected == 0 {
+        let n = totals.rows_unreported;
+        return format!(
+            "{MISSING} (not reported: {n} {} didn't report rows)",
+            if n == 1 { "node" } else { "nodes" }
+        );
     }
     if totals.rows_is_lower_bound() {
         let n = totals.rows_unreported;
@@ -180,7 +193,7 @@ pub(super) fn nodes_table(run: &RunSummary) -> ViewNode {
             .map(|n| {
                 vec![
                     vec![Span::toned(display_name(&n.node), Tone::Code)],
-                    vec![status(&n.stats)],
+                    vec![status(&n.stats, run.mode)],
                     vec![Span::plain(took(&n.stats))],
                     vec![Span::plain(rows(&n.stats))],
                     vec![Span::plain(
@@ -226,12 +239,18 @@ mod tests {
         totals.rows_affected = 298;
         assert_eq!(rows_line(&totals), "298");
         totals.rows_unreported = 2;
+        totals.rows_at_least = true;
         assert_eq!(
             rows_line(&totals),
             "at least 298 (2 nodes didn't report rows)"
         );
         totals.rows_unreported = 3;
         totals.rows_affected = 0;
-        assert_eq!(rows_line(&totals), "— not reported for any node");
+        assert_eq!(
+            rows_line(&totals),
+            "— (not reported: 3 nodes didn't report rows)"
+        );
+        // Nothing could have written rows (everything skipped): an exact 0.
+        assert_eq!(rows_line(&RunTotals::default()), "0");
     }
 }
