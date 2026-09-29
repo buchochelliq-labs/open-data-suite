@@ -119,8 +119,11 @@ default `execute_with_events` runs `execute` and then reports the events rebuilt
 the report (`events_from_report`): the run, each node's status, completion time and
 error summary, and each check. Nothing the report doesn't say is filled in: no start
 times, durations, rows, extras or thread. `run_started.live` says which it was, so a UI
-can say "no live stats" instead of showing gaps as zeros. The run is still recorded
-either way. If the execution fails to start, there are no events.
+can say "no live stats" instead of showing gaps as zeros. An executor with the
+capability may still fall back for one run (e.g. the dbt executor, when the user tells
+dbt to log in another format), and says `live: false` then; without the capability,
+`live` is never true. The run is still recorded either way. If the execution fails to
+start, there are no events.
 
 ### The run journal
 `ods state run`, `seed`, `snapshot`, `build` and `test` append every event of a run

@@ -397,8 +397,10 @@ fn check_events(
         let requested: Vec<String> = request.nodes.iter().map(|n| n.id.clone()).collect();
         assert_eq!(nodes, &requested, "{case}: run_started lists the request");
         assert_eq!(*mode, request.mode, "{case}: mode");
-        assert_eq!(
-            *said, live,
+        // An executor with the capability may still fall back for a run, e.g. when
+        // its engine was told to log in a way it can't read.
+        assert!(
+            live || !*said,
             "{case}: live only with the run_events capability"
         );
     }
