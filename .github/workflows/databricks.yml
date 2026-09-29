@@ -102,6 +102,13 @@ jobs:
           # SDK refuses a second method it would find in these.
           unset DATABRICKS_CLIENT_ID DATABRICKS_ACCOUNT_ID DATABRICKS_TOKEN_AUDIENCE DATABRICKS_OAUTH_SCOPES
           ODS_CI_CATALOG="$CATALOG" ODS_CI_SCHEMA="$SCHEMA" bash .github/databricks/demo.sh
+      # Delta table versions decide reuse of a model reading a source (ADR-0022, #17),
+      # in the demo's project and the run's schema.
+      - name: ods state with Delta source versions
+        run: |
+          export PATH="$HOME/dbt-databricks-venv/bin:$PATH"
+          unset DATABRICKS_CLIENT_ID DATABRICKS_ACCOUNT_ID DATABRICKS_TOKEN_AUDIENCE DATABRICKS_OAUTH_SCOPES
+          ODS_CI_CATALOG="$CATALOG" ODS_CI_SCHEMA="$SCHEMA" bash .github/databricks/source-versions.sh
       - name: Drop the run's schema
         if: always() && env.DATABRICKS_TOKEN != ''
         run: python .github/databricks/ci.py sql "DROP SCHEMA IF EXISTS \`$CATALOG\`.\`$SCHEMA\` CASCADE"

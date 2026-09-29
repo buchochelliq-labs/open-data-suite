@@ -101,6 +101,14 @@ jobs:
           cargo test -p ods-cli --test dbt_favor_state -- --nocapture 2>&1 | tee favor-state.log
           grep -q 'test result: ok. 4 passed' favor-state.log
           ! grep -q 'skipped: set ODS_TEST_DBT' favor-state.log
+      # The relation probe's Jinja rendered by real dbt against DuckDB (ADR-0022): rows,
+      # nulls, a missing relation, a view, an unconfirmed format. It must run, not skip.
+      - name: The relation probe on real dbt (#17)
+        shell: bash
+        run: |
+          cargo test -p ods-provider-dbt --test probe real_dbt -- --nocapture 2>&1 | tee probe.log
+          grep -q 'test result: ok. 1 passed' probe.log
+          ! grep -q 'skipped: set ODS_TEST_DBT' probe.log
       - name: dbt's settings are all classified (#227)
         shell: bash
         run: |

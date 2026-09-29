@@ -37,6 +37,12 @@ ODS's Databricks code is tested two ways:
    Databricks. It leaves out the Python model, which uses DuckDB's relation API, and the
    DuckDB-typed contracts. To rehearse on DuckDB, set `ODS_CI_PROFILES_YML` to a DuckDB
    `profiles.yml` and put a dbt with dbt-duckdb on the `PATH`.
+4. **It checks Delta table versions as source versions** (ADR-0022),
+   `.github/databricks/source-versions.sh`, in the demo's project and the run's schema.
+   It creates a Delta table, adds a dbt source for it and a model reading it, then runs
+   `ods state build` three times: the model builds, then is reused (its plan evidence
+   shows the `delta_history` version), then builds again after an `INSERT` into the
+   table. The table goes with the run's schema.
 
 Runs are serialised, because Free Edition has a single 2X-Small warehouse.
 
