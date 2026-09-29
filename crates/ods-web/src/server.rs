@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::dashboard::{Dashboard, HomeView, ShellView};
 use crate::search::search;
 
+mod catalog_routes;
+
 /// Everything the server shows, rebuilt by the [`Loader`] when artifacts change.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -234,7 +236,12 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         .route(&at("/api/graph"), get(graph))
         .route(&at("/api/search"), get(search_handler))
         .route(&at("/api/node"), get(node))
-        .route(&at("/api/impact"), get(impact));
+        .route(&at("/api/impact"), get(impact))
+        // The Catalog and the model pages (#313).
+        .route(&at("/catalog"), get(catalog_routes::page))
+        .route(&at("/catalog/{id}"), get(catalog_routes::model))
+        .route(&at("/api/catalog"), get(catalog_routes::api))
+        .route(&at("/api/catalog/{id}"), get(catalog_routes::model_api));
     if !base_path.is_empty() {
         let target = at("/");
         app = app.route(

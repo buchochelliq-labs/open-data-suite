@@ -48,6 +48,15 @@ the changelog was introduced.
 - The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
   served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
   `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
+- The dashboard's Catalog and model pages (#313). `/catalog` lists every model, seed
+  and snapshot with facets (resource type, layer from the model's folder, materialization,
+  tags, next-run decision from the plan, lineage confidence) whose selections, search and
+  sort are kept in the URL, each node's next-run pill and last successful build, and a
+  `[n]` health placeholder (#117). `/catalog/<unique_id>` has Overview, Code, Columns,
+  Lineage, State and Tests tabs; column types are shown only when the artifacts record
+  them, and test outcomes only when recorded. Without a state store every node reads
+  *never built*. `/api/catalog` and `/api/catalog/<unique_id>` return the same view
+  models at `schema_version` 1 (ADR-0009).
 - `ods doctor` checks that ODS can work in the current project: configuration (files,
   profile, every effective value and where it came from, credentials only as
   references and connection strings without their user, query or options), the dbt

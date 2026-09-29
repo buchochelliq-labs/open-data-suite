@@ -1,0 +1,129 @@
+---
+source: crates/ods-web/tests/catalog.rs
+expression: pretty(view)
+---
+{
+  "checks_passed": {
+    "at": "2026-09-28T09:05:00Z",
+    "checks_changed_since": false,
+    "run_id": "9ea38bd5-0000-4000-8000-000000000002"
+  },
+  "code": {
+    "compiled": "select id from db.raw_orders",
+    "language": "sql",
+    "raw": "select id from {{ ref('raw_orders') }}"
+  },
+  "columns": [
+    {
+      "constraints": [
+        "not_null"
+      ],
+      "data_type": "BIGINT",
+      "description": "The order.",
+      "name": "id",
+      "tests": [
+        "unique"
+      ],
+      "type_source": "warehouse",
+      "upstream": [
+        "raw_orders.id"
+      ]
+    },
+    {
+      "constraints": [],
+      "data_type": "varchar",
+      "description": null,
+      "name": "status",
+      "tests": [],
+      "type_source": "declared",
+      "upstream": []
+    },
+    {
+      "constraints": [],
+      "data_type": null,
+      "description": null,
+      "name": "amount",
+      "tests": [],
+      "type_source": null,
+      "upstream": []
+    }
+  ],
+  "decision": {
+    "decision": "build",
+    "reasons": [
+      {
+        "code": "code_changed",
+        "label": "code changed",
+        "message": "code changed since run 9ea38bd5: sql"
+      }
+    ],
+    "summary": "code changed since run 9ea38bd5: sql"
+  },
+  "decisions": {
+    "based_on": 2,
+    "error": null,
+    "state": "recorded",
+    "warnings": []
+  },
+  "description": "One row per order.",
+  "downstream": [
+    {
+      "href": "catalog/model.shop.customers",
+      "id": "model.shop.customers",
+      "name": "</script><img src=x onerror=alert(1)>"
+    }
+  ],
+  "file": "models/staging/orders.sql",
+  "id": "model.shop.orders",
+  "last_build": {
+    "built_at": "2026-09-28T09:00:00Z",
+    "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+    "short_run_id": "9ea38bd5",
+    "snapshot": 2
+  },
+  "layer": "staging",
+  "layer_source": "the folder under the model paths",
+  "lineage": "parsed",
+  "lineage_notes": [],
+  "links": {
+    "lineage": "lineage?node=model.shop.orders",
+    "why": "state/plan?node=model.shop.orders"
+  },
+  "materialization": "view",
+  "name": "orders",
+  "relation": "db.orders",
+  "resource_type": "model",
+  "schema_version": 1,
+  "tags": [
+    "core"
+  ],
+  "tests": [
+    {
+      "column": "id",
+      "id": "test.shop.unique_orders_id.1",
+      "kind": "data",
+      "last_outcome": null,
+      "name": "unique"
+    },
+    {
+      "column": null,
+      "id": "unit_test.shop.orders.totals",
+      "kind": "unit",
+      "last_outcome": null,
+      "name": "totals"
+    }
+  ],
+  "type_label": "model",
+  "upstream": [
+    {
+      "href": null,
+      "id": "source.shop.app.events",
+      "name": "app.events"
+    },
+    {
+      "href": "catalog/seed.shop.raw_orders",
+      "id": "seed.shop.raw_orders",
+      "name": "raw_orders"
+    }
+  ]
+}

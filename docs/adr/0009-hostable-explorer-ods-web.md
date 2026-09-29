@@ -90,6 +90,25 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
 - **Escaping:** server-rendered text and attributes go through the `html-escape` crate
   (MIT).
 
+*Amended 2026-09-29 (#313, the Catalog and model pages):*
+- **Data:** the binary also fills a neutral `ods_web::catalog::CatalogInput` on the
+  `Dashboard`: each node's id, name, type, language, layer, materialization, tags,
+  description, relation, file, parents, columns (type only when recorded, and whether
+  it came from the warehouse or was declared), code and compiled code, and tests; plus
+  each node's last successful build from the latest snapshot, with the snapshot that
+  recorded it. The binary decides what a layer is (the model's first folder under the
+  model paths, from the artifacts) and says so; `ods-web` names no build tool. Decisions
+  come from the same `Planner` as Home, per request; lineage confidence from the graph
+  document the server already holds.
+- **Pages:** `<base>/catalog` and `<base>/catalog/<id>`. A page one level down emits
+  `<meta name="ods-root" content="../">` and prefixes its links and font URLs, since
+  the CSP's `base-uri 'none'` rules out `<base>`; the shared script reads it to find
+  the API. Filters are a plain `GET` form, so the URL is the state and the page works
+  without script.
+- **API:** `/api/catalog` (`CatalogView`, same query as the page) and
+  `/api/catalog/<id>` (`ModelView`, every tab), `GET` only, at `schema_version` 1.
+  Beyond loopback they omit file paths and error text.
+
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE
   crates may depend on anything up to MODULE, and not on providers. `axum` is confined to

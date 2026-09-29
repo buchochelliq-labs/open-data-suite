@@ -1,0 +1,212 @@
+---
+source: crates/ods-web/tests/catalog.rs
+expression: pretty(view.clone())
+---
+{
+  "decisions": {
+    "based_on": null,
+    "error": null,
+    "state": "no_store",
+    "warnings": []
+  },
+  "facets": [
+    {
+      "key": "type",
+      "label": "Resource type",
+      "note": null,
+      "values": [
+        {
+          "count": 2,
+          "label": "model",
+          "selected": false,
+          "value": "model"
+        },
+        {
+          "count": 1,
+          "label": "seed",
+          "selected": false,
+          "value": "seed"
+        }
+      ]
+    },
+    {
+      "key": "layer",
+      "label": "Layer",
+      "note": "the folder under the model paths",
+      "values": [
+        {
+          "count": 1,
+          "label": "marts",
+          "selected": false,
+          "value": "marts"
+        },
+        {
+          "count": 1,
+          "label": "staging",
+          "selected": false,
+          "value": "staging"
+        }
+      ]
+    },
+    {
+      "key": "materialized",
+      "label": "Materialization",
+      "note": null,
+      "values": [
+        {
+          "count": 1,
+          "label": "seed",
+          "selected": false,
+          "value": "seed"
+        },
+        {
+          "count": 1,
+          "label": "table",
+          "selected": false,
+          "value": "table"
+        },
+        {
+          "count": 1,
+          "label": "view",
+          "selected": false,
+          "value": "view"
+        }
+      ]
+    },
+    {
+      "key": "tag",
+      "label": "Tags",
+      "note": null,
+      "values": [
+        {
+          "count": 1,
+          "label": "core",
+          "selected": false,
+          "value": "core"
+        }
+      ]
+    },
+    {
+      "key": "decision",
+      "label": "Next-run decision",
+      "note": "From the plan against the latest snapshot, made for this request.",
+      "values": [
+        {
+          "count": 0,
+          "label": "Build",
+          "selected": false,
+          "value": "build"
+        },
+        {
+          "count": 0,
+          "label": "Reuse",
+          "selected": false,
+          "value": "reuse"
+        },
+        {
+          "count": 3,
+          "label": "Never built",
+          "selected": false,
+          "value": "never_built"
+        },
+        {
+          "count": 0,
+          "label": "Unknown",
+          "selected": false,
+          "value": "unknown"
+        }
+      ]
+    },
+    {
+      "key": "lineage",
+      "label": "Lineage confidence",
+      "note": "Column lineage from the SQL; seeds have none (n/a).",
+      "values": [
+        {
+          "count": 1,
+          "label": "parsed",
+          "selected": false,
+          "value": "parsed"
+        },
+        {
+          "count": 1,
+          "label": "opaque",
+          "selected": false,
+          "value": "opaque"
+        },
+        {
+          "count": 1,
+          "label": "n/a",
+          "selected": false,
+          "value": "n/a"
+        }
+      ]
+    }
+  ],
+  "query": {
+    "descending": false,
+    "filters": {},
+    "search": null,
+    "sort": "name"
+  },
+  "rows": [
+    {
+      "decision": {
+        "decision": "never_built",
+        "reasons": [],
+        "summary": "no state store yet: nothing was ever recorded, so it builds next run"
+      },
+      "health": null,
+      "href": "catalog/model.shop.customers",
+      "id": "model.shop.customers",
+      "last_build": null,
+      "layer": "marts",
+      "lineage": "opaque",
+      "materialization": "table",
+      "name": "</script><img src=x onerror=alert(1)>",
+      "resource_type": "model",
+      "tags": [],
+      "type_label": "python model"
+    },
+    {
+      "decision": {
+        "decision": "never_built",
+        "reasons": [],
+        "summary": "no state store yet: nothing was ever recorded, so it builds next run"
+      },
+      "health": null,
+      "href": "catalog/model.shop.orders",
+      "id": "model.shop.orders",
+      "last_build": null,
+      "layer": "staging",
+      "lineage": "parsed",
+      "materialization": "view",
+      "name": "orders",
+      "resource_type": "model",
+      "tags": [
+        "core"
+      ],
+      "type_label": "model"
+    },
+    {
+      "decision": {
+        "decision": "never_built",
+        "reasons": [],
+        "summary": "no state store yet: nothing was ever recorded, so it builds next run"
+      },
+      "health": null,
+      "href": "catalog/seed.shop.raw_orders",
+      "id": "seed.shop.raw_orders",
+      "last_build": null,
+      "layer": null,
+      "lineage": "not_applicable",
+      "materialization": "seed",
+      "name": "raw_orders",
+      "resource_type": "seed",
+      "tags": [],
+      "type_label": "seed"
+    }
+  ],
+  "schema_version": 1,
+  "total": 3
+}

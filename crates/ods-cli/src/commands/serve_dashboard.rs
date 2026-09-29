@@ -145,6 +145,9 @@ impl DashboardSource {
             })
             .collect();
         let state = self.state(Arc::clone(&ws));
+        // The Catalog (#313): the project's nodes and their last builds.
+        let catalog =
+            super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, &ws.state_db, &ws.scope);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         let target = self
             .settings
@@ -158,6 +161,7 @@ impl DashboardSource {
             .with_opaque(opaque)
             .with_state(state)
             .with_modules(modules(recorded))
+            .with_catalog(catalog)
     }
 
     fn state(&self, ws: Arc<Workspace>) -> StateInput {

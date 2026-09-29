@@ -605,6 +605,49 @@ and every route is `GET`. `/api/shell` and `/api/home` return exactly what the p
 shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served by
 `ods serve` itself (no font CDN), with system fonts as the fallback.
 
+### The Catalog and model pages
+
+The **Catalog** (`/catalog`, #313) lists every model, seed and snapshot in the
+manifest, with facets to filter by and counts over every node:
+- **resource type**, **materialization** and **tags** (the resolved `config.tags`);
+- **layer:** a model's first folder under the model paths (from its `fqn`, e.g.
+  `models/marts/…` → `marts`). Seeds and models at the top of a model path have none;
+  the layer is never guessed from a name;
+- **next-run decision:** *Build*, *Reuse*, *Never built* (no successful build is
+  recorded, so it builds) or *Unknown* (the plan couldn't be made, or the store can't be
+  read), from the plan against the latest snapshot, made again on every request as on
+  Home;
+- **lineage confidence:** *parsed*, *inferred*, *observed*, *unknown*, *opaque*, or
+  *n/a* for seeds.
+
+The table sorts by any column, and shows each node's last successful build (the
+snapshot and run that recorded it, and when) or *never built*. Health is `[n]` until
+the health signals exist (#117). Facets, the name search and the sort are in the URL
+query (`/catalog?layer=marts&decision=build&sort=last_built&desc=1`), so a filtered
+view can be bookmarked; the page works without script.
+
+Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with tabs
+(`?tab=`):
+- **Overview:** description, columns, the current decision and a small lineage view;
+- **Code:** the code as written and, only if the artifacts carry it, as compiled;
+- **Columns:** name, type, description, tests, constraints and the columns each is
+  computed from. A type comes from `catalog.json` or a YAML `data_type` (marked
+  *declared*); otherwise it says *unknown*;
+- **Lineage:** the nodes it reads and that read it (the build graph, not
+  relationships), linking to `/lineage?node=<unique_id>`;
+- **State:** the decision with the planner's reasons, the last successful build, and a
+  link to *Why* at `/state/plan?node=<unique_id>`;
+- **Tests:** its data and unit tests. Their outcomes aren't recorded per test, so each
+  says *not recorded*; when the state records that all of a node's checks passed on its
+  current build, the tab says when.
+
+Relationships and Usage are greyed as planned. An unknown id gets a 404 page. Without a
+state store, every node reads *never built* and its last build *never*.
+
+`/api/catalog` (with the same query) and `/api/catalog/<unique_id>` return the view
+models the pages render, at `schema_version` 1; every tab's data is in the latter.
+Beyond loopback they leave out file paths and error text.
+
 ## dbt State configuration
 
 ODS reads dbt State configuration exactly as you already write it

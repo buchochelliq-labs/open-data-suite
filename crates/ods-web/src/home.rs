@@ -60,7 +60,7 @@ fn svg(paths: &str, size: u32) -> String {
 const LOGO: &str = r#"<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>"#;
 const SEARCH: &str = r#"<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>"#;
 
-fn nav_item(out: &mut String, section: &NavSection) {
+fn nav_item(out: &mut String, section: &NavSection, root: &str) {
     let icon = svg(icon(section.key), 18);
     let label = format!(r#"<span class="label">{}</span>"#, text(section.label));
     match (section.status, section.href) {
@@ -81,15 +81,60 @@ fn nav_item(out: &mut String, section: &NavSection) {
             let _ = write!(
                 out,
                 r#"<a href="{href}"{current} data-section="{key}">{icon}{label}</a>"#,
-                href = attr(href),
+                href = attr(&format!("{root}{href}")),
                 key = attr(section.key),
             );
         }
+    }
+    if !section.items.is_empty() {
+        out.push_str(r#"<div class="sub">"#);
+        for item in &section.items {
+            match (item.status, item.href) {
+                (SectionStatus::Planned, _) | (_, None) => {
+                    let _ = write!(
+                        out,
+                        r#"<span class="planned" title="{note}" data-section="{key}"><span class="label">{label}</span><span class="chip">Planned</span></span>"#,
+                        note = attr(item.note.unwrap_or("Planned: not built yet")),
+                        key = attr(item.key),
+                        label = text(item.label),
+                    );
+                }
+                (status, Some(href)) => {
+                    let _ = write!(
+                        out,
+                        r#"<a href="{href}"{current} data-section="{key}">{label}</a>"#,
+                        href = attr(&format!("{root}{href}")),
+                        current = if status == SectionStatus::Current {
+                            r#" aria-current="page""#
+                        } else {
+                            ""
+                        },
+                        key = attr(item.key),
+                        label = text(item.label),
+                    );
+                }
+            }
+        }
+        out.push_str("</div>");
     }
 }
 
 /// The whole page: the shell around `body`, titled `title`.
 fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
+    shell_at(shell, title, body, generation, "", "")
+}
+
+/// [`shell`] for a page `root` below the dashboard's root (e.g. `../` for
+/// `catalog/<id>`), so its relative links, fonts and API calls still resolve, with
+/// the page's own stylesheet `css`.
+pub(crate) fn shell_at(
+    shell: &ShellView,
+    title: &str,
+    body: &str,
+    generation: u64,
+    root: &str,
+    css: &str,
+) -> String {
     let mut out = String::with_capacity(32 * 1024);
     let target = match &shell.target.kind {
         Some(kind) => format!("{} · {}", shell.target.name, kind),
@@ -108,8 +153,9 @@ fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="ods-generation" content="{generation}">
+<meta name="ods-root" content="{root_attr}">
 <title>{title} · {project} · ODS</title>
-<style>{fonts}{CSS}</style>
+<style>{fonts}{CSS}{css}</style>
 </head>
 <body>
 <div class="app">
@@ -125,15 +171,16 @@ fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String 
         title = text(title),
         project = text(&shell.project),
         target = text(&target),
-        fonts = crate::fonts::font_faces(),
+        root_attr = attr(root),
+        fonts = crate::fonts::font_faces().replace("url('assets/", &format!("url('{root}assets/")),
     );
     let (bottom, main): (Vec<_>, Vec<_>) = shell.sections.iter().partition(|s| s.key == "settings");
     for section in main {
-        nav_item(&mut out, section);
+        nav_item(&mut out, section, root);
     }
     out.push_str("</div>\n<div class=\"bottom\">");
     for section in bottom {
-        nav_item(&mut out, section);
+        nav_item(&mut out, section, root);
     }
     let snapshot = match &shell.snapshot {
         Some(s) => format!(

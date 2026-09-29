@@ -50,6 +50,8 @@ pub struct Dashboard {
     pub opaque: Vec<OpaqueNode>,
     /// Which modules are set up.
     pub modules: Vec<ModuleStatus>,
+    /// The project's nodes, for the Catalog and the model pages (#313).
+    pub catalog: crate::catalog::CatalogInput,
 }
 
 impl Dashboard {
@@ -68,6 +70,7 @@ impl Dashboard {
             },
             opaque: Vec::new(),
             modules: Vec::new(),
+            catalog: crate::catalog::CatalogInput::default(),
         }
     }
 
@@ -110,6 +113,13 @@ impl Dashboard {
     #[must_use]
     pub fn with_modules(mut self, modules: Vec<ModuleStatus>) -> Self {
         self.modules = modules;
+        self
+    }
+
+    /// Sets the project's nodes, for the Catalog (#313).
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: crate::catalog::CatalogInput) -> Self {
+        self.catalog = catalog;
         self
     }
 }
@@ -472,6 +482,9 @@ pub struct NavSection {
     pub href: Option<&'static str>,
     /// What to know about it, e.g. that its module already works from the CLI.
     pub note: Option<&'static str>,
+    /// Its sub-pages, listed while it is the section shown (e.g. Catalog's Models).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<NavSection>,
 }
 
 /// A section of the design: key, label, href when built, and a note.
@@ -486,7 +499,7 @@ type Section = (
 /// of the navigation.
 const SECTIONS: [Section; 9] = [
     ("home", "Home", Some("./"), None),
-    ("catalog", "Catalog", None, None),
+    ("catalog", "Catalog", Some("catalog"), None),
     ("lineage", "Lineage", Some("lineage"), None),
     (
         "state",
@@ -505,6 +518,46 @@ const SECTIONS: [Section; 9] = [
     ("agent", "Agent", None, None),
     ("settings", "Settings", None, None),
 ];
+
+/// Sub-pages of a section, by the section's key, listed under it while it is shown.
+/// Sources and freshness evidence and the semantic layer come with #309.
+const SUB_SECTIONS: [(&str, Section); 3] = [
+    ("catalog", ("models", "Models", Some("catalog"), None)),
+    (
+        "catalog",
+        (
+            "freshness",
+            "Freshness evidence",
+            None,
+            Some("Freshness evidence is planned"),
+        ),
+    ),
+    (
+        "catalog",
+        (
+            "semantic",
+            "Semantic layer",
+            None,
+            Some("The semantic layer is planned"),
+        ),
+    ),
+];
+
+/// A nav entry for `section`; `current` is the key shown, if it is in this list.
+fn nav_section(&(key, label, href, note): &Section, current: Option<&str>) -> NavSection {
+    NavSection {
+        key,
+        label,
+        status: match href {
+            _ if Some(key) == current => SectionStatus::Current,
+            Some(_) => SectionStatus::Available,
+            None => SectionStatus::Planned,
+        },
+        href,
+        note,
+        items: Vec::new(),
+    }
+}
 
 /// Where the state is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -790,8 +843,10 @@ impl Dashboard {
         self.recorded().and_then(|r| r.runs.first())
     }
 
-    /// The shell, with `current` as the page shown.
+    /// The shell, with `current` as the page shown: a section's key, or
+    /// `section/sub-page`, e.g. `catalog/models`.
     pub fn shell(&self, current: &str) -> ShellView {
+        let (section, page) = current.split_once('/').unwrap_or((current, ""));
         let latest = self.latest();
         let target = latest
             .and_then(|r| r.target.clone())
@@ -812,16 +867,16 @@ impl Dashboard {
             }),
             sections: SECTIONS
                 .iter()
-                .map(|&(key, label, href, note)| NavSection {
-                    key,
-                    label,
-                    status: match href {
-                        _ if key == current => SectionStatus::Current,
-                        Some(_) => SectionStatus::Available,
-                        None => SectionStatus::Planned,
-                    },
-                    href,
-                    note,
+                .map(|s| {
+                    let mut nav = nav_section(s, Some(section));
+                    if nav.key == section {
+                        nav.items = SUB_SECTIONS
+                            .iter()
+                            .filter(|(parent, _)| *parent == section)
+                            .map(|(_, item)| nav_section(item, Some(page)))
+                            .collect();
+                    }
+                    nav
                 })
                 .collect(),
             mode: "local",
@@ -1197,5 +1252,26 @@ impl Dashboard {
             ranked.into_iter().take(ATTENTION_LIMIT).collect();
         shown.sort_by_key(|(n, item)| (item.kind, *n));
         (shown.into_iter().map(|(_, item)| item).collect(), more)
+    }
+}
+
+// ------------------------------------------------------------------ other pages
+
+impl Dashboard {
+    /// The plan against the latest snapshot as of `now` (made again when the binary
+    /// supplied a [`Planner`]), with what qualifies it; `None` unless the store was
+    /// read. For pages other than Home that show decisions, e.g. the Catalog (#313).
+    pub(crate) fn plan_at(
+        &self,
+        now: Timestamp,
+    ) -> Option<(Result<ExecutionPlan, String>, Vec<String>)> {
+        let recorded = self.recorded()?;
+        Some(match &recorded.planner {
+            Some(PlannerFn(planner)) => match planner(now) {
+                Ok((plan, warnings)) => (Ok(plan), warnings),
+                Err(error) => (Err(error), Vec::new()),
+            },
+            None => (recorded.plan.clone(), recorded.warnings.clone()),
+        })
     }
 }

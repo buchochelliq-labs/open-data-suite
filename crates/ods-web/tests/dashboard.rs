@@ -299,9 +299,10 @@ fn home_is_served_with_the_shell_and_every_panel() {
     }
     assert!(page.contains(r#"<a href="./" aria-current="page" data-section="home">"#));
     assert!(page.contains(r#"<a href="lineage" data-section="lineage">"#));
+    assert!(page.contains(r#"<a href="catalog" data-section="catalog">"#));
     assert!(
         page.contains(
-            r#"<span class="planned" title="Planned: not built yet" data-section="catalog">"#
+            r#"<span class="planned" title="Planned: not built yet" data-section="usage">"#
         ),
         "planned sections link nowhere"
     );

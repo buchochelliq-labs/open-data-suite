@@ -3,7 +3,9 @@
 // the server loads a new snapshot. The page is complete without it.
 (function () {
   // Relative to the page's directory, so it works under any base path.
-  const base = location.pathname.replace(/[^/]*$/, "");
+  // Pages below the root (e.g. catalog/<id>) say how far up it is.
+  const root = document.querySelector('meta[name="ods-root"]');
+  const base = location.pathname.replace(/[^/]*$/, "") + (root ? root.content : "");
 
   // "4 min ago" for every <time data-relative>; the server writes the exact time.
   function ago(iso) {

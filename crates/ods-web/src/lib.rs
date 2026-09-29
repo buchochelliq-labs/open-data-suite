@@ -9,15 +9,19 @@
 //!   node details, impact) and live reload when the dbt artifacts change.
 //!
 //! Served, it sits inside the ODS Dashboard: Home at the root (the project's runs,
-//! reuse and what needs attention, see [`dashboard`]) and the explorer at `lineage`.
+//! reuse and what needs attention, see [`dashboard`]), the explorer at `lineage`, and
+//! the Catalog at `catalog`, with a page per node (see [`catalog`]).
 //!
 //! This crate only presents. It never reads dbt artifacts or the state store, or wires
 //! providers: the caller (a binary) supplies a [`Loader`] that produces a fresh
 //! [`Snapshot`], with a [`Dashboard`] of neutral facts (ADR-0001).
 
+pub mod catalog;
+mod catalog_page;
 pub mod dashboard;
 mod fonts;
 mod home;
+mod model_page;
 mod page;
 mod search;
 mod server;
