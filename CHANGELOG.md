@@ -28,11 +28,11 @@ State MVP. Entries below record changes since the changelog was introduced.
   are still there, point at this target. Every other node keeps the upstream pointer,
   with a reason (`--output json`). It fixes a retry after a failure building on prod's
   copy of a model this target just built. New error code `ODS-E0406` for a held lock
-  or a failed write (#296).
+  or a failed write (#304, #296).
 - `ods-export.json`, written next to the exported `manifest.json`, is a new ODS
   document at `schema_version` 1.0: when and from which snapshot and target the export
   was made, the SHA-256 of the manifest it describes, and each node's choice and
-  reason (#296).
+  reason (#304, #296).
 - A "State on Databricks" docs page shows `ods state` on a real Databricks workspace:
   after one model changes, only it and the view reading it are rebuilt. Its screenshots
   come from the nightly Databricks CI job (#302, #294).
