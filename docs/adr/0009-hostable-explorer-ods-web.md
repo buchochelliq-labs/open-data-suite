@@ -90,31 +90,6 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
 - **Escaping:** server-rendered text and attributes go through the `html-escape` crate
   (MIT).
 
-*Amended 2026-09-29 (#312, the Lineage page):* the explorer at `<base>/lineage` moves
-into the dashboard's shell, with a State overlay.
-- **One explorer, two pages:** the explorer's script and stylesheet
-  (`assets/lineage.js`, `assets/lineage.css`) are shared. Served, the page is the shell
-  around them, with the graph, the overlay and a deep-linked selection embedded as
-  JSON (`<` escaped, as before). Offline (`ods lineage view`, `--site`), the same
-  explorer has a small header instead of the shell, and the graph only: no overlay, no
-  impact, no font files. No library is added.
-- **Overlay contract:** `ods_web::lineage::LineageOverlay` at `schema_version` 1,
-  served at `/api/lineage/overlay` (`GET` only). It is built from the same neutral
-  `Dashboard` as Home and planned again as of each request with its `Planner`, so it
-  matches `ods state plan`. Each node gets a `Decision`: `build`, `reuse`,
-  `never_built`, or `unknown` when the evidence to reuse it is missing or the plan
-  couldn't be made (never shown as reuse, AGENTS rule 3), with its reason chain (rule
-  4). Without a state store every node is `never_built`. Sources have no decision.
-  Beyond loopback, error text is omitted.
-- **Links out:** each node links to its Model page, `catalog/<id>`, and to its decision
-  on the State plan page, `state/plan?node=<id>`, relative to the dashboard's root,
-  with the id percent-encoded except for RFC 3986's unreserved characters.
-  `<base>/lineage?node=<id>` selects a node.
-- **Edges are the DAG's** (AGENTS rule 6): the exported graph now also links a node to
-  the parents it declares, so an opaque node (a Python model) is no longer drawn apart;
-  impact already read them. They are drawn and described as "reads", never as
-  relationships.
-
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE
   crates may depend on anything up to MODULE, and not on providers. `axum` is confined to
@@ -169,6 +144,31 @@ into the dashboard's shell, with a State overlay.
   - `ods serve [--host] [--port] [--base-path] [--no-watch]` serves it.
 
   Both reuse `ods lineage`'s artifact options.
+
+*Amended 2026-09-29 (#312, the Lineage page):* the explorer at `<base>/lineage` moves
+into the dashboard's shell, with a State overlay.
+- **One explorer, two pages:** the explorer's script and stylesheet
+  (`assets/lineage.js`, `assets/lineage.css`) are shared. Served, the page is the shell
+  around them, with the graph, the overlay and a deep-linked selection embedded as
+  JSON (`<` escaped, as before). Offline (`ods lineage view`, `--site`), the same
+  explorer has a small header instead of the shell, and the graph only: no overlay, no
+  impact, no font files. No library is added.
+- **Overlay contract:** `ods_web::lineage::LineageOverlay` at `schema_version` 1,
+  served at `/api/lineage/overlay` (`GET` only). It is built from the same neutral
+  `Dashboard` as Home and planned again as of each request with its `Planner`, so it
+  matches `ods state plan`. Each node gets a `Decision`: `build`, `reuse`,
+  `never_built`, or `unknown` when the evidence to reuse it is missing or the plan
+  couldn't be made (never shown as reuse, AGENTS rule 3), with its reason chain (rule
+  4). Without a state store every node is `never_built`. Sources have no decision.
+  Beyond loopback, error text is omitted.
+- **Links out:** each node links to its Model page, `catalog/<id>`, and to its decision
+  on the State plan page, `state/plan?node=<id>`, relative to the dashboard's root,
+  with the id percent-encoded except for RFC 3986's unreserved characters.
+  `<base>/lineage?node=<id>` selects a node.
+- **Edges are the DAG's** (AGENTS rule 6): the exported graph now also links a node to
+  the parents it declares, so an opaque node (a Python model) is no longer drawn apart;
+  impact already read them. They are drawn and described as "reads", never as
+  relationships.
 
 ## Consequences
 - Positive:

@@ -203,11 +203,23 @@ pub type Planner =
 
 /// A [`Planner`], for types that must be `Debug`.
 #[derive(Clone)]
-pub(crate) struct PlannerFn(pub(crate) Planner);
+struct PlannerFn(Planner);
 
 impl fmt::Debug for PlannerFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Planner")
+    }
+}
+
+impl Recorded {
+    /// The plan as of `now`, with what qualifies it: made again with the planner when
+    /// there is one, else as made at load time. For pages outside this module, such as
+    /// Lineage (#312).
+    pub(crate) fn plan_at(&self, now: Timestamp) -> Result<(ExecutionPlan, Vec<String>), String> {
+        match &self.planner {
+            Some(PlannerFn(planner)) => planner(now),
+            None => self.plan.clone().map(|plan| (plan, self.warnings.clone())),
+        }
     }
 }
 
@@ -228,7 +240,7 @@ pub struct Recorded {
     /// What qualifies the plan, e.g. missing source freshness.
     pub warnings: Vec<String>,
     /// Plans again as of the time asked; without one, `plan` is shown as made.
-    pub(crate) planner: Option<PlannerFn>,
+    planner: Option<PlannerFn>,
 }
 
 impl Recorded {

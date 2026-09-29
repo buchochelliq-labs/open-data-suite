@@ -89,7 +89,7 @@ fn nav_item(out: &mut String, section: &NavSection) {
 }
 
 /// The whole page: the shell around `body`, titled `title`.
-pub(crate) fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
+fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
     let mut out = String::with_capacity(32 * 1024);
     let target = match &shell.target.kind {
         Some(kind) => format!("{} · {}", shell.target.name, kind),
@@ -423,4 +423,10 @@ fn panels(b: &mut String, home: &HomeView) {
 /// Percent-encodes a URL fragment value.
 fn url_component(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+/// A page at the dashboard's root, inside the shell: for pages built in their own
+/// modules, such as Lineage (#312).
+pub(crate) fn root_page(view: &ShellView, title: &str, body: &str, generation: u64) -> String {
+    shell(view, title, body, generation)
 }

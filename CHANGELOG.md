@@ -45,9 +45,6 @@ the changelog was introduced.
 - Two JSON routes return the dashboard's view models at `schema_version` 1:
   `/api/shell` and `/api/home`. Beyond loopback, `/api/home` omits the store's path and
   error text (#310, ADR-0009).
-- The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
-  served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
-  `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
 - The dashboard's Lineage page (#312): `ods serve` shows the lineage explorer at
   `/lineage` inside the dashboard's shell, restyled to the design, with a *State
   overlay* that colours each node by what the next run does with it: build, reuse,
@@ -60,6 +57,9 @@ the changelog was introduced.
   explorer's details, columns and impact. `/lineage?node=<id>` selects a node. The
   overlay can be switched off. A new JSON route, `/api/lineage/overlay`, returns the
   overlay at `schema_version` 1; beyond loopback it omits error text (ADR-0009).
+- The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
+  served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
+  `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
 - `ods doctor` checks that ODS can work in the current project: configuration (files,
   profile, every effective value and where it came from, credentials only as
   references and connection strings without their user, query or options), the dbt

@@ -18,10 +18,12 @@
 pub mod dashboard;
 mod fonts;
 mod home;
-pub mod lineage;
 mod page;
 mod search;
 mod server;
+
+// The Lineage page and its State overlay (#312).
+pub mod lineage;
 
 pub use dashboard::Dashboard;
 pub use page::{export_site, standalone_page};

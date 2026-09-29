@@ -16,8 +16,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 
 use crate::dashboard::{
-    Dashboard, PlannerFn, RunRecord, ShellView, StateInput, StateStatus, reason_label, sentence,
-    short,
+    Dashboard, RunRecord, ShellView, StateInput, StateStatus, reason_label, sentence, short,
 };
 
 /// Version of [`LineageOverlay`]. Additive fields don't change it; a removed or
@@ -375,14 +374,7 @@ impl Dashboard {
                 } else {
                     StateStatus::Recorded
                 };
-                let planned = match &recorded.planner {
-                    Some(PlannerFn(planner)) => planner(now),
-                    None => recorded
-                        .plan
-                        .clone()
-                        .map(|plan| (plan, recorded.warnings.clone())),
-                };
-                match planned {
+                match recorded.plan_at(now) {
                     Ok((plan, warnings)) => {
                         overlay.warnings = warnings;
                         overlay.based_on = plan.based_on.map(|s| s.0);
@@ -441,7 +433,7 @@ pub(crate) fn explorer_markup(served: bool) -> String {
         r#"<div class="lin" id="lin">
 <section class="lin-main" aria-label="Lineage graph">
 <div class="lin-bar">
-<div class="lin-find"><label class="lin-sel" for="lin-search"><span class="lin-muted">search</span><input id="lin-search" type="search" autocomplete="off" spellcheck="false" placeholder="models and columns" aria-label="Search models and columns"></label><div id="lin-results" role="listbox"></div></div>
+<div class="lin-find"><label class="lin-sel" for="lin-search"><span class="lin-muted">search</span><input id="lin-search" type="search" autocomplete="off" spellcheck="false" placeholder="a model or column" aria-label="Search models and columns"></label><div id="lin-results" role="listbox"></div></div>
 {overlay}
 <label class="lin-check"><input type="checkbox" id="lin-columns">Columns</label>
 <label class="lin-check" title="Column view: also show inputs that shape rows (joins, filters, grouping)"><input type="checkbox" id="lin-indirect" checked>Indirect edges</label>
@@ -488,7 +480,7 @@ pub(crate) fn lineage_page(
         markup = explorer_markup(true),
         dagre = crate::page::DAGRE,
     );
-    Ok(crate::home::shell(shell, "Lineage", &body, generation))
+    Ok(crate::home::root_page(shell, "Lineage", &body, generation))
 }
 
 #[cfg(test)]
