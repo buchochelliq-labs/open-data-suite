@@ -8,13 +8,13 @@
 //! The model is presentation-free and provider-neutral: what a check is about is data
 //! (its id, category and the provider it concerns), not a branch in this crate.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What a check concluded.
 ///
 /// `Unknown` and `Skipped` are outcomes in their own right: a check that couldn't
 /// conclude is never reported as `Ok` (AGENTS.md rule 3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CheckStatus {
@@ -53,7 +53,7 @@ impl CheckStatus {
 }
 
 /// What part of the environment a check looks at. Declared in display order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CheckCategory {
@@ -92,7 +92,7 @@ impl CheckCategory {
 /// came from (e.g. a flag, a variable, a configuration file or a default).
 ///
 /// Values are never secrets: a credential appears only as its reference (ADR-0005).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct Evidence {
@@ -124,7 +124,7 @@ impl Evidence {
 }
 
 /// The outcome of one check.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct CheckResult {
@@ -276,7 +276,7 @@ impl CheckResult {
 }
 
 /// The overall outcome of a set of checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Verdict {
@@ -289,7 +289,7 @@ pub enum Verdict {
 }
 
 /// How many checks ended in each status.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct Summary {
@@ -306,7 +306,7 @@ pub struct Summary {
 }
 
 /// The checks of one run, in display order, with their verdict.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct HealthReport {
@@ -453,6 +453,33 @@ mod tests {
             .unwrap();
         assert!(ok.get("code").is_none() && ok.get("hint").is_none());
         assert_eq!(ok["category"], "state_store");
+    }
+
+    #[test]
+    fn a_report_round_trips_through_json() {
+        let report = HealthReport::new(
+            vec![
+                CheckResult::ok("config.load", CheckCategory::Config, "fine").required(true),
+                CheckResult::warning(
+                    "project.freshness",
+                    CheckCategory::Project,
+                    "ODS-W0206",
+                    "stale",
+                )
+                .provider("dbt")
+                .evidence(Evidence::new("target", "dev").from_source("flag"))
+                .hint("recompile"),
+                CheckResult::skipped(
+                    "connectivity.relations",
+                    CheckCategory::Connectivity,
+                    "not run",
+                ),
+            ],
+            true,
+        );
+        let json = serde_json::to_string(&report).unwrap();
+        let back: HealthReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, report);
     }
 
     #[test]
