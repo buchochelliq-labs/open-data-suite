@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Arg, ArgMatches, Command};
 use ods_core::state::Timestamp;
@@ -14,7 +15,7 @@ use ods_lineage::GraphFilter;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
 use ods_web::dashboard::{
-    ModuleState, ModuleStatus, OpaqueNode, RECENT_RUNS, Recorded, RunRecord, StateInput,
+    ModuleState, ModuleStatus, OpaqueNode, Planner, RECENT_RUNS, Recorded, RunRecord, StateInput,
     StoreLocation, Target,
 };
 use ods_web::{Dashboard, Snapshot};
@@ -68,13 +69,19 @@ impl DashboardSource {
         })
     }
 
-    /// Files whose change means new state: the database and its write-ahead log, where
-    /// a commit lands first.
+    /// Files whose change means new state or a new plan: the database and its
+    /// write-ahead log, where a commit lands first, and the source freshness results
+    /// the plan reads (`--sources`, else `<target-dir>/sources.json`). A file that
+    /// doesn't exist yet is watched too: creating it is a change.
     pub(super) fn watched(&self) -> Vec<PathBuf> {
         let db = self.settings.state_db();
         let mut wal = db.clone().into_os_string();
         wal.push("-wal");
-        vec![db, PathBuf::from(wal)]
+        let sources = self.args.get_one::<String>("sources").map_or_else(
+            || self.settings.target_dir().join("sources.json"),
+            PathBuf::from,
+        );
+        vec![db, PathBuf::from(wal), sources]
     }
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
@@ -97,15 +104,22 @@ impl DashboardSource {
         let environment = self.settings.environment.value.clone();
         let ws = match Workspace::load(&self.args, &self.settings, Sources::AsGiven) {
             Ok(ws) => ws,
+            // The project's files (artifacts, source freshness results) couldn't be
+            // read: the store wasn't even opened, so it isn't blamed.
             Err(e) => {
+                tracing::warn!(error = %e.message, "dashboard: the project can't be read");
+                let hint = e.hint.clone().or_else(|| {
+                    Some("check the files named above (`--sources`, `--target-dir`); the page reloads when they change".to_owned())
+                });
                 return Dashboard::new("project", environment)
-                    .with_state(StateInput::Unreadable {
-                        store: store_location(&self.settings.state_db()),
+                    .with_state(StateInput::ProjectUnreadable {
                         error: e.message,
+                        hint,
                     })
                     .with_modules(modules(false));
             }
         };
+        let ws = Arc::new(ws);
         let project = ws.manifest.project_name.clone().unwrap_or_default();
         let mut kinds = BTreeMap::new();
         for node in &ws.project.nodes {
@@ -130,7 +144,7 @@ impl DashboardSource {
                 OpaqueNode::new(id, name, why)
             })
             .collect();
-        let state = self.state(&ws);
+        let state = self.state(Arc::clone(&ws));
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         let target = self
             .settings
@@ -146,19 +160,23 @@ impl DashboardSource {
             .with_modules(modules(recorded))
     }
 
-    fn state(&self, ws: &Workspace) -> StateInput {
+    fn state(&self, ws: Arc<Workspace>) -> StateInput {
         let store = store_location(&ws.state_db);
         // Never created here: the dashboard only reads (AGENTS rule 5, #310).
         if !ws.state_db.is_file() {
             return StateInput::NoStore { store };
         }
-        let unreadable = |error: String| StateInput::Unreadable {
-            store: store.clone(),
-            error,
+        let unreadable = |error: String| {
+            tracing::warn!(%error, "dashboard: the state store can't be read");
+            StateInput::Unreadable {
+                store: store.clone(),
+                error,
+            }
         };
         let read = block_on(async {
             let db = SqliteStateStore::open_existing(&ws.state_db).await?;
-            let history = db.history(&ws.scope, usize::MAX).await?;
+            // Counted up to a bound: the tile says "at least" beyond it.
+            let history = db.history(&ws.scope, SNAPSHOTS_COUNTED + 1).await?;
             let mut runs = Vec::new();
             for summary in history.iter().take(RECENT_RUNS) {
                 if let Some(stored) = db.get(&ws.scope, summary.id).await? {
@@ -169,21 +187,38 @@ impl DashboardSource {
             db.close().await;
             Ok::<_, ods_sdk::ProviderError>((history.len(), runs, latest))
         });
-        let (snapshots, runs, latest) = match read {
+        let (counted, runs, latest) = match read {
             Ok(Ok(read)) => read,
             Ok(Err(e)) => return unreadable(e.to_string()),
             Err(e) => return unreadable(e.message),
         };
-        let planned = plan_latest(ws, &self.settings, latest, &[], Timestamp::now());
-        let (plan, warnings) = match planned {
-            Ok(Planned { plan, warnings, .. }) => (Ok(plan), warnings),
-            Err(e) => (Err(e.message), Vec::new()),
+        // Plans depend on time (lag tolerances expire), so Home plans again on every
+        // request, as of then; this first plan is the fallback.
+        let settings = self.settings.clone();
+        let planner: Planner = Arc::new(move |now| {
+            plan_latest(&ws, &settings, latest.clone(), &[], now)
+                .map(|Planned { plan, warnings, .. }| (plan, warnings))
+                .map_err(|e| {
+                    tracing::warn!(error = %e.message, "dashboard: the plan can't be made");
+                    e.message
+                })
+        });
+        let (plan, warnings) = match planner(Timestamp::now()) {
+            Ok((plan, warnings)) => (Ok(plan), warnings),
+            Err(error) => (Err(error), Vec::new()),
         };
         StateInput::Recorded(Box::new(
-            Recorded::new(store, runs, snapshots, plan).with_warnings(warnings),
+            Recorded::new(store, runs, counted.min(SNAPSHOTS_COUNTED), plan)
+                .capped(counted > SNAPSHOTS_COUNTED)
+                .with_warnings(warnings)
+                .with_planner(planner),
         ))
     }
 }
+
+/// How many snapshots are counted for the Snapshots tile; the store has no count
+/// query, and history rows are small.
+const SNAPSHOTS_COUNTED: usize = 10_000;
 
 /// The store as people read it: as given when relative, else relative to the working
 /// directory or with `~` for the home directory; and in full.
@@ -218,6 +253,7 @@ fn capitalized(word: &str) -> String {
 /// What `ods` can do for a project today.
 fn modules(recorded: bool) -> Vec<ModuleStatus> {
     vec![
+        // Ready: this very server analyzed it.
         ModuleStatus::new("Lineage (column-level)", ModuleState::Ready, None),
         if recorded {
             ModuleStatus::new("State", ModuleState::Ready, None)
@@ -228,7 +264,8 @@ fn modules(recorded: bool) -> Vec<ModuleStatus> {
                 Some("record a first run".to_owned()),
             )
         },
-        ModuleStatus::new("ERD", ModuleState::Ready, Some("ods erd".to_owned())),
+        // Not checked for this project here: it works from the CLI.
+        ModuleStatus::new("ERD", ModuleState::Available, Some("ods erd".to_owned())),
         ModuleStatus::new("Usage", ModuleState::Planned, None),
     ]
 }

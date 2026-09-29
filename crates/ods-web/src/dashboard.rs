@@ -8,6 +8,8 @@
 //! everything the page shows.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
 
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, StateSnapshot, Timestamp};
 use serde::Serialize;
@@ -25,6 +27,10 @@ const ATTENTION_LIMIT: usize = 5;
 // ------------------------------------------------------------------------- inputs
 
 /// Everything the dashboard shows about a project, filled in by the binary.
+///
+/// It is shown to anyone who can reach the server, so it must never carry
+/// credentials or resolved secrets (AGENTS rule 9): names, counts, paths and reasons
+/// only. Targets are named, never connected to.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Dashboard {
@@ -173,8 +179,36 @@ pub enum StateInput {
         /// Why.
         error: String,
     },
+    /// The project itself couldn't be read (e.g. its artifacts are missing or too
+    /// old), so its state scope isn't known. Nothing is wrong with the store.
+    ProjectUnreadable {
+        /// Why.
+        error: String,
+        /// What to do, from the binary, which knows the project format.
+        hint: Option<String>,
+    },
     /// The store was read. `runs` may be empty: nothing recorded in this scope yet.
     Recorded(Box<Recorded>),
+}
+
+/// Plans the project against the recorded state as of a given time, returning the
+/// plan and the warnings that qualify it, or why it couldn't. Supplied by the binary,
+/// which owns the providers; offline and cheap.
+///
+/// Plans depend on time, not only on files: a lag tolerance can expire while nothing
+/// changes on disk, turning a REUSE into a BUILD. So Home plans again on every request
+/// rather than showing the plan made at load time (AGENTS rule 3).
+pub type Planner =
+    Arc<dyn Fn(Timestamp) -> Result<(ExecutionPlan, Vec<String>), String> + Send + Sync>;
+
+/// A [`Planner`], for types that must be `Debug`.
+#[derive(Clone)]
+struct PlannerFn(Planner);
+
+impl fmt::Debug for PlannerFn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Planner")
+    }
 }
 
 /// A readable state store's contents for one scope.
@@ -185,12 +219,16 @@ pub struct Recorded {
     pub store: StoreLocation,
     /// The most recent runs, newest first.
     pub runs: Vec<RunRecord>,
-    /// How many snapshots the scope has in all.
+    /// How many snapshots the scope has in all, or at least, when `snapshots_capped`.
     pub snapshots: usize,
+    /// Whether the store was asked for no more than `snapshots`, and has that many.
+    pub snapshots_capped: bool,
     /// The plan against the latest snapshot, or why it couldn't be made.
     pub plan: Result<ExecutionPlan, String>,
     /// What qualifies the plan, e.g. missing source freshness.
     pub warnings: Vec<String>,
+    /// Plans again as of the time asked; without one, `plan` is shown as made.
+    planner: Option<PlannerFn>,
 }
 
 impl Recorded {
@@ -205,9 +243,25 @@ impl Recorded {
             store: store.into(),
             runs,
             snapshots,
+            snapshots_capped: false,
             plan,
             warnings: Vec::new(),
+            planner: None,
         }
+    }
+
+    /// Plans again with `planner` whenever Home is shown.
+    #[must_use]
+    pub fn with_planner(mut self, planner: Planner) -> Self {
+        self.planner = Some(PlannerFn(planner));
+        self
+    }
+
+    /// Says `snapshots` is a lower bound: the store was only counted that far.
+    #[must_use]
+    pub fn capped(mut self, capped: bool) -> Self {
+        self.snapshots_capped = capped;
+        self
     }
 
     /// Adds what qualifies the plan.
@@ -230,8 +284,10 @@ pub struct RunRecord {
     pub recorded_at: Timestamp,
     /// Ids of the nodes this run built, sorted.
     pub built: Vec<String>,
-    /// How many nodes kept an earlier run's build.
-    pub reused: usize,
+    /// How many recorded nodes kept an earlier run's build: not built successfully by
+    /// this run. That covers reuse, but also nodes this run didn't select and nodes it
+    /// failed to build (a snapshot keeps their last good build, AGENTS rule 5).
+    pub kept: usize,
     /// The target it built in, if recorded.
     pub target: Option<Target>,
 }
@@ -243,20 +299,21 @@ impl RunRecord {
         run_id: impl Into<String>,
         recorded_at: Timestamp,
         built: Vec<String>,
-        reused: usize,
+        kept: usize,
     ) -> Self {
         Self {
             snapshot,
             run_id: run_id.into(),
             recorded_at,
             built,
-            reused,
+            kept,
             target: None,
         }
     }
 
     /// The run a committed snapshot records: the nodes whose last build is this run's
-    /// were built by it; every other node kept an earlier build.
+    /// were built by it; every other node kept an earlier build, for whatever reason
+    /// (reused, not selected, or failed: the snapshot can't tell them apart).
     pub fn of(id: u64, snapshot: &StateSnapshot) -> Self {
         let built: Vec<String> = snapshot
             .nodes
@@ -264,13 +321,13 @@ impl RunRecord {
             .filter(|(_, node)| node.run_id == snapshot.run_id)
             .map(|(id, _)| id.clone())
             .collect();
-        let reused = snapshot.nodes.len() - built.len();
+        let kept = snapshot.nodes.len() - built.len();
         Self {
             snapshot: id,
             run_id: snapshot.run_id.clone(),
             recorded_at: snapshot.created_at,
             built,
-            reused,
+            kept,
             target: snapshot
                 .target
                 .as_ref()
@@ -307,8 +364,10 @@ impl OpaqueNode {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ModuleState {
-    /// It works for this project.
+    /// It works for this project, and this page shows it.
     Ready,
+    /// It works from the CLI; the dashboard doesn't check it for this project.
+    Available,
     /// It works, but needs something first (e.g. a first recorded run).
     NotSetUp,
     /// It isn't built yet.
@@ -459,6 +518,8 @@ pub enum StateStatus {
     NoStore,
     /// The store couldn't be read.
     Unreadable,
+    /// The project couldn't be read, so neither was the store.
+    ProjectUnreadable,
 }
 
 /// Home: the project's health at a glance.
@@ -544,12 +605,14 @@ pub struct RunView {
     pub command: Option<String>,
     /// How many nodes it built.
     pub built: usize,
-    /// How many kept an earlier build.
-    pub reused: usize,
+    /// How many recorded nodes kept an earlier build: reused, not selected, or failed
+    /// this run. The snapshot can't tell which, so this is not a reuse count.
+    pub kept: usize,
     /// Names of the nodes it built, in plan order where known.
     pub built_names: Vec<String>,
-    /// Always `recorded`: only runs in which something succeeded commit a snapshot, and
-    /// a snapshot keeps only the successful builds (AGENTS rule 5).
+    /// Always `recorded`: a run commits a snapshot when at least one node succeeded,
+    /// keeping only its successful builds (AGENTS rule 5). Whether others failed isn't
+    /// stored, so this doesn't say the run succeeded.
     pub outcome: &'static str,
 }
 
@@ -606,10 +669,60 @@ pub struct PlanSummary {
     pub build: usize,
     /// How many it reuses.
     pub reuse: usize,
+    /// Why it builds what it builds: each built node counted once, by its first (most
+    /// important) reason, most common first. Covers every build, including the ones
+    /// the attention list doesn't show.
+    pub builds_for: Vec<ReasonCount>,
     /// Why it couldn't be made, if it couldn't.
     pub error: Option<String>,
     /// What qualifies it.
     pub warnings: Vec<String>,
+}
+
+/// How many planned builds have a reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ReasonCount {
+    /// The planner's stable reason code.
+    pub code: ReasonCode,
+    /// The code for people, e.g. `target changed`.
+    pub label: String,
+    /// How many built nodes have it as their first reason.
+    pub count: usize,
+}
+
+/// `upstream_code_changed` → `upstream code changed`: the planner's stable code, as
+/// words, so new codes read without a table to keep in step.
+fn reason_label(code: ReasonCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+        .unwrap_or_else(|| format!("{code:?}"))
+}
+
+/// Each built node counted by its first reason; most common first, then by code.
+fn builds_for(plan: &ExecutionPlan) -> Vec<ReasonCount> {
+    let mut counts: BTreeMap<ReasonCode, usize> = BTreeMap::new();
+    for entry in plan.with_action(PlanAction::Build) {
+        // A build with no reason would be a planner bug; it still counts, as a build
+        // whose reason is unknown is exactly what this must not hide.
+        let code = entry
+            .reasons
+            .first()
+            .map_or(ReasonCode::UnknownDependency, |r| r.code);
+        *counts.entry(code).or_default() += 1;
+    }
+    let mut counts: Vec<ReasonCount> = counts
+        .into_iter()
+        .map(|(code, count)| ReasonCount {
+            code,
+            label: reason_label(code),
+            count,
+        })
+        .collect();
+    counts.sort_by(|a, b| b.count.cmp(&a.count).then(a.code.cmp(&b.code)));
+    counts
 }
 
 /// A labelled count.
@@ -716,8 +829,38 @@ impl Dashboard {
         }
     }
 
-    /// Home. `details` shows local paths and error text (on loopback only).
+    /// Home as of now. `details` shows local paths and error text (on loopback only).
     pub fn home(&self, details: bool) -> HomeView {
+        self.home_at(details, Timestamp::now())
+    }
+
+    /// Home as of `now`: with a [`Planner`], the plan is made again for `now`.
+    pub fn home_at(&self, details: bool, now: Timestamp) -> HomeView {
+        match &self.state {
+            StateInput::Recorded(recorded) if recorded.planner.is_some() => {
+                let mut fresh = (**recorded).clone();
+                if let Some(PlannerFn(planner)) = &recorded.planner {
+                    match planner(now) {
+                        Ok((plan, warnings)) => {
+                            fresh.plan = Ok(plan);
+                            fresh.warnings = warnings;
+                        }
+                        Err(error) => {
+                            fresh.plan = Err(error);
+                            fresh.warnings = Vec::new();
+                        }
+                    }
+                }
+                fresh.planner = None;
+                let mut this = self.clone();
+                this.state = StateInput::Recorded(Box::new(fresh));
+                this.render_home(details)
+            }
+            _ => self.render_home(details),
+        }
+    }
+
+    fn render_home(&self, details: bool) -> HomeView {
         let names = self.names();
         let name_of = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
         let order = self.plan_order();
@@ -729,11 +872,9 @@ impl Dashboard {
             .map(|run| {
                 let mut built = run.built.clone();
                 // In plan order; nodes no longer planned (removed since) last.
-                built.sort_by_key(|id| {
-                    (
-                        order.get(id.as_str()).copied().unwrap_or(usize::MAX),
-                        id.clone(),
-                    )
+                built.sort_by(|a, b| {
+                    let at = |id: &String| order.get(id.as_str()).copied().unwrap_or(usize::MAX);
+                    at(a).cmp(&at(b)).then_with(|| a.cmp(b))
                 });
                 RunView {
                     snapshot: run.snapshot,
@@ -742,7 +883,7 @@ impl Dashboard {
                     recorded_at: run.recorded_at,
                     command: None,
                     built: run.built.len(),
-                    reused: run.reused,
+                    kept: run.kept,
                     built_names: built.iter().map(|id| name_of(id)).collect(),
                     outcome: "recorded",
                 }
@@ -761,6 +902,7 @@ impl Dashboard {
                         store.clone()
                     }
                     StateInput::Recorded(r) => r.store.clone(),
+                    StateInput::ProjectUnreadable { .. } => StoreLocation::new("", ""),
                 })
                 .filter(|s| !s.full.is_empty()),
             empty,
@@ -769,26 +911,7 @@ impl Dashboard {
             runs,
             attention,
             attention_more,
-            plan: self.recorded().map(|r| match &r.plan {
-                Ok(plan) => PlanSummary {
-                    based_on: plan.based_on.map(|s| s.0),
-                    build: plan.with_action(PlanAction::Build).count(),
-                    reuse: plan.with_action(PlanAction::Reuse).count(),
-                    error: None,
-                    warnings: r.warnings.clone(),
-                },
-                Err(error) => PlanSummary {
-                    based_on: None,
-                    build: 0,
-                    reuse: 0,
-                    error: Some(if details {
-                        error.clone()
-                    } else {
-                        "the plan couldn't be made; see the server log".to_owned()
-                    }),
-                    warnings: r.warnings.clone(),
-                },
-            }),
+            plan: self.plan_summary(details),
             health: [
                 ("healthy", "Healthy"),
                 ("warning", "Warning"),
@@ -819,6 +942,32 @@ impl Dashboard {
             ],
             modules: self.modules.clone(),
         }
+    }
+
+    /// The plan against the latest snapshot, or why there is none.
+    fn plan_summary(&self, details: bool) -> Option<PlanSummary> {
+        self.recorded().map(|r| match &r.plan {
+            Ok(plan) => PlanSummary {
+                based_on: plan.based_on.map(|s| s.0),
+                build: plan.with_action(PlanAction::Build).count(),
+                reuse: plan.with_action(PlanAction::Reuse).count(),
+                builds_for: builds_for(plan),
+                error: None,
+                warnings: r.warnings.clone(),
+            },
+            Err(error) => PlanSummary {
+                based_on: None,
+                build: 0,
+                reuse: 0,
+                builds_for: Vec::new(),
+                error: Some(if details {
+                    error.clone()
+                } else {
+                    "the plan couldn't be made; see the server log".to_owned()
+                }),
+                warnings: r.warnings.clone(),
+            },
+        })
     }
 
     /// Node id → name, from the plan and the opaque list.
@@ -890,6 +1039,24 @@ impl Dashboard {
                     )],
                 }),
             ),
+            StateInput::ProjectUnreadable { error, hint } => (
+                StateStatus::ProjectUnreadable,
+                Some(EmptyState {
+                    title: "The project can't be read".to_owned(),
+                    message: format!(
+                        "{} The state store wasn't opened: without the project, which \
+                         state to show isn't known.{}",
+                        if details {
+                            format!("{error}.")
+                        } else {
+                            "See the server log.".to_owned()
+                        },
+                        hint.as_ref()
+                            .map_or_else(String::new, |h| format!(" To fix it: {h}.")),
+                    ),
+                    commands: Vec::new(),
+                }),
+            ),
             StateInput::Recorded(r) if r.runs.is_empty() => (
                 StateStatus::NoRuns,
                 Some(EmptyState {
@@ -917,9 +1084,10 @@ impl Dashboard {
         let snapshots = match &self.state {
             StateInput::Recorded(r) => Some(r.snapshots),
             StateInput::NoStore { .. } => Some(0),
-            // Unknown, not zero: the store holds something it couldn't read.
-            StateInput::Unreadable { .. } => None,
+            // Unknown, not zero: the store (or which scope to read) couldn't be read.
+            StateInput::Unreadable { .. } | StateInput::ProjectUnreadable { .. } => None,
         };
+        let capped = self.recorded().is_some_and(|r| r.snapshots_capped);
         vec![
             Tile {
                 key: "nodes",
@@ -932,16 +1100,14 @@ impl Dashboard {
                 },
             },
             Tile {
-                key: "reused_last_run",
-                label: "Reused last run",
-                value: last.map(|r| r.reused),
+                key: "kept_last_run",
+                label: "Kept earlier build",
+                value: last.map(|r| r.kept),
+                // What the snapshot shows, and no more: it can't tell reuse from a node
+                // left out or failed.
                 note: last.map_or_else(
                     || "nothing to compare with yet".to_owned(),
-                    |r| {
-                        let all = r.built + r.reused;
-                        let pct = (r.reused * 100).checked_div(all).unwrap_or(0);
-                        format!("{pct}% of the plan skipped")
-                    },
+                    |_| "not rebuilt by the last run".to_owned(),
                 ),
             },
             Tile {
@@ -963,8 +1129,10 @@ impl Dashboard {
                 label: "Snapshots",
                 value: snapshots,
                 note: match snapshots {
+                    Some(n) if capped => format!("at least {n}; each keeps only successful builds"),
                     Some(n) if n > 0 => "each keeps only successful builds".to_owned(),
-                    _ => "none recorded".to_owned(),
+                    Some(_) => "none recorded".to_owned(),
+                    None => "unknown".to_owned(),
                 },
             },
         ]

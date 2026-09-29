@@ -368,7 +368,9 @@ fetch `graph.json` from a `file://` page, so use `ods lineage view` for local fi
   `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home` and `/healthz`.
 
 It checks `manifest.json`, `catalog.json`, the Information Schema and the state
-database every second. When they change (e.g. after `dbt compile` or `ods state build`)
+database and the source freshness results (`--sources`, else
+`<target-dir>/sources.json`, even before it exists) every second. When they change
+(e.g. after `dbt compile`, `dbt source freshness` or `ods state build`)
 it re-analyzes only the models that changed, and open pages reload. If a reload fails,
 the last good graph stays up and the error appears in `/api/version`.
 
@@ -402,18 +404,29 @@ ods serve              # then open http://127.0.0.1:8765/
 ```
 
 Home shows:
-- **tiles:** the planned nodes by kind, and how many the last run reused and built,
-  and how many snapshots are recorded;
-- **recent runs:** each recorded snapshot, its run, and how many nodes it built or
-  reused. Runs don't record their command yet (shown as —), and a run's snapshot keeps
-  only its successful builds, so the outcome reads *recorded*;
+- **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
+  kept an earlier build; and how many snapshots are recorded;
+- **recent runs:** each recorded snapshot, its run, and how many nodes it built and how
+  many kept an earlier build. *Kept* is not the same as reused: a snapshot keeps the
+  last good build of a node the run reused, didn't select, or failed to build, and
+  can't tell them apart. Runs don't record their command yet (shown as —), and whether
+  some nodes failed isn't stored, so the outcome reads *recorded*, without a tick;
 - **needs attention:** from the plan against the latest snapshot (`ods state plan`),
   nodes whose code changed and nodes whose evidence is missing, then opaque nodes whose
-  column lineage is unknown. Each links to the node in the explorer;
+  column lineage is unknown. Each links to the node in the explorer. Below them, *The
+  plan builds N nodes* counts every build by its main reason (e.g. `target changed`,
+  `never built`, `new upstream data`), including reasons the list doesn't show. It says
+  *Nothing* only when the plan builds nothing. The plan is made again on every page
+  load, because a lag tolerance can run out while no file changes;
 - **health and coverage:** `[n]` placeholders until the health signals exist (#117);
-- **modules:** which ODS modules are ready for this project.
+- **modules:** *Ready* for what this page reads (lineage, and State once a run is
+  recorded); *Available* for modules that work from the CLI but aren't checked here
+  (ERD); *Planned* for the rest.
 
-Without a state database, Home says how to record a first run instead. The left
+Without a state database, Home says how to record a first run instead. If the project's
+own files can't be read (the artifacts, or a `--sources` file that is missing or
+malformed), it says so and doesn't open the store. Errors appear on the page on
+loopback, and in the server log (a warning) everywhere. The left
 navigation lists every section of the design; sections not built yet are greyed and
 marked *Planned*. The project and target pickers show the current ones; switching
 comes later. The search box hands its text to the explorer's search.

@@ -82,8 +82,8 @@ expression: pretty(&body)
       "value": 11
     },
     {
-      "key": "reused_last_run",
-      "label": "Reused last run",
+      "key": "kept_last_run",
+      "label": "Kept earlier build",
       "note": "nothing to compare with yet",
       "value": null
     },

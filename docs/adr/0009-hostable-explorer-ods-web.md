@@ -67,7 +67,13 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   the plan against the head, opaque nodes and module status. `ods-web` depends only on
   `ods-core` types for it. The state store is opened read-only (no migration, never
   created); without one, Home shows how to record a first run. The watcher also
-  watches the state database and its WAL, so a new run reloads open pages.
+  watches the state database, its WAL and the source freshness results (even before
+  they exist), so a new run or measurement reloads open pages.
+- **Plans depend on time:** a lag tolerance can expire with no file changing, so the
+  binary also supplies a `Planner` (offline, cheap) and Home plans again as of each
+  request, instead of showing a plan made at load time. A timer at the earliest
+  lag-tolerance deadline was the alternative; it needs the planner to report
+  deadlines, and still goes stale between a deadline and the next reload.
 - **API:** `/api/shell` (`ShellView`) and `/api/home` (`HomeView`) return the view
   models the page renders, at `schema_version` 1; additive fields keep it. They are
   `GET` only, like every route. Beyond loopback, `/api/home` omits the store's path and

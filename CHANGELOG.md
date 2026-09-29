@@ -32,12 +32,16 @@ the changelog was introduced.
   the current snapshot; a *Local · read-only* badge) and Home. Home shows the planned
   nodes, what the last run reused and built, the recent runs from the state store,
   the nodes that need attention (changed code, missing evidence, opaque lineage, from
-  the plan against the latest snapshot), `[n]` placeholders for health and coverage,
-  and which modules are ready. Without a state store it says how to record a first
-  run. It never writes: the state database is opened read-only and is never created
-  or migrated. New `serve` options `--state-db`, `--environment`, `--target` and
+  the plan against the latest snapshot) with a count of every planned build by reason,
+  `[n]` placeholders for health and coverage, and which modules are ready or
+  available. A run's nodes read *built* or *kept earlier build*, since a snapshot
+  can't tell reuse from a node left out or failed. The plan is made again on every
+  request, as lag tolerances expire with time. Without a state store it says how to
+  record a first run; if the project's files can't be read, it says that instead. It
+  never writes: the state database is opened read-only and is never created or
+  migrated. New `serve` options `--state-db`, `--environment`, `--target` and
   `--sources` pick the state shown, as for `ods state plan`; the server also reloads
-  when the state database changes.
+  when the state database or the source freshness results change.
 - Two JSON routes return the dashboard's view models at `schema_version` 1:
   `/api/shell` and `/api/home`. Beyond loopback, `/api/home` omits the store's path and
   error text (#310, ADR-0009).

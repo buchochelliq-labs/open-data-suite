@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+/// Only the Unix-only tests (the fake dbt is a Python script) use it.
+#[cfg(unix)]
 fn fixtures(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/dbt")
@@ -272,4 +274,52 @@ fn home_shows_the_runs_the_state_store_recorded_and_changes_nothing() {
     assert!(page.contains("13 built"), "{page}");
     drop(server);
     assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
+}
+
+/// The server's snapshot generation and last reload error.
+fn generation(server: &Server) -> (u64, Value) {
+    let (_, body) = get(server, "api/version");
+    let version: Value = serde_json::from_str(&body).unwrap();
+    (
+        version["generation"].as_u64().unwrap(),
+        version["last_error"].clone(),
+    )
+}
+
+fn wait_for_generation(server: &Server, want: u64) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let (g, error) = generation(server);
+        if g >= want {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no reload: generation {g}, error {error}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn a_source_freshness_file_written_later_reloads_the_dashboard() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path();
+    for file in ["manifest.json", "catalog.json"] {
+        fs::copy(fixture().join(file), target.join(file)).unwrap();
+    }
+    // No sources.json yet: it is watched all the same, and creating it is a change.
+    let server = serve(target, &[]);
+    assert_eq!(generation(&server).0, 1);
+    std::thread::sleep(Duration::from_millis(1100));
+    fs::write(target.join("sources.json"), "{").unwrap();
+    wait_for_generation(&server, 2);
+    let (status, body) = get(&server, "api/home");
+    assert_eq!(status, 200, "{body}");
+    let home: Value = serde_json::from_str(&body).unwrap();
+    // A bad freshness file is the project's problem, not the store's.
+    assert_eq!(home["state"], "project_unreadable", "{home}");
+    let message = home["empty"]["message"].as_str().unwrap();
+    assert!(message.contains("sources.json"), "{message}");
+    assert!(!message.contains("doctor"), "{message}");
 }

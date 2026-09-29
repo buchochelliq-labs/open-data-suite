@@ -70,9 +70,9 @@ expression: pretty(&body)
       "customer_segments"
     ],
     "command": null,
+    "kept": 9,
     "outcome": "recorded",
     "recorded_at": "2026-09-29T11:56:00Z",
-    "reused": 9,
     "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
     "short_run_id": "4c0b5c8f",
     "snapshot": 3
@@ -97,6 +97,23 @@ expression: pretty(&body)
   "plan": {
     "based_on": 3,
     "build": 3,
+    "builds_for": [
+      {
+        "code": "code_changed",
+        "count": 1,
+        "label": "code changed"
+      },
+      {
+        "code": "upstream_code_changed",
+        "count": 1,
+        "label": "upstream code changed"
+      },
+      {
+        "code": "missing_data_evidence",
+        "count": 1,
+        "label": "missing data evidence"
+      }
+    ],
     "error": null,
     "reuse": 2,
     "warnings": [
@@ -111,9 +128,9 @@ expression: pretty(&body)
         "customer_segments"
       ],
       "command": null,
+      "kept": 9,
       "outcome": "recorded",
       "recorded_at": "2026-09-29T11:56:00Z",
-      "reused": 9,
       "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
       "short_run_id": "4c0b5c8f",
       "snapshot": 3
@@ -131,9 +148,9 @@ expression: pretty(&body)
         "model.m7"
       ],
       "command": null,
+      "kept": 3,
       "outcome": "recorded",
       "recorded_at": "2026-09-28T09:00:00Z",
-      "reused": 3,
       "run_id": "9ea38bd5-0000-4000-8000-000000000002",
       "short_run_id": "9ea38bd5",
       "snapshot": 2
@@ -146,9 +163,9 @@ expression: pretty(&body)
         "seed.raw_payments"
       ],
       "command": null,
+      "kept": 0,
       "outcome": "recorded",
       "recorded_at": "2026-09-27T09:00:00Z",
-      "reused": 0,
       "run_id": "e6f54fe3-0000-4000-8000-000000000001",
       "short_run_id": "e6f54fe3",
       "snapshot": 1
@@ -169,9 +186,9 @@ expression: pretty(&body)
       "value": 11
     },
     {
-      "key": "reused_last_run",
-      "label": "Reused last run",
-      "note": "81% of the plan skipped",
+      "key": "kept_last_run",
+      "label": "Kept earlier build",
+      "note": "not rebuilt by the last run",
       "value": 9
     },
     {

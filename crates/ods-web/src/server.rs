@@ -297,10 +297,14 @@ async fn security_headers(mut response: Response) -> Response {
         ),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::REFERRER_POLICY, "no-referrer"),
-        (header::CACHE_CONTROL, "no-store"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+    // Data changes with every reload, so nothing is cached, unless a route says
+    // otherwise (the vendored fonts).
+    headers
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     response
 }
 
@@ -326,7 +330,15 @@ async fn home_api(State(state): State<Shared>) -> Json<HomeView> {
 /// The dashboard's vendored fonts; nothing else is served from disk or memory by name.
 async fn font(Path(file): Path<String>) -> Response {
     match crate::fonts::font(&file) {
-        Some(font) => ([(header::CONTENT_TYPE, "font/woff2")], font.bytes).into_response(),
+        // The files never change within a build of ODS, so browsers may keep them.
+        Some(font) => (
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            font.bytes,
+        )
+            .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

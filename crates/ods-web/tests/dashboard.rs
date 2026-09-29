@@ -15,7 +15,7 @@ use ods_lineage::{GraphFilter, LineageNode, LineageProject, MemoryCache, NodeKin
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
 use ods_web::dashboard::{
-    AttentionKind, ModuleState, ModuleStatus, OpaqueNode, Recorded, RunRecord, StateInput,
+    AttentionKind, ModuleState, ModuleStatus, OpaqueNode, Planner, Recorded, RunRecord, StateInput,
     StateStatus, Target,
 };
 use ods_web::{Dashboard, ServeOptions, Snapshot, router};
@@ -318,7 +318,22 @@ fn home_is_served_with_the_shell_and_every_panel() {
     // Home.
     assert!(page.contains(r#"data-tile="nodes""#));
     assert!(page.contains("8 models · 3 seeds"));
-    assert!(page.contains("2 built · 9 reused"));
+    assert!(page.contains("2 built · 9 kept"));
+    assert!(page.contains("Kept earlier build"));
+    assert!(
+        !page.contains("9 reused") && !page.contains("Reused"),
+        "a kept build isn't claimed as reuse"
+    );
+    assert!(!page.contains("✓"), "a recorded run may have failed nodes");
+    assert!(!page.contains("% of the plan skipped"));
+    assert!(
+        page.contains(r#"data-build="3""#),
+        "the plan's builds are counted"
+    );
+    assert!(
+        !page.contains("Nothing:"),
+        "no all-clear while the plan builds"
+    );
     assert!(page.contains("3 · 4c0b5c8f"));
     assert!(page.contains(r#"data-kind="changed""#));
     assert!(page.contains(r#"data-kind="unknown""#));
@@ -342,6 +357,23 @@ fn the_fonts_are_served_by_the_server_itself() {
     assert!(head.contains("font-src 'self'"), "{head}");
     assert_eq!(get(addr, "/assets/fonts/../../Cargo.toml").0, 404);
     assert_eq!(get(addr, "/assets/fonts/other.woff2").0, 404);
+    // Encoded traversal: decoded, it still names no vendored font.
+    for path in [
+        "/assets/fonts/%2e%2e%2f%2e%2e%2fCargo.toml",
+        "/assets/fonts/..%2fsrc%2flib.rs",
+        "/assets/fonts/%2e%2e%2fdashboard.css",
+    ] {
+        assert_eq!(get(addr, path).0, 404, "{path}");
+    }
+    assert!(
+        head.contains("cache-control: public, max-age=31536000, immutable"),
+        "{head}"
+    );
+    let (_, head, _) = get(addr, "/api/home");
+    assert!(
+        head.contains("cache-control: no-store"),
+        "data is never cached"
+    );
 }
 
 #[test]
@@ -417,7 +449,7 @@ fn a_run_built_the_nodes_whose_last_build_is_its_own() {
     );
     let run = RunRecord::of(2, &snapshot);
     assert_eq!(run.built, ["model.a"]);
-    assert_eq!(run.reused, 2);
+    assert_eq!(run.kept, 2);
     assert_eq!(run.snapshot, 2);
 }
 
@@ -473,4 +505,152 @@ fn beyond_loopback_paths_and_errors_stay_in_the_log() {
     let text = serde_json::to_string(&remote).unwrap();
     assert!(!text.contains("/home/me"), "{text}");
     assert!(text.contains("ods state doctor"));
+}
+
+/// One recorded run, and a plan whose builds have reasons the attention list doesn't
+/// show.
+fn builds_for_unlisted_reasons(entries: Vec<PlanEntry>) -> Dashboard {
+    let plan = ExecutionPlan::new(Some(SnapshotId(1)), at("2026-09-29T12:00:00Z"), entries);
+    Dashboard::new("p", "dev").with_state(StateInput::Recorded(Box::new(Recorded::new(
+        "db",
+        vec![RunRecord::new(
+            1,
+            RUN_1,
+            at("2026-09-29T11:56:00Z"),
+            vec![],
+            2,
+        )],
+        1,
+        Ok(plan),
+    ))))
+}
+
+#[test]
+fn the_all_clear_needs_a_plan_that_builds_nothing() {
+    // Another target: everything builds, and none of it is "changed" or "unknown".
+    let target_changed = builds_for_unlisted_reasons(vec![
+        entry(
+            "model.a",
+            PlanAction::Build,
+            ReasonCode::TargetChanged,
+            "last built in another target",
+            0,
+        ),
+        entry(
+            "model.b",
+            PlanAction::Build,
+            ReasonCode::TargetChanged,
+            "last built in another target",
+            1,
+        ),
+        entry(
+            "model.c",
+            PlanAction::Build,
+            ReasonCode::NeverBuilt,
+            "no successful build recorded",
+            1,
+        ),
+    ]);
+    let home = target_changed.home(true);
+    assert!(home.attention.is_empty());
+    let plan = home.plan.as_ref().unwrap();
+    assert_eq!(plan.build, 3);
+    let reasons: Vec<(String, usize)> = plan
+        .builds_for
+        .iter()
+        .map(|r| (r.label.clone(), r.count))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            ("target changed".to_owned(), 2),
+            ("never built".to_owned(), 1)
+        ]
+    );
+    let addr = start(target_changed);
+    let (_, _, page) = get(addr, "/");
+    assert!(!page.contains("Nothing"), "{page}");
+    assert!(page.contains("The plan builds 3 nodes"), "{page}");
+    assert!(page.contains("2 target changed · 1 never built"), "{page}");
+
+    let all_reused = builds_for_unlisted_reasons(vec![entry(
+        "model.a",
+        PlanAction::Reuse,
+        ReasonCode::Unchanged,
+        "unchanged",
+        0,
+    )]);
+    let addr = start(all_reused);
+    let (_, _, page) = get(addr, "/");
+    assert!(
+        page.contains("Nothing: the plan reuses every node."),
+        "{page}"
+    );
+    assert!(!page.contains("The plan builds"));
+}
+
+#[test]
+fn home_plans_again_as_of_each_request() {
+    // A lag tolerance that runs out at noon: nothing on disk changes, the plan does.
+    let deadline = at("2026-09-29T12:00:00Z");
+    let planner: Planner = std::sync::Arc::new(move |now| {
+        let (action, code) = if now < deadline {
+            (PlanAction::Reuse, ReasonCode::WithinLagTolerance)
+        } else {
+            (PlanAction::Build, ReasonCode::NewUpstreamData)
+        };
+        Ok((
+            ExecutionPlan::new(
+                Some(SnapshotId(1)),
+                now,
+                vec![entry("model.orders", action, code, "lag tolerance", 0)],
+            ),
+            Vec::new(),
+        ))
+    });
+    let stale = Err("made at load time; must not be shown".to_owned());
+    let dashboard = Dashboard::new("p", "dev").with_state(StateInput::Recorded(Box::new(
+        Recorded::new(
+            "db",
+            vec![RunRecord::new(
+                1,
+                RUN_1,
+                at("2026-09-29T09:00:00Z"),
+                vec![],
+                1,
+            )],
+            1,
+            stale,
+        )
+        .with_planner(planner),
+    )));
+    let before = dashboard.home_at(true, at("2026-09-29T11:59:00Z"));
+    let plan = before.plan.unwrap();
+    assert_eq!((plan.build, plan.reuse, plan.error), (0, 1, None));
+    let after = dashboard.home_at(true, at("2026-09-29T12:01:00Z"));
+    let plan = after.plan.unwrap();
+    assert_eq!((plan.build, plan.reuse), (1, 0));
+    assert_eq!(plan.builds_for[0].label, "new upstream data");
+}
+
+#[test]
+fn an_unreadable_project_does_not_blame_the_store() {
+    let dashboard = Dashboard::new("project", "dev").with_state(StateInput::ProjectUnreadable {
+        error: "can't read /home/me/p/target/sources.json: expected value".into(),
+        hint: Some("fix or remove the source freshness results".into()),
+    });
+    let local = dashboard.home(true);
+    assert_eq!(local.state, StateStatus::ProjectUnreadable);
+    let empty = local.empty.unwrap();
+    assert_eq!(empty.title, "The project can't be read");
+    assert!(empty.message.contains("sources.json"));
+    assert!(
+        empty
+            .message
+            .contains("fix or remove the source freshness results")
+    );
+    assert!(!empty.message.contains("doctor"));
+    assert_eq!(local.tiles[3].value, None, "unknown, not zero");
+    let remote = serde_json::to_string(&dashboard.home(false)).unwrap();
+    assert!(!remote.contains("/home/me"), "{remote}");
 }

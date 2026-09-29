@@ -12,6 +12,13 @@ use crate::dashboard::{
 const CSS: &str = include_str!("../assets/dashboard.css");
 const JS: &str = include_str!("../assets/dashboard.js");
 
+/// What a recorded run's outcome does and doesn't say.
+const OUTCOME_NOTE: &str = "Its successful builds were recorded as the new state. \
+    Whether other nodes failed isn't stored yet.";
+/// What "kept earlier build" covers.
+const KEPT_NOTE: &str = "Not rebuilt by this run: reused, not selected, or failed. \
+    The snapshot keeps the last good build either way.";
+
 /// Inline icons (Lucide-style strokes, as in the design boards), by section key.
 fn icon(key: &str) -> &'static str {
     match key {
@@ -181,7 +188,8 @@ fn title_row(b: &mut String, home: &HomeView) {
     if let Some(run) = &home.last_run {
         let _ = write!(
             b,
-            r#"<span class="muted">Last run: <span class="mono" title="run {run_id}">{short}</span> · snapshot {snap} · <span title="Its successful builds were recorded as the new state">recorded</span></span>"#,
+            r#"<span class="muted">Last run: <span class="mono" title="run {run_id}">{short}</span> · snapshot {snap} · <span title="{note}">recorded</span></span>"#,
+            note = attr(OUTCOME_NOTE),
             run_id = attr(&run.run_id),
             short = text(&run.short_run_id),
             snap = run.snapshot,
@@ -220,6 +228,7 @@ fn runs(b: &mut String, home: &HomeView) {
                 StateStatus::NoStore => "no_store",
                 StateStatus::NoRuns => "no_runs",
                 StateStatus::Unreadable => "unreadable",
+                StateStatus::ProjectUnreadable => "project_unreadable",
                 StateStatus::Recorded => "recorded",
             },
             title = text(&empty.title),
@@ -245,15 +254,15 @@ fn runs(b: &mut String, home: &HomeView) {
         b.push_str("</div></section>");
     } else {
         b.push_str(
-            r#"<section class="card gap12 span2"><div class="card-head"><h2>Recent runs</h2><span class="soon" title="The Runs page is planned">All runs<span class="chip">Planned</span></span></div><table class="runs"><thead><tr><th>Snapshot</th><th>Command</th><th>Built · reused</th><th>Outcome</th></tr></thead><tbody>"#,
+            r#"<section class="card gap12 span2"><div class="card-head"><h2>Recent runs</h2><span class="soon" title="The Runs page is planned">All runs<span class="chip">Planned</span></span></div><table class="runs"><thead><tr><th>Snapshot</th><th>Command</th><th>Built · kept earlier build</th><th>Outcome</th></tr></thead><tbody>"#,
         );
         for run in &home.runs {
-            let all = run.built + run.reused;
+            let all = run.built + run.kept;
             let built_pct = (run.built * 100).checked_div(all).unwrap_or(0);
-            let counts = if run.reused == 0 {
+            let counts = if run.kept == 0 {
                 format!("{} built", run.built)
             } else {
-                format!("{} built · {} reused", run.built, run.reused)
+                format!("{} built · {} kept", run.built, run.kept)
             };
             let command = run.command.as_deref().map_or_else(
                 || r#"<span class="placeholder" title="Runs don't record their command yet">—</span>"#.to_owned(),
@@ -261,17 +270,20 @@ fn runs(b: &mut String, home: &HomeView) {
             );
             let _ = write!(
                 b,
-                r#"<tr><td class="mono" title="run {run_id}">{snap} · {short}</td><td>{command}</td><td><span class="built"><span class="bar" title="{counts}"><span class="b" style="width:{built_pct}%"></span><span class="r" style="width:{reuse_pct}%"></span></span>{counts}</span></td><td class="outcome" title="Its successful builds were recorded as the new state">✓ {outcome}</td></tr>"#,
+                r#"<tr><td class="mono" title="run {run_id}">{snap} · {short}</td><td>{command}</td><td><span class="built"><span class="bar" title="{counts}"><span class="b" style="width:{built_pct}%"></span><span class="r" style="width:{reuse_pct}%"></span></span>{counts}</span></td><td class="outcome" title="{outcome_note}">{outcome}</td></tr>"#,
                 run_id = attr(&run.run_id),
                 snap = run.snapshot,
                 short = text(&run.short_run_id),
                 counts = text(&counts),
                 reuse_pct = if all == 0 { 0 } else { 100 - built_pct },
                 outcome = text(run.outcome),
+                outcome_note = attr(OUTCOME_NOTE),
             );
         }
-        b.push_str(
-            r#"</tbody></table><div class="legend"><span><span class="sw" style="background:var(--build)"></span>Built</span><span><span class="sw" style="background:var(--reuse)"></span>Reused</span></div></section>"#,
+        let _ = write!(
+            b,
+            r#"</tbody></table><div class="legend"><span><span class="sw" style="background:var(--build)"></span>Built</span><span title="{note}"><span class="sw" style="background:var(--reuse)"></span>Kept earlier build</span></div></section>"#,
+            note = attr(KEPT_NOTE)
         );
     }
 }
@@ -281,17 +293,23 @@ fn attention(b: &mut String, home: &HomeView) {
     b.push_str(
         r#"<section class="card gap12" aria-label="Needs attention"><h2>Needs attention</h2>"#,
     );
+    // The all-clear rests on the plan building nothing, never on the list being empty:
+    // the list shows some reasons to build, not all of them (AGENTS rules 3 and 4).
+    let plan = home.plan.as_ref().filter(|p| p.error.is_none());
     if home.attention.is_empty() {
-        let message = match (&home.state, &home.plan) {
-            (StateStatus::Recorded, Some(plan)) if plan.error.is_some() => {
-                "The plan couldn't be made, so changes can't be listed."
+        let message = match (&home.state, &home.plan, plan) {
+            (StateStatus::Recorded, Some(p), _) if p.error.is_some() => {
+                Some("The plan couldn't be made, so what would be built isn't known.")
             }
-            (StateStatus::Recorded, _) => {
-                "Nothing: every node's code and evidence match its last build."
+            (StateStatus::Recorded, _, Some(p)) if p.build == 0 => {
+                Some("Nothing: the plan reuses every node.")
             }
-            _ => "Nothing to compare with until a first run is recorded.",
+            (StateStatus::Recorded, _, _) => None,
+            _ => Some("Nothing to compare with until a first run is recorded."),
         };
-        let _ = write!(b, r#"<p class="all-clear">{}</p>"#, text(message));
+        if let Some(message) = message {
+            let _ = write!(b, r#"<p class="all-clear">{}</p>"#, text(message));
+        }
     }
     for item in &home.attention {
         let (class, label) = match item.kind {
@@ -312,6 +330,27 @@ fn attention(b: &mut String, home: &HomeView) {
             b,
             r#"<p class="all-clear">and {} more; <code>ods state plan</code> lists them all</p>"#,
             home.attention_more
+        );
+    }
+    if let Some(plan) = plan
+        && plan.build > 0
+    {
+        let reasons = plan
+            .builds_for
+            .iter()
+            .map(|r| format!("{} {}", r.count, r.label))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let _ = write!(
+            b,
+            r#"<p class="plan-builds" data-build="{n}">The plan builds {nodes} (<code>ods state plan</code>): {reasons}</p>"#,
+            n = plan.build,
+            nodes = if plan.build == 1 {
+                "1 node".to_owned()
+            } else {
+                format!("{} nodes", plan.build)
+            },
+            reasons = text(&reasons),
         );
     }
     if let Some(plan) = &home.plan
@@ -359,11 +398,14 @@ fn panels(b: &mut String, home: &HomeView) {
     for module in &home.modules {
         let status = match module.state {
             ModuleState::Ready => r#"<span class="ready">Ready</span>"#.to_owned(),
+            ModuleState::Available => {
+                r#"<span class="available" title="Works from the CLI; not checked for this project here">Available</span>"#.to_owned()
+            }
             ModuleState::NotSetUp => r#"<span class="not_set_up">Not set up</span>"#.to_owned(),
             _ => r#"<span class="chip">Planned</span>"#.to_owned(),
         };
         let note = match (&module.note, module.state) {
-            (Some(note), ModuleState::Ready) => {
+            (Some(note), ModuleState::Ready | ModuleState::Available) => {
                 format!(r#"<span class="mod-note mono">· {}</span>"#, text(note))
             }
             (Some(note), _) => format!(r#"<span class="mod-note">· {}</span>"#, text(note)),
