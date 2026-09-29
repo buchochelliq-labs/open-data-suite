@@ -1,0 +1,103 @@
+---
+source: crates/ods-web/tests/dashboard.rs
+expression: pretty(&body)
+---
+{
+  "attention": [],
+  "attention_more": 0,
+  "coverage": [
+    {
+      "count": null,
+      "key": "tests",
+      "label": "Models with tests",
+      "placeholder": "tested",
+      "total": 8
+    },
+    {
+      "count": null,
+      "key": "descriptions",
+      "label": "Models with descriptions",
+      "placeholder": "described",
+      "total": 8
+    }
+  ],
+  "empty": {
+    "commands": [
+      {
+        "command": "ods state build",
+        "does": "plans, builds what changed, and records the run"
+      },
+      {
+        "command": "ods state record",
+        "does": "records a build you ran yourself, from its run results"
+      }
+    ],
+    "message": "ODS keeps the last successful build of every node in a local state store. There isn't one yet, so there are no runs, reuse or plan to show. Record a first run in a terminal; this page updates when it's done.",
+    "title": "No runs recorded yet"
+  },
+  "health": [
+    {
+      "count": null,
+      "key": "healthy",
+      "label": "Healthy"
+    },
+    {
+      "count": null,
+      "key": "warning",
+      "label": "Warning"
+    },
+    {
+      "count": null,
+      "key": "failing",
+      "label": "Failing"
+    },
+    {
+      "count": null,
+      "key": "unknown",
+      "label": "Unknown"
+    }
+  ],
+  "last_run": null,
+  "modules": [
+    {
+      "name": "State",
+      "note": "record a first run",
+      "state": "not_set_up"
+    }
+  ],
+  "plan": null,
+  "runs": [],
+  "schema_version": 1,
+  "scope": "jaffle_ods/default",
+  "state": "no_store",
+  "store": {
+    "full": ".ods/state.db",
+    "shown": ".ods/state.db"
+  },
+  "tiles": [
+    {
+      "key": "nodes",
+      "label": "Nodes",
+      "note": "8 models · 3 seeds",
+      "value": 11
+    },
+    {
+      "key": "reused_last_run",
+      "label": "Reused last run",
+      "note": "nothing to compare with yet",
+      "value": null
+    },
+    {
+      "key": "built_last_run",
+      "label": "Built last run",
+      "note": "record a first run",
+      "value": null
+    },
+    {
+      "key": "snapshots",
+      "label": "Snapshots",
+      "note": "none recorded",
+      "value": 0
+    }
+  ]
+}

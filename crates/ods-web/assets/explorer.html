@@ -554,6 +554,15 @@
   render(); fit();
   const params = new URLSearchParams(location.hash.slice(1));
   if (params.get("node") && byId.has(params.get("node"))) select(params.get("node"), params.get("column"));
+  // #q=<text>: a search handed over from the dashboard's header.
+  else if (params.get("q")) { search.value = params.get("q"); search.focus(); showResults(); }
+  // Served next to the dashboard, whose Home is the page's parent directory.
+  if (api) {
+    const home = h("a", "← Home", null, null);
+    home.href = "./";
+    home.style.marginRight = "8px";
+    document.querySelector("header h1").before(home);
+  }
 })();
 </script>
 </body>

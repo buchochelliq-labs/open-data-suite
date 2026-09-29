@@ -1,0 +1,190 @@
+---
+source: crates/ods-web/tests/dashboard.rs
+expression: pretty(&body)
+---
+{
+  "attention": [
+    {
+      "kind": "changed",
+      "node": "customers",
+      "node_id": "model.customers",
+      "why": "Code changed since run 9ea38bd5: sql"
+    },
+    {
+      "kind": "unknown",
+      "node": "raw_orders",
+      "node_id": "seed.raw_orders",
+      "why": "No freshness evidence: will build next run"
+    },
+    {
+      "kind": "opaque",
+      "node": "customer_segments",
+      "node_id": "model.customer_segments",
+      "why": "Python model: column lineage unknown"
+    }
+  ],
+  "attention_more": 0,
+  "coverage": [
+    {
+      "count": null,
+      "key": "tests",
+      "label": "Models with tests",
+      "placeholder": "tested",
+      "total": 8
+    },
+    {
+      "count": null,
+      "key": "descriptions",
+      "label": "Models with descriptions",
+      "placeholder": "described",
+      "total": 8
+    }
+  ],
+  "empty": null,
+  "health": [
+    {
+      "count": null,
+      "key": "healthy",
+      "label": "Healthy"
+    },
+    {
+      "count": null,
+      "key": "warning",
+      "label": "Warning"
+    },
+    {
+      "count": null,
+      "key": "failing",
+      "label": "Failing"
+    },
+    {
+      "count": null,
+      "key": "unknown",
+      "label": "Unknown"
+    }
+  ],
+  "last_run": {
+    "built": 2,
+    "built_names": [
+      "customers",
+      "customer_segments"
+    ],
+    "command": null,
+    "outcome": "recorded",
+    "recorded_at": "2026-09-29T11:56:00Z",
+    "reused": 9,
+    "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
+    "short_run_id": "4c0b5c8f",
+    "snapshot": 3
+  },
+  "modules": [
+    {
+      "name": "Lineage (column-level)",
+      "note": null,
+      "state": "ready"
+    },
+    {
+      "name": "State",
+      "note": null,
+      "state": "ready"
+    },
+    {
+      "name": "Usage",
+      "note": null,
+      "state": "planned"
+    }
+  ],
+  "plan": {
+    "based_on": 3,
+    "build": 3,
+    "error": null,
+    "reuse": 2,
+    "warnings": [
+      "no source freshness results"
+    ]
+  },
+  "runs": [
+    {
+      "built": 2,
+      "built_names": [
+        "customers",
+        "customer_segments"
+      ],
+      "command": null,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-29T11:56:00Z",
+      "reused": 9,
+      "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
+      "short_run_id": "4c0b5c8f",
+      "snapshot": 3
+    },
+    {
+      "built": 8,
+      "built_names": [
+        "model.m0",
+        "model.m1",
+        "model.m2",
+        "model.m3",
+        "model.m4",
+        "model.m5",
+        "model.m6",
+        "model.m7"
+      ],
+      "command": null,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-28T09:00:00Z",
+      "reused": 3,
+      "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+      "short_run_id": "9ea38bd5",
+      "snapshot": 2
+    },
+    {
+      "built": 3,
+      "built_names": [
+        "raw_customers",
+        "raw_orders",
+        "seed.raw_payments"
+      ],
+      "command": null,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-27T09:00:00Z",
+      "reused": 0,
+      "run_id": "e6f54fe3-0000-4000-8000-000000000001",
+      "short_run_id": "e6f54fe3",
+      "snapshot": 1
+    }
+  ],
+  "schema_version": 1,
+  "scope": "jaffle_ods/dev",
+  "state": "recorded",
+  "store": {
+    "full": ".ods/state.db",
+    "shown": ".ods/state.db"
+  },
+  "tiles": [
+    {
+      "key": "nodes",
+      "label": "Nodes",
+      "note": "8 models · 3 seeds",
+      "value": 11
+    },
+    {
+      "key": "reused_last_run",
+      "label": "Reused last run",
+      "note": "81% of the plan skipped",
+      "value": 9
+    },
+    {
+      "key": "built_last_run",
+      "label": "Built last run",
+      "note": "customers and customer_segments",
+      "value": 2
+    },
+    {
+      "key": "snapshots",
+      "label": "Snapshots",
+      "note": "each keeps only successful builds",
+      "value": 3
+    }
+  ]
+}

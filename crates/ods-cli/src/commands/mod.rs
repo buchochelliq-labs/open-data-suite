@@ -9,6 +9,7 @@ mod mcp_data;
 mod mcp_tools;
 mod planned;
 mod serve;
+mod serve_dashboard;
 mod state;
 mod state_doctor;
 mod state_explain;

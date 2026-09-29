@@ -9,6 +9,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+fn fixtures(path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/dbt")
+        .join(path)
+}
+
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10")
 }
@@ -18,7 +24,7 @@ struct Server {
     child: Child,
     /// e.g. `http://127.0.0.1:41234/lineage/`.
     url: String,
-    _home: tempfile::TempDir,
+    home: tempfile::TempDir,
 }
 
 impl Drop for Server {
@@ -61,11 +67,7 @@ fn serve(target: &Path, extra: &[&str]) -> Server {
         .as_str()
         .unwrap_or_else(|| panic!("ods serve didn't start: {envelope}"))
         .to_owned();
-    Server {
-        child,
-        url,
-        _home: home,
-    }
+    Server { child, url, home }
 }
 
 /// GET `path` relative to the server URL: (status, body).
@@ -97,6 +99,9 @@ fn serves_the_explorer_and_api_under_a_base_path() {
     assert!(server.url.ends_with("/lineage/"), "{}", server.url);
 
     let (status, page) = get(&server, "");
+    assert_eq!(status, 200);
+    assert!(page.contains("Project health"), "Home is the first page");
+    let (status, page) = get(&server, "lineage");
     assert_eq!(status, 200);
     assert!(page.contains(r#"content="api""#));
 
@@ -181,4 +186,90 @@ fn a_missing_target_fails_before_listening() {
         envelope["diagnostics"][0]["code"], "ODS-E0201",
         "{envelope}"
     );
+}
+
+#[test]
+fn without_a_state_store_home_says_how_to_record_a_first_run() {
+    let server = serve(&fixture(), &["--no-watch"]);
+    let (status, body) = get(&server, "api/home");
+    assert_eq!(status, 200, "{body}");
+    let home: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(home["state"], "no_store", "{home}");
+    assert_eq!(home["scope"], "jaffle_ods/default");
+    assert_eq!(home["empty"]["commands"][0]["command"], "ods state build");
+    assert_eq!(home["tiles"][0]["value"], 13, "{home}");
+    let (_, body) = get(&server, "api/shell");
+    let shell: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(shell["project"], "jaffle_ods");
+    assert_eq!(shell["read_only"], true);
+    let (status, page) = get(&server, "");
+    assert_eq!(status, 200);
+    assert!(page.contains("No runs recorded yet"));
+    assert!(
+        !server.home.path().join(".ods").exists(),
+        "the dashboard never creates a state store"
+    );
+}
+
+/// `ods state build` with the fake dbt (a Python script, so Unix only), then the
+/// dashboard over the state it recorded.
+#[cfg(unix)]
+#[test]
+fn home_shows_the_runs_the_state_store_recorded_and_changes_nothing() {
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    fs::create_dir_all(dir.join("base")).unwrap();
+    fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        dir.join("base/manifest.json"),
+    )
+    .unwrap();
+    let target = dir.join("target");
+    let db = dir.join(".ods/state.db");
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--dbt"])
+        .arg(fixtures("fake-dbt/dbt"))
+        .args(["--dbt-output", "capture", "--target-dir"])
+        .arg(&target)
+        .arg("--state-db")
+        .arg(&db)
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", dir.join("base"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let before = fs::read(&db).unwrap();
+
+    let server = serve(&target, &["--no-watch", "--state-db", db.to_str().unwrap()]);
+    let (status, body) = get(&server, "api/home");
+    assert_eq!(status, 200, "{body}");
+    let home: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(home["state"], "recorded", "{home}");
+    assert_eq!(home["runs"].as_array().unwrap().len(), 1, "{home}");
+    assert_eq!(home["runs"][0]["snapshot"], 1);
+    assert_eq!(home["runs"][0]["built"], 13, "{home}");
+    assert_eq!(home["runs"][0]["outcome"], "recorded");
+    assert_eq!(home["plan"]["build"], 0, "nothing changed since: {home}");
+    let opaque: Vec<&Value> = home["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["kind"] == "opaque")
+        .collect();
+    assert_eq!(opaque[0]["node"], "customer_segments", "{home}");
+    assert_eq!(opaque[0]["why"], "Python model: column lineage unknown");
+    let (_, body) = get(&server, "api/shell");
+    let shell: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(shell["snapshot"]["id"], 1, "{shell}");
+    let (status, page) = get(&server, "");
+    assert_eq!(status, 200);
+    assert!(page.contains("13 built"), "{page}");
+    drop(server);
+    assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
 }

@@ -19,8 +19,28 @@ State MVP. Entries below record changes since the changelog was introduced.
   whose tests to run, and an `ExecutionReport` returns their outcomes. Out-of-process
   executor plugins must be rebuilt against the current SDK, whose `EXECUTOR` contract
   is 0.3 (#288, #232).
+- `ods serve` now opens on the dashboard's Home page; the lineage explorer moved from
+  `/` to `/lineage` (under `--base-path`, from `<base>/` to `<base>/lineage`). Update
+  bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- `ods serve` hosts the first slice of the ODS Dashboard (#310): the shell (navigation
+  with every section of the design, planned ones greyed; project and target; search;
+  the current snapshot; a *Local · read-only* badge) and Home. Home shows the planned
+  nodes, what the last run reused and built, the recent runs from the state store,
+  the nodes that need attention (changed code, missing evidence, opaque lineage, from
+  the plan against the latest snapshot), `[n]` placeholders for health and coverage,
+  and which modules are ready. Without a state store it says how to record a first
+  run. It never writes: the state database is opened read-only and is never created
+  or migrated. New `serve` options `--state-db`, `--environment`, `--target` and
+  `--sources` pick the state shown, as for `ods state plan`; the server also reloads
+  when the state database changes.
+- Two JSON routes return the dashboard's view models at `schema_version` 1:
+  `/api/shell` and `/api/home`. Beyond loopback, `/api/home` omits the store's path and
+  error text (#310, ADR-0009).
+- The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
+  served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
+  `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
 - On Databricks, `ods state run`, `build`, `seed`, `snapshot` and `compile` (with or
   without `--dry-run`) read each source's Delta table version through dbt's own
   connection, in one `dbt show` query, and reuse the models reading a source only while

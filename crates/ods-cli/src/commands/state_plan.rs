@@ -529,6 +529,69 @@ pub(super) fn dbt_command(plan: &ExecutionPlan) -> Option<String> {
     (!build.is_empty()).then(|| format!("dbt build --select {}", build.join(" ")))
 }
 
+/// A plan against `latest`, as `ods state plan` makes it, with the notes and warnings
+/// that qualify it.
+pub(super) struct Planned {
+    pub(super) plan: ExecutionPlan,
+    pub(super) warnings: Vec<String>,
+    pub(super) based_on: Option<SnapshotId>,
+    pub(super) recorded_target: Option<ods_core::state::TargetIdentity>,
+}
+
+/// Plans `ws` against `latest` (the scope's head, if any), offline. Shared by
+/// `ods state plan` and `ods serve`'s dashboard, so both say the same.
+pub(super) fn plan_latest(
+    ws: &Workspace,
+    settings: &StateSettings,
+    latest: Option<StoredSnapshot>,
+    specs: &[String],
+    now: Timestamp,
+) -> Result<Planned, CliError> {
+    // `plan` doesn't run dbt, so it can't ask which target dbt builds in (#227):
+    // state recorded under another target name than --target is planned as `run`
+    // would plan it, with none of it reused; state that doesn't name one (recorded
+    // with `ods state record`) is planned as recorded, and the plan says so.
+    let recorded_target = latest.as_ref().and_then(|l| l.snapshot.target.clone());
+    let mut notes = Vec::new();
+    let other = match (&recorded_target, settings.target.as_ref().map(|t| &t.value)) {
+        (None, _) if latest.is_some() => {
+            notes.push("the recorded state doesn't say which target it was built in: reuse assumes dbt still builds in the same one (`ods state run` checks, and rebuilds if it can't tell)".to_owned());
+            None
+        }
+        (Some(recorded), Some(given)) if &recorded.name != given => Some(format!(
+            "the recorded state was built in target {recorded}, not {given}: nothing in it is reused"
+        )),
+        _ => None,
+    };
+    let options = ods_state::PlanOptions::default();
+    let (latest, options) = match (latest, other) {
+        (Some(latest), Some(note)) => {
+            notes.push(note);
+            let mut empty = latest.snapshot.clone();
+            empty.nodes.clear();
+            empty.sources.clear();
+            (
+                Some(StoredSnapshot::new(latest.id, empty)),
+                options.target_changed(),
+            )
+        }
+        (latest, _) => (latest, options),
+    };
+    // Offline, as the relation check is (ADR-0016): it runs no dbt command.
+    if super::state_versions::reads_table_versions(ws) {
+        // `ods state explain` plans through here, so it says the same.
+        notes.push("sources' table versions weren't read: this command doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
+    }
+    let (plan, mut warnings) = plan_against(ws, latest.as_ref(), specs, now, options)?;
+    warnings.extend(notes);
+    Ok(Planned {
+        based_on: latest.map(|s| s.id),
+        plan,
+        warnings,
+        recorded_target,
+    })
+}
+
 impl PlanReport {
     pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
         let settings = StateSettings::resolve(args, config)?;
@@ -544,49 +607,17 @@ impl PlanReport {
         } else {
             None
         };
-        // `plan` doesn't run dbt, so it can't ask which target dbt builds in (#227):
-        // state recorded under another target name than --target is planned as `run`
-        // would plan it, with none of it reused; state that doesn't name one (recorded
-        // with `ods state record`) is planned as recorded, and the plan says so.
-        let recorded_target = latest.as_ref().and_then(|l| l.snapshot.target.clone());
-        let mut notes = Vec::new();
-        let other = match (&recorded_target, settings.target.as_ref().map(|t| &t.value)) {
-            (None, _) if latest.is_some() => {
-                notes.push("the recorded state doesn't say which target it was built in: reuse assumes dbt still builds in the same one (`ods state run` checks, and rebuilds if it can't tell)".to_owned());
-                None
-            }
-            (Some(recorded), Some(given)) if &recorded.name != given => Some(format!(
-                "the recorded state was built in target {recorded}, not {given}: nothing in it is reused"
-            )),
-            _ => None,
-        };
-        let options = ods_state::PlanOptions::default();
-        let (latest, options) = match (latest, other) {
-            (Some(latest), Some(note)) => {
-                notes.push(note);
-                let mut empty = latest.snapshot.clone();
-                empty.nodes.clear();
-                empty.sources.clear();
-                (
-                    Some(StoredSnapshot::new(latest.id, empty)),
-                    options.target_changed(),
-                )
-            }
-            (latest, _) => (latest, options),
-        };
-        // Offline, as the relation check is (ADR-0016): it runs no dbt command.
-        if super::state_versions::reads_table_versions(&ws) {
-            // `ods state explain` plans through here, so it says the same.
-            notes.push("sources' table versions weren't read: this command doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
-        }
-        let (plan, mut warnings) =
-            plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;
-        warnings.extend(notes);
+        let Planned {
+            plan,
+            warnings,
+            based_on,
+            recorded_target,
+        } = plan_latest(&ws, &settings, latest, &select_specs(args), now)?;
         Ok(Self {
             dbt_command: dbt_command(&plan),
             build: plan.with_action(PlanAction::Build).count(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
-            based_on: latest.map(|s| s.id),
+            based_on,
             recorded_target,
             target_dir: ws.target_dir,
             state_db: ws.state_db,

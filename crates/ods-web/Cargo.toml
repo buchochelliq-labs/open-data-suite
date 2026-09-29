@@ -1,6 +1,6 @@
 [package]
 name = "ods-web"
-description = "Hostable lineage explorer for OpenDataSuite: a local/hosted server and static site export (ADR-0009)."
+description = "Hostable lineage explorer and dashboard for OpenDataSuite: a local/hosted server and static site export (ADR-0009)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,10 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+html-escape.workspace = true
 ods-core.workspace = true
 ods-lineage.workspace = true
+percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -20,6 +22,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"
 tracing.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 ods-provider-fake.workspace = true
 ods-sdk.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
