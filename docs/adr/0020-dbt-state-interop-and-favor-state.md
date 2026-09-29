@@ -1,7 +1,7 @@
 # ADR-0020: dbt state interop: export a state that `--favor-state` can trust, and import dbt runs
 
 - **Status:** Proposed
-- **Date:** 2026-09-28
+- **Date:** 2026-09-28 (amended 2026-09-29 with the reproduction results, #296)
 - **Issues:** #296 (related: #292, #293, #294, #227, #230)
 - **Deciders:** @n1ckyb
 
@@ -45,9 +45,10 @@ doesn't know what this target has built since. ODS does. Every successful build 
 recorded per target, with a target identity (ADR-0013, ADR-0017), and ODS can check
 that a relation still exists (ADR-0016).
 
-### What we are unsure of
+### What we were unsure of
 The reproduction test (Decision §7) settles each of these before the export ships,
-and the docs will describe only what it shows.
+and the docs describe only what it shows. The first is settled: see "What the
+reproduction showed" below.
 - **Which flags `dbt retry` honours.** We believe it reuses the saved arguments and
   reads `run_results.json` from `--state`. We don't know whether `--defer-state` on
   the retry's command line overrides a saved `--state`, or whether the export must be
@@ -65,6 +66,25 @@ and the docs will describe only what it shows.
   honours it (see above).
 - **"Selected" under `dbt build`.** We believe tests are selected resources too, but
   only refable nodes can be deferred, so this shouldn't matter.
+
+### What the reproduction showed
+`crates/ods-cli/tests/dbt_favor_state.rs` runs real dbt on DuckDB, in the `real-dbt`
+CI job, on the fixture `fixtures/dbt/favor-state`. Model `a` records which target built
+it, and `b` reads `a`. It gave the same results with dbt 1.11.15 and 1.12.5:
+- **The problem is real.** `a` builds in dev and `b` fails. `dbt retry` then builds
+  `b` on **prod's** `a`: its compiled SQL and its data both say prod.
+- **`dbt retry --defer-state <dir>` works.** With `<dir>` holding prod's manifest in
+  which `a` points at dev, the retry builds `b` on dev's `a`. dbt honours
+  `--defer-state` over the original run's saved `--state`, and reads the previous run
+  results from the target path as usual.
+- **`dbt retry --state <dir>` doesn't.** With the run results copied into `<dir>`, the
+  retry reads them from there, but still defers to the saved `--state` (prod). So the
+  export doesn't carry run results, and the docs never suggest this form.
+- **Later deferred runs work too.** `dbt build -s b --defer --favor-state --state prod/
+  --defer-state <dir>` keeps prod for `state:modified` selection and resolves `a` to
+  dev.
+- Changing only `schema` and `relation_name` was enough on DuckDB. The export still
+  sets all four relation fields, as §3 says.
 
 ### Constraints
 - **Rule 8, clean-room:** only the public artifact schemas and dbt-core's OSS source.
@@ -113,14 +133,16 @@ every choice.
 **`ods state export --dbt-state <dir> --upstream <state dir>` writes a dbt state
 directory. It is the upstream `manifest.json` with one change: nodes that ODS recorded as
 successfully built in this target, and can show still exist there, point at this
-target's relation. Every other node keeps the upstream pointer. By default it also holds
-the previous run's `run_results.json`, so `dbt retry --state <dir>` works.
-`ods state import --from <target dir>` records a plain dbt run.**
+target's relation. Every other node keeps the upstream pointer. dbt reads it with
+`--defer-state <dir>`, including on `dbt retry`. `ods state import --from <target dir>`
+records a plain dbt run.**
 
 ### 1. The export command
 ```sh
 ods state export --dbt-state .ods/dbt-state --upstream prod/ --target dev
-dbt retry --state .ods/dbt-state     # to be confirmed by the reproduction test (§7)
+dbt retry --defer-state .ods/dbt-state
+# or any later deferred run: selection still compares with prod
+dbt build -s b --defer --favor-state --state prod/ --defer-state .ods/dbt-state
 ```
 - **Option names.** `--dbt PROGRAM` already means the dbt executable on every
   `ods state` command (`docs/cli.md`), and it keeps that meaning here. The export's
@@ -142,7 +164,6 @@ So the directory stays put, and each file in it is replaced atomically:
    the same filesystem), and flushes it. A maintained crate does this (`tempfile`'s
    `persist`, already a dev-dependency).
 3. It renames the files over the old ones in this order: `ods-export.json`, then
-   `run_results.json` (or deletes an old one the new export doesn't include), and
    **`manifest.json` last**. A rename is atomic on POSIX. On Windows, `MoveFileEx`
    with `REPLACE_EXISTING` replaces the file in one step, but fails while another
    process holds it open. ODS retries briefly, then fails and names the file.
@@ -153,12 +174,8 @@ What a dbt reader can see during a refresh:
 - **The manifest decides where refs resolve, and it changes last,** in a single step.
   A dbt run that starts during a refresh either uses the whole previous export or the
   whole new one.
-- A reader can pair the new `run_results.json` with the old `manifest.json`. Both
-  still come from recorded runs in this scope. The old manifest's pointers were each
-  checked when it was written. The worst case is a retry that selects from the newer
-  results and resolves refs as the previous export did. `ods-export.json` records the
-  SHA-256 of the manifest it describes, so ODS (and the docs' troubleshooting) can
-  tell when the files disagree.
+- `ods-export.json` records the SHA-256 of the manifest it describes, so ODS (and the
+  docs' troubleshooting) can tell when a manifest was written by another export.
 - If any step fails, the export exits non-zero and says which files were replaced.
   Before step 3 nothing has changed. Rerunning the export repairs a partial refresh.
   The upstream directory and ODS state are never touched (rule 5).
@@ -197,29 +214,16 @@ outcome has a reason code.
   `relation_name` are replaced. Nothing is added, removed or reordered on purpose,
   including `metadata`. A test diffs the output against the upstream and allows only
   those four fields to differ.
-- **`run_results.json`, by default:** `dbt retry --state <dir>` reads the previous
-  run's results from that directory (see "What we are unsure of"). So the export copies
-  the project's latest `run_results.json` from the dbt target path (`--target-dir`,
-  default `target/`), or the file named by `--run-results <file>`.
-  - It is copied unchanged, and only if its `metadata.invocation_id` is a run recorded
-    in this scope: an `ods state` run, or one recorded by `import`/`record`. Otherwise
-    it is left out, with a warning that says why and how to retry without it.
-  - `--no-run-results` leaves it out.
-  - ODS never writes run results itself.
-
-  **The documented retry, and its alternative.** We document `dbt retry --state <dir>`
-  with the run results inside the export. The other form keeps the results where dbt
-  wrote them, and passes only the manifest:
-  `dbt retry --state target/ --defer-state <dir>`. It works only if `dbt retry` honours
-  `--defer-state` over its saved arguments, which we don't know. The reproduction test
-  (§7) runs both forms. The docs will show the form it confirms, and the export's
-  default changes if only the second one works.
+- **No `run_results.json`.** `dbt retry` reads the previous run's results from the
+  target path, and defers to `--defer-state` (see "What the reproduction showed").
+  `dbt retry --state <dir>` would read results from the export but still defer to the
+  original run's state, so the export writes none. ODS never writes run results.
 - **`ods-export.json`:** ODS's own sidecar, which dbt doesn't read. It holds
   `schema_version`, when and from which snapshot the export was made, the target
   identity's non-secret form (ADR-0017), the upstream manifest's `invocation_id`, the
-  SHA-256 of the `manifest.json` and `run_results.json` it was written with, and each
-  node's choice and reason.
-- **Supported versions:** manifest **v12** and run results **v6**, the versions the
+  SHA-256 of the `manifest.json` it was written with, and each node's choice and
+  reason.
+- **Supported versions:** manifest **v12**, the version the
   fixtures in `fixtures/dbt/` use (dbt 1.10.23 and 2.0.5 both write manifest v12) and
   that dbt 1.11 and 1.12 in the `real-dbt` job write. The export keeps the upstream's
   `dbt_schema_version`, since it is the upstream's document. Other versions are
@@ -230,10 +234,9 @@ outcome has a reason code.
   Node `meta` is user data. Neither is ours to write, so the sidecar holds everything.
 
 ### 4. Versioning (ADR-0019)
-- `manifest.json` and `run_results.json` are written for dbt to read. Their schema is
-  dbt's, and they are versioned by dbt's `dbt_schema_version`. ODS doesn't version
-  them.
-- Supporting a new manifest or run-results version is **Added** in the changelog.
+- `manifest.json` is written for dbt to read. Its schema is dbt's, and it is versioned
+  by dbt's `dbt_schema_version`. ODS doesn't version it.
+- Supporting a new manifest version is **Added** in the changelog.
   Dropping one is **Breaking**.
 - `ods-export.json` is an ODS persisted document: `schema_version` 1.0, with
   ADR-0019's rules (minor: optional fields only; major: through a reader that
@@ -269,24 +272,25 @@ outcome has a reason code.
    job, for each dbt in its matrix):
    - A fixture project with `prod` and `dev` targets, in separate DuckDB databases.
      Model `a` writes a marker that differs by target; `b` reads `a` and can be made
-     to fail with a var.
+     to fail with an environment variable (`dbt retry` replays the original vars).
    - Build prod and keep its `manifest.json`.
    - In dev: `dbt build --defer --favor-state --state prod/` with `b` failing, then fix
      it and `dbt retry`.
    - Assert that `b` read **prod's** `a` (its marker, and the relation in its compiled
      SQL). The test pins today's behaviour, so a dbt release that changes it is
      noticed.
-   - The same test settles each point under "What we are unsure of". It runs both
-     retry forms from §3: `dbt retry --state <export>` with the copied run results,
-     and `dbt retry --state target/ --defer-state <export>`. It records which works.
+   - The same tests settle the retry form: `dbt retry --defer-state <export>` reads
+     dev's `a`, and `dbt retry --state <export>` doesn't.
+   - **Done:** `crates/ods-cli/tests/dbt_favor_state.rs`, with the results under
+     "What the reproduction showed".
 2. **Then the fix:** the same scenario through `ods state build` (or
-   `ods state import --from`), then `ods state export --dbt-state`, then `dbt retry`.
+   `ods state import --from`), then `ods state export --dbt-state`, then
+   `dbt retry --defer-state`.
    Assert that `b` read **dev's** `a`.
 3. **Unit and snapshot tests** with no dbt:
    - each rule in §2, with a fake store and inspector;
    - the four-field diff against the fixture manifests;
    - refusal of other schema versions and of another project's manifest;
-   - run results copied only when their invocation is recorded;
    - the refresh: file order, a failure before and during the renames, and a second
      export blocked by the lock;
    - `insta` snapshots of the JSON and plain output;
@@ -308,7 +312,8 @@ outcome has a reason code.
   - The fix depends on dbt internals that aren't a documented contract (§ "How dbt
     resolves refs"). The reproduction test is what tells us when they change.
   - The relation check costs one dbt call per export.
-  - Only manifest v12 and run results v6, until tests cover more.
+  - Only manifest v12 for the export (and run results v6 for the import), until tests
+    cover more.
 - Follow-up issues:
   - `ods state retry --failed` after an import. The last-run file holds an ODS
     command line, and a dbt invocation's saved arguments don't map to one exactly.
