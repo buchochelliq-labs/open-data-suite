@@ -1389,12 +1389,16 @@ dependencies = [
 name = "ods-provider-databricks"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "csv",
  "ods-core",
+ "ods-provider-fake",
  "ods-sdk",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1406,6 +1410,7 @@ dependencies = [
  "ods-core",
  "ods-sdk",
  "parquet",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tempfile",

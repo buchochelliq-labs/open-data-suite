@@ -2892,3 +2892,254 @@ fn a_failing_source_test_keeps_the_nodes_tests_that_passed() {
     let (_, again) = project.test(&[]);
     assert_eq!(again["result"]["requested"], 0, "{again:#}");
 }
+
+const DETAIL: &str = "DESCRIBE DETAIL {relation}";
+const HISTORY: &str = "DESCRIBE HISTORY {relation} LIMIT 1";
+
+/// The fake Databricks workspace the relation probe reads (ADR-0022): source name →
+/// `(format, table id, version)`.
+fn workspace(project: &Project, tables: &[(&str, &str, &str, &str)]) {
+    let doc: serde_json::Map<String, Value> = tables
+        .iter()
+        .map(|(name, format, id, version)| {
+            (
+                (*name).to_owned(),
+                serde_json::json!({
+                    "type": "table",
+                    "formats": [format],
+                    "rows": {
+                        DETAIL: {"id": id, "format": format},
+                        HISTORY: {"version": version, "timestamp": "2026-09-29 10:00:00"},
+                    },
+                }),
+            )
+        })
+        .collect();
+    std::fs::write(
+        project.dir.join("workspace.json"),
+        Value::Object(doc).to_string(),
+    )
+    .unwrap();
+}
+
+/// A project on Databricks, with two sources, whose table versions the fake dbt reads.
+fn on_databricks(name: &str) -> Project {
+    let project = Project::new(name);
+    let workspace = project.dir.join("workspace.json");
+    let seen = project.dir.join("seen");
+    project
+        .with("FAKE_DBT_SOURCES", "1")
+        .with("FAKE_DBT_ADAPTER", "databricks")
+        .with("FAKE_DBT_PROBE", workspace.to_str().unwrap())
+        .with("FAKE_DBT_SEEN", seen.to_str().unwrap())
+}
+
+/// ODS compares times to the second: a version read in the same second as the last
+/// build can't show data that arrived after it.
+fn next_second() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(
+        1010 - u64::from(now.subsec_millis()),
+    ));
+}
+
+/// The value of `kind` evidence about `source` in `name`'s plan entry.
+fn evidence(result: &Value, name: &str, kind: &str, source: &str) -> Option<String> {
+    entry(result, name)["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == kind && e["subject"] == source)
+        .map(|e| e["value"].as_str().unwrap_or_default().to_owned())
+        .reduce(|a, b| format!("{a}; {b}"))
+}
+
+/// How many dbt calls ran the relation probe.
+fn probes(project: &Project) -> usize {
+    project
+        .seen()
+        .iter()
+        .filter(|(argv, _)| argv.iter().any(|a| a.contains("ods_relation_probe")))
+        .count()
+}
+
+const ORDERS: &str = "source.jaffle_ods.raw.orders";
+const PAYMENTS: &str = "source.jaffle_ods.raw.payments";
+
+/// ADR-0022: on Databricks, each source's Delta table version decides whether the
+/// models reading it are reused. A first build records it as the baseline; the same
+/// version reuses; a new commit builds. `--dry-run` reads versions too, `ods state
+/// plan` doesn't.
+#[test]
+fn delta_table_versions_decide_reuse_on_databricks() {
+    let project = on_databricks("delta-versions");
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "3"),
+            ("raw.payments", "delta", "t-payments", "8"),
+        ],
+    );
+    let first = project.run_ok(&[]);
+    assert_eq!(probes(&project), 1, "every source, in one dbt call");
+    assert_eq!(first["record"]["sources_recorded"], true, "{first:#}");
+
+    next_second();
+    let same = project.run_ok(&["--dry-run"]);
+    assert_eq!(probes(&project), 2, "a dry run reads versions too");
+    for (model, source, version) in [
+        ("stg_orders", ORDERS, "t-orders/3"),
+        ("stg_payments", PAYMENTS, "t-payments/8"),
+    ] {
+        assert_eq!(entry(&same, model)["action"], "reuse", "{same:#}");
+        assert_eq!(
+            evidence(&same, model, "source_data_version", source).as_deref(),
+            Some(version)
+        );
+        assert_eq!(
+            evidence(&same, model, "source_version_strategy", source).as_deref(),
+            Some("relation_versions")
+        );
+    }
+
+    // A commit to raw.orders: its readers build, raw.payments' don't.
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "4"),
+            ("raw.payments", "delta", "t-payments", "8"),
+        ],
+    );
+    next_second();
+    let changed = project.run_ok(&[]);
+    let orders = entry(&changed, "stg_orders");
+    assert_eq!(orders["action"], "build");
+    assert_eq!(orders["reasons"][0]["code"], "new_upstream_data");
+    assert!(
+        orders["reasons"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("raw.orders"),
+        "{orders:#}"
+    );
+    assert_eq!(entry(&changed, "stg_payments")["action"], "reuse");
+
+    // Offline: the plan says it didn't read them.
+    let seen = probes(&project);
+    let (code, plan) = project.ods(&["state", "plan"]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(probes(&project), seen);
+    assert!(
+        plan["result"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("table versions weren't read")),
+        "{plan:#}"
+    );
+
+    // The step line says what the dbt call is for.
+    let dbt = fixture("fake-dbt/dbt");
+    let (code, _, stderr) = project.ods_with_stderr(&[
+        "state",
+        "build",
+        "--dry-run",
+        "--dbt",
+        dbt.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("dbt show: reading table versions for 2 sources"),
+        "{stderr}"
+    );
+}
+
+/// ADR-0022 §4: when the probe fails, every source is unknown: the models reading
+/// them build, and a warning names dbt's error.
+#[test]
+fn a_failed_table_version_probe_builds_every_reader_and_warns() {
+    let project = on_databricks("delta-probe-fails");
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "3"),
+            ("raw.payments", "delta", "t-payments", "8"),
+        ],
+    );
+    project.run_ok(&[]);
+    next_second();
+    let project = project.with("FAKE_DBT_PROBE_FAIL", "1");
+    let failed = project.run_ok(&[]);
+    for model in ["stg_orders", "stg_payments"] {
+        let entry = entry(&failed, model);
+        assert_eq!(entry["action"], "build", "{failed:#}");
+        assert_eq!(entry["reasons"][0]["code"], "missing_data_evidence");
+    }
+    // Models reading no source are still reused.
+    assert_eq!(entry(&failed, "stg_customers")["action"], "reuse");
+    let warnings = failed["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("couldn't read the sources' table versions")
+                && w.contains("DESCRIBE HISTORY refused")
+        }),
+        "{failed:#}"
+    );
+}
+
+/// ADR-0022 §4: a source that isn't a Delta table is unknown to the probe, and falls
+/// back to its `max_loaded_at`, saying why.
+#[test]
+fn a_source_that_isnt_a_delta_table_falls_back_to_max_loaded_at() {
+    let project = on_databricks("delta-fallback").with(
+        "FAKE_DBT_LOADED_AT",
+        "raw.orders=2026-01-01T00:00:00Z,raw.payments=2026-01-01T00:00:00Z",
+    );
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "3"),
+            ("raw.payments", "parquet", "t-payments", "8"),
+        ],
+    );
+    project.run_ok(&[]);
+    next_second();
+    let again = project.run_ok(&[]);
+    assert_eq!(
+        entry(&again, "stg_payments")["action"],
+        "reuse",
+        "{again:#}"
+    );
+    assert_eq!(
+        evidence(&again, "stg_payments", "source_version_strategy", PAYMENTS).as_deref(),
+        Some("source_freshness")
+    );
+    let skipped = evidence(&again, "stg_payments", "source_version_skipped", PAYMENTS).unwrap();
+    assert!(
+        skipped.starts_with("relation_versions: not a Delta table"),
+        "{skipped}"
+    );
+    // The Delta table's version wins over its load time.
+    assert_eq!(
+        evidence(&again, "stg_orders", "source_version_strategy", ORDERS).as_deref(),
+        Some("relation_versions")
+    );
+}
+
+/// Other adapters have no change provider: nothing probes their sources.
+#[test]
+fn other_adapters_read_no_table_versions() {
+    let seen = |p: &Project| p.dir.join("seen");
+    let project = Project::new("no-probe").with("FAKE_DBT_SOURCES", "1");
+    let project = {
+        let path = seen(&project);
+        project.with("FAKE_DBT_SEEN", path.to_str().unwrap())
+    };
+    project.run_ok(&[]);
+    next_second();
+    project.run_ok(&[]);
+    assert_eq!(probes(&project), 0);
+}

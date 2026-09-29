@@ -13,6 +13,8 @@
 //!
 //! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
 //!   asks the adapter which relations exist (#230).
+//! - [`probe`](RelationProbe::probe) runs one `dbt show --inline` query that runs a few
+//!   statements against each source's relation (ADR-0022).
 //!
 //! dbt's own output goes to ODS's stderr (or is captured), never to stdout, which
 //! carries ODS's report.
@@ -25,10 +27,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ods_core::state::Timestamp;
 use ods_core::{Capability, CapabilitySet};
+use ods_sdk::contracts::changes::RequestedSource;
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
     PrepareReport, PrepareRequest, RequestedNode,
 };
+use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, RelationProbe};
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -84,6 +88,11 @@ pub enum DbtStep {
     RelationCheck {
         /// How many nodes ODS would reuse.
         nodes: usize,
+    },
+    /// `dbt show`: statements run against the relations of `sources` sources.
+    RelationProbe {
+        /// How many sources were asked about.
+        sources: usize,
     },
 }
 
@@ -860,7 +869,7 @@ impl Provider for DbtExecutor {
             KIND,
             "dbt",
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::from([Capability::RelationExistence]),
+            CapabilitySet::from([Capability::RelationExistence, Capability::RelationProbe]),
         )
     }
 }
@@ -923,25 +932,9 @@ const RELATION_CHECK_DIR: &str = "ods-relation-check";
 impl RelationInspector for DbtExecutor {
     async fn inspect(&self, nodes: &[RequestedNode]) -> Result<RelationReport, ProviderError> {
         self.refuse_env()?;
-        let target = self.target_path().join(RELATION_CHECK_DIR);
-        // dbt writes the manifest it checked here: one left by an earlier check must
-        // never pass for this one's.
+        // dbt writes the manifest it checked here.
+        let target = self.aside(RELATION_CHECK_DIR, "relation check")?;
         let checked_manifest = target.join("manifest.json");
-        if let Err(e) = std::fs::remove_file(&checked_manifest)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(ProviderError::Other(format!(
-                "can't clear `{}` for the relation check: {e}",
-                checked_manifest.display()
-            )));
-        }
-        // A best effort: dbt parses from scratch without it, just more slowly.
-        if std::fs::create_dir_all(&target).is_ok() {
-            let _ = std::fs::copy(
-                self.artifact("partial_parse.msgpack"),
-                target.join("partial_parse.msgpack"),
-            );
-        }
         let mut args = vec![
             "show".to_owned(),
             "--quiet".to_owned(),
@@ -1146,6 +1139,145 @@ impl Executor for DbtExecutor {
         .with_unrequested(outcomes.unrequested)
         .with_command(command);
         Ok(if ok { report } else { report.failed() })
+    }
+}
+
+/// Where the relation probe writes its artifacts, apart from the target path's own and
+/// the relation check's, for the same reason.
+const RELATION_PROBE_DIR: &str = "ods-relation-probe";
+
+impl DbtExecutor {
+    /// Makes `dir`, under the target path, ready for a `dbt show` whose manifest is
+    /// read afterwards: one left by an earlier call must never pass for this one's.
+    fn aside(&self, dir: &str, what: &str) -> Result<PathBuf, ProviderError> {
+        let target = self.target_path().join(dir);
+        let manifest = target.join("manifest.json");
+        if let Err(e) = std::fs::remove_file(&manifest)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(ProviderError::Other(format!(
+                "can't clear `{}` for the {what}: {e}",
+                manifest.display()
+            )));
+        }
+        // A best effort: dbt parses from scratch without it, just more slowly.
+        if std::fs::create_dir_all(&target).is_ok() {
+            let _ = std::fs::copy(
+                self.artifact("partial_parse.msgpack"),
+                target.join("partial_parse.msgpack"),
+            );
+        }
+        Ok(target)
+    }
+}
+
+/// A probed relation's answer, checked against the request.
+fn probe_answer(found: crate::probe::Found, request: &ProbeRequest) -> ProbeAnswer {
+    use crate::probe::Found;
+    match found {
+        Found::Missing => ProbeAnswer::Unknown("dbt's adapter has no such relation".to_owned()),
+        Found::Kind(kind) => ProbeAnswer::Skipped(format!(
+            "a {}, not a {}",
+            if kind.is_empty() {
+                "relation of unknown kind"
+            } else {
+                &kind
+            },
+            request.filter().relation_kinds().join(" or ")
+        )),
+        Found::Format => ProbeAnswer::Skipped(format!(
+            "dbt's adapter doesn't confirm it is stored as {}",
+            request.filter().format().unwrap_or("the requested format")
+        )),
+        Found::Rows(rows) if rows.len() != request.statements().len() => {
+            ProbeAnswer::Unknown(format!(
+                "the probe returned {} rows for {} statements",
+                rows.len(),
+                request.statements().len()
+            ))
+        }
+        Found::Rows(rows) => ProbeAnswer::Rows(
+            rows.into_iter()
+                .zip(request.statements())
+                .map(|(mut row, statement)| {
+                    row.retain(|column, _| statement.columns().contains(column));
+                    row
+                })
+                .collect(),
+        ),
+    }
+}
+
+#[async_trait]
+impl RelationProbe for DbtExecutor {
+    async fn probe(
+        &self,
+        request: &ProbeRequest,
+        sources: &[RequestedSource],
+    ) -> Result<ProbeReport, ProviderError> {
+        self.refuse_env()?;
+        let target = self.aside(RELATION_PROBE_DIR, "relation probe")?;
+        let mut args = vec![
+            "show".to_owned(),
+            "--quiet".to_owned(),
+            "--inline".to_owned(),
+            crate::probe::query(request),
+            "--output".to_owned(),
+            "json".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+            "--log-format".to_owned(),
+            "json".to_owned(),
+        ];
+        args.extend(self.common_args_in("show", &target));
+        self.step(DbtStep::RelationProbe {
+            sources: sources.len(),
+        });
+        let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
+        if !ok {
+            return Err(Self::failure(
+                "the relation probe (`dbt show`) failed",
+                &tail,
+            ));
+        }
+        let probed = crate::probe::parse(&stdout).map_err(|why| {
+            ProviderError::Other(format!("the relation probe (`dbt show`) failed: {why}"))
+        })?;
+        // Which sources dbt probed: those of the project as it parsed it. A source it
+        // didn't probe is unknown.
+        let manifest = crate::Manifest::read(&target.join("manifest.json")).map_err(|e| {
+            ProviderError::Other(format!(
+                "the relation probe (`dbt show`) wrote no readable manifest: {e}"
+            ))
+        })?;
+        let known: BTreeSet<&str> = manifest
+            .nodes
+            .iter()
+            .filter(|n| n.resource_type == crate::ResourceType::Source)
+            .map(|n| n.unique_id.as_str())
+            .collect();
+        if probed.probed != known.len() {
+            return Err(ProviderError::Other(format!(
+                "the relation probe saw {} sources, its manifest has {}",
+                probed.probed,
+                known.len()
+            )));
+        }
+        // Only the requested sources are answered; the others are ignored.
+        let sources = sources
+            .iter()
+            .map(|s| {
+                let answer = match probed.sources.get(&s.id).cloned() {
+                    _ if !known.contains(s.id.as_str()) => ProbeAnswer::Unknown(
+                        "dbt didn't probe it: not a source of the project it parsed".to_owned(),
+                    ),
+                    Some(found) => probe_answer(found, request),
+                    None => ProbeAnswer::Unknown("dbt didn't report on it".to_owned()),
+                };
+                (s.id.clone(), answer)
+            })
+            .collect();
+        Ok(ProbeReport::new(sources))
     }
 }
 

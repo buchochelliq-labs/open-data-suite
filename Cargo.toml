@@ -46,6 +46,8 @@ opener = "0.8"
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
 # compression codecs dbt may use.
 parquet = { version = "60", default-features = false, features = ["zstd", "snap", "lz4", "flate2-zlib-rs"] }
+# Decodes the percent-encoded answer of the dbt relation probe (ADR-0022).
+percent-encoding = "2"
 # Graph algorithms: dependency order, cycles, shortest join paths.
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).

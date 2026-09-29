@@ -21,6 +21,16 @@ State MVP. Entries below record changes since the changelog was introduced.
   is 0.3 (#288, #232).
 
 ### Added
+- On Databricks, `ods state run`, `build`, `seed`, `snapshot` and `compile` (with or
+  without `--dry-run`) read each source's Delta table version through dbt's own
+  connection, in one `dbt show` query, and reuse the models reading a source only while
+  its version (`<table id>/<version>`, exactness `exact`, origin `delta_history`) is
+  unchanged. `loaded_at_field` is no longer needed for data-aware reuse there. A table
+  version wins over `max_loaded_at`; a source that isn't a Delta table falls back to
+  it; if the query fails, a warning says so and those sources count as changed. The
+  first run after upgrading builds the readers of these sources once, since versions
+  from different origins never compare equal. `ods state plan` stays offline and says
+  it read no table versions (#17, ADR-0022).
 - Two plugin contracts for reading sources' data versions: `ChangeProvider` 0.1 reports
   each source's current data version, or why it can't; `RelationProbe` 0.1 runs a few
   read-only statement templates against each source's relation and returns their first

@@ -21,6 +21,7 @@ pub mod export;
 pub mod fingerprint;
 mod info_schema;
 pub mod normalize;
+mod probe;
 mod relations;
 mod runs;
 mod seeds;

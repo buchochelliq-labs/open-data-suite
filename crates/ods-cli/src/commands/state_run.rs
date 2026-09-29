@@ -37,7 +37,7 @@ use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::state_store::{StateStore, StoredSnapshot};
 use ods_state::{
     Outcome, Recorded, RecordedSources, RelationFact, RunResult, SourceCheck, SourceCheckAction,
-    TestResult,
+    TestResult, VersionReading,
 };
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
@@ -522,6 +522,11 @@ impl Steps {
             DbtStep::RelationCheck { nodes } => format!(
                 "dbt show: are the tables of {} ODS would reuse still there?",
                 count(nodes, "node")
+            ),
+            // The only probe ODS runs reads table versions (ADR-0022).
+            DbtStep::RelationProbe { sources } => format!(
+                "dbt show: reading table versions for {}",
+                count(sources, "source")
             ),
             _ => "dbt".to_owned(),
         };
@@ -1184,7 +1189,7 @@ pub(super) fn prepare(
 fn record(
     (args, settings): (&ArgMatches, &StateSettings),
     tested: bool,
-    sources: Sources,
+    (sources, table_versions): (Sources, Option<&VersionReading>),
     execution: &ExecutionReport,
     (latest, target): (Option<&StoredSnapshot>, Option<&TargetIdentity>),
     store: &SqliteStateStore,
@@ -1204,6 +1209,10 @@ fn record(
         if let Some(checks) = planned_checks.get(&source.id) {
             source.checks.clone_from(checks);
         }
+    }
+    // The table versions read before the build, not after it (ADR-0022 §3).
+    if let Some(reading) = table_versions {
+        built.add_reading(reading.clone());
     }
     if built.invocation_id.as_deref() != Some(execution.run_id.as_str()) {
         return Err(CliError::new(
@@ -1237,18 +1246,15 @@ fn record(
             }
         })
         .collect();
-    let sources_recorded = matches!(
-        (built.sources_taken_at, execution.started_at),
-        // Strictly before: timestamps are to the second.
-        (Some(taken), Some(started)) if taken < started
-    );
+    let sources_recorded = keep_versions_read_before(&mut built.project, execution.started_at);
     let mut recorded = ods_state::record(
         &built.project,
         latest.map(|s| (s.id, &s.snapshot)),
         &results,
         &execution.run_id,
         execution.finished_at,
-        sources_recorded,
+        // Each source's version was dropped above unless it predates the run.
+        true,
     );
     recorded.snapshot.target = target.cloned();
     // Source tests (#232): recorded against the data measured before the run.
@@ -1257,7 +1263,7 @@ fn record(
         &built.project,
         &source_results(execution),
         execution.finished_at,
-        sources_recorded,
+        true,
     );
     tracing::info!(
         run = %execution.run_id,
@@ -1294,6 +1300,22 @@ fn record(
         recorded,
         source_tests,
     })
+}
+
+/// Drops the source versions not read strictly before the run `started` (timestamps
+/// are to the second): one read later could show data the run didn't see. Returns
+/// whether any version is left to record.
+fn keep_versions_read_before(project: &mut ods_state::Project, started: Option<Timestamp>) -> bool {
+    let mut kept = false;
+    for source in &mut project.sources {
+        if matches!((source.observed_at, started), (Some(at), Some(started)) if at < started) {
+            kept |= source.version.is_some();
+        } else {
+            source.version = None;
+            source.observed_at = None;
+        }
+    }
+    kept
 }
 
 fn execution_error(error: &ProviderError) -> CliError {
@@ -1645,8 +1667,10 @@ impl RunReport {
         let dry_run = !builds || args.get_flag("dry-run");
         let target = target_for(&executor, dry_run, &mut warnings)?;
 
-        // 2. Plan.
+        // 2. Plan, with the sources' table versions where the warehouse has them.
         let mut ws = Workspace::load(args, settings, sources)?;
+        let table_versions =
+            super::state_versions::read_table_versions(&mut ws, &executor, &mut warnings)?;
         let tested = execution_tested(kind, args);
         let (store, latest) = open_state(&ws, dry_run)?;
         let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
@@ -1734,7 +1758,7 @@ impl RunReport {
             (args, settings),
             &executor,
             (requested, checked_sources),
-            sources,
+            (sources, table_versions.as_ref()),
             latest.as_ref(),
             &store,
         )
@@ -1748,7 +1772,7 @@ impl RunReport {
         (args, settings): (&ArgMatches, &StateSettings),
         executor: &DbtExecutor,
         (requested, checked_sources): (Vec<RequestedNode>, Vec<RequestedNode>),
-        sources: Sources,
+        sources: (Sources, Option<&VersionReading>),
         latest: Option<&StoredSnapshot>,
         store: &SqliteStateStore,
     ) -> Result<(Self, Option<CliError>), CliError> {

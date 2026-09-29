@@ -14,6 +14,7 @@ csv.workspace = true
 ods-core.workspace = true
 ods-sdk.workspace = true
 parquet.workspace = true
+percent-encoding.workspace = true
 serde.workspace = true
 # `preserve_order`: an exported manifest keeps the upstream's key order (ADR-0020 §3).
 # Cargo unifies features, so every crate built with this one gets it too: nothing in
