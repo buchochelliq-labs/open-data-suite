@@ -212,6 +212,7 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
     });
     let manifest = Manifest {
         project_name,
+        project_id: None,
         invocation_id: None,
         macros,
         schema_version: version,
@@ -418,6 +419,9 @@ fn read_nodes(
                 });
             nodes.push(ManifestNode {
                 resource_type,
+                database: None,
+                schema: None,
+                alias: None,
                 relation_name: text(&row, "relation_name"),
                 compiled_code,
                 raw_code,
@@ -496,6 +500,9 @@ fn read_tests(
         };
         tests.push(ManifestNode {
             resource_type: ResourceType::Test,
+            database: None,
+            schema: None,
+            alias: None,
             relation_name: None,
             compiled_code: None,
             raw_code: None,

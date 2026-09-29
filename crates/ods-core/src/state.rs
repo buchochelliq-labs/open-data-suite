@@ -133,6 +133,11 @@ impl Fingerprint {
     /// reused across the change (and the plan can say why).
     pub const SCHEME: &'static str = "scheme";
 
+    /// The component that names the relation (table or view) a node builds into.
+    /// Consumers that must tie a recorded build to a place in the warehouse compare
+    /// it on its own; a fingerprint without it names no relation.
+    pub const RELATION: &'static str = "relation";
+
     /// A fingerprint from components' canonical content, which is hashed here.
     pub fn from_content<I, K, V>(components: I) -> Self
     where
