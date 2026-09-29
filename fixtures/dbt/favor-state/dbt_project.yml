@@ -1,0 +1,10 @@
+# The smallest project that shows `dbt retry --defer --favor-state` reading prod's
+# relation for a model this target just built (#296, ADR-0020 §7). Used by
+# crates/ods-cli/tests/dbt_favor_state.rs against real dbt and DuckDB.
+name: favor_state
+version: "1.0.0"
+config-version: 2
+profile: favor_state
+models:
+  favor_state:
+    +materialized: table

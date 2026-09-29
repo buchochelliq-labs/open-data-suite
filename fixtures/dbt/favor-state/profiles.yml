@@ -1,0 +1,15 @@
+# prod and dev share one DuckDB file with a schema each, as two schemas of one
+# warehouse would: dev can read prod's relations when dbt defers to them.
+favor_state:
+  target: dev
+  outputs:
+    prod:
+      type: duckdb
+      path: "warehouse.duckdb"
+      schema: prod
+      threads: 1
+    dev:
+      type: duckdb
+      path: "warehouse.duckdb"
+      schema: dev
+      threads: 1
