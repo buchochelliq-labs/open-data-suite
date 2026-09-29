@@ -788,14 +788,7 @@ impl RunSummary {
                 }
                 RunEventKind::NodeFinished { node, stats } => {
                     let entry = run.node(&mut index, node, false);
-                    let mut stats = stats.clone();
-                    // What the start said, unless the finish says better.
-                    stats.started_at = stats.started_at.or(entry.stats.started_at);
-                    if stats.thread.is_none() {
-                        stats.thread.clone_from(&entry.stats.thread);
-                    }
-                    stats.tests = merge_tests(stats.tests, entry.stats.tests);
-                    entry.stats = stats;
+                    entry.stats = finish_over(&entry.stats, stats.clone());
                 }
                 RunEventKind::CheckFinished { covers, status, .. } => {
                     for node in covers {
@@ -869,6 +862,40 @@ impl RunSummary {
     pub fn get(&self, node: &str) -> Option<&NodeSummary> {
         self.nodes.iter().find(|n| n.node == node)
     }
+}
+
+/// A finish over what was known of the node. Its status wins, and so does every stat
+/// it reports; every stat it doesn't report is kept from before (the start's time and
+/// thread, or a first finish's stats when this one corrects its status, ADR-0024). An
+/// error is kept only while the node is still failed.
+fn finish_over(before: &NodeRunStats, mut stats: NodeRunStats) -> NodeRunStats {
+    let correction = before.status.is_finished();
+    stats.started_at = stats.started_at.or(before.started_at);
+    stats.finished_at = stats.finished_at.or(before.finished_at);
+    stats.duration_ms = stats.duration_ms.or(before.duration_ms);
+    stats.compile_ms = stats.compile_ms.or(before.compile_ms);
+    stats.execute_ms = stats.execute_ms.or(before.execute_ms);
+    stats.rows_affected = stats.rows_affected.or(before.rows_affected);
+    if stats.thread.is_none() {
+        stats.thread.clone_from(&before.thread);
+    }
+    if stats.adapter.is_empty() {
+        stats.adapter.clone_from(&before.adapter);
+    }
+    if stats.blocked_by.is_empty() && stats.status == NodeRunStatus::Skipped {
+        stats.blocked_by.clone_from(&before.blocked_by);
+    }
+    if stats.error.is_none() && stats.status == NodeRunStatus::Error {
+        stats.error.clone_from(&before.error);
+    }
+    // Checks seen before a first finish add to what it reports; a correction's counts,
+    // if any, already include them.
+    stats.tests = if correction {
+        stats.tests.or(before.tests)
+    } else {
+        merge_tests(stats.tests, before.tests)
+    };
+    stats
 }
 
 /// Counts from `check_finished` events seen before the node's finish are added to
@@ -1000,6 +1027,66 @@ mod tests {
             let json = serde_json::to_string(&e).unwrap();
             assert!(!json.contains("sk_live_9"), "{json}");
         }
+    }
+
+    /// Codex review on #326: a status-only correction keeps every stat the live finish
+    /// reported, and takes the new status.
+    #[test]
+    fn a_status_only_correction_keeps_the_live_stats() {
+        let live = NodeRunStats::new(NodeRunStatus::Unknown)
+            .with_times(Some(ms(1000)), Some(ms(3000)))
+            .with_durations(Some(2000), Some(300), Some(1700))
+            .with_rows_affected(Some(42))
+            .with_extra("query_id", "q-1")
+            .with_thread("t1")
+            .with_blocked_by(vec!["x".into()]);
+        let events = vec![
+            event(
+                0,
+                RunEventKind::RunStarted {
+                    nodes: vec!["a".into()],
+                    mode: ExecutionMode::Run,
+                    live: true,
+                },
+            ),
+            event(
+                3000,
+                RunEventKind::NodeFinished {
+                    node: "a".into(),
+                    stats: live,
+                },
+            ),
+            event(
+                3000,
+                RunEventKind::CheckFinished {
+                    check: "test.a".into(),
+                    covers: vec!["a".into()],
+                    status: CheckStatus::Passed,
+                },
+            ),
+            event(
+                4000,
+                RunEventKind::NodeFinished {
+                    node: "a".into(),
+                    stats: NodeRunStats::new(NodeRunStatus::Success),
+                },
+            ),
+        ];
+        let run = RunSummary::from_events(&events);
+        let a = &run.get("a").unwrap().stats;
+        assert_eq!(a.status, NodeRunStatus::Success);
+        assert_eq!(a.finished_at, Some(ms(3000)));
+        assert_eq!(a.started_at, Some(ms(1000)));
+        assert_eq!(
+            (a.duration_ms, a.compile_ms, a.execute_ms),
+            (Some(2000), Some(300), Some(1700))
+        );
+        assert_eq!(a.rows_affected, Some(42));
+        assert_eq!(a.adapter["query_id"], "q-1");
+        assert_eq!(a.thread.as_deref(), Some("t1"));
+        assert_eq!(a.tests.unwrap().passed, 1, "counted once");
+        assert!(a.blocked_by.is_empty(), "a success isn't blocked");
+        assert_eq!(run.totals.rows_affected, 42);
     }
 
     /// A node finished again with the report's status: the last finish wins, and keeps

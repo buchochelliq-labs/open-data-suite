@@ -20,7 +20,7 @@ impl ExecutorHarness for Harness {
         let executor = FakeExecutor::new(FakeClock::new(), ["model.suite.a", "model.suite.b"])
             .failing_with(
                 "model.suite.broken",
-                "Can't cast 'SECRET_CONFORMANCE_1' to INT",
+                "Can't cast 'SECRET_CONFORMANCE_1' to INT in \u{1b}[1mUPDATE\u{1b}[0m accounts SET token = SECRET_CONFORMANCE_1",
             )
             .with_checks("model.suite.checked", ["test.suite.checked_unique"])
             .with_source(
