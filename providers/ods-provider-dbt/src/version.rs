@@ -11,11 +11,13 @@
 //!   - databricks: 1.10.1 - Up to date!
 //! ```
 //!
-//! and other builds print one line such as `dbt-fusion 2.0.0-preview.1`. Only the
-//! major and minor numbers decide support. They are read by hand rather than with a
-//! version crate because dbt's versions follow Python's PEP 440 (`1.9.0b1`,
-//! `1.10.0rc2`), which semantic-version parsers reject, and two integers are all that
-//! is needed.
+//! Only dbt Core's own `- installed:` line is read (dbt before 1.0 printed
+//! `installed version: …`); anything else, including other builds that call
+//! themselves dbt, is an unknown version. The version is PEP 440 (`1.9.0b1`,
+//! `1.10.0rc2`), parsed with `pep440_rs`; only its major and minor numbers decide
+//! support.
+
+use std::str::FromStr;
 
 use serde::Serialize;
 
@@ -54,20 +56,23 @@ pub enum Support {
 }
 
 impl DbtVersion {
-    /// Reads `dbt --version`'s output. `None` if no version can be found in it.
+    /// Reads `dbt --version`'s output. `None` unless dbt Core's `installed` line
+    /// holds a PEP 440 version.
     pub fn parse(output: &str) -> Option<Self> {
         let raw = output
             .lines()
-            .find_map(|line| line.trim().strip_prefix("- installed:"))
-            .and_then(|rest| rest.split_whitespace().next())
-            .map(str::to_owned)
-            .or_else(|| {
-                output
-                    .split_whitespace()
-                    .find(|word| numbers(word).is_some())
-                    .map(str::to_owned)
-            })?;
-        let (major, minor) = numbers(&raw)?;
+            .find_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("- installed:")
+                    .or_else(|| line.strip_prefix("installed version:"))
+            })?
+            .split_whitespace()
+            .next()?
+            .to_owned();
+        let version = pep440_rs::Version::from_str(&raw).ok()?;
+        let release = version.release();
+        let major = u32::try_from(*release.first()?).ok()?;
+        let minor = u32::try_from(release.get(1).copied().unwrap_or(0)).ok()?;
         Some(Self {
             raw,
             major,
@@ -95,19 +100,6 @@ impl DbtVersion {
         }
         Some(self.plugins.iter().any(|(name, _)| name == adapter))
     }
-}
-
-/// `major.minor` at the start of `word` (after an optional `v`), if it has them.
-fn numbers(word: &str) -> Option<(u32, u32)> {
-    let word = word.strip_prefix('v').unwrap_or(word);
-    let mut parts = word.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor: String = parts
-        .next()?
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    Some((major, minor.parse().ok()?))
 }
 
 /// The `- name: version …` lines under `Plugins:`, sorted by name.
@@ -153,8 +145,14 @@ mod tests {
         let v = DbtVersion::parse("Core:\n  - installed: 1.9.0b1\n").unwrap();
         assert_eq!((v.major, v.minor), (1, 9));
         assert_eq!(v.has_plugin("duckdb"), None);
-        let v = DbtVersion::parse("dbt-fusion 2.0.0-preview.12\n").unwrap();
+        let v = DbtVersion::parse("Core:\n  - installed: 2.0.0a1\n").unwrap();
         assert_eq!((v.major, v.minor, v.support()), (2, 0, Support::Untested));
+        let v = DbtVersion::parse("installed version: 0.19.2\n").unwrap();
+        assert_eq!(v.support(), Support::TooOld);
+        // Only dbt Core's own line counts: no other number is taken for its version.
+        assert!(DbtVersion::parse("dbt-fusion 2.0.0-preview.12\n").is_none());
+        assert!(DbtVersion::parse("Python 3.12.1\nsomething 1.10.2\n").is_none());
+        assert!(DbtVersion::parse("Core:\n  - installed: not-a-version\n").is_none());
         assert!(DbtVersion::parse("command not found").is_none());
         assert!(DbtVersion::parse("").is_none());
     }
