@@ -37,7 +37,7 @@ use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::state_store::{StateStore, StoredSnapshot};
 use ods_state::{
     Outcome, Recorded, RecordedSources, RelationFact, RunResult, SourceCheck, SourceCheckAction,
-    TestResult,
+    TestResult, VersionReading,
 };
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
@@ -522,6 +522,11 @@ impl Steps {
             DbtStep::RelationCheck { nodes } => format!(
                 "dbt show: are the tables of {} ODS would reuse still there?",
                 count(nodes, "node")
+            ),
+            // The only probe ODS runs reads table versions (ADR-0022).
+            DbtStep::RelationProbe { sources } => format!(
+                "dbt show: reading table versions for {}",
+                count(sources, "source")
             ),
             _ => "dbt".to_owned(),
         };
@@ -1184,7 +1189,7 @@ pub(super) fn prepare(
 fn record(
     (args, settings): (&ArgMatches, &StateSettings),
     tested: bool,
-    sources: Sources,
+    (sources, table_versions): (Sources, Option<&VersionReading>),
     execution: &ExecutionReport,
     (latest, target): (Option<&StoredSnapshot>, Option<&TargetIdentity>),
     store: &SqliteStateStore,
@@ -1204,6 +1209,10 @@ fn record(
         if let Some(checks) = planned_checks.get(&source.id) {
             source.checks.clone_from(checks);
         }
+    }
+    // The table versions read before the build, not after it (ADR-0022 §3).
+    if let Some(reading) = table_versions {
+        built.add_reading(reading.clone());
     }
     if built.invocation_id.as_deref() != Some(execution.run_id.as_str()) {
         return Err(CliError::new(
@@ -1237,18 +1246,15 @@ fn record(
             }
         })
         .collect();
-    let sources_recorded = matches!(
-        (built.sources_taken_at, execution.started_at),
-        // Strictly before: timestamps are to the second.
-        (Some(taken), Some(started)) if taken < started
-    );
+    let sources_recorded = keep_versions_read_before(&mut built.project, execution.started_at);
     let mut recorded = ods_state::record(
         &built.project,
         latest.map(|s| (s.id, &s.snapshot)),
         &results,
         &execution.run_id,
         execution.finished_at,
-        sources_recorded,
+        // Each source's version was dropped above unless it predates the run.
+        true,
     );
     recorded.snapshot.target = target.cloned();
     // Source tests (#232): recorded against the data measured before the run.
@@ -1257,7 +1263,7 @@ fn record(
         &built.project,
         &source_results(execution),
         execution.finished_at,
-        sources_recorded,
+        true,
     );
     tracing::info!(
         run = %execution.run_id,
@@ -1294,6 +1300,22 @@ fn record(
         recorded,
         source_tests,
     })
+}
+
+/// Drops the source versions not read strictly before the run `started` (timestamps
+/// are to the second): one read later could show data the run didn't see. Returns
+/// whether any version is left to record.
+fn keep_versions_read_before(project: &mut ods_state::Project, started: Option<Timestamp>) -> bool {
+    let mut kept = false;
+    for source in &mut project.sources {
+        if matches!((source.observed_at, started), (Some(at), Some(started)) if at < started) {
+            kept |= source.version.is_some();
+        } else {
+            source.version = None;
+            source.observed_at = None;
+        }
+    }
+    kept
 }
 
 fn execution_error(error: &ProviderError) -> CliError {
@@ -1645,10 +1667,13 @@ impl RunReport {
         let dry_run = !builds || args.get_flag("dry-run");
         let target = target_for(&executor, dry_run, &mut warnings)?;
 
-        // 2. Plan.
+        // 2. Plan, with the sources' table versions where the warehouse has them.
         let mut ws = Workspace::load(args, settings, sources)?;
         let tested = execution_tested(kind, args);
+        // The store first: a problem with it stops the run before the warehouse is asked.
         let (store, latest) = open_state(&ws, dry_run)?;
+        let table_versions =
+            super::state_versions::read_table_versions(&mut ws, &executor, &mut warnings)?;
         let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
         // One clock for the check and the plan, so they agree on what is due.
         let now = Timestamp::now();
@@ -1734,7 +1759,7 @@ impl RunReport {
             (args, settings),
             &executor,
             (requested, checked_sources),
-            sources,
+            (sources, table_versions.as_ref()),
             latest.as_ref(),
             &store,
         )
@@ -1748,7 +1773,7 @@ impl RunReport {
         (args, settings): (&ArgMatches, &StateSettings),
         executor: &DbtExecutor,
         (requested, checked_sources): (Vec<RequestedNode>, Vec<RequestedNode>),
-        sources: Sources,
+        sources: (Sources, Option<&VersionReading>),
         latest: Option<&StoredSnapshot>,
         store: &SqliteStateStore,
     ) -> Result<(Self, Option<CliError>), CliError> {
@@ -2221,6 +2246,89 @@ mod tests {
             relation_facts(&Blind, &requested(&["a"]), CheckFor::Reuse, &mut warnings).unwrap();
         assert_eq!(facts, None);
         assert!(warnings[0].contains("reuse trusts"), "{warnings:?}");
+    }
+
+    mod versions_read_before {
+        use ods_core::state::{DataVersion, Exactness, Timestamp};
+        use ods_core::{Capability, CapabilitySet};
+        use ods_state::{Project, Source, VersionAnswer, VersionReading};
+
+        use super::super::keep_versions_read_before;
+
+        const ID: &str = "source.p.raw.orders";
+
+        fn reading(capability: Capability, at: i64, value: &str, origin: &str) -> VersionReading {
+            VersionReading::new(
+                CapabilitySet::from([capability]),
+                Some(Timestamp::from_unix(at)),
+                [(
+                    ID.to_owned(),
+                    VersionAnswer::Version(DataVersion::new(value, Exactness::Exact, origin)),
+                )]
+                .into(),
+            )
+        }
+
+        fn project(readings: &[VersionReading]) -> Project {
+            let mut sources = vec![Source::new(ID, "raw.orders", None)];
+            ods_state::choose_source_versions(&mut sources, readings);
+            Project::new(Vec::new(), sources)
+        }
+
+        fn table(at: i64) -> VersionReading {
+            reading(Capability::RelationVersions, at, "t/1", "delta_history")
+        }
+
+        #[test]
+        fn only_versions_read_strictly_before_the_start_are_kept() {
+            // Read the second before: kept.
+            let mut before = project(&[table(99)]);
+            assert!(keep_versions_read_before(
+                &mut before,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert!(before.sources[0].version.is_some());
+            // The same second as the start: timestamps are to the second, so it may
+            // have been read after the run started. Dropped.
+            let mut same = project(&[table(100)]);
+            assert!(!keep_versions_read_before(
+                &mut same,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert_eq!(same.sources[0].version, None);
+            assert_eq!(same.sources[0].observed_at, None);
+            // After the start: dropped.
+            let mut after = project(&[table(101)]);
+            assert!(!keep_versions_read_before(
+                &mut after,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert_eq!(after.sources[0].version, None);
+            // No start time: nothing can be shown to predate the run.
+            let mut unknown = project(&[table(99)]);
+            assert!(!keep_versions_read_before(&mut unknown, None));
+            assert_eq!(unknown.sources[0].version, None);
+        }
+
+        #[test]
+        fn a_late_table_version_is_dropped_without_falling_back_to_max_loaded_at() {
+            // The planner chose the table version, read too late; `max_loaded_at` was
+            // read in time. The version the plan used is the one recorded or none: it
+            // isn't swapped for another that the plan didn't rest on. So nothing is
+            // recorded, and the readers build once more next run (conservative).
+            let freshness = reading(
+                Capability::SourceFreshness,
+                50,
+                "2026-01-01T00:00:00Z",
+                "max_loaded_at",
+            );
+            let mut late = project(&[freshness, table(100)]);
+            assert!(!keep_versions_read_before(
+                &mut late,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert_eq!(late.sources[0].version, None);
+        }
     }
 
     #[test]

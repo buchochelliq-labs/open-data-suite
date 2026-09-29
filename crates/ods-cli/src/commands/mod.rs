@@ -18,6 +18,7 @@ mod state_retry;
 mod state_run;
 mod state_settings;
 mod state_test;
+mod state_versions;
 mod version;
 
 pub use completions::Completions;

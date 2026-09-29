@@ -185,6 +185,8 @@ pub(super) struct Workspace {
     pub(super) source_errors: Vec<String>,
     /// The manifest the project was read from.
     pub(super) manifest: ods_provider_dbt::Manifest,
+    /// What was read about sources' data versions, which the planner picks from.
+    pub(super) readings: Vec<VersionReading>,
 }
 
 /// `sources.json`'s `max_loaded_at` per source, as a `source_freshness` reading, taken
@@ -291,6 +293,26 @@ impl Workspace {
             project: Project::new(nodes, sources),
             scope,
             manifest: artifacts.manifest,
+            readings,
+        })
+    }
+
+    /// Adds what another reader found about sources' data versions (e.g. table
+    /// versions), and has the planner pick each source's version again from
+    /// everything read (ADR-0022 §2).
+    pub(super) fn add_reading(&mut self, reading: VersionReading) {
+        self.readings.push(reading);
+        ods_state::choose_source_versions(&mut self.project.sources, &self.readings);
+    }
+
+    /// Whether some source's version could come from `sources.json`: one without a
+    /// relation version.
+    fn freshness_matters(&self) -> bool {
+        self.project.sources.iter().any(|s| {
+            !s.version_evidence.iter().any(|e| {
+                e.kind == "source_version_strategy"
+                    && e.value.as_deref() == Some("relation_versions")
+            })
         })
     }
 
@@ -457,14 +479,19 @@ pub(super) fn plan_against(
         );
     }
     let mut warnings = Vec::new();
-    if ws.project.sources.iter().any(|s| s.version.is_none()) && ws.sources_file.is_none() {
+    // Table versions may have been read, but if none was usable either, every reader
+    // still builds.
+    if ws.sources_file.is_none()
+        && !ws.project.sources.is_empty()
+        && ws.project.sources.iter().all(|s| s.version.is_none())
+    {
         warnings.push(
             "no source freshness results: every node reading a source is built. Run `dbt source freshness` before planning."
                 .to_owned(),
         );
     }
     if let (Some(taken), Some(head)) = (ws.sources_taken_at, latest)
-        && !ws.project.sources.is_empty()
+        && ws.freshness_matters()
         && taken <= head.snapshot.created_at
     {
         warnings.push(format!(
@@ -547,6 +574,11 @@ impl PlanReport {
             }
             (latest, _) => (latest, options),
         };
+        // Offline, as the relation check is (ADR-0016): it runs no dbt command.
+        if super::state_versions::reads_table_versions(&ws) {
+            // `ods state explain` plans through here, so it says the same.
+            notes.push("sources' table versions weren't read: this command doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
+        }
         let (plan, mut warnings) =
             plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;
         warnings.extend(notes);

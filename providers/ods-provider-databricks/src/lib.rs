@@ -1,6 +1,10 @@
 //! Databricks provider for OpenDataSuite.
 //!
-//! Today: reading Unity Catalog's lineage system table,
+//! - [`DeltaVersions`]: each source's Delta table version, read through any
+//!   [`RelationProbe`](ods_sdk::contracts::probe::RelationProbe), as a
+//!   [`ChangeProvider`](ods_sdk::contracts::changes::ChangeProvider) (#17, ADR-0022).
+//!
+//! Reading Unity Catalog's lineage system table,
 //! [`system.access.column_lineage`](https://docs.databricks.com/aws/en/admin/system-tables/lineage),
 //! from an export, as [`ObservedLineage`](ods_sdk::contracts::observed_lineage::ObservedLineage)
 //! ([`UcColumnLineage`]). Unity Catalog records column lineage for queries run by notebooks,
@@ -20,8 +24,10 @@
 //! ```
 
 mod column_lineage;
+pub mod delta_versions;
 
 pub use column_lineage::{ExportFormat, UcColumnLineage};
+pub use delta_versions::DeltaVersions;
 
 /// The `kind` Databricks providers are registered under in configuration.
 pub const KIND: &str = "databricks";

@@ -464,6 +464,44 @@ ods state build --resource-type seed --exclude big_model
 ods state run --full-refresh -- --threads 8    # anything after `--` goes to dbt
 ```
 
+### Where source versions come from
+
+A model reading a source is reused only when the source has no new data since the model
+was built. ODS picks each source's data version from what it could read, in this order
+([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)):
+
+1. **The table's own version** (`relation_versions`), on warehouses that have one. On
+   Databricks (`metadata.adapter_type` is `databricks` in the manifest), the commands
+   that can build (`run`, `build`, `seed`, `snapshot`, `compile`, with or without
+   `--dry-run`) ask about every source of the project in one `dbt show` query, through
+   dbt's own connection, so ODS handles no credential. For each source that dbt's
+   adapter says is a Delta table, it reads `DESCRIBE DETAIL` (the table's id and format)
+   and `DESCRIBE HISTORY … LIMIT 1` (its latest version). The version is
+   `<table id>/<version>` (exactness `exact`, origin `delta_history`): every commit
+   moves it, and a table dropped and created again gets a new id. The step line reads
+   `dbt show: reading table versions for N sources`.
+2. **`max_loaded_at`** (`source_freshness`), from `dbt source freshness`
+   (`sources.json`), for sources with a `loaded_at_field`.
+3. **None**: the source counts as changed, and the models reading it build.
+
+A table version wins over `max_loaded_at` when both exist. A source whose table version
+can't be read (a view, a table that isn't Delta, one dbt's adapter doesn't confirm is
+Delta, e.g. in `hive_metastore`, or an answer without an id or version) falls back to
+`max_loaded_at`. If the `dbt show` query fails (a permission error, a table that refuses
+`DESCRIBE HISTORY`), every source's table version is unknown and a warning names dbt's
+error (the evidence only says the probe failed). Each plan entry says where its
+sources' versions came from: evidence `source_version_strategy` (`relation_versions`,
+`source_freshness` or `no_version`), `source_version_origin` (the version's own
+origin, e.g. `delta_history` or `sources.json max_loaded_at`) and, for each preferred
+strategy that could have applied but wasn't used, `source_version_skipped` with the
+reason.
+
+Versions from different origins never compare equal, so the first run after table
+versions become available (or stop being) builds the readers of those sources once.
+Any commit moves a Delta version, including `OPTIMIZE` and `VACUUM`, so maintenance
+also rebuilds readers. `ods state plan` and `ods state explain` don't run dbt, so they
+read no table versions, and say so; `ods state build --dry-run` does. Other adapters read none yet.
+
 ### Source tests
 
 `dbt build` also runs the tests defined on sources (e.g. `not_null` on a raw table).
@@ -787,8 +825,9 @@ A node is **built** when (first match wins):
 5. it depends on something ODS doesn't know, declares no inputs at all (seeds aside), or
    its State config has a setting ODS can't honour yet;
 6. a source it reads has no usable data version, now or when it was last built. A
-   version only counts if `sources.json` was measured after the node's last build, so
-   run `dbt source freshness` before planning;
+   version only counts if it was read after the node's last build: run `dbt source
+   freshness` before planning (or, on Databricks, let the commands that run dbt read
+   table versions: see [Where source versions come from](#where-source-versions-come-from));
 7. a parent has new data (a source's `max_loaded_at` moved, a parent is rebuilt for
    data, or a parent was rebuilt by a run it didn't read), unless its `lag_tolerance`
    hasn't run out or `require_fresh_data_from: all` isn't met yet.
@@ -813,8 +852,8 @@ table or view of every node they would reuse still exists.
 Record right after the run, before another dbt command rewrites the target directory.
 It advances only nodes whose status in `run_results.json` is `success`.
 Failed and skipped nodes keep their last successful state, so they (and what reads them)
-are built next time. Source versions are recorded only if `sources.json` was measured
-before the run started. Otherwise a node could be credited with data that arrived after
+are built next time. Source versions are recorded only if they were read (`sources.json`
+measured, or table versions read) before the run started. Otherwise a node could be credited with data that arrived after
 it ran.
 
 | Flag | Meaning |
