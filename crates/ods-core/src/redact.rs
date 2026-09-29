@@ -353,7 +353,13 @@ fn match_at(lower: &str, at: usize, pattern: &[&str]) -> Option<usize> {
         || bytes
             .get(pos)
             .is_none_or(|b| b.is_ascii_whitespace() || matches!(b, b'(' | b';'));
-    ends.then_some(pos)
+    // A text that is only a statement word and a count (an adapter's status,
+    // `INSERT`, `SELECT 5`) carries no value to remove.
+    let only_status = at == 0
+        && lower[pos..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_whitespace() || b == b';');
+    (ends && !only_status).then_some(pos)
 }
 
 /// Where the first SQL start is in `lower` (ASCII-lowercased), in bytes.
@@ -722,6 +728,18 @@ mod tests {
         ] {
             assert_eq!(summary_line(fine, 200).as_deref(), Some(fine), "{fine}");
         }
+    }
+
+    /// Adapters' statuses are a statement word and a count: nothing to remove.
+    #[test]
+    fn a_statement_status_is_kept() {
+        for status in ["INSERT", "INSERT 0 6", "SELECT 5", "CREATE TABLE", "MERGE"] {
+            assert_eq!(value_line(status, 100).as_deref(), Some(status), "{status}");
+        }
+        assert_eq!(
+            value_line("UPDATE accounts SET token = x", 100).as_deref(),
+            Some("[SQL removed]")
+        );
     }
 
     #[test]
