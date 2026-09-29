@@ -99,15 +99,15 @@ fn copies_of(db: &Path) -> Vec<PathBuf> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) struct DoctorReport {
-    state_db: PathBuf,
-    exists: bool,
-    schema: Option<StoreSchema>,
-    scopes: Vec<ScopeSummary>,
-    problems: Vec<StoreProblem>,
+    pub(super) state_db: PathBuf,
+    pub(super) exists: bool,
+    pub(super) schema: Option<StoreSchema>,
+    pub(super) scopes: Vec<ScopeSummary>,
+    pub(super) problems: Vec<StoreProblem>,
     /// Copies of the database found beside it, oldest name first.
-    copies: Vec<PathBuf>,
+    pub(super) copies: Vec<PathBuf>,
     /// What to do, for people.
-    advice: Vec<String>,
+    pub(super) advice: Vec<String>,
 }
 
 impl DoctorReport {
@@ -129,7 +129,12 @@ impl DoctorReport {
         ctx.emit_failed(&report, error)
     }
 
-    fn build(db: &Path) -> Result<Self, CliError> {
+    /// Checks the database at `db`, changing nothing. Also `ods doctor`'s state store
+    /// check (#181), so the two never disagree.
+    ///
+    /// # Errors
+    /// The database exists but can't be opened (other than being damaged).
+    pub(super) fn build(db: &Path) -> Result<Self, CliError> {
         let mut report = Self {
             state_db: db.to_owned(),
             exists: db.is_file(),
@@ -203,7 +208,7 @@ fn advice(report: &DoctorReport) -> Vec<String> {
     advice
 }
 
-fn problem_label(kind: ProblemKind) -> &'static str {
+pub(super) fn problem_label(kind: ProblemKind) -> &'static str {
     match kind {
         ProblemKind::Damaged => "damaged",
         ProblemKind::NewerSchema => "newer schema",

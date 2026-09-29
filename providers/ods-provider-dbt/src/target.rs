@@ -29,9 +29,13 @@ or target.get(\"path\") or target.get(\"project\") or \"\") | string -%}\
 \"location_digest\": (local_md5(raw) if raw else none), \
 \"database\": target.get(\"database\") or target.get(\"catalog\") or target.get(\"dbname\")}) }}";
 
-/// The same cleaning as [`QUERY`]'s, again, in case a dbt renders it differently:
-/// what is shown and stored never carries a user, query string or options.
-fn shown(location: &str) -> String {
+/// A location (host, URL or connection string) without anything that can carry a
+/// credential: a user part (up to an `@`), query string, fragment or `;` options.
+/// The target check cleans what it renders the same way, and cleans it again here in
+/// case a dbt renders it differently, so what is shown and stored never carries one.
+/// Also used wherever else a value that may be a connection string is shown
+/// (`ods doctor`).
+pub fn strip_credentials(location: &str) -> String {
     let cut = location.split(['?', '#', ';']).next().unwrap_or_default();
     cut.rsplit('@').next().unwrap_or(cut).to_owned()
 }
@@ -68,7 +72,7 @@ pub(crate) fn parse(stdout: &str) -> Result<TargetIdentity, String> {
         .kind(field("type"))
         .location(
             field("location")
-                .map(|l| shown(&l))
+                .map(|l| strip_credentials(&l))
                 .filter(|l| !l.is_empty()),
         )
         .location_digest(field("location_digest"))
@@ -116,7 +120,7 @@ mod tests {
             ),
             ("/data/warehouse.duckdb", "/data/warehouse.duckdb"),
         ] {
-            assert_eq!(shown(given), kept, "{given}");
+            assert_eq!(strip_credentials(given), kept, "{given}");
         }
     }
 

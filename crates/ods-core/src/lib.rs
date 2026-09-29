@@ -3,9 +3,10 @@
 //! `ods-core` sits at the bottom of the dependency graph (ADR-0001): it depends on no other
 //! ODS crate and must never contain warehouse- or runtime-specific logic. It holds the
 //! capability vocabulary and strategy choice (#3, ADR-0006), the State domain model
-//! (ADR-0013), and the conventions every persisted domain type follows. The semantic graph itself is delivered by #4.
+//! (ADR-0013), the health-check model of `ods doctor` (ADR-0023), and the conventions every persisted domain type follows. The semantic graph itself is delivered by #4.
 
 pub mod capability;
+pub mod diagnostic;
 pub mod freshness;
 pub mod graph;
 pub mod lineage;
@@ -13,6 +14,9 @@ pub mod state;
 pub mod strategy;
 
 pub use capability::{Capability, CapabilitySet, CustomCapability, UnknownCapability};
+pub use diagnostic::{
+    CheckCategory, CheckResult, CheckStatus, Evidence, HealthReport, Summary, Verdict,
+};
 pub use freshness::{FreshnessPolicy, LoadedAt, PolicyOrigin, Quorum, UnappliedSetting};
 pub use lineage::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, RelationName};
 pub use strategy::{Choice, ChoiceError, Skipped, Strategy, choose};

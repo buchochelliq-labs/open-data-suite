@@ -1,0 +1,96 @@
+---
+source: crates/ods-cli/src/commands/doctor.rs
+expression: output
+---
+{
+  "schema_version": {
+    "major": 0,
+    "minor": 1
+  },
+  "command": "doctor",
+  "ods_version": "[ods-version]",
+  "result": {
+    "scope": {
+      "project_only": false,
+      "provider": null,
+      "connect": false
+    },
+    "verdict": "failed",
+    "strict": false,
+    "summary": {
+      "ok": 1,
+      "warning": 1,
+      "error": 1,
+      "unknown": 1,
+      "skipped": 1
+    },
+    "checks": [
+      {
+        "id": "config.load",
+        "category": "config",
+        "status": "ok",
+        "required": true,
+        "message": "1 configuration file(s) loaded",
+        "evidence": [
+          {
+            "key": "project file",
+            "value": "ods.toml",
+            "source": "loaded"
+          }
+        ]
+      },
+      {
+        "id": "project.freshness",
+        "category": "project",
+        "provider": "dbt",
+        "status": "warning",
+        "required": false,
+        "code": "ODS-W0206",
+        "message": "the manifest is older than `models/orders.sql`",
+        "evidence": [
+          {
+            "key": "manifest_modified",
+            "value": "2026-01-01T00:00:00Z"
+          }
+        ],
+        "hint": "parse the project again: `dbt parse`"
+      },
+      {
+        "id": "tools.dbt",
+        "category": "tools",
+        "provider": "dbt",
+        "status": "error",
+        "required": true,
+        "code": "ODS-E0502",
+        "message": "dbt can't be run",
+        "evidence": [],
+        "hint": "install dbt-core"
+      },
+      {
+        "id": "target.identity",
+        "category": "target",
+        "provider": "dbt",
+        "status": "unknown",
+        "required": true,
+        "code": "ODS-U0001",
+        "message": "not checked: `tools.dbt` failed",
+        "evidence": [
+          {
+            "key": "depends_on",
+            "value": "tools.dbt"
+          }
+        ]
+      },
+      {
+        "id": "connectivity.relations",
+        "category": "connectivity",
+        "provider": "dbt",
+        "status": "skipped",
+        "required": false,
+        "message": "a live check: pass --connect to run it",
+        "evidence": []
+      }
+    ]
+  },
+  "diagnostics": []
+}
