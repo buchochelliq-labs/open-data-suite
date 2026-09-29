@@ -526,9 +526,3 @@ fn panels(b: &mut String, home: &HomeView) {
 fn url_component(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
-
-/// A page at the dashboard's root, inside the shell: for pages built in their own
-/// modules, such as Lineage (#312).
-pub(crate) fn root_page(view: &ShellView, title: &str, body: &str, generation: u64) -> String {
-    shell(view, title, body, generation)
-}

@@ -393,58 +393,41 @@ struct LineageQuery {
 }
 
 /// The Lineage page (#312): the explorer in the dashboard's shell, with the State
-/// overlay planned as of this request.
+/// overlay from the plan every page shares. Built on a blocking thread, as it may plan.
 async fn explorer(State(state): State<Shared>, Query(query): Query<LineageQuery>) -> Response {
-    // The first paint is embedded, with its generation so the page notices any reload
-    // after it.
-    let generation = state.generation.load(Ordering::SeqCst);
-    let snapshot = state.current();
-    let page = move |overlay: crate::lineage::LineageOverlay| {
+    crate::state_pages::blocking(move || {
+        // The first paint is embedded, with its generation so the page notices any
+        // reload after it.
+        let generation = state.generation.load(Ordering::SeqCst);
+        let snapshot = state.current();
         let dashboard = snapshot.dashboard();
-        crate::lineage::lineage_page(
+        let overlay = dashboard.lineage_overlay(&snapshot.document, state.details);
+        match crate::lineage::lineage_page(
             &dashboard.shell("lineage"),
             &snapshot.document,
             &overlay,
             query.node.as_deref(),
             generation,
-        )
-    };
-    match lineage_overlay_of(&state).await {
-        Ok(overlay) => match page(overlay) {
+        ) {
             Ok(html) => Html(html).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
-        Err(()) => overlay_failed(),
-    }
+        }
+    })
+    .await
 }
 
 /// `/api/lineage/overlay`: the plan's decision for each node, as the page colours it.
 async fn lineage_overlay(State(state): State<Shared>) -> Response {
-    match lineage_overlay_of(&state).await {
-        Ok(overlay) => Json(overlay).into_response(),
-        Err(()) => overlay_failed(),
-    }
-}
-
-/// The overlay as of now. Planning reads the project and runs the planner, so it runs
-/// on a blocking thread, through the dashboard's `plan_at` like every page's plan.
-async fn lineage_overlay_of(state: &Shared) -> Result<crate::lineage::LineageOverlay, ()> {
-    let snapshot = state.current();
-    let details = state.details;
-    tokio::task::spawn_blocking(move || {
-        snapshot
-            .dashboard()
-            .lineage_overlay(&snapshot.document, details)
+    crate::state_pages::blocking(move || {
+        let snapshot = state.current();
+        Json(
+            snapshot
+                .dashboard()
+                .lineage_overlay(&snapshot.document, state.details),
+        )
+        .into_response()
     })
     .await
-    .map_err(|e| tracing::warn!(error = %e, "the lineage overlay couldn't be made"))
-}
-
-fn overlay_failed() -> Response {
-    error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "the overlay couldn't be made; see the server log",
-    )
 }
 
 #[derive(Serialize)]

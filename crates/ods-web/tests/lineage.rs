@@ -8,13 +8,14 @@ use std::sync::Arc;
 
 use ods_core::FreshnessPolicy;
 use ods_core::state::{
-    Evidence, Exactness, ExecutionPlan, PlanAction, PlanEntry, Reason, ReasonCode, SnapshotId,
-    Timestamp,
+    Evidence, Exactness, ExecutionPlan, Fingerprint, NodeState, PlanAction, PlanEntry, Reason,
+    ReasonCode, SnapshotId, StateSnapshot, Timestamp,
 };
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, RelationName};
 use ods_lineage::{GraphFilter, LineageNode, LineageProject, MemoryCache, NodeKind, build};
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
+use ods_web::dashboard::state::History;
 use ods_web::dashboard::{OpaqueNode, Planner, Recorded, RunRecord, StateInput, StateStatus};
 use ods_web::lineage::{Decision, RELATION_NOT_CHECKED, TRUSTED_REUSE};
 use ods_web::{Dashboard, ServeOptions, Snapshot, router, standalone_page};
@@ -122,7 +123,7 @@ fn plan() -> ExecutionPlan {
 }
 
 fn recorded() -> Dashboard {
-    let mut run = RunRecord::new(
+    let run = RunRecord::new(
         2,
         RUN,
         at("2026-09-29T11:00:00Z"),
@@ -133,10 +134,23 @@ fn recorded() -> Dashboard {
         ],
         1,
     );
-    run.components = BTreeMap::from([(
-        "model.shop.customers".to_owned(),
-        vec!["config".to_owned(), "sql".to_owned(), "upstream".to_owned()],
-    )]);
+    // The latest snapshot: what the fingerprint step compares with.
+    let fingerprint =
+        Fingerprint::from_content([("config", "{}"), ("sql", "select 1"), ("upstream", "")]);
+    let latest = StateSnapshot::new(
+        Some(SnapshotId(1)),
+        at("2026-09-29T11:00:00Z"),
+        RUN,
+        BTreeMap::from([(
+            "model.shop.customers".to_owned(),
+            NodeState::new(
+                fingerprint,
+                at("2026-09-29T11:00:00Z"),
+                RUN,
+                BTreeMap::new(),
+            ),
+        )]),
+    );
     Dashboard::new("shop", "dev")
         .with_opaque(vec![OpaqueNode::new(
             "model.shop.segments",
@@ -145,7 +159,8 @@ fn recorded() -> Dashboard {
         )])
         .with_state(StateInput::Recorded(Box::new(
             Recorded::new(".ods/state.db", vec![run], 2, Ok(plan()))
-                .with_warnings(vec!["no source freshness results".into()]),
+                .with_warnings(vec!["no source freshness results".into()])
+                .with_history(History::new(vec![(2, latest)])),
         )))
 }
 
@@ -245,7 +260,7 @@ fn the_overlay_api_colours_each_node_by_the_plan() {
     );
     assert_eq!(
         nodes["model.shop.customers"]["why_href"],
-        "state/plan?node=model.shop.customers"
+        "state/plan?node=model.shop.customers",
     );
     assert_eq!(
         nodes["model.shop.customers"]["reasons"][0]["message"],

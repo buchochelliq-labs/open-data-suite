@@ -25,7 +25,7 @@ expression: pretty(&body)
       ],
       "relation": null,
       "summary": "never built",
-      "why_href": "state/plan?node=model.shop.customers"
+      "why_href": null
     },
     "model.shop.orders": {
       "changed_components": [],
@@ -43,7 +43,7 @@ expression: pretty(&body)
       ],
       "relation": null,
       "summary": "never built",
-      "why_href": "state/plan?node=model.shop.orders"
+      "why_href": null
     },
     "model.shop.segments": {
       "changed_components": [],
@@ -61,7 +61,7 @@ expression: pretty(&body)
       ],
       "relation": null,
       "summary": "never built",
-      "why_href": "state/plan?node=model.shop.segments"
+      "why_href": null
     },
     "seed.shop.countries": {
       "changed_components": [],
@@ -79,7 +79,7 @@ expression: pretty(&body)
       ],
       "relation": null,
       "summary": "never built",
-      "why_href": "state/plan?node=seed.shop.countries"
+      "why_href": null
     }
   },
   "planned_at": null,

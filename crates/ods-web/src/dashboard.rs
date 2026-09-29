@@ -223,18 +223,6 @@ impl fmt::Debug for PlannerFn {
     }
 }
 
-impl Recorded {
-    /// The plan as of `now`, with what qualifies it: made again with the planner when
-    /// there is one, else as made at load time. For pages outside this module, such as
-    /// Lineage (#312).
-    pub(crate) fn plan_at(&self, now: Timestamp) -> Result<(ExecutionPlan, Vec<String>), String> {
-        match &self.planner {
-            Some(PlannerFn(planner)) => planner(now),
-            None => self.plan.clone().map(|plan| (plan, self.warnings.clone())),
-        }
-    }
-}
-
 /// A readable state store's contents for one scope.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -335,9 +323,6 @@ pub struct RunRecord {
     pub kept: usize,
     /// The target it built in, if recorded.
     pub target: Option<Target>,
-    /// For each node the snapshot holds, the names of its recorded fingerprint's
-    /// components, so a page can say which were compared (#312).
-    pub components: BTreeMap<String, Vec<String>>,
 }
 
 impl RunRecord {
@@ -356,7 +341,6 @@ impl RunRecord {
             built,
             kept,
             target: None,
-            components: BTreeMap::new(),
         }
     }
 
@@ -381,14 +365,6 @@ impl RunRecord {
                 .target
                 .as_ref()
                 .map(|t| Target::new(t.name.clone(), t.kind.clone())),
-            components: snapshot
-                .nodes
-                .iter()
-                .map(|(id, node)| {
-                    let names = node.fingerprint.components.keys().cloned().collect();
-                    (id.clone(), names)
-                })
-                .collect(),
         }
     }
 }

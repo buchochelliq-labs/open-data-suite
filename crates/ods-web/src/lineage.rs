@@ -15,6 +15,8 @@ use ods_lineage::{GraphDocument, NodeKind};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 
+use crate::home::{Frame, framed};
+
 use crate::dashboard::{
     Dashboard, RunRecord, ShellView, StateInput, StateStatus, reason_label, sentence, short,
 };
@@ -91,8 +93,9 @@ pub struct NodeOverlay {
     pub opaque: Option<String>,
     /// Its Model page, relative to the dashboard's root.
     pub model_href: String,
-    /// Its decision on the State plan page, relative to the dashboard's root.
-    pub why_href: String,
+    /// Its decision on the State plan page, relative to the dashboard's root; `None`
+    /// when the plan has no entry for it (no store, or no plan), so nothing to explain.
+    pub why_href: Option<String>,
 }
 
 /// One reason.
@@ -326,6 +329,23 @@ impl Dashboard {
             .iter()
             .map(|n| (n.id.as_str(), n.why.as_str()))
             .collect();
+        // The latest snapshot's fingerprints, to list what was compared (#311's History).
+        let recorded_components: BTreeMap<&str, Vec<String>> = self
+            .history()
+            .and_then(|h| h.snapshots.first())
+            .map(|(_, snapshot)| {
+                snapshot
+                    .nodes
+                    .iter()
+                    .map(|(id, n)| {
+                        (
+                            id.as_str(),
+                            n.fingerprint.components.keys().cloned().collect(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let entries: BTreeMap<&str, &PlanEntry> = plan
             .iter()
             .flat_map(|p| p.entries.iter())
@@ -340,7 +360,7 @@ impl Dashboard {
             let (decision, summary, reasons, changed_components) =
                 decided(entry, blanket.as_ref(), runs);
             // The latest run's snapshot holds every node's last good build.
-            let recorded = runs.first().and_then(|run| run.components.get(&node.id));
+            let recorded = recorded_components.get(node.id.as_str());
             let last_built = runs
                 .iter()
                 .find(|run| run.built.iter().any(|b| b == &node.id))
@@ -368,7 +388,7 @@ impl Dashboard {
                     last_built,
                     opaque,
                     model_href: model_href(&node.id),
-                    why_href: why_href(&node.id),
+                    why_href: entry.map(|_| why_href(&node.id)),
                 },
             );
         }
@@ -450,8 +470,12 @@ impl Dashboard {
                 } else {
                     StateStatus::Recorded
                 };
-                match recorded.plan_at(now) {
-                    Ok((plan, warnings)) => {
+                // The plan every page shares: memoised per reload and time bucket (#311).
+                let (planned, warnings) = self
+                    .plan_at(now)
+                    .unwrap_or_else(|| (recorded.plan.clone(), recorded.warnings.clone()));
+                match planned {
+                    Ok(plan) => {
                         overlay.warnings = warnings;
                         overlay.based_on = plan.based_on.map(|s| s.0);
                         overlay.planned_at = Some(plan.created_at);
@@ -543,12 +567,17 @@ pub(crate) fn lineage_page(
     node: Option<&str>,
     generation: u64,
 ) -> Result<String, serde_json::Error> {
+    // The header says which plan the overlay is, as the design does.
+    let status = overlay.based_on.map(|snapshot| {
+        format!(
+            r#"<span class="pill-snap" title="The overlay is the plan against this snapshot"><span class="dot"></span>plan against snapshot {snapshot}</span>"#
+        )
+    });
     let graph = embeddable(document)?;
     let overlay = embeddable(overlay)?;
     let selected = embeddable(&node)?;
     let body = format!(
-        r#"<style>{CSS}</style>
-<meta name="ods-source" content="api">
+        r#"<meta name="ods-source" content="api">
 {markup}
 <script>{dagre}</script>
 <script type="application/json" id="ods-graph">{graph}</script>
@@ -558,7 +587,18 @@ pub(crate) fn lineage_page(
         markup = explorer_markup(true),
         dagre = crate::page::DAGRE,
     );
-    Ok(crate::home::root_page(shell, "Lineage", &body, generation))
+    let frame = Frame {
+        title: "Lineage",
+        crumbs: None,
+        root: "",
+        status,
+        sub: None,
+        // The toolbar's search is the page's; the header's would search elsewhere.
+        search: false,
+        css: CSS,
+        js: "",
+    };
+    Ok(framed(shell, &frame, &body, generation))
 }
 
 #[cfg(test)]

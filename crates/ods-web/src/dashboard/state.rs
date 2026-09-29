@@ -801,7 +801,9 @@ fn unknown_evidence(code: ReasonCode) -> bool {
 }
 
 impl Dashboard {
-    fn history(&self) -> Option<&super::state::History> {
+    /// The snapshots and last run the State pages list; also what the Lineage page
+    /// compares fingerprints with (#312).
+    pub(crate) fn history(&self) -> Option<&super::state::History> {
         self.recorded().and_then(|r| r.history.as_deref())
     }
 

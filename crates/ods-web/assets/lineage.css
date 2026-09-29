@@ -49,9 +49,6 @@
 .lin-bar .lin-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 .lin-bar .lin-primary:disabled { opacity: .55; cursor: not-allowed; }
 
-/* The design's Lineage header has no search box: the toolbar's is the page's. */
-header.top:has(~ .lin) .search { display: none; }
-header.top:has(~ .lin) .pill-snap { margin-left: auto; }
 
 /* ---- canvas */
 .lin-canvas { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; min-height: 0;

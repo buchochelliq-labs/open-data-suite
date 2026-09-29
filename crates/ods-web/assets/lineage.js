@@ -172,13 +172,6 @@ if (typeof document !== "undefined") (async function () {
   const nameOf = id => (byId.get(id) || { name: id }).name;
   const names = ids => [...ids].map(nameOf).sort().join(", ");
 
-  // The header says which plan the page shows, as the design does.
-  const pill = document.querySelector("header.top .pill-snap");
-  if (pill && overlay && overlay.based_on != null) {
-    pill.replaceChildren(h("span", null, "dot"), `plan against snapshot ${overlay.based_on}`);
-    pill.title = "The overlay is the plan against this snapshot";
-  }
-
   // ---------- layout: dagre (layered, left to right). Nodes and edges go in sorted
   // order so the same graph always gets the same picture.
   let pos = new Map(), routes = new Map();
@@ -614,9 +607,11 @@ if (typeof document !== "undefined") (async function () {
       });
     } else sub.textContent = "No reader builds.";
     if (d.opaque) rich("p", `${d.opaque}. Any change to what it reads makes it run.`, "warn more", body);
-    const more = h("p", null, "more", body);
-    const a = h("a", "Full reason chain and evidence in State · Why →", null, more);
-    a.href = d.why_href;
+    if (d.why_href) {
+      const more = h("p", null, "more", body);
+      const a = h("a", "Full reason chain and evidence in State · Why →", null, more);
+      a.href = d.why_href;
+    }
     warnings(body);
   }
 
@@ -865,7 +860,7 @@ if (typeof document !== "undefined") (async function () {
   search.addEventListener("blur", () => setTimeout(hideResults, 100));
   window.addEventListener("keydown", e => {
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement || {}).tagName || "");
-    // The page's own search; served, the shell's is hidden here (lineage.css).
+    // The page's own search; served, the shell leaves its header search out here.
     if (e.key === "/" && !typing) { e.preventDefault(); search.focus(); }
     else if (e.key === "Escape" && !typing && state.sel) clearSel();
   });
