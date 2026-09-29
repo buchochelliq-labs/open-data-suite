@@ -117,6 +117,9 @@ impl Module for State {
             Some(("test", args)) => state_test::TestReport::run(args, ctx),
             Some(("plan", args)) => ctx.emit(&state_plan::PlanReport::build(args, ctx.config)?),
             Some(("record", args)) => ctx.emit(&state_plan::RecordReport::build(args, ctx.config)?),
+            Some(("history", args)) if args.get_one::<String>("run").is_some() => {
+                ctx.emit(&state_plan::RunHistoryReport::build(args, ctx.config)?)
+            }
             Some(("history", args)) if args.get_one::<String>("node").is_some() => {
                 ctx.emit(&state_explain::NodeHistoryReport::build(args, ctx.config)?)
             }

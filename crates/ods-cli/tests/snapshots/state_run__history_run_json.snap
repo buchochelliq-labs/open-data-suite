@@ -1,0 +1,157 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
+---
+{
+  "outcome": "failed",
+  "live": true,
+  "mode": "run",
+  "nodes": [
+    {
+      "node": "seed.jaffle_ods.raw_customers",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "seed.jaffle_ods.raw_orders",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": 6,
+      "adapter": {
+        "code": "INSERT"
+      },
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "seed.jaffle_ods.raw_payments",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.stg_customers",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.stg_orders",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.stg_payments",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.order_events",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.orders",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.customer_order_rank",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.customers",
+      "status": "error",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": {
+        "kind": "Conversion Error",
+        "message": "Conversion Error: Could not convert string [value removed] to INT32",
+        "details_at": "dbt's log file (logs/dbt.log in the project, unless --log-path)"
+      },
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.customer_segments",
+      "status": "skipped",
+      "duration_ms": null,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.customers_snapshot_view",
+      "status": "skipped",
+      "duration_ms": null,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
+      "node": "model.jaffle_ods.segment_summary",
+      "status": "skipped",
+      "duration_ms": null,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    }
+  ],
+  "totals": {
+    "duration_ms": "<ms>",
+    "by_status": {
+      "success": 9,
+      "error": 1,
+      "skipped": 3
+    },
+    "rows_affected": 6,
+    "rows_unreported": 8
+  }
+}

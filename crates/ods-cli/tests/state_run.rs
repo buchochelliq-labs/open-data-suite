@@ -1087,6 +1087,22 @@ fn real_project() -> Project {
     project
 }
 
+/// #322: every node of a real dbt run has stats from dbt's structured log, as it ran,
+/// with rows only where the adapter reported them: none are made up.
+fn assert_live_stats(json: &Value, rows: bool) {
+    let stats = &json["result"]["run_stats"];
+    assert_eq!(stats["live"], true, "{stats:#}");
+    for node in stats["nodes"].as_array().unwrap() {
+        let s = &node["stats"];
+        assert_eq!(s["status"], "success", "{node:#}");
+        assert!(
+            s["duration_ms"].is_u64() && s["thread"].is_string(),
+            "{node:#}"
+        );
+        assert_eq!(s["rows_affected"].is_u64(), rows, "{node:#}");
+    }
+}
+
 /// The same flow against real dbt and `DuckDB`, on a copy of the demo project. Set
 /// `ODS_TEST_DBT` to a dbt executable with `dbt-duckdb` installed.
 #[test]
@@ -1138,6 +1154,9 @@ fn real_dbt() {
     assert_eq!(code, 0, "{first:#}");
     assert_eq!(advanced(&first), 11, "10 models and the extra one");
     assert!(ran(&first).contains(" run --select "), "{}", ran(&first));
+    // #322: seeds report the rows they wrote; DuckDB reports none for models.
+    assert_live_stats(&seeded, true);
+    assert_live_stats(&first, false);
     let (code, again) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
     assert_eq!(code, 0, "{again:#}");
     assert_eq!(again["result"]["outcome"], "nothing_to_build");
@@ -3215,5 +3234,198 @@ fn plan_json_says_where_each_source_version_came_from() {
     assert_eq!(
         source_evidence(&planned, "stg_payments", "source_version_skipped", payments).as_deref(),
         Some("source_freshness: not reported")
+    );
+}
+
+// ---------------------------------------------------------------------------- run journal (#322)
+
+/// The journal of the run `result` reports, read back: one event per line.
+fn journal_of(project: &Project, result: &Value) -> (PathBuf, Vec<Value>) {
+    let run_id = result["execution"]["run_id"].as_str().unwrap();
+    let path = project
+        .dir
+        .join(format!(".ods/state.db.runs/{run_id}.jsonl"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let events = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .collect();
+    (path, events)
+}
+
+fn stats_of<'v>(result: &'v Value, name: &str) -> &'v Value {
+    result["run_stats"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node"].as_str().unwrap().ends_with(&format!(".{name}")))
+        .map_or_else(|| panic!("{name}: {result:#}"), |n| &n["stats"])
+}
+
+/// #322: a run appends its events to a journal beside the state database, under the
+/// run id `.last-run.json` keeps, and reports each node's stats. Rows a node didn't
+/// report are missing, not zero, and the total says "at least".
+#[test]
+fn a_run_keeps_a_journal_with_each_nodes_stats() {
+    let project = Project::new("journal").with("FAKE_DBT_ROWS", "raw_orders=6,orders=99");
+    let result = project.run_ok(&[]);
+    let (path, events) = journal_of(&project, &result);
+    assert_eq!(result["journal"], path.display().to_string());
+    assert_eq!(events.first().unwrap()["kind"], "run_started");
+    assert_eq!(events.first().unwrap()["live"], true);
+    assert_eq!(events.last().unwrap()["kind"], "run_finished");
+    assert_eq!(events.last().unwrap()["outcome"], "succeeded");
+    let run_id = result["execution"]["run_id"].as_str().unwrap();
+    for event in &events {
+        assert_eq!(event["schema_version"]["major"], 1, "{event}");
+        assert_eq!(event["run_id"], run_id, "{event}");
+        assert_eq!(event["scope"], result["scope"], "{event}");
+    }
+    let last: Value = serde_json::from_slice(
+        &std::fs::read(project.dir.join(".ods/state.db.last-run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(last["run_id"], run_id);
+
+    let orders = stats_of(&result, "orders");
+    assert_eq!(orders["status"], "success");
+    assert_eq!(orders["rows_affected"], 99);
+    assert_eq!(orders["duration_ms"], 250);
+    assert_eq!(orders["adapter"]["code"], "INSERT");
+    assert!(orders["thread"].is_string());
+    let view = stats_of(&result, "stg_orders");
+    assert!(view["rows_affected"].is_null(), "{view}");
+    let totals = &result["run_stats"]["totals"];
+    assert_eq!(totals["rows_affected"], 105);
+    assert_eq!(totals["rows_unreported"], 11);
+
+    // `history` shows the run's totals beside its snapshot.
+    let history = project.history();
+    assert_eq!(history[0]["run_id"], run_id);
+    assert_eq!(history[0]["run_stats"]["totals"]["rows_affected"], 105);
+    assert_eq!(history[0]["run_stats"]["outcome"], "succeeded");
+}
+
+/// #322: a run that fails keeps its journal (canonical state still advances only for
+/// what succeeded), and neither a `--vars` value nor a value in dbt's error message
+/// reaches it. `ods state history --run` shows it, plain and JSON.
+#[test]
+fn a_failed_run_keeps_a_journal_without_values() {
+    let project = Project::new("journal-failed")
+        .with("FAKE_DBT_FAIL", "customers")
+        .with("FAKE_DBT_ROWS", "raw_orders=6")
+        .with(
+            "FAKE_DBT_FAIL_MESSAGE",
+            "Runtime Error in model customers (models/customers.sql)\n  Conversion Error: Could not convert string 'sk_live_SENTINEL_7' to INT32\n  LINE 3: where cast('sk_live_SENTINEL_7' as integer) = 1",
+        );
+    let (code, json) = project.run(&["--vars", r#"{"secret": "VARS_SENTINEL_7"}"#]);
+    assert_eq!(code, 1, "{json:#}");
+    let result = &json["result"];
+    let (path, events) = journal_of(&project, result);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("SENTINEL_7"), "{text}");
+    assert!(!text.to_lowercase().contains("select"), "{text}");
+    assert!(!text.contains("as integer"), "{text}");
+    assert_eq!(events.last().unwrap()["outcome"], "failed");
+    let failed = stats_of(result, "customers");
+    assert_eq!(failed["status"], "error");
+    assert_eq!(failed["error"]["kind"], "Conversion Error");
+    assert_eq!(
+        failed["error"]["message"],
+        "Conversion Error: Could not convert string [value removed] to INT32"
+    );
+    let skipped = stats_of(result, "segment_summary");
+    assert_eq!(skipped["status"], "skipped");
+    assert!(skipped["duration_ms"].is_null(), "{skipped}");
+    // The successes were recorded; the failure keeps its last state.
+    assert!(result["record"]["snapshot"].is_number(), "{result:#}");
+
+    // The run, from its journal.
+    let run_id = result["execution"]["run_id"].as_str().unwrap();
+    let (code, shown) = project.ods(&["state", "history", "--run", run_id]);
+    assert_eq!(code, 0, "{shown:#}");
+    let run = &shown["result"]["run"];
+    assert_eq!(run["outcome"], "failed");
+    assert_eq!(run["run_id"], run_id);
+    assert!(!shown.to_string().contains("SENTINEL_7"));
+    let redact = |text: &str| {
+        text.replace(run_id, "<run>")
+            .replace(project.dir.to_str().unwrap(), "<project>")
+    };
+    let mut stable = serde_json::json!({
+        "outcome": run["outcome"],
+        "live": run["live"],
+        "mode": run["mode"],
+        "nodes": run["nodes"].as_array().unwrap().iter().map(|n| {
+            let s = &n["stats"];
+            serde_json::json!({
+                "node": n["node"],
+                "status": s["status"],
+                "duration_ms": s["duration_ms"],
+                "rows_affected": s["rows_affected"],
+                "adapter": s["adapter"],
+                "error": s["error"],
+                "blocked_by": s["blocked_by"],
+                "tests": s["tests"],
+            })
+        }).collect::<Vec<_>>(),
+        "totals": run["totals"],
+    });
+    stable["totals"]["duration_ms"] = Value::String("<ms>".into());
+    insta::assert_snapshot!(
+        "history_run_json",
+        redact(&serde_json::to_string_pretty(&stable).unwrap())
+    );
+    let plain = project.ods_plain(&["state", "history", "--run", run_id]);
+    let plain: String = plain
+        .lines()
+        .map(|l| {
+            // Times of this run.
+            if l.starts_with("started:") {
+                "started: <time>".to_owned()
+            } else if l.starts_with("totals:") {
+                format!("totals: <took>{}", &l[l.find(" · ").unwrap()..])
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("history_run_plain", redact(&plain));
+}
+
+/// #322: `ods state run`'s plain output shows each node's time taken and rows, `—`
+/// when not reported, and the totals.
+#[test]
+fn the_run_table_shows_time_taken_and_rows() {
+    let project = Project::new("journal-plain").with("FAKE_DBT_ROWS", "raw_orders=6");
+    let dbt = fixture("fake-dbt/dbt");
+    let plain = project.ods_plain(&[
+        "state",
+        "build",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+        "--exclude-resource-type",
+        "test",
+        "--select",
+        "raw_orders",
+        "--select",
+        "stg_orders",
+    ]);
+    let table: Vec<&str> = plain
+        .lines()
+        .skip_while(|l| !l.contains("why it ran"))
+        .take_while(|l| !l.trim().is_empty())
+        .collect();
+    insta::assert_snapshot!("run_table_plain", table.join("\n"));
+    let rows = plain
+        .lines()
+        .find(|l| l.trim_start().starts_with("rows"))
+        .unwrap();
+    assert!(
+        rows.contains("at least 6 (1 node didn't report rows)"),
+        "{plain}"
     );
 }

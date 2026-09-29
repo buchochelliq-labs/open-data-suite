@@ -125,6 +125,25 @@ dbt to log in another format), and says `live: false` then; without the capabili
 `live` is never true. The run is still recorded either way. If the execution fails to
 start, there are no events.
 
+### The dbt bridge
+The dbt executor has `run_events`. For the build or test it passes `--log-format json
+--log-level debug`, reads dbt's standard output line by line, and turns two of dbt's
+public structured events into run events: `NodeStart` (the node and `info.thread`) and
+`NodeFinished` (`data.run_result`: `status`, `message`, `timing_info`, `thread`,
+`execution_time`, `adapter_response`). Both are debug-level, hence the log level. Of
+every other line it reads only `info.level`, `info.ts`, `info.msg` and
+`info.invocation_id` (the run id), and prints the `msg` of lines at `info` and above,
+as dbt would have; debug lines, which carry the SQL dbt runs and the options it was
+given, are neither shown nor kept. After dbt exits, `run_results.json` fills in any
+requested node the log didn't finish (every node, in a test run) and checks it didn't
+show, and each node's status is the report's. If the caller passes its own
+`--log-format` to dbt, the log isn't read: the events come from `run_results.json`
+afterwards, with `live: false`. dbt reports rows in `adapter_response.rows_affected`
+(a float in log events); `_message` is free text and never kept. dbt starts an error
+message with a header (`Runtime Error in model x (path)`); the summary takes the kind
+from it and the message from the next line. The shapes were checked against dbt 1.10
+with DuckDB, and a captured log is a test fixture.
+
 ### The run journal
 `ods state run`, `seed`, `snapshot`, `build` and `test` append every event of a run
 that executes to a journal beside the state database:
