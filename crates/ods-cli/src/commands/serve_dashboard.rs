@@ -217,7 +217,8 @@ impl DashboardSource {
         };
         let last_run = last_run(&ws.state_db);
         // The Catalog's last builds (#313), from the snapshot the plan is made against.
-        let last_builds = super::serve_catalog::last_builds(latest.as_ref(), &runs_index);
+        let last_builds =
+            super::serve_catalog::last_builds(latest.as_ref(), &runs_index, &ws.manifest);
         // Plans depend on time (lag tolerances expire), so Home plans again on every
         // request, as of then; this first plan is the fallback.
         let settings = self.settings.clone();

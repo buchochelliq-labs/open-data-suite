@@ -680,7 +680,10 @@ Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with
 (`?tab=`):
 - **Overview:** description, columns, the current decision (with whether the relation
   was checked) and a small lineage view;
-- **Code:** the code as written and, only if the artifacts carry it, as compiled;
+- **Code:** the code as written, with its templating unresolved (`{{ env_var('X') }}`
+  stays as written). Compiled SQL is never shown or served, as it can contain secrets
+  resolved from environment variables, variables or macros; it is in the project's
+  `target/compiled/` folder;
 - **Columns:** name, type, description, tests, constraints and the columns each is
   computed from. A type comes from `catalog.json`, as of when it was generated (the
   page says when), or a YAML `data_type` (marked *declared*); otherwise it says
@@ -694,8 +697,11 @@ Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with
   (`/state/plan?node=<unique_id>`);
 - **Tests:** the data tests that read the node or are attached to it, and its unit
   tests. Outcomes aren't kept per test: the state records that a build's checks passed
-  together, so each test among those checks reads *passed · run …*, and the rest *not
-  recorded*.
+  together, with a digest of those checks, so each test among them reads *passed · run
+  …* only while the node's checks are the same ones (the digest the planner computes).
+  After a test is added, removed or edited and not run again, every test reads *checks
+  changed since run …: not recorded*; the rest read *not recorded*. Column lineage is
+  matched to columns whatever their case (a warehouse catalog may fold it).
 
 Relationships and Usage are greyed as planned. An unknown id, or one that isn't valid
 percent-encoding, gets a 404 page; `/catalog/` redirects to `/catalog`. Without a state

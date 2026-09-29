@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use ods_provider_dbt::fingerprint::checks_digest;
 use ods_provider_dbt::{Catalog, Manifest, ManifestNode, ResourceType};
 use ods_sdk::contracts::state_store::{SnapshotSummary, StoredSnapshot};
 use ods_web::catalog::{
@@ -123,7 +124,8 @@ fn node(n: &ManifestNode, warehouse: Option<&Catalog>) -> CatalogNode {
     node.file.clone_from(&n.original_file_path);
     node.depends_on.clone_from(&n.depends_on);
     node.code.clone_from(&n.raw_code);
-    node.compiled_code.clone_from(&n.compiled_code);
+    // Never `compiled_code`: it can hold values resolved from `env_var()`, `var()` or
+    // macros, such as credentials (AGENTS rule 9). The raw code keeps them unresolved.
     node.columns = columns(n, warehouse);
     node
 }
@@ -257,10 +259,14 @@ fn columns(n: &ManifestNode, warehouse: Option<&Catalog>) -> Vec<CatalogColumn> 
 /// Each node's last successful build in `latest`, with the snapshot that recorded its
 /// run (from `history`). The caller reads both once, with the snapshot it plans
 /// against, so the Catalog's builds and decisions can't come from different
-/// snapshots.
+/// snapshots. A build's passing checks count only if they are the node's checks in
+/// `manifest` now: the digest is the planner's (`checks_digest`), compared as the
+/// state does (`NodeState::is_tested_with`), so a test added or edited since doesn't
+/// read as passed.
 pub(super) fn last_builds(
     latest: Option<&StoredSnapshot>,
     history: &[SnapshotSummary],
+    manifest: &Manifest,
 ) -> BTreeMap<String, LastBuild> {
     let Some(latest) = latest else {
         return BTreeMap::new();
@@ -281,7 +287,13 @@ pub(super) fn last_builds(
                 state.built_at,
             );
             if let Some(tested) = &state.tested {
-                build = build.with_tested(tested.run_id.clone(), tested.at);
+                let now = checks_digest(manifest, id);
+                build = build.with_tested(
+                    tested.run_id.clone(),
+                    tested.at,
+                    tested.checks.clone(),
+                    state.is_tested_with(now.as_deref()),
+                );
             }
             (id.clone(), build)
         })
@@ -453,18 +465,69 @@ mod tests {
             SnapshotSummary::new(SnapshotId(2), Some(SnapshotId(1)), at, "run-2", 2),
             SnapshotSummary::new(SnapshotId(1), None, at, "run-1", 1),
         ];
-        let builds = last_builds(Some(&latest), &history);
+        let fixture = manifest(|_| {});
+        let builds = last_builds(Some(&latest), &history, &fixture);
         assert_eq!(builds["model.x.orders"].snapshot, Some(2));
         assert_eq!(builds["seed.x.raw"].snapshot, Some(1), "kept from run 1");
         assert!(builds["model.x.orders"].tested.is_some());
         assert!(
-            last_builds(None, &history).is_empty(),
+            last_builds(None, &history, &fixture).is_empty(),
             "no snapshot, no builds"
         );
         // A run the history doesn't reach: the snapshot is unknown, not guessed.
         assert_eq!(
-            last_builds(Some(&latest), &history[..1])["seed.x.raw"].snapshot,
+            last_builds(Some(&latest), &history[..1], &fixture)["seed.x.raw"].snapshot,
             None
+        );
+    }
+
+    /// A test added after the checks last passed isn't vouched for: the recorded
+    /// digest no longer matches the node's checks.
+    #[test]
+    fn checks_passed_count_only_while_the_checks_are_the_same() {
+        let id = "model.jaffle_ods.customers";
+        let before = manifest(|_| {});
+        let digest = checks_digest(&before, id).expect("customers has checks");
+        let at = Timestamp::parse("2026-09-28T09:00:00Z").unwrap();
+        let mut node = NodeState::new(
+            Fingerprint::from_content([("sql", "a")]),
+            at,
+            "run-1",
+            BTreeMap::new(),
+        );
+        node.tested = Some(TestRecord::new("run-1", at, digest.clone()));
+        let mut snapshot = StateSnapshot::new(None, at, "run-1", BTreeMap::new());
+        snapshot.nodes.insert(id.to_owned(), node);
+        let latest = StoredSnapshot::new(SnapshotId(1), snapshot);
+        let history = vec![SnapshotSummary::new(SnapshotId(1), None, at, "run-1", 1)];
+
+        let same = last_builds(Some(&latest), &history, &before);
+        assert!(same[id].checks_current, "nothing changed since they passed");
+        assert_eq!(same[id].tested_checks.as_deref(), Some(digest.as_str()));
+
+        // A new test on customers, not run since.
+        let after = manifest(|m| {
+            let nodes = m["nodes"].as_object_mut().unwrap();
+            let (_, template) = nodes
+                .iter()
+                .find(|(k, _)| k.starts_with("test.jaffle_ods.unique_customers_customer_id"))
+                .unwrap();
+            let mut added = template.clone();
+            let new_id = "test.jaffle_ods.accepted_values_customers_value_tier.0000000001";
+            added["unique_id"] = serde_json::json!(new_id);
+            added["name"] = serde_json::json!("accepted_values_customers_value_tier");
+            added["column_name"] = serde_json::json!("value_tier");
+            added["test_metadata"]["name"] = serde_json::json!("accepted_values");
+            nodes.insert(new_id.to_owned(), added);
+        });
+        let changed = last_builds(Some(&latest), &history, &after);
+        assert!(
+            !changed[id].checks_current,
+            "a test added since hasn't run: the record no longer vouches"
+        );
+        assert!(
+            changed[id].tested.is_some(),
+            "the record itself is still shown"
         );
     }
 }

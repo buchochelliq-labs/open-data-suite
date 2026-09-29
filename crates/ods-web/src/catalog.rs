@@ -111,8 +111,6 @@ pub struct CatalogNode {
     pub columns: Vec<CatalogColumn>,
     /// Its code as written.
     pub code: Option<String>,
-    /// Its code as compiled, only if the artifacts carry it.
-    pub compiled_code: Option<String>,
     /// The tests on it.
     pub tests: Vec<CatalogTest>,
 }
@@ -138,7 +136,6 @@ impl CatalogNode {
             depends_on: Vec::new(),
             columns: Vec::new(),
             code: None,
-            compiled_code: None,
             tests: Vec::new(),
         }
     }
@@ -264,6 +261,11 @@ pub struct LastBuild {
     pub built_at: Timestamp,
     /// When its checks last all passed on this build, and in which run, if recorded.
     pub tested: Option<(String, Timestamp)>,
+    /// The digest of the checks that passed then, as recorded.
+    pub tested_checks: Option<String>,
+    /// Whether those are the node's checks now (same digest, as the planner compares
+    /// them). When not, a test added or edited since hasn't run: nothing vouches for it.
+    pub checks_current: bool,
 }
 
 impl LastBuild {
@@ -274,13 +276,24 @@ impl LastBuild {
             run_id: run_id.into(),
             built_at,
             tested: None,
+            tested_checks: None,
+            checks_current: false,
         }
     }
 
-    /// Records that its checks all passed in `run_id` at `at`.
+    /// Records that its checks, with digest `checks`, all passed in `run_id` at `at`;
+    /// `current` says whether they are still the node's checks.
     #[must_use]
-    pub fn with_tested(mut self, run_id: impl Into<String>, at: Timestamp) -> Self {
+    pub fn with_tested(
+        mut self,
+        run_id: impl Into<String>,
+        at: Timestamp,
+        checks: Option<String>,
+        current: bool,
+    ) -> Self {
         self.tested = Some((run_id.into(), at));
+        self.tested_checks = checks;
+        self.checks_current = current;
         self
     }
 }
@@ -689,8 +702,8 @@ pub struct ChecksPassed {
     pub run_id: String,
     /// When.
     pub at: Timestamp,
-    /// Whether the plan says the checks changed since, so this no longer vouches for
-    /// them.
+    /// Whether the checks changed since (a test added, removed or edited, by their
+    /// recorded digest or the plan), so this no longer vouches for any of them.
     pub checks_changed_since: bool,
 }
 
@@ -701,10 +714,10 @@ pub struct ChecksPassed {
 pub struct CodeView {
     /// Its language, if known.
     pub language: Option<String>,
-    /// As written.
+    /// As written, with its templating unresolved. Compiled code is never carried:
+    /// it can hold values resolved from the environment or variables, such as
+    /// credentials (AGENTS rule 9).
     pub raw: Option<String>,
-    /// As compiled, only if the artifacts carry it.
-    pub compiled: Option<String>,
 }
 
 /// Links to the other pages about a node.
@@ -1355,16 +1368,13 @@ impl Dashboard {
             .reasons
             .iter()
             .any(|r| r.code == ReasonCode::ChecksChanged);
-        let checks_passed = cx
-            .input
-            .last_builds
-            .get(id)
-            .and_then(|b| b.tested.as_ref())
-            .map(|(run_id, at)| ChecksPassed {
+        let checks_passed = cx.input.last_builds.get(id).and_then(|b| {
+            b.tested.as_ref().map(|(run_id, at)| ChecksPassed {
                 run_id: run_id.clone(),
                 at: *at,
-                checks_changed_since: checks_changed,
-            });
+                checks_changed_since: checks_changed || !b.checks_current,
+            })
+        });
         // Each test the record vouches for passed with the rest of the checks; the
         // others' outcomes aren't recorded.
         let vouched = checks_passed.as_ref().filter(|c| !c.checks_changed_since);
@@ -1395,7 +1405,6 @@ impl Dashboard {
             code: CodeView {
                 language: node.language.clone(),
                 raw: node.code.clone().filter(|c| !c.is_empty()),
-                compiled: node.compiled_code.clone().filter(|c| !c.is_empty()),
             },
             tests: node
                 .tests
@@ -1434,10 +1443,12 @@ fn column_views(
     let graph_node = cx.graph.get(id).copied();
     // Column lineage is fact only when parsed from the code (AGENTS rule 3).
     let upstream_inferred = lineage != LineageConfidence::Parsed;
-    let mut edges: BTreeMap<&str, Vec<&ColumnEdge>> = BTreeMap::new();
+    // By lower-cased name: a warehouse catalog may fold case (`CUSTOMER_ID`) where
+    // the analyzer keeps the code's (`customer_id`).
+    let mut edges: BTreeMap<String, Vec<&ColumnEdge>> = BTreeMap::new();
     for edge in document.column_edges.iter().filter(|e| e.to.node == id) {
         if let Some(column) = edge.to.column.as_deref() {
-            edges.entry(column).or_default().push(edge);
+            edges.entry(column.to_lowercase()).or_default().push(edge);
         }
     }
     let code_columns: BTreeSet<String> = graph_node
@@ -1469,7 +1480,7 @@ fn column_views(
                     .map(|t| t.name.clone())
                     .collect(),
                 constraints: c.constraints.clone(),
-                upstream: column_inputs(cx, id, edges.get(c.name.as_str())),
+                upstream: column_inputs(cx, id, edges.get(&c.name.to_lowercase())),
                 upstream_inferred,
             }
         })
