@@ -286,6 +286,14 @@ impl ErrorSummary {
         })
     }
 
+    /// Names the error's kind, when the engine gives it apart from the message (e.g. a
+    /// header line). Values are removed from it too, and it is cut to 40 characters.
+    #[must_use]
+    pub fn with_kind(mut self, kind: &str) -> Self {
+        self.kind = redact::summary_line(kind, 40);
+        self
+    }
+
     /// Says where the full message is.
     #[must_use]
     pub fn with_details_at(mut self, at: impl Into<String>) -> Self {
@@ -866,6 +874,10 @@ mod tests {
         assert_eq!(s.kind.as_deref(), Some("Binder Error"));
         assert!(!s.message.contains("select"));
         assert_eq!(ErrorSummary::from_message("failed").unwrap().kind, None);
+        let s = ErrorSummary::from_message("column x not found")
+            .unwrap()
+            .with_kind("Runtime Error 'x'");
+        assert_eq!(s.kind.as_deref(), Some("Runtime Error [value removed]"));
         assert_eq!(ErrorSummary::from_message(""), None);
     }
 
