@@ -10,7 +10,13 @@ codes).
 | Command | Status |
 |---|---|
 | `ods state policies` | available (preview): freshness policies read from dbt State configs, see [below](#dbt-state-configuration) |
-| `ods state plan\|run\|explain\|…` | planned: M1 State MVP (v0.1.0) |
+| `ods state compile\|run\|seed\|snapshot\|build` | available (preview): each runs the dbt command it's named after, on only what needs building, and records what succeeded, see [below](#state-run) |
+| `ods state test` | available (preview): test what was built but not yet tested, see [below](#state-test) |
+| `ods state retry` | available (preview): run the last `run`, `seed`, `snapshot`, `build` or `test` again with its options; `--failed` builds only what failed, see [below](#retrying-a-run) |
+| `ods state export` | available (preview): write a dbt state directory in which what this target built points here, for `dbt retry --defer-state`, see [below](#state-export-for-dbt-deferral) |
+| `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
+| `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
+| `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -18,14 +24,15 @@ codes).
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
-| `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
+| `ods serve` | available (preview): host the read-only dashboard, the lineage explorer and their JSON API, see [below](#the-dashboard) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
+| `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
 
 Planned commands already appear in `--help`. They accept any arguments and exit with
-status 3 (`ods state plan --select x` reports "not implemented", not a usage error).
+status 3 (`ods usage --select x` reports "not implemented", not a usage error).
 
 ## Global flags
 
@@ -39,6 +46,7 @@ literally.
 | `--json` | shorthand for `--output json` | |
 | `--color` | `auto`, `always`, `never` | `auto` |
 | `--width` | columns (≥ 20) | terminal width, or 100 when not a terminal |
+| `--log-level` | `off`, `error`, `warn`, `info`, `debug`, `trace`; conflicts with `-v`/`-q` and overrides `ODS_LOG` | `warn` |
 | `-v`, `--verbose` | repeatable: `-v` info, `-vv` debug, `-vvv` trace | warnings only |
 | `-q`, `--quiet` | errors only; conflicts with `-v` | |
 | `--profile` | configuration profile | `ODS_PROFILE`, then `default_profile` |
@@ -57,21 +65,23 @@ literally.
 {
   "schema_version": {"major": 0, "minor": 1},
   "command": "state",
-  "ods_version": "0.1.0",
+  "ods_version": "0.0.1",
   "result": null,
   "diagnostics": [
     {
       "level": "error",
       "code": "ODS-E0003",
       "message": "`ods state` is not implemented yet",
-      "hint": "planned for M1 State MVP (v0.1.0); see docs/ROADMAP.md"
+      "hint": "planned for M1 State MVP (v0.0.1); see docs/ROADMAP.md"
     }
   ]
 }
 ```
 
 `result` is the command's result model on success and `null` on failure. `hint` is
-omitted when there is none.
+omitted when there is none. One exception: a command whose partial result matters
+reports both. `ods state run` that recorded some nodes but had failures carries its
+report in `result` and the error in `diagnostics`, and exits 1.
 
 Exceptions to the one-document rule:
 - **Usage errors** (bad flags or an unknown command) are detected before the output mode
@@ -110,12 +120,19 @@ meanings get new numbers.
 | `ODS-E0202` | The project graph is inconsistent (duplicate ids or relations, or a dependency cycle). |
 | `ODS-E0203` | A model, column, change kind or dialect named on the command line doesn't exist. |
 | `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
+| `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
+| `ODS-E0402` | Another run recorded state first; plan again and retry. |
+| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. `ods state export`: the upstream manifest can't be read, is another project's or an unsupported version, or `--dbt-state` names the upstream or dbt's target directory. |
+| `ODS-E0405` | The state database is damaged: it can't be read, or holds a record that can't be decoded. Nothing was changed; `ods state doctor` says what is wrong. |
+| `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
+| `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
+| `ODS-E0501` | `ods doctor` found checks that fail (exit status 5). Each finding has its own code: see [`ods doctor`](#ods-doctor). |
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
-| `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`. |
+| `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`; `--log-level` overrides it. |
 | `ODS_PROFILE` | Configuration profile to use; `--profile` overrides it. |
 | `ODS__SECTION__KEY` | Sets a configuration key, e.g. `ODS__OUTPUT__WIDTH=120`. |
 | `NO_COLOR` | Any non-empty value disables colour when `--color auto`. `--color always` overrides it. |
@@ -192,7 +209,10 @@ format = "json"
   - `output.format` (`human`, `plain` or `json`), `output.color` (`auto`, `always` or
     `never`) and `output.width` (at least 20)
   - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
-  - `providers.<name>.kind` and `providers.<name>.settings`
+  - `state.db` and `state.environment`: see [State settings](#state-settings-in-odstoml)
+  - `providers.<name>.kind` and `providers.<name>.settings`. For `kind = "dbt"` the
+    settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
+    `target_dir`, all strings; any other key is an error
   - `policy.rules`
 
   Unknown keys are errors.
@@ -214,6 +234,173 @@ providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file .
 ```
 
 Configuration errors exit with status 4.
+
+## `ods doctor`
+
+`ods doctor` checks that ODS can work in the current project and environment, and says
+what to do about anything that stops it ([ADR-0023](adr/0023-ods-doctor-diagnostics.md),
+#181).
+
+By default ODS runs no warehouse query. It runs `dbt --version`, and has dbt render the
+profile with `dbt compile --inline … --no-populate-cache --no-introspect`, which reads
+`profiles.yml` but doesn't connect to the warehouse. dbt itself may still use the
+network: its version check looks up the latest release, and it may send usage
+statistics unless they are turned off (`DBT_SEND_ANONYMOUS_USAGE_STATS=false`). ODS
+writes nothing; dbt writes the target check's artifacts under
+`<target-dir>/ods-target-check`, as `ods state run` does, and its own log. Only
+`--connect` queries the warehouse, through dbt's own connection.
+
+```sh
+ods doctor                        # every offline check
+ods doctor --project              # only the dbt project and its artifacts
+ods doctor --provider databricks  # only the checks about one provider: dbt, databricks or sqlite
+ods doctor --connect              # also the live checks, through dbt's own connection
+ods doctor --strict --json        # for CI: warnings fail too; one JSON document
+```
+
+It takes the options `ods state` commands take to find things (`--project-dir`,
+`--target-dir`, `--dbt`, `--profiles-dir`, `--dbt-profile`, `--target`, `--state-db`,
+`--environment`), with the same [precedence](#state-settings-in-odstoml), and the
+[global flags](#global-flags) (`-o human|plain|json`, `--json`, `--profile`).
+
+### Checks
+
+| Check | Question | Required |
+|---|---|---|
+| `config.load` | Do the configuration files load? Which were found, and which profile is active? | yes |
+| `config.values` | What is every effective value, and where did it come from? Credentials appear only as references, e.g. `secret(env:WH_TOKEN)` | |
+| `config.resolution` | Where do dbt, the project, the target directory, the state database and the environment come from: a flag, a `DBT_*` variable, a configuration file or profile, or a default? | yes |
+| `project.dbt_project` | Is there a `dbt_project.yml` in the project directory? | yes |
+| `project.manifest` | Can `manifest.json` (or dbt's Information Schema) be read, at a supported schema version (v11, v12)? | yes |
+| `project.name` | Does the manifest name its project? | |
+| `project.freshness` | Is the manifest newer than every project file (`.sql`, `.yml`, `.yaml`, `.csv`, `.py`, outside `target/`, `dbt_packages/`, `logs/` and hidden directories)? | |
+| `tools.dbt` | Does dbt run, and is it a supported version (1.7 or later; 2.x is untested)? | yes |
+| `tools.adapter` | Is the adapter the manifest was written with (`metadata.adapter_type`) installed in dbt? | |
+| `target.identity` | Which target does dbt build in? dbt renders the profile (`dbt compile --inline`), which reads `profiles.yml` but connects to nothing | yes |
+| `state_store.database` | Is the state database sound, and at a schema this ODS can read and write? The same check as `ods state doctor` | yes |
+| `capabilities.relation_existence` | Can a build's relation be checked before it is reused (#230)? | |
+| `capabilities.relation_versions` | Where do sources' data versions come from: the warehouse's table versions (Databricks), `loaded_at_field` through `dbt source freshness`, or nowhere? | |
+| `connectivity.relations` | With `--connect`: does the relation check (`dbt show`) run? | |
+| `connectivity.table_versions` | With `--connect`, on Databricks: does the table-version probe run? | |
+
+The checks about sources' data versions (`capabilities.relation_versions`,
+`connectivity.table_versions`) concern `databricks` when the manifest's adapter is
+Databricks, whose table versions ODS reads, and `dbt` otherwise; `--provider` picks
+them accordingly.
+
+Each check ends `ok`, `warning`, `error`, `unknown` (it couldn't conclude, e.g. a check
+it depends on failed) or `skipped` (not run by choice, e.g. a live check without
+`--connect`). An unknown check is never shown as passed. Every finding carries a code,
+its evidence (each value with where it came from) and a hint.
+
+### Exit status
+
+| Outcome | Exit |
+|---|---|
+| every check `ok` or `skipped` | 0 |
+| warnings, or `unknown` on checks that aren't required | 0; with `--strict`, 5 |
+| an `error`, or `unknown` on a required check | 5, `ODS-E0501` |
+
+The output mode never changes it. Invalid configuration doesn't stop `ods doctor` as it
+stops other commands (status 4): it is reported as `config.load`, and the checks that
+depend on settings are `unknown`. With `--json`, a failed run still carries the whole
+report in `result`, and `ODS-E0501` in `diagnostics`.
+
+### Codes
+
+| Code | Finding | Hint |
+|---|---|---|
+| `ODS-U0001` | Not checked: a check it depends on failed (evidence `depends_on`). | Fix that check first. |
+| `ODS-E0101` | A configuration file can't be read or isn't valid TOML. | Fix the file named in the message. |
+| `ODS-E0102` | Configuration schema violation, a variable that isn't UTF-8, or more than one dbt provider. | Fix the key named in the message; keep one `kind = "dbt"` provider. |
+| `ODS-E0103` | A credential is written as plaintext. The value is never shown. | Use a reference, e.g. `{ secret = "env:VAR" }`. |
+| `ODS-E0104` | The selected profile is not defined. | Define it, or select another with `--profile` or `ODS_PROFILE`. |
+| `ODS-E0201` | The manifest is missing, unreadable or an unsupported schema version. | `dbt parse` (or `ods state compile`); for an old schema, upgrade dbt to 1.7 or later. |
+| `ODS-E0204` | No `dbt_project.yml` in the project directory. | Run ODS in the project, or name it with `--project-dir`, `DBT_PROJECT_DIR` or `project_dir`. |
+| `ODS-W0205` | The manifest names no project. | Write it again with dbt 1.7 or later: `dbt parse`. |
+| `ODS-W0206` | The manifest is older than a project file: plans would describe code that isn't what runs. | `dbt parse`, or any `ods state` command that compiles. |
+| `ODS-U0207` | How old the artifacts are can't be told: dbt's Information Schema (no `manifest.json`), a file or directory of the project that can't be read, or a file without a modification time. | `dbt parse` writes `manifest.json`; check the project's permissions. |
+| `ODS-E0401` | The state database can't be opened, or a newer ODS wrote it. | Check the path and permissions; for a newer schema, upgrade ODS. |
+| `ODS-E0405` | The state database is damaged. | `ods state doctor`, then [recover](#recovering-state). |
+| `ODS-E0501` | `ods doctor` found checks that fail. | Each failing check says what to do. |
+| `ODS-E0502` | dbt can't be run. | Install `dbt-core` with your adapter, or name it with `--dbt` or `program`. |
+| `ODS-E0503` | dbt is older than 1.7, whose manifests ODS reads. | Upgrade dbt. |
+| `ODS-W0504` | dbt's major version (2.x) is one ODS isn't tested with. | If a command fails, try dbt 1.x, and report it. |
+| `ODS-U0505` | `dbt --version` printed no dbt Core `installed:` line with a version ODS can read (other programs that call themselves dbt aren't recognised). | Check that `--dbt` names dbt itself. |
+| `ODS-E0506` | The manifest's adapter isn't installed in dbt. | `pip install dbt-<adapter>` next to dbt. |
+| `ODS-U0507` | The manifest names no adapter. | `dbt parse` with dbt 1.7 or later. |
+| `ODS-U0508` | dbt lists no adapters, so whether the manifest's is installed can't be told. | |
+| `ODS-E0509` | dbt can't render the profile, so it can't say which target it builds in. | Check `profiles.yml`, `--profiles-dir`, `--target` and the variables it reads; `dbt debug` says more. |
+| `ODS-W0601` | No data versions for some sources: the adapter has no table versions, and they have no `loaded_at_field`, so the models reading them build on every run. | Give them a `loaded_at_field` (or `loaded_at_query`); see [where source versions come from](#where-source-versions-come-from). |
+| `ODS-W0602` | Relations can't be checked before reuse: a dropped table is rebuilt only when something else changes. | |
+| `ODS-E0603` | The live relation check failed. | Check that the warehouse is reachable with the profile's credentials: `dbt debug`. |
+| `ODS-E0604` | The live table-version probe failed. | Check that the profile's user may read table history (`DESCRIBE HISTORY`). |
+| `ODS-U0605` | The live relation check ran, but couldn't tell whether some relations exist. Those nodes are built rather than reused. | `dbt debug`, and the adapter's permissions on those schemas. |
+| `ODS-W0606` | The live table-version probe ran, but some sources have no table version (evidence `without_version`, with why, e.g. a view). They fall back to `max_loaded_at`, or count as changed. | Give them a `loaded_at_field` if they have new data ODS should notice. |
+| `ODS-U0607` | The live table-version probe ran, but no source has a table version. | As `ODS-W0606`; check that the sources are Delta tables. |
+
+### Common failures
+
+**Not in a dbt project**, or never parsed:
+
+```text
+$ ods doctor --project -o plain
+...
+Project
+  [error ODS-E0204] project.dbt_project (required): no dbt project in `.`: `dbt_project.yml` isn't there
+    project_dir: . (default)
+    hint: run ODS in your dbt project, or name it with --project-dir, DBT_PROJECT_DIR or the dbt provider's `project_dir` setting
+  [error ODS-E0201] project.manifest (required): cannot read `target/info_schema/v1/dbt.models.parquet`: no manifest.json and no dbt Information Schema
+    target_dir: target (default)
+    hint: dbt writes it when it parses the project: run `dbt parse`, or `ods state compile`
+  [unknown ODS-U0001] project.name: not checked: `project.manifest` failed
+    depends_on: project.manifest
+    hint: fix `project.manifest` first
+```
+
+**Stale artifacts** (a model edited since dbt last parsed the project): a warning, so
+`ods doctor` exits 0, and 5 with `--strict`:
+
+```text
+  [warning ODS-W0206] project.freshness: the manifest is older than `./models/orders.sql`: plans would describe code that isn't what runs
+    manifest: target/manifest.json
+    manifest_modified: 2026-01-01T01:00:00Z
+    newest_project_file: ./models/orders.sql
+    newest_project_file_modified: 2026-01-01T02:00:00Z
+    hint: parse the project again: `dbt parse`, or any `ods state` command that compiles (not with --no-compile)
+```
+
+**Broken `ods.toml`**: reported, not fatal; what depends on settings is unknown:
+
+```text
+Configuration
+  [error ODS-E0101] config.load (required): /path/to/project/ods.toml is not valid TOML: …
+    hint: fix the value named above; see docs/cli.md#configuration
+  [unknown ODS-U0001] config.values: not checked: `config.load` failed
+```
+
+**dbt not installed**, or not on `PATH`: the target can't be checked, and since it is
+required, the run fails even if nothing else did:
+
+```text
+Tools
+  [error ODS-E0502] tools.dbt (required): dbt can't be run: couldn't start `dbt`: No such file or directory (os error 2)
+    program: dbt (default)
+    hint: install dbt-core with your adapter (`pip install dbt-core dbt-<adapter>`), or point ODS at it with --dbt or the dbt provider's `program` setting
+
+Target
+  [unknown ODS-U0001] target.identity (required): not checked: `tools.dbt` failed
+```
+
+**No data versions for sources** (a DuckDB or Postgres project whose sources have no
+`loaded_at_field`):
+
+```text
+  [warning ODS-W0601] capabilities.relation_versions: no table versions for the `duckdb` adapter, and 2 of 2 sources have no `loaded_at_field`: they count as changed on every run, so the models reading them always build
+    adapter: duckdb (manifest)
+    missing_capability: relation_versions
+    sources_without_loaded_at_field: raw.orders, raw.payments
+```
 
 ## Column-level lineage
 
@@ -253,13 +440,21 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 
 | Flag | Meaning |
 |---|---|
-| `--target-dir DIR` | dbt target directory; default `target` |
+| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are, found as `ods state` finds them: `--target-dir`, else `DBT_TARGET_PATH`, else the configured `target_dir`, else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else the configured `project_dir`, else `.`); see [State settings](#state-settings-in-odstoml). The same for `erd`, `serve` and `mcp` |
 | `--artifacts FORMAT` | `auto` (default: `manifest.json` if present, else the Information Schema), `json`, or `info-schema` (dbt v2's Parquet `target/info_schema/v1/`) |
 | `--dialect NAME` | `databricks`, `spark`, `duckdb`, `snowflake`, `bigquery`, `postgres`, `redshift` or `generic`; default: the manifest's adapter type |
 | `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable |
 | `--base DIR` | (`impact`) another build to compare with; every difference in compiled SQL becomes column changes |
 | `--run-events` | (`export`) write `COMPLETE` RunEvents instead of JobEvents, for sinks that only accept runs |
 | `--indirect-in-fields` | (`export`) also copy row-shaping inputs into every field, for consumers that ignore the facet's `dataset` array |
+
+Column lists come from the warehouse catalog (`dbt docs generate`). Without one, a
+seed's columns come from its CSV header, which is exactly what dbt loads. The header is
+only used if the file's checksum matches the one dbt recorded, so a changed or missing
+file leaves the columns unknown. Seed changes then reach only the models that read
+the changed columns.
+`ods lineage columns --model <seed or source>` shows where each column goes, hop by
+hop, and `reaches` (in JSON) lists every column it can affect.
 
 How impact is decided, most conservative first:
 - a model whose SQL can't be analyzed (a Python model, `select *` over a relation with
@@ -327,7 +522,7 @@ The same page ships three ways ([ADR-0009](adr/0009-hostable-explorer-ods-web.md
 ```sh
 ods lineage view                              # one offline file, graph embedded
 ods lineage view --site public/lineage        # static site: index.html + graph.json
-ods serve                                     # http://127.0.0.1:8765/, live reload
+ods serve                                     # http://127.0.0.1:8765/lineage, live reload
 ods serve --host 0.0.0.0 --port 8080 --base-path /lineage   # behind a reverse proxy
 ```
 
@@ -335,14 +530,18 @@ A static site can go on any static web server (S3, GitHub Pages, nginx). Browser
 fetch `graph.json` from a `file://` page, so use `ods lineage view` for local files.
 
 `ods serve` analyzes the project once, then serves:
-- the explorer, which adds a *What if this changes?* panel that runs impact on the server;
+- the [dashboard](#the-dashboard) at `/`;
+- the explorer at `/lineage`, which adds a *What if this changes?* panel that runs
+  impact on the server;
 - a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
-  `/api/impact?node=&column=&kind=` and `/healthz`.
+  `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home` and `/healthz`.
 
-It checks `manifest.json`, `catalog.json` and the Information Schema every second. When
-they change (e.g. after `dbt compile`) it re-analyzes only the models that changed, and
-open pages reload. If a reload fails, the last good graph stays up and the error appears
-in `/api/version`.
+It checks `manifest.json`, `catalog.json`, the Information Schema and the state
+database and the source freshness results (`--sources`, else
+`<target-dir>/sources.json`, even before it exists) every second. When they change
+(e.g. after `dbt compile`, `dbt source freshness` or `ods state build`)
+it re-analyzes only the models that changed, and open pages reload. If a reload fails,
+the last good graph stays up and the error appears in `/api/version`.
 
 It listens on loopback by default and then only answers requests for `localhost`,
 `127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
@@ -358,8 +557,53 @@ plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
 | `--port PORT` | (`serve`) default `8765`; `0` picks a free port (the URL is printed) |
 | `--base-path PATH` | (`serve`) URL prefix, e.g. `/lineage`; the page is served at `/lineage/` |
 | `--allow-host NAME` | (`serve`) also accept this `Host` name, e.g. the one your reverse proxy forwards; repeatable |
-| `--no-watch` | (`serve`) don't reload when artifacts change |
+| `--no-watch` | (`serve`) don't reload when artifacts or the state store change |
+| `--state-db PATH`, `--environment NAME`, `--target NAME`, `--sources PATH` | (`serve`) which state the dashboard shows, as for `ods state plan`; the database is only read, never created or migrated |
 | `--site DIR` | (`lineage view`) write a static site instead of one file |
+
+### The dashboard
+
+`ods serve` opens on the ODS Dashboard's Home page: a read-only view of the project
+and its local state ([design](design/dashboard/README.md), #310). Run it from the
+project, where `ods state` keeps `.ods/state.db`:
+
+```sh
+ods state build        # record a run first, if you haven't
+ods serve              # then open http://127.0.0.1:8765/
+```
+
+Home shows:
+- **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
+  kept an earlier build; and how many snapshots are recorded;
+- **recent runs:** each recorded snapshot, its run, and how many nodes it built and how
+  many kept an earlier build. *Kept* is not the same as reused: a snapshot keeps the
+  last good build of a node the run reused, didn't select, or failed to build, and
+  can't tell them apart. Runs don't record their command yet (shown as —), and whether
+  some nodes failed isn't stored, so the outcome reads *recorded*, without a tick;
+- **needs attention:** from the plan against the latest snapshot (`ods state plan`),
+  nodes whose code changed and nodes whose evidence is missing, then opaque nodes whose
+  column lineage is unknown. Each links to the node in the explorer. Below them, *The
+  plan builds N nodes* counts every build by its main reason (e.g. `target changed`,
+  `never built`, `new upstream data`), including reasons the list doesn't show. It says
+  *Nothing* only when the plan builds nothing. The plan is made again on every page
+  load, because a lag tolerance can run out while no file changes;
+- **health and coverage:** `[n]` placeholders until the health signals exist (#117);
+- **modules:** *Ready* for what this page reads (lineage, and State once a run is
+  recorded); *Available* for modules that work from the CLI but aren't checked here
+  (ERD); *Planned* for the rest.
+
+Without a state database, Home says how to record a first run instead. If the project's
+own files can't be read (the artifacts, or a `--sources` file that is missing or
+malformed), it says so and doesn't open the store. Errors appear on the page on
+loopback, and in the server log (a warning) everywhere. The left
+navigation lists every section of the design; sections not built yet are greyed and
+marked *Planned*. The project and target pickers show the current ones; switching
+comes later. The search box hands its text to the explorer's search.
+
+The dashboard never writes configuration or state: the database is opened read-only,
+and every route is `GET`. `/api/shell` and `/api/home` return exactly what the page
+shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served by
+`ods serve` itself (no font CDN), with system fonts as the fallback.
 
 ## dbt State configuration
 
@@ -394,6 +638,668 @@ ods state policies --model orders --json
 Defaults: if any model configures `state:` or `build_after`, the project relies on dbt
 State, so models without settings get dbt State's defaults (`45m`, `any`). Otherwise
 ODS rebuilds on any new upstream data (tolerance `0`).
+
+## State: run
+
+Each of these commands does the whole State loop
+([ADR-0014](adr/0014-executor-contract-and-state-run.md)) and is named after the dbt
+command it runs (#229, [ADR-0015](adr/0015-cli-compatibility-front-ends.md)):
+
+| Command | dbt commands | Builds |
+|---|---|---|
+| `ods state compile` | `source freshness`, `compile` | nothing: shows the plan |
+| `ods state run` | `run` | models |
+| `ods state seed` | `seed` | seeds |
+| `ods state snapshot` | `snapshot` | snapshots |
+| `ods state build` | `build` | models, seeds and snapshots, **with their tests** |
+
+The loop:
+1. `dbt source freshness`, then `dbt compile`, so the plan sees current code and data;
+2. plan against the last successful state, as `ods state plan` does;
+3. build exactly the nodes that must build, of the command's resource types, and
+   nothing else. Each node is selected by its full `fqn:` and resource type; its file
+   narrows the selection when a folder shares its name. A node that can't be selected
+   exactly stops the run before dbt starts. Nodes of other types that need building
+   are left out and stay to build. If a node being built reads one of them (e.g. a
+   changed seed under `ods state run`), ODS warns that it reads the current table, as
+   dbt would;
+4. record the run. Nodes that built advance: after `build`, with their tests, they are
+   marked tested; otherwise untested. Failed nodes, the ones dbt skipped because of
+   them, and nodes whose tests failed keep their last successful state, so they run
+   again next time. If nothing succeeded, nothing is recorded.
+
+```sh
+ods state compile                # what would build, and why; builds nothing
+ods state seed                   # load the seeds that changed
+ods state run                    # build the models that need it (`dbt run`)
+ods state build                  # build and test everything that needs it (`dbt build`)
+ods state build --exclude-resource-type test   # the same, without tests
+# … edit a model …
+ods state run                    # builds that model and what depends on it
+ods state run --dry-run          # prepare and plan only; builds and records nothing
+ods state run -s +orders --json
+ods state build --resource-type seed --exclude big_model
+ods state run --full-refresh -- --threads 8    # anything after `--` goes to dbt
+```
+
+### Where source versions come from
+
+A model reading a source is reused only when the source has no new data since the model
+was built. ODS picks each source's data version from what it could read, in this order
+([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)):
+
+1. **The table's own version** (`relation_versions`), on warehouses that have one. On
+   Databricks (`metadata.adapter_type` is `databricks` in the manifest), the commands
+   that can build (`run`, `build`, `seed`, `snapshot`, `compile`, with or without
+   `--dry-run`) ask about every source of the project in one `dbt show` query, through
+   dbt's own connection, so ODS handles no credential. For each source that dbt's
+   adapter says is a Delta table, it reads `DESCRIBE DETAIL` (the table's id and format)
+   and `DESCRIBE HISTORY … LIMIT 1` (its latest version). The version is
+   `<table id>/<version>` (exactness `exact`, origin `delta_history`): every commit
+   moves it, and a table dropped and created again gets a new id. The step line reads
+   `dbt show: reading table versions for N sources`.
+2. **`max_loaded_at`** (`source_freshness`), from `dbt source freshness`
+   (`sources.json`), for sources with a `loaded_at_field`.
+3. **None**: the source counts as changed, and the models reading it build.
+
+A table version wins over `max_loaded_at` when both exist. A source whose table version
+can't be read (a view, a table that isn't Delta, one dbt's adapter doesn't confirm is
+Delta, e.g. in `hive_metastore`, or an answer without an id or version) falls back to
+`max_loaded_at`. If the `dbt show` query fails (a permission error, a table that refuses
+`DESCRIBE HISTORY`), every source's table version is unknown and a warning names dbt's
+error (the evidence only says the probe failed). Each plan entry says where its
+sources' versions came from: evidence `source_version_strategy` (`relation_versions`,
+`source_freshness` or `no_version`), `source_version_origin` (the version's own
+origin, e.g. `delta_history` or `sources.json max_loaded_at`) and, for each preferred
+strategy that could have applied but wasn't used, `source_version_skipped` with the
+reason.
+
+Versions from different origins never compare equal, so the first run after table
+versions become available (or stop being) builds the readers of those sources once.
+Any commit moves a Delta version, including `OPTIMIZE` and `VACUUM`, so maintenance
+also rebuilds readers. `ods state plan` and `ods state explain` don't run dbt, so they
+read no table versions, and say so; `ods state build --dry-run` does. Other adapters read none yet.
+
+### Source tests
+
+`dbt build` also runs the tests defined on sources (e.g. `not_null` on a raw table).
+ODS never builds sources, so no node selection reaches those tests; instead
+`ods state build` (unless `--exclude-resource-type test`) and `ods state test` run a
+source's tests when (#232):
+
+- they haven't passed since ODS started recording them, or they failed last time;
+- they changed (one was added, removed or edited);
+- its data version is unknown: `dbt source freshness` didn't measure it (no
+  `loaded_at_field`/`freshness`), or measured it before the tests last passed;
+- its `max_loaded_at` moved since they last passed: the source has new data.
+
+Otherwise they are skipped: they already passed on this data. Their last pass is
+recorded in the target's state against the `max_loaded_at` measured before they ran,
+just as a node's tests are recorded against its build. With `--select`, only the
+sources a `+name` selector reaches as ancestors are considered (a node selected alone
+doesn't bring in its sources' tests, as in dbt). `ods state test --all` runs every
+source's tests.
+
+Sources don't need anything built first: `ods state test` on a state database with
+nothing recorded yet runs the sources' tests (and no node's) and records them, with
+`based_on: null` in JSON. With no sources to test either, it still fails with "ODS has
+no recorded builds to test". When a source test fails in `ods state test`, the nodes'
+tests that passed in the same run are still recorded as passed: the failing source test
+explains the failed run.
+
+The tests run in the same dbt invocation as the nodes, selected exactly
+(`fqn:<test fqn>,resource_type:test`). A failing source test fails the command
+(`ODS-E0404`), and, as with `dbt build`, the nodes being built that read the source,
+and theirs, are skipped: they keep their last state and build next time. The report
+lists every source with tests, whether its tests ran and why (e.g. "`raw.orders` has
+new data"), and how they ended; in JSON, `source_tests` holds the decisions (`source`,
+`name`, `action`: `test` or `skip`, `reasons` with codes `not_tested`,
+`checks_changed`, `missing_data_evidence`, `new_upstream_data` or `unchanged`, and
+`evidence`), `execution.sources` each source's outcome, and `record.source_tests` the
+sources whose tests `passed` or `failed`.
+
+It exits 0 when everything built and every test passed, or when there was nothing to
+build. It exits 1 with `ODS-E0404` when dbt couldn't run or when nodes or tests
+failed; the successes are recorded either way. If recording fails after dbt ran (for
+example, another run recorded first), the report says what dbt did, with outcome
+`not_recorded`. dbt's own output goes to stderr, so
+stdout carries only the report (one JSON document with `--json`).
+
+| Flag | Meaning |
+|---|---|
+| `-s`, `--select SPEC` | only consider these nodes: `name`, `+name`, `name+`; repeatable |
+| `--exclude SPEC` | leave these nodes out (same syntax as `--select`); they keep their last state and stay to build; repeatable |
+| `--resource-type model\|seed\|snapshot` | `build` only: only build nodes of these types; the others stay to build; repeatable |
+| `--exclude-resource-type model\|seed\|snapshot\|test` | `build` only: leave this type out; `test` builds without tests (and unit tests, dbt 1.8+); repeatable |
+| `--full-refresh` | like dbt's: rebuild the selected incremental models and seeds from scratch, **even if unchanged** (reason `full refresh requested`); everything downstream of them that is selected rebuilds too, whatever its lag tolerance, since a full refresh is how data gets corrected (reason `upstream full refresh`; select with `name+` to include it). Models with `full_refresh: false` opt out, as in dbt; tables, views and snapshots follow the plan (dbt never full-refreshes snapshots, and `snapshot` has no such flag) |
+| `--vars YAML` | dbt's `--vars`, passed to **every** dbt command ODS runs (freshness, compile, build, test), so the plan and the build see the same values. Values end up in the compiled SQL, so nodes that use them are fingerprinted with them: change a var, and exactly those rebuild. With `--no-compile`, ODS warns if the artifacts were compiled with other vars (dbt records them in `run_results.json`). Don't pass secrets as vars: use `env_var()` |
+| `-- DBT_ARGS` | passed to dbt as they are, e.g. `-- --threads 8`. Only options about how dbt runs and logs are accepted: `--threads`, `--log-level`, `--log-format`, `--log-path`, `--printer-width`, `--warn-error`, `--warn-error-options`, `--fail-fast`/`-x`, `--debug`/`-d`, `--quiet`/`-q`, `--(no-)use-colors`, `--(no-)partial-parse`, `--store-failures` and the like. Anything else (selection, target, project, vars, `--empty`, `--sample`, …) is refused: use the ODS option where there is one. dbt's `DBT_*` settings are handled the same way: see [below](#dbt-settings-from-the-environment) |
+| `--dry-run` | prepare and plan, but build and record nothing (`compile` always does just that) |
+| `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
+| `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
+| `--dbt PROGRAM` | the dbt executable; default the configured `program`, then `dbt` |
+| `--project-dir DIR` | dbt's; also where ODS finds the artifacts: `DIR/target` unless `--target-dir` says otherwise. Default `DBT_PROJECT_DIR`, then the configured `project_dir`, then `.` |
+| `--profiles-dir DIR`, `--target NAME` | dbt's; default `DBT_PROFILES_DIR`, `DBT_TARGET`, then the configured `profiles_dir`, `target` |
+| `--dbt-profile NAME` | dbt's `--profile`: the `profiles.yml` profile to use instead of the project's; default `DBT_PROFILE`, then the configured `profile`. (ODS's own `--profile` picks its [configuration profile](#configuration)) |
+| `--dbt-output stderr\|capture` | show dbt's output on stderr (default), or capture it and quote the end on failure |
+
+### dbt settings from the environment
+
+dbt reads about 60 `DBT_*` variables as defaults for its flags. ODS handles each one as
+it handles the flag (#227):
+
+| Group | Variables | What ODS does |
+|---|---|---|
+| ODS has an option for it | `DBT_TARGET`, `DBT_PROFILE`, `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR`, `DBT_TARGET_PATH`, `DBT_FULL_REFRESH` | reads it as the default of `--target`, `--dbt-profile`, `--profiles-dir`, `--project-dir`, `--target-dir` (relative to the project, as dbt reads it) and `--full-refresh`; passes the result to dbt as a flag, and removes the variable from dbt's environment. An explicit option wins, as in dbt |
+| Beaten by a flag | `DBT_DEFER`, `DBT_FAVOR_STATE`, `DBT_EMPTY`; `DBT_STATE`, `DBT_DEFER_STATE`, `DBT_ARTIFACT_STATE_PATH` (only deferral reads them, and ODS never passes `state:` selectors); `DBT_WRITE_JSON`, `DBT_INDIRECT_SELECTION`, `DBT_PARTIAL_PARSE_FILE_DIFF` | passes `--no-defer`, `--no-favor-state` and `--no-empty` (where dbt has `--empty`), with a warning, so slim-CI settings exported for every job don't stop ODS. `--write-json`, `--partial-parse-file-diff` and `--indirect-selection eager` (for `build` and `test`) are always passed, so `dbt_project.yml`'s `flags:` can't change them either |
+| Nothing beats it | `DBT_RESOURCE_TYPES`, `DBT_EXCLUDE_RESOURCE_TYPES`, `DBT_SAMPLE`, `DBT_EVENT_TIME_START`/`END`, the old spellings `DBT_DEFER_TO_STATE` and `DBT_FAVOR_STATE_MODE` (they beat dbt's own flags), `DBT_RECORDER_MODE` and `DBT_PP_FILE_DIFF_TEST` | refuses to start (exit 2) until it is unset, and says why |
+| Harmless | logging, colours, printing, parsing, caching, `DBT_FAIL_FAST`, `DBT_WARN_ERROR*`, `DBT_STORE_FAILURES`, … | passed through |
+| Not a dbt setting | `DBT_ENV_SECRET_*`, `DBT_ENV_CUSTOM_ENV_*`, your project's own (`env_var('DBT_SCHEMA')`) | passed through; what they change in the code is in the compiled SQL, which is fingerprinted |
+
+The report says which settings were in effect and where each came from, e.g.
+`dbt: target prod (DBT_TARGET), target_dir target (default)`; `-v` logs it too.
+
+### State settings in `ods.toml`
+
+A project can keep its settings in [configuration](#configuration), so every `ods state`
+command is one word (#214):
+
+```toml
+[state]
+db = ".ods/state.db"          # --state-db
+environment = "dev"           # --environment
+
+[providers.dbt]
+kind = "dbt"
+
+[providers.dbt.settings]
+program = ".venv/bin/dbt"     # --dbt
+project_dir = "transform"     # --project-dir
+profiles_dir = "transform"    # --profiles-dir
+profile = "warehouse"         # --dbt-profile
+target = "dev"                # --target
+target_dir = "transform/target"   # --target-dir
+
+[profiles.ci.providers.dbt.settings]
+target = "ci"
+```
+
+- **Precedence**, highest first: the flag; the `DBT_*` variable dbt itself would read
+  (`DBT_TARGET`, …); configuration, with its own layers (`ODS__…` variables, the active
+  profile, `.ods/local.toml`, `ods.toml`, the user file); the default. So
+  `DBT_TARGET=prod ods state run` builds in `prod` whatever `ods.toml` says, and
+  `ods state run --target qa` beats both.
+- **Paths** in a file are read against that file's directory, so `ods.toml` means the
+  same from any directory below it. `program` is a path only if it names a directory;
+  `program = "dbt"` is looked up on `PATH`.
+- **Environment:** `--environment`, else `state.environment`, else the dbt target,
+  else `default`. Setting `state.environment` stops the target from choosing it: ODS
+  still checks which target the state was built in, so another target's state is
+  never reused (#227).
+- **Only one** `kind = "dbt"` provider may be configured; its name is yours to choose.
+- **No credentials:** dbt's own `profiles.yml` holds those; nothing here is one.
+
+`ods config explain state.environment` says where a value came from, and the report's
+`dbt` line names each setting's source (`project config`, `profile ci`,
+`ODS__STATE__ENVIRONMENT`, …).
+
+### Retrying a run
+
+When a run fails, the nodes that built are recorded. Failed nodes, the ones dbt skipped
+because of them, and nodes whose tests failed keep their last state, so running the
+same command again builds exactly those. It also builds anything else that changed
+since. `ods state retry` saves retyping that command (#276):
+
+```sh
+ods state build -s +orders --vars '{region: eu}'   # stg_payments fails; orders is skipped
+# … fix stg_payments …
+ods state retry                  # runs `ods state build -s +orders --vars '{region: eu}'` again
+ods state retry --dry-run        # plan the retry; build and record nothing
+```
+
+- **Planned afresh:** unlike `dbt retry`, it doesn't replay a list of failed nodes.
+  The plan picks up a fix made in between, and reuses what already succeeded. To build
+  only what failed, use `--failed` ([below](#retrying-only-what-failed)).
+- **What it keeps:** every `run`, `seed`, `snapshot`, `build` and `test` that isn't a
+  dry run keeps its command line beside the state database, in
+  `.ods/state.db.last-run.json`. Only what was typed is kept, including `-- DBT_ARGS`.
+  Environment variables (`DBT_TARGET`, …) and configuration are read again when
+  retrying, as for any command, so none of their values is written down. Don't put
+  secrets on the command line: use `env_var()` in dbt.
+- **One last run per state database:** `retry` reruns whichever command ran last,
+  whatever its target. It prints what it runs on stderr, e.g. retrying
+  `ods state build -s +orders`. `--state-db` picks the database, as elsewhere, and the
+  retry runs against the database it was found in, even if configuration now names
+  another. `--dry-run` plans without building, except after `ods state test`, which has
+  no dry run.
+- **Nothing to retry:** with no run kept yet, `retry` fails with `ODS-E0403`.
+
+#### Retrying only what failed
+
+`ods state retry --failed` is closer to `dbt retry` (#292): it reruns the same command,
+but builds only the nodes that failed, or were skipped because of a failure, in the
+last run, and runs the tests only of the sources whose tests failed. Nothing that
+changed since builds.
+
+```sh
+ods state build                  # customer_segments fails; segment_summary is skipped
+# … fix customer_segments, and meanwhile edit order_events …
+ods state retry --failed         # builds customer_segments and segment_summary only
+ods state retry --failed --dry-run   # plan it; build and record nothing
+```
+
+- **What it keeps:** once dbt has built, the last-run file also keeps the outcome:
+  the ids of the nodes that failed (or whose tests failed), those skipped, and the
+  sources whose tests failed. A run whose results couldn't be recorded counts every node
+  it ran as failed. The file is format 1.1; a 1.0 file from an older ODS still reads.
+- **Still planned:** every node goes through the planner, as in any run. A failed node
+  the plan now reuses (e.g. its last successful build still matches) is reused, and the
+  report says why.
+- **Nothing new:** nodes the plan would build that weren't among the failures are not
+  built. The report lists them as *changed since, not retried*; `ods state retry`
+  without `--failed`, or the command itself, builds them.
+- **Never on stale input:** a node to retry that reads a node the plan builds but the
+  retry doesn't (one changed since, or held back itself) is *held back*: not built, with
+  the parent it waits on. It stays in the outcome, so the next `retry --failed` tries it
+  again.
+- **Nothing to retry:** if the last run succeeded, or its file doesn't keep an outcome
+  (written by an older ODS, or the run stopped before dbt finished), `--failed` says so
+  and fails with `ODS-E0403` without running dbt. After `ods state test`, which already
+  runs only the tests that haven't passed, `--failed` is a usage error (exit 2); plain
+  `retry` reruns it.
+- **JSON:** the report of a `--failed` retry has a `retry` object: `of` (the command
+  line retried), `retried` (node ids built again), `reused`, `held_back` and
+  `changed_since` (each `{node, reason}`), `not_planned` (failed nodes the plan no longer
+  has), `source_tests` and `source_tests_changed_since` (source ids). Empty lists are
+  left out. Without `--failed` the report has no `retry` object.
+
+### What you see while it runs
+
+ODS runs the dbt CLI as a child process: up to three invocations, one after another,
+each starting with dbt's usual `Running with dbt=…` banner:
+
+| # | dbt command | Why | Skipped with |
+|---|---|---|---|
+| 1 | `dbt source freshness` | measure source data, so nodes reading changed sources build | `--no-source-freshness`, `--no-compile` |
+| 2 | `dbt compile` | compiled SQL for every node, which the fingerprints need | `--no-compile` |
+| 3 | the command's namesake with `--select …`: `dbt run`, `seed`, `snapshot` or `build` (`build --exclude-resource-type test --exclude-resource-type unit_test` without tests) | build exactly the plan's BUILD set | `compile`, `--dry-run`, or nothing to build |
+
+`ods state test` runs 1 and 2 the same way, then `dbt test --select …`. In both, the
+dbt command's step line counts the sources whose tests run with it, e.g. `dbt build:
+8 nodes and their tests, and the tests of 1 source`, and the plan summary names them
+(`source tests to run: raw.orders (new data)`).
+
+- **ODS's step lines** on stderr say which dbt command is about to run and why, since
+  dbt starts each one with the same banner; the plan is summed up between them:
+
+  ```text
+  ods ▸ 1/4 dbt source freshness: how new each source's data is
+  ods ▸ 2/4 dbt compile: the code as it is now, for the plan
+  ods ▸ 3/4 dbt show: are the tables of 5 nodes ODS would reuse still there?
+  ods ▸ plan: 8 to build, 5 to reuse
+  ods ▸   code changed: stg_orders
+  ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, …
+  ods ▸ 4/4 dbt build: 8 nodes, without tests
+  ```
+
+  What builds is grouped by its main reason, with long lists cut short; reused nodes
+  are only counted (`-vv` or `ods state plan` names each one and why).
+
+  When nothing needs building, the last line is `ods ▸ nothing to build, so dbt
+  doesn't run again`. `-q` turns them off.
+- **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
+  streams to **stderr** as dbt writes it, exactly as dbt prints it: ODS doesn't
+  reformat it. With `--dbt-output capture` it is hidden, and the last lines are quoted
+  in the error if dbt fails.
+- **ODS's report** (the plan, the exact dbt command it ran, the outcome, what was
+  recorded, and a table with each node's result and why it ran) is printed to
+  **stdout** once dbt has finished, or as one JSON document with `--json`. So
+  `ods state run --json > run.json` keeps dbt's progress on the terminal and the
+  report in the file.
+- **dbt's own files** are written as usual: `logs/dbt.log` in the project (dbt's debug
+  log), and `manifest.json`, `run_results.json` and `sources.json` in the target
+  directory. ODS reads those artifacts; it keeps its state in `.ods/state.db`.
+- ODS writes no log file of its own. Its logs go to stderr, at the level set by
+  `--log-level`, `ODS_LOG`, `-v`/`-q` or `log.level` in the configuration (e.g.
+  `ODS__LOG__LEVEL=debug`), in that order:
+
+  | Level | Shows |
+  |---|---|
+  | `warn` (default) | the step lines and warnings |
+  | `info` (`-v`) | each dbt command line ODS runs, its exit code and time, and what was recorded |
+  | `debug` (`-vv`) | also each node's plan decision and why, dbt's result per node (tests passed, failed, didn't run), and nodes that kept their last state |
+  | `trace` (`-vvv`) | also libraries' logs, e.g. every statement the state store runs |
+  | `error` (`-q`), `off` | errors only (or nothing): no step lines |
+
+  dbt's own verbosity is dbt's: pass it through, e.g. `-- --debug` or
+  `-- --log-level debug`. dbt also writes its debug log to `logs/dbt.log`.
+
+It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
+Don't run other dbt commands against the same target directory while it runs.
+ODS checks that the manifest it records from comes from its own build, and records
+nothing if it doesn't.
+
+## State: test
+
+`ods state test` runs the tests of what ODS built but hasn't tested since, without
+building anything. That covers nodes built by `ods state run`, `seed` or `snapshot`,
+or by `build --exclude-resource-type test`, and nodes whose tests failed last time.
+
+```sh
+ods state run                   # build the models that changed (`dbt run`: no tests)
+ods state test                  # test what that built (`dbt test`, selected exactly)
+ods state test --all            # test everything ODS has a build of
+ods state test --select +orders -- --threads 8
+```
+
+A node is marked tested only when every test that reads it ran and passed: the tests
+dbt attaches to it (data tests and unit tests), as they are now. So:
+
+- a node with no tests is never tested, and isn't run (the report counts it under
+  `no tests`);
+- adding, removing or editing a node's test makes it untested again;
+- a test dbt skipped (e.g. after `-- --fail-fast`) or didn't run tested nothing: the
+  outcome is `incomplete` and the command exits 1 with `ODS-E0404`.
+
+Nodes whose tests fail stay untested, so the next `ods state test` runs them again,
+and the command exits 1 with `ODS-E0404`. Builds are unchanged: failing tests don't
+make a node rebuild unless its code or data changes. A rebuild that fails, or whose
+tests fail, clears the node's tested mark, since the warehouse may now hold that
+build. Tests check what is in the warehouse now, with the tests as they are now.
+It also runs the tests of sources whose data is new or unknown since they last
+passed, as `ods state build` does ([Source tests](#source-tests)): it measures sources
+first, unless `--no-source-freshness` or `--no-compile`.
+It takes `-s`/`--select`, `--exclude`, `--no-compile`, `--no-source-freshness`, the dbt
+options and `-- DBT_ARGS` as `ods state run` does, plus `--all`.
+
+## State: plan, record, history
+
+`ods state plan` says, for every model, seed and snapshot, whether it must be **built**
+or can be **reused**, and why ([ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md)).
+It compares the project now with the last successful state, which `ods state record`
+takes from the dbt runs you already do. Nothing runs, and planning never writes.
+
+```sh
+dbt source freshness            # optional: data versions for sources (sources.json)
+dbt build
+ods state record                # the run's successful nodes become the state
+# … edit models, dbt compile …
+ods state plan                  # what to build, what to reuse, why, and the dbt command
+ods state plan --select +orders --json
+ods state history
+```
+
+A node is **built** when (first match wins):
+1. ODS has no successful build of it;
+2. its code can't be fingerprinted completely (e.g. no compiled SQL: run `dbt compile`;
+   or a hook reads a value only known at run time, such as `var`, `env_var` or
+   `target`);
+3. its fingerprint changed; the plan names the components (`sql`, `file`, `config`,
+   `macros`, `contract`, `relation`, `engine`). A SQL model's `sql` ignores comments
+   and whitespace, so a formatting-only edit reuses it, and the reason says "only
+   formatting changed". SQL whose meaning could depend on the dialect (e.g. `[...]`,
+   `$`, `#`, backslash escapes) is compared as written;
+4. a parent is built because *its* code changed;
+5. it depends on something ODS doesn't know, declares no inputs at all (seeds aside), or
+   its State config has a setting ODS can't honour yet;
+6. a source it reads has no usable data version, now or when it was last built. A
+   version only counts if it was read after the node's last build: run `dbt source
+   freshness` before planning (or, on Databricks, let the commands that run dbt read
+   table versions: see [Where source versions come from](#where-source-versions-come-from));
+7. a parent has new data (a source's `max_loaded_at` moved, a parent is rebuilt for
+   data, or a parent was rebuilt by a run it didn't read), unless its `lag_tolerance`
+   hasn't run out or `require_fresh_data_from: all` isn't met yet.
+
+Otherwise it is **reused**, as long as what it built is still in the warehouse (#230).
+Before planning, the commands that run dbt ask, in one `dbt show` query, whether the
+table or view of every node they would reuse still exists.
+- A node whose relation is gone is **built** (reason `not in the warehouse`), and its
+  readers see new data.
+- If the query fails (no access, a connection error), every node it would have
+  checked is built (reason `couldn't check the warehouse`), with a warning.
+- `ods state plan` doesn't run dbt, so it can't check. Its reuses say that the
+  relation was not checked (evidence `relation_exists`, exactness `none`).
+
+`ods state record` only accepts a real build of the manifest's code:
+- `run_results.json` must come from `dbt build`, `run`, `seed` or `snapshot`, not
+  `--empty`;
+- `manifest.json` must come from the same invocation;
+- the run must not have been recorded already, or have started before the recorded
+  state.
+
+Record right after the run, before another dbt command rewrites the target directory.
+It advances only nodes whose status in `run_results.json` is `success`.
+Failed and skipped nodes keep their last successful state, so they (and what reads them)
+are built next time. Source versions are recorded only if they were read (`sources.json`
+measured, or table versions read) before the run started. Otherwise a node could be credited with data that arrived after
+it ran.
+
+| Flag | Meaning |
+|---|---|
+| `--state-db PATH` | SQLite state database; default `.ods/state.db` (created by `record`) |
+| `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are: `--target-dir` (relative to where ODS runs; ODS passes dbt an absolute path), else `DBT_TARGET_PATH` (relative to the project, as dbt reads it), else the configured `target_dir`, else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else the configured `project_dir`, else `.`). `ods state policies`, `ods lineage`, `erd`, `serve` and `mcp` read the same place |
+| `--environment NAME` | separate state per environment, e.g. `dev`, `prod`; default: the dbt target (`--target`, else `DBT_TARGET`), else `default` |
+| `--target NAME` | dbt's `--target`; on `plan`, `record` and `history` too, so they find the same state |
+| `--sources PATH` | `dbt source freshness` results; default `<target-dir>/sources.json` if present |
+| `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |
+| `--run-results PATH` | (`record`) default `<target-dir>/run_results.json` |
+| `--limit N` | (`history`) default 20; `history` reads the target directory for the project name |
+
+State is kept per project and environment as immutable snapshots. A record that races
+another fails with `ODS-E0402` and writes nothing.
+
+Builds are only reused in the dbt target they went to (#227, ADR-0017). The commands
+that run dbt ask it which target it builds in (one `dbt compile --inline` of the
+target's name, profile, adapter type, host or account and database; never a
+credential) and record that in each snapshot. When it differs from the recorded one
+(same target name on another host, another profile, or state recorded before ODS
+kept targets), nothing in the recorded state is reused: everything builds, with the
+reason `target changed`, and the run says which targets differ. A host, account or
+path is shown without anything that could be a credential (a user, a query string),
+and compared by a digest. `ods state test` refuses to test another target's builds.
+`ods state plan` doesn't run dbt: it shows the target the state was recorded in as not
+checked (use `ods state compile` for a checked plan). State recorded under another
+target name than `--target` is planned with nothing reused; state without a target is
+planned as recorded, with a note.
+`ods state record` doesn't know where the dbt build it records went, so it records no
+target: the next run rebuilds once.
+
+## State: explain, diff, graph
+
+These say why, without running anything (#21). They plan as `ods state plan` does,
+from the artifacts in the target directory, and take the same options (`--target-dir`,
+`--state-db`, `--environment`, …). Run `dbt compile` (or `ods state compile`) first
+so the artifacts show the code as it is.
+
+```sh
+ods state explain customers        # why it would be built or reused, traced upstream
+ods state why-build customers      # the same, answering "why does it build?"
+ods state why-skip stg_payments    # … and "why is it reused?"
+ods state diff                     # what changed since the recorded state
+ods state diff --from 3 --to 5     # what changed between two snapshots
+ods state history orders           # each build of `orders`, and why it happened
+ods state graph --changed          # what would be built, as a Mermaid graph
+```
+
+- **`explain NODE`** shows the node's decision, its reasons and evidence (the
+  fingerprint, the source data versions, its parents' decisions), and what changed.
+  When it builds because a parent builds, the parent is explained in turn, up to the
+  root cause:
+
+  ```text
+  customers would be built
+
+  customers: build
+    upstream code changed: orders will be rebuilt
+    orders: build
+      upstream code changed: stg_orders will be rebuilt
+      stg_orders: build
+        code changed since run 51c7…: sql
+  ```
+
+  `why-build` and `why-skip` answer the same way, and say so when the node does the
+  opposite. `NODE` is a name or a unique id; a name two nodes share is an error that
+  lists them.
+- **`diff`** compares the project now with the recorded state: nodes added or
+  removed, code that changed (by fingerprint component, e.g. `sql`, `config`), and
+  source data newer than what the recorded builds read. With `--from` and `--to` it
+  compares two snapshots (`ods state history` lists them), and says what changed
+  before each node that was rebuilt.
+- **`history NODE`** lists the node's builds and tests, newest first, and for each
+  build what changed since the one before:
+  - its code;
+  - the source data it read;
+  - a parent that was rebuilt.
+
+  This comes from what the snapshots record, so past decisions stay explainable. A
+  rebuild where nothing recorded changed is shown as such. Full refreshes and missing
+  relations aren't kept in snapshots, so a rebuild for one of those reasons appears
+  this way; a change of dbt target is recorded, and shown. Without `NODE`, `history` lists snapshots as before.
+- **`graph`** writes the plan as a graph: each node with its action, and an edge to
+  each node that reads it.
+  - `--changed` keeps only the nodes that would be built.
+  - `--format mermaid` (the default) or `--format dot` picks the format.
+  - The text goes to stdout as it is, so `ods state graph --changed > plan.mmd` works.
+  - With `--json`, the graph comes as nodes and edges, with the text alongside.
+
+All of them work with `--json`: the explanation is a tree of plan entries (`entry`,
+`causes`), history is a list of `built`, `tested` and `dropped` events with typed
+`changes` (`code`, `code_unknown`, `data`, `target`, `upstream`), and a diff lists `added`,
+`removed` and `changed` nodes.
+
+## Recovering state
+
+The state database (`.ods/state.db` by default) is the only record of what was built.
+ODS protects it ([ADR-0018](adr/0018-state-store-migrations-and-recovery.md), #188):
+
+- **Failed runs** change nothing. A run records in one transaction at the end, and
+  only its successes; if it fails, is interrupted or loses a race, the last good state
+  stays as it was.
+- **Upgrades:** a newer ODS migrates the database forward the first time it opens it,
+  in one transaction. It first keeps a copy beside it,
+  `state.db.v<version>-<time>-<process>.bak`.
+  If the migration fails, nothing changes and the error names the copy.
+- **Downgrades:** an older ODS refuses a database a newer one wrote (`ODS-E0401`,
+  "upgrade ODS"). It never guesses. To go back, restore the copy kept when it was
+  migrated.
+- **Damage:** if the file can't be read, or a snapshot in it can't be decoded, commands
+  that read it stop with `ODS-E0405`, change nothing and point at `ods state doctor`.
+  They never reuse a build on the strength of damaged state.
+
+```sh
+ods state doctor                 # check; changes nothing; exit 1 (ODS-E0405) if damaged
+ods state backup                 # consistent copy: state.db.<time>.bak (or --to PATH)
+ods state reset --yes            # set it aside: state.db-<time>-<process>.set-aside; deletes nothing
+```
+
+`doctor` reports:
+- the database's schema version, and the latest this ODS knows;
+- every scope, with its head snapshot and how many snapshots it has;
+- every problem: `damaged` (SQLite's integrity check failed, or it isn't a state
+  database), `newer schema`, `unreadable snapshot`, `inconsistent snapshot` (what
+  `history` lists disagrees with the snapshot itself), `dangling head` or
+  `broken chain` (a head or parent that points at a missing snapshot);
+- any copies it finds beside the database, and what to do.
+
+`backup` works while runs use the database. Take one before anything risky, or on a
+schedule in CI.
+
+To recover a damaged database:
+1. `ods state doctor` to see what is wrong, and which copies exist.
+2. `ods state reset --yes`: the damaged database moves aside, so it can still be
+   inspected (and its `-wal`/`-shm` files move with it, so it still opens).
+3. Either restore a copy, by copying it over the database (e.g.
+   `cp .ods/state.db.v1-1790000000-4242.bak .ods/state.db`) and running `ods state doctor`
+   again; or start afresh by doing nothing more. With no state, the next run builds
+   every node and records new state.
+
+Don't reset or restore while a run is using the database.
+
+## State: export for dbt deferral
+
+`dbt retry` and other runs with `--defer --favor-state` send every reference to a model
+the run doesn't select to the state they defer to (e.g. prod's manifest), even when this
+target has just built it. A retry after a failure then builds the failed model on
+**prod's** copy of its parents, not the ones this target built. `ods state export`
+writes a dbt state directory that fixes this, from what ODS recorded
+([ADR-0020](adr/0020-dbt-state-interop-and-favor-state.md), #296):
+
+```sh
+ods state build --target dev                     # a builds, b fails; ODS records a
+ods state export --dbt-state .ods/dbt-state --upstream prod/ --target dev
+dbt retry --defer-state .ods/dbt-state           # b now reads dev's a
+# or any later deferred run: selection still compares with prod
+dbt build -s b --defer --favor-state --state prod/ --defer-state .ods/dbt-state
+```
+
+The directory holds prod's `manifest.json`, in which only the nodes ODS can vouch for
+point at this target, and `ods-export.json`, ODS's record of why. Pass it to dbt as
+**`--defer-state`**.
+
+!!! warning "Not `--state`"
+    `dbt retry --state .ods/dbt-state` does **not** work: the retry then still defers to
+    the state the original run was given (prod), whatever the directory holds. Keep
+    `--state prod/` for `state:modified` selection, and add `--defer-state`.
+
+Each node of the upstream manifest points at this target only if all of these hold;
+otherwise it keeps the upstream pointer, exactly as dbt would have used it. The first
+rule that fails is the node's reason:
+
+| Reason | Why the node points upstream (or is left alone) |
+|---|---|
+| `not_deferrable` | dbt never defers it: a test, an ephemeral model, anything but a model, seed or snapshot. Left unchanged. |
+| `not_in_project` | It isn't in this target's current manifest. |
+| `target_changed` / `target_unknown` | The latest recorded state is for another target, or doesn't say which (`ods state record`). |
+| `not_built_here` | No successful build of it is recorded in this target. |
+| `relation_changed` | It now builds into another table or view than the recorded build did. |
+| `code_changed_since_build` | Its code (SQL, config, macros, …) differs from the recorded build's, or can't be fingerprinted. |
+| `relation_missing` | Its table or view isn't in this target's warehouse any more. |
+| `relation_unverified` | Nothing showed that its table or view is still there: the check failed, `--no-check-relations`, or the check found it somewhere other than `manifest.json` says (recompile, then export again). |
+| `built_here` | Built here by a recorded run, still there: it points at this target. |
+
+- **Options:** the usual scope (`--target`, `--environment`, `--project-dir`,
+  `--target-dir`, `--state-db`) and dbt options (`--dbt`, `--profiles-dir`,
+  `--dbt-profile`, `--vars`, `--dbt-output`). `--upstream` is required: ODS doesn't
+  guess where prod's state is. `--no-check-relations` skips the warehouse check, so
+  every node keeps the upstream pointer.
+- **What runs:** one dbt call to identify the target, and one to check, for all the
+  nodes that could point here, that their tables and views exist. It doesn't run
+  `dbt compile`: that would overwrite `target/run_results.json`, which `dbt retry`
+  reads. It reads the artifacts the last dbt command left in the target directory.
+- **Refused** (`ODS-E0403`): an upstream manifest of another project (by
+  `project_name`, and `project_id` when both have one; a missing id only warns), a
+  manifest version other than v12, `--dbt-state` naming the upstream directory or dbt's
+  target directory, and dbt's Information Schema instead of `manifest.json`. If dbt
+  can't say which target it builds in, the export stops (`ODS-E0404`): it never
+  guesses.
+- **What is written:** the upstream document with only `database`, `schema`, `alias`
+  and `relation_name` replaced, for the `built_here` nodes. Nothing is added, removed or
+  reordered, and no ODS key is added. No `run_results.json`: `dbt retry` reads the
+  previous run's from the target directory. The upstream directory is never written to.
+- **Refreshing it:** each file is written in full to a temporary file in the directory,
+  then renamed over the old one: `ods-export.json` first, `manifest.json` last. A dbt
+  run that starts meanwhile reads the whole previous export or the whole new one. A
+  second export to the same directory waits up to 10 seconds for the lock
+  (`.ods-export.lock`), then fails with `ODS-E0406`, as does a failed write, whose
+  message names the files already replaced. Run the export again to repair it.
+- **Treat it like the upstream state.** The export copies what the upstream manifest
+  holds, including its rendered SQL and `metadata.env`, and adds nothing from profiles
+  or credentials. `ods-export.json` holds the target's identity only in the form
+  `ods state history` shows: never the raw location.
+- **After a deferred compile.** If the last dbt command was itself a deferred run, the
+  artifacts ODS reads were compiled with refs resolved to prod. A node whose SQL names
+  prod's relations then differs from what ODS recorded, and points upstream
+  (`code_changed_since_build`). That is conservative: it can send more nodes upstream
+  than needed, never fewer. Nodes that only read sources, or whose parents weren't
+  deferred, aren't affected. Don't run `dbt compile` just to avoid it before a
+  `dbt retry`: it replaces the run results the retry reads.
+
+`--output json` returns every node's choice (`pointer`: `this_target`, `upstream` or
+`unchanged`), `reason`, the recorded `run_id` and `built_at` it rests on, the fingerprint
+components that changed, and its `evidence`. The same list, with the snapshot and target
+it was made from and the SHA-256 of the `manifest.json` it describes, is in
+`ods-export.json` (`schema_version` 1.0). Plain output counts the reasons and lists the
+nodes that point at this target.
 
 ## Entity-relationship diagrams
 

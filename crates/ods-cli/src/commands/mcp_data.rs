@@ -6,12 +6,13 @@
 //! relationships carry their evidence. The plan never invents columns or joins; the
 //! model writes the final SQL from it.
 
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use ods_erd::{Basis, Cardinality, Entity, Erd, Relationship};
 use ods_mcp::ToolOutput;
+use petgraph::algo::astar;
+use petgraph::graph::{NodeIndex, UnGraph};
 use serde_json::{Value, json};
 
 use super::erd::{ErdOptions, project_erd};
@@ -236,43 +237,51 @@ fn weight(rel: &Relationship) -> u32 {
         }
 }
 
-/// The cheapest path of relationships from `start` to `goal`, as edge indexes.
-fn path(erd: &Erd, start: &str, goal: &str) -> Option<Vec<usize>> {
-    let mut best: BTreeMap<&str, u32> = BTreeMap::from([(start, 0)]);
-    let mut previous: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut queue = BinaryHeap::from([Reverse((0_u32, start))]);
-    while let Some(Reverse((cost, node))) = queue.pop() {
-        if node == goal {
-            let mut edges = Vec::new();
-            let mut at = goal;
-            while let Some(&edge) = previous.get(at) {
-                edges.push(edge);
-                let rel = &erd.relationships[edge];
-                at = if rel.from == at { &rel.to } else { &rel.from };
-            }
-            edges.reverse();
-            return Some(edges);
-        }
-        if cost > best.get(node).copied().unwrap_or(u32::MAX) {
-            continue;
-        }
+/// The relationships as an undirected graph of entity ids; each edge is a
+/// relationship's index.
+struct Joins<'a> {
+    graph: UnGraph<&'a str, usize>,
+    index: BTreeMap<&'a str, NodeIndex>,
+}
+
+impl<'a> Joins<'a> {
+    fn new(erd: &'a Erd) -> Self {
+        let ids: BTreeSet<&str> = erd
+            .relationships
+            .iter()
+            .flat_map(|r| [r.from.as_str(), r.to.as_str()])
+            .collect();
+        let mut graph = UnGraph::with_capacity(ids.len(), erd.relationships.len());
+        let index: BTreeMap<&str, NodeIndex> =
+            ids.into_iter().map(|id| (id, graph.add_node(id))).collect();
         for (i, rel) in erd.relationships.iter().enumerate() {
-            let next = if rel.from == node {
-                rel.to.as_str()
-            } else if rel.to == node {
-                rel.from.as_str()
-            } else {
-                continue;
-            };
-            let next_cost = cost + weight(rel);
-            if next_cost < best.get(next).copied().unwrap_or(u32::MAX) {
-                best.insert(next, next_cost);
-                previous.insert(next, i);
-                queue.push(Reverse((next_cost, next)));
-            }
+            graph.add_edge(index[rel.from.as_str()], index[rel.to.as_str()], i);
         }
+        Self { graph, index }
     }
-    None
+
+    /// The cheapest path of relationships from `start` to `goal`, as edge indexes.
+    fn path(&self, erd: &Erd, start: &str, goal: &str) -> Option<Vec<usize>> {
+        let (start, goal) = (*self.index.get(start)?, *self.index.get(goal)?);
+        let cost = |edge: usize| weight(&erd.relationships[edge]);
+        let (_, nodes) = astar(
+            &self.graph,
+            start,
+            |n| n == goal,
+            |e| cost(*e.weight()),
+            |_| 0,
+        )?;
+        // Between two tables, the most trustworthy of their relationships.
+        nodes
+            .windows(2)
+            .map(|pair| {
+                self.graph
+                    .edges_connecting(pair[0], pair[1])
+                    .map(|e| *e.weight())
+                    .min_by_key(|&edge| (cost(edge), edge))
+            })
+            .collect()
+    }
 }
 
 /// Short, unique table aliases: `order_items` → `oi`.
@@ -337,6 +346,7 @@ pub(super) fn plan_query(project: &Project, arguments: &Value) -> ToolOutput {
 
     // Join each requested table in along the most trustworthy path, reusing tables
     // already in the query.
+    let joins = Joins::new(&erd);
     let mut in_query: Vec<String> = vec![base.clone()];
     let mut steps: Vec<(usize, String)> = Vec::new(); // (edge, entity it adds)
     for target in &ids[1..] {
@@ -345,7 +355,7 @@ pub(super) fn plan_query(project: &Project, arguments: &Value) -> ToolOutput {
         }
         let Some(edges) = in_query
             .iter()
-            .filter_map(|from| path(&erd, from, target))
+            .filter_map(|from| joins.path(&erd, from, target))
             .min_by_key(|p| {
                 p.iter()
                     .map(|&e| weight(&erd.relationships[e]))

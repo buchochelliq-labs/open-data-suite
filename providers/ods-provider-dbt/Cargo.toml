@@ -9,11 +9,26 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+csv.workspace = true
 ods-core.workspace = true
+ods-sdk.workspace = true
 parquet.workspace = true
+percent-encoding.workspace = true
+pep440_rs.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# `preserve_order`: an exported manifest keeps the upstream's key order (ADR-0020 §3).
+# Cargo unifies features, so every crate built with this one gets it too: nothing in
+# the workspace may depend on `serde_json::Map` ordering being sorted.
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+
+[dev-dependencies]
+ods-sdk = { workspace = true, features = ["conformance"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true

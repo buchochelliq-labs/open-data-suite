@@ -106,7 +106,7 @@ fn json(body: &str) -> serde_json::Value {
 fn the_api_answers_graph_search_node_and_impact_queries() {
     let addr = start("");
 
-    let (status, head, page) = get(addr, "/");
+    let (status, head, page) = get(addr, "/lineage");
     assert_eq!(status, 200);
     assert!(
         head.contains("content-security-policy: default-src 'none'"),
@@ -171,6 +171,10 @@ fn it_can_live_under_a_reverse_proxy_prefix() {
     assert_eq!(status, 308, "the page must load from the slash URL");
     assert!(head.contains("location: /lineage/"), "{head}");
     assert_eq!(get(addr, "/lineage/healthz").2, "ok");
+    assert!(
+        get(addr, "/lineage/lineage").2.contains(r#"content="api""#),
+        "the explorer sits next to Home, so its `api/...` resolves under the prefix"
+    );
     assert_eq!(get(addr, "/lineage/api/graph").0, 200);
     assert_eq!(get(addr, "/api/graph").0, 404);
 }
@@ -201,7 +205,7 @@ fn hostile_names_cannot_break_out_of_the_embedded_graph() {
     assert!(!page.contains(evil));
     assert!(page.contains(r"\u003c/script>\u003cscript>alert(1)\u003c/script>"));
     let addr = start_with(snapshot, "");
-    let (_, _, served) = get(addr, "/");
+    let (_, _, served) = get(addr, "/lineage");
     assert!(!served.contains(evil));
 }
 
@@ -212,7 +216,8 @@ fn standalone_pages_embed_the_graph_and_static_sites_fetch_it() {
     assert!(page.contains(r#"content="embedded""#));
     assert!(page.contains("model.orders"));
 
-    let dir = std::env::temp_dir().join(format!("ods-web-site-{}", std::process::id()));
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("site");
     let files = export_site(&snapshot.document, &dir).unwrap();
     assert_eq!(files, [dir.join("index.html"), dir.join("graph.json")]);
     let index = std::fs::read_to_string(&files[0]).unwrap();
@@ -223,7 +228,33 @@ fn standalone_pages_embed_the_graph_and_static_sites_fetch_it() {
     );
     let graph = json(&std::fs::read_to_string(&files[1]).unwrap());
     assert_eq!(graph, serde_json::to_value(&snapshot.document).unwrap());
+}
+
+#[test]
+fn every_delivery_mode_inlines_the_layout_library() {
+    let dagre = include_str!("../assets/vendor/dagre.min.js");
+    let inlined = format!("<script>{dagre}</script>");
+    let snapshot = snapshot();
+    assert!(
+        standalone_page(&snapshot.document)
+            .unwrap()
+            .contains(&inlined)
+    );
+
+    let dir = std::env::temp_dir().join(format!("ods-web-dagre-{}", std::process::id()));
+    let files = export_site(&snapshot.document, &dir).unwrap();
+    assert!(
+        std::fs::read_to_string(&files[0])
+            .unwrap()
+            .contains(&inlined)
+    );
     std::fs::remove_dir_all(dir).unwrap();
+
+    let addr = start_with(snapshot, "");
+    assert!(
+        get(addr, "/lineage").2.contains(&inlined),
+        "served without a CDN"
+    );
 }
 
 #[test]

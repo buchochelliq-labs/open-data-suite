@@ -1,0 +1,1130 @@
+//! The planning rules of ADR-0013, one behaviour per test.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use ods_core::state::{
+    DataVersion, Exactness, Fingerprint, PlanAction, ReasonCode, SnapshotId, StateSnapshot,
+    Timestamp,
+};
+use ods_core::{FreshnessPolicy, Quorum, UnappliedSetting};
+use ods_state::{
+    Node, Outcome, PlanError, PlanOptions, Project, RelationFact, RunResult, Source, plan, record,
+    reuse_candidates, select,
+};
+
+const T0: i64 = 1_000_000;
+
+#[allow(clippy::unnecessary_wraps, reason = "nodes hold a Result")]
+fn fp(code: &str) -> Result<Fingerprint, String> {
+    Ok(Fingerprint::from_content([
+        ("file", code),
+        ("config", "{}"),
+    ]))
+}
+
+fn node(id: &str, parents: &[&str], code: &str) -> Node {
+    Node::new(
+        format!("model.p.{id}"),
+        id,
+        "model",
+        parents
+            .iter()
+            .map(|p| {
+                if p.starts_with("raw_") {
+                    format!("source.p.{p}")
+                } else {
+                    format!("model.p.{p}")
+                }
+            })
+            .collect(),
+        fp(code),
+        FreshnessPolicy::conservative(),
+    )
+}
+
+fn source(id: &str, version: Option<&str>) -> Source {
+    Source::new(
+        format!("source.p.{id}"),
+        id,
+        version.map(|v| DataVersion::new(v, Exactness::Semantic, "sources.json")),
+    )
+    // Measured after the build at T0, before plans at T0 + 60.
+    .observed_at(Some(Timestamp::from_unix(T0 + 50)))
+}
+
+/// `raw_orders → stg_orders → orders → report`, `raw_users → stg_users → report`,
+/// and `lonely` (no parents, self-contained like a seed).
+fn project() -> Project {
+    Project::new(
+        vec![
+            node("stg_orders", &["raw_orders"], "so"),
+            node("stg_users", &["raw_users"], "su"),
+            node("orders", &["stg_orders"], "o"),
+            node("report", &["orders", "stg_users"], "r"),
+            node("lonely", &[], "l").self_contained(),
+        ],
+        vec![
+            source("raw_orders", Some("v1")),
+            source("raw_users", Some("u1")),
+        ],
+    )
+}
+
+fn all(project: &Project) -> BTreeSet<String> {
+    select(project, &[]).unwrap()
+}
+
+/// Everything in `project` built successfully at T0, with sources predating the run.
+fn built(project: &Project) -> StateSnapshot {
+    let results: Vec<RunResult> = project
+        .nodes
+        .iter()
+        .map(|n| RunResult::new(&n.id, Outcome::Success, Some(Timestamp::from_unix(T0))))
+        .collect();
+    record(
+        project,
+        None,
+        &results,
+        "run-1",
+        Timestamp::from_unix(T0),
+        true,
+    )
+    .snapshot
+}
+
+fn actions(
+    project: &Project,
+    snapshot: Option<&StateSnapshot>,
+    now: i64,
+) -> BTreeMap<String, (PlanAction, ReasonCode)> {
+    let plan = plan(
+        project,
+        snapshot.map(|s| (SnapshotId(1), s)),
+        &all(project),
+        Timestamp::from_unix(now),
+    )
+    .unwrap();
+    plan.entries
+        .into_iter()
+        .map(|e| (e.name, (e.action, e.reasons[0].code)))
+        .collect()
+}
+
+fn build(code: ReasonCode) -> (PlanAction, ReasonCode) {
+    (PlanAction::Build, code)
+}
+
+fn reuse(code: ReasonCode) -> (PlanAction, ReasonCode) {
+    (PlanAction::Reuse, code)
+}
+
+#[test]
+fn without_state_everything_is_built() {
+    let p = project();
+    for (name, decision) in actions(&p, None, T0) {
+        assert_eq!(decision, build(ReasonCode::NeverBuilt), "{name}");
+    }
+}
+
+#[test]
+fn nothing_changed_means_everything_is_reused() {
+    let p = project();
+    let state = built(&p);
+    for (name, decision) in actions(&p, Some(&state), T0 + 60) {
+        assert_eq!(decision, reuse(ReasonCode::Unchanged), "{name}");
+    }
+}
+
+#[test]
+fn a_code_change_rebuilds_the_node_and_its_descendants_only() {
+    let p = project();
+    let state = built(&p);
+    let mut changed = p.clone();
+    changed.nodes[0].fingerprint = fp("so v2");
+    let got = actions(&changed, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::CodeChanged));
+    assert_eq!(got["orders"], build(ReasonCode::UpstreamCodeChanged));
+    assert_eq!(got["report"], build(ReasonCode::UpstreamCodeChanged));
+    assert_eq!(
+        got["stg_users"],
+        reuse(ReasonCode::Unchanged),
+        "unrelated branch"
+    );
+    assert_eq!(
+        got["lonely"],
+        reuse(ReasonCode::Unchanged),
+        "unrelated node"
+    );
+}
+
+#[test]
+fn a_code_change_names_the_changed_components() {
+    let p = project();
+    let state = built(&p);
+    let mut changed = p.clone();
+    changed.nodes[2].fingerprint = Ok(Fingerprint::from_content([
+        ("file", "o"),
+        ("config", "{\"x\":1}"),
+    ]));
+    let plan = plan(
+        &changed,
+        Some((SnapshotId(1), &state)),
+        &all(&changed),
+        Timestamp::from_unix(T0),
+    )
+    .unwrap();
+    let orders = plan.entries.iter().find(|e| e.name == "orders").unwrap();
+    assert_eq!(orders.changed_components, ["config"]);
+    assert!(
+        orders.reasons[0].message.contains("config"),
+        "{:?}",
+        orders.reasons
+    );
+    assert_ne!(orders.before, orders.after);
+}
+
+#[test]
+fn new_source_data_rebuilds_its_readers_and_their_descendants() {
+    let p = project();
+    let state = built(&p);
+    let mut fresh = p.clone();
+    fresh.sources[0] = source("raw_orders", Some("v2"));
+    let got = actions(&fresh, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::NewUpstreamData));
+    assert_eq!(got["orders"], build(ReasonCode::NewUpstreamData));
+    assert_eq!(got["report"], build(ReasonCode::NewUpstreamData));
+    assert_eq!(got["stg_users"], reuse(ReasonCode::Unchanged));
+}
+
+#[test]
+fn missing_or_weak_data_evidence_means_build() {
+    let p = project();
+    let state = built(&p);
+    let mut unknown = p.clone();
+    unknown.sources[1] = source("raw_users", None);
+    let got = actions(&unknown, Some(&state), T0 + 60);
+    assert_eq!(got["stg_users"], build(ReasonCode::MissingDataEvidence));
+    assert_eq!(got["report"], build(ReasonCode::NewUpstreamData));
+    assert_eq!(got["stg_orders"], reuse(ReasonCode::Unchanged));
+
+    let mut proxy = p.clone();
+    proxy.sources[1].version = Some(DataVersion::new("u1", Exactness::Proxy, "metadata"));
+    assert_eq!(
+        actions(&proxy, Some(&state), T0 + 60)["stg_users"],
+        build(ReasonCode::MissingDataEvidence),
+        "proxy evidence isn't enough to reuse"
+    );
+}
+
+#[test]
+fn source_versions_seen_after_the_run_are_not_trusted() {
+    let p = project();
+    let results: Vec<RunResult> = p
+        .nodes
+        .iter()
+        .map(|n| RunResult::new(&n.id, Outcome::Success, None))
+        .collect();
+    let state = record(&p, None, &results, "run-1", Timestamp::from_unix(T0), false).snapshot;
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::MissingDataEvidence));
+    assert_eq!(got["lonely"], reuse(ReasonCode::Unchanged));
+}
+
+#[test]
+fn lag_tolerance_defers_new_data_until_due() {
+    let mut p = project();
+    p.nodes[0].policy.lag_tolerance_secs = 3600;
+    let state = built(&p);
+    let mut fresh = p.clone();
+    fresh.sources[0] = source("raw_orders", Some("v2"));
+    let got = actions(&fresh, Some(&state), T0 + 600);
+    assert_eq!(got["stg_orders"], reuse(ReasonCode::WithinLagTolerance));
+    assert_eq!(
+        got["orders"],
+        reuse(ReasonCode::Unchanged),
+        "nothing new reaches it yet"
+    );
+    let later = actions(&fresh, Some(&state), T0 + 3600);
+    assert_eq!(
+        later["stg_orders"],
+        build(ReasonCode::NewUpstreamData),
+        "due exactly at the tolerance"
+    );
+}
+
+#[test]
+fn a_lag_beyond_representable_time_is_never_due() {
+    let message = |lag: u64| {
+        let mut p = project();
+        p.nodes[0].policy.lag_tolerance_secs = lag;
+        let state = built(&p);
+        let mut fresh = p.clone();
+        fresh.sources[0] = source("raw_orders", Some("v2"));
+        let plan = plan(
+            &fresh,
+            Some((SnapshotId(1), &state)),
+            &all(&fresh),
+            Timestamp::from_unix(T0 + 600),
+        )
+        .unwrap();
+        let entry = plan
+            .entries
+            .into_iter()
+            .find(|e| e.name == "stg_orders")
+            .unwrap();
+        assert_eq!(entry.reasons[0].code, ReasonCode::WithinLagTolerance);
+        entry.reasons[0].message.clone()
+    };
+    let hour = message(3600);
+    assert!(hour.contains("due at "), "{hour}");
+    let forever = message(u64::MAX);
+    assert!(
+        forever.ends_with("never due") && !forever.contains("due at"),
+        "{forever}"
+    );
+}
+
+#[test]
+fn lag_tolerance_never_defers_an_upstream_code_change() {
+    let mut p = project();
+    p.nodes[2].policy.lag_tolerance_secs = 3600;
+    let state = built(&p);
+    let mut changed = p.clone();
+    changed.nodes[0].fingerprint = fp("so v2");
+    assert_eq!(
+        actions(&changed, Some(&state), T0 + 60)["orders"],
+        build(ReasonCode::UpstreamCodeChanged)
+    );
+}
+
+#[test]
+fn quorum_all_waits_for_every_parent() {
+    let mut p = project();
+    p.nodes[3].policy.require_fresh_data_from = Quorum::All;
+    let state = built(&p);
+    let mut fresh = p.clone();
+    fresh.sources[0] = source("raw_orders", Some("v2"));
+    assert_eq!(
+        actions(&fresh, Some(&state), T0 + 60)["report"],
+        reuse(ReasonCode::QuorumNotMet)
+    );
+    fresh.sources[1] = source("raw_users", Some("u2"));
+    assert_eq!(
+        actions(&fresh, Some(&state), T0 + 60)["report"],
+        build(ReasonCode::NewUpstreamData)
+    );
+}
+
+#[test]
+fn a_policy_ods_cannot_honour_blocks_reuse() {
+    let mut p = project();
+    p.nodes[4].policy.unapplied.push(UnappliedSetting::new(
+        "state.evaluate_volatile_sql",
+        "true",
+        true,
+        "not supported yet",
+    ));
+    let state = built(&p);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["lonely"], build(ReasonCode::PolicyBlocksReuse));
+}
+
+#[test]
+fn incomplete_code_evidence_means_build() {
+    let p = project();
+    let state = built(&p);
+    let mut parsed_only = p.clone();
+    parsed_only.nodes[4].fingerprint = Err("no compiled SQL; run `dbt compile`".into());
+    assert_eq!(
+        actions(&parsed_only, Some(&state), T0)["lonely"],
+        build(ReasonCode::CodeEvidenceIncomplete)
+    );
+}
+
+#[test]
+fn a_failed_run_keeps_the_last_successful_state_and_its_children_catch_up() {
+    let p = project();
+    let first = built(&p);
+    // Run 2: stg_orders rebuilt at T0+100, orders failed, report skipped.
+    let results = [
+        RunResult::new(
+            "model.p.stg_orders",
+            Outcome::Success,
+            Some(Timestamp::from_unix(T0 + 100)),
+        ),
+        RunResult::new("model.p.orders", Outcome::Failed, None),
+        RunResult::new("model.p.report", Outcome::Skipped, None),
+        RunResult::new("model.p.gone", Outcome::Success, None),
+    ];
+    let recorded = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &results,
+        "run-2",
+        Timestamp::from_unix(T0 + 200),
+        true,
+    );
+    assert_eq!(recorded.advanced, ["model.p.stg_orders"]);
+    assert_eq!(recorded.kept.len(), 2);
+    assert_eq!(recorded.ignored, ["model.p.gone"]);
+    let second = recorded.snapshot;
+    assert_eq!(second.parent, Some(SnapshotId(1)));
+    assert_eq!(
+        second.nodes["model.p.orders"], first.nodes["model.p.orders"],
+        "failed node kept"
+    );
+    assert_eq!(second.nodes["model.p.stg_orders"].run_id, "run-2");
+    // Sources measured again after run 2, as `dbt source freshness` before planning.
+    let mut p = p.clone();
+    for source in &mut p.sources {
+        source.observed_at = Some(Timestamp::from_unix(T0 + 250));
+    }
+    let got = actions(&p, Some(&second), T0 + 300);
+    assert_eq!(got["stg_orders"], reuse(ReasonCode::Unchanged));
+    assert_eq!(
+        got["orders"],
+        build(ReasonCode::NewUpstreamData),
+        "its parent was rebuilt after it"
+    );
+    assert_eq!(got["report"], build(ReasonCode::NewUpstreamData));
+}
+
+#[test]
+fn plans_are_ordered_by_depth_then_id_and_stable() {
+    let p = project();
+    let order: Vec<String> = plan(&p, None, &all(&p), Timestamp::from_unix(T0))
+        .unwrap()
+        .entries
+        .iter()
+        .map(|e| format!("{}:{}", e.depth, e.name))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "0:lonely",
+            "0:stg_orders",
+            "0:stg_users",
+            "1:orders",
+            "2:report"
+        ]
+    );
+    let mut reversed = p.clone();
+    reversed.nodes.reverse();
+    let again = plan(&reversed, None, &all(&reversed), Timestamp::from_unix(T0)).unwrap();
+    let first = plan(&p, None, &all(&p), Timestamp::from_unix(T0)).unwrap();
+    assert_eq!(
+        serde_json::to_string(&first).unwrap(),
+        serde_json::to_string(&again).unwrap(),
+        "input order doesn't matter"
+    );
+}
+
+#[test]
+fn cycles_and_duplicates_are_errors() {
+    let cyclic = Project::new(
+        vec![
+            node("a", &["b"], "a"),
+            node("b", &["a"], "b"),
+            node("c", &[], "c"),
+        ],
+        vec![],
+    );
+    assert_eq!(
+        plan(&cyclic, None, &all(&cyclic), Timestamp::from_unix(T0)).unwrap_err(),
+        PlanError::Cycle(vec!["model.p.a".into(), "model.p.b".into()])
+    );
+    assert_eq!(
+        plan(&cyclic, None, &all(&cyclic), Timestamp::from_unix(T0))
+            .unwrap_err()
+            .to_string(),
+        "the dependency graph has a cycle: model.p.a → model.p.b → model.p.a"
+    );
+    let twice = Project::new(vec![node("a", &[], "a"), node("a", &[], "b")], vec![]);
+    assert!(matches!(
+        plan(&twice, None, &all(&twice), Timestamp::from_unix(T0)),
+        Err(PlanError::Duplicate(_))
+    ));
+}
+
+#[test]
+fn selection_limits_the_plan_but_not_the_decisions() {
+    let p = project();
+    let state = built(&p);
+    let mut changed = p.clone();
+    changed.nodes[0].fingerprint = fp("so v2");
+    let only_report = select(&changed, &["report".to_owned()]).unwrap();
+    let plan = plan(
+        &changed,
+        Some((SnapshotId(1), &state)),
+        &only_report,
+        Timestamp::from_unix(T0),
+    )
+    .unwrap();
+    assert_eq!(plan.entries.len(), 1);
+    assert_eq!(
+        plan.entries[0].reasons[0].code,
+        ReasonCode::UpstreamCodeChanged
+    );
+
+    let names = |specs: &[&str]| -> Vec<String> {
+        let ids = select(
+            &p,
+            &specs.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        ids.into_iter()
+            .map(|i| i.trim_start_matches("model.p.").to_owned())
+            .collect()
+    };
+    assert_eq!(names(&["+orders"]), ["orders", "stg_orders"]);
+    assert_eq!(names(&["stg_orders+"]), ["orders", "report", "stg_orders"]);
+    assert_eq!(names(&["+orders+"]), ["orders", "report", "stg_orders"]);
+    assert_eq!(names(&["lonely stg_users"]), ["lonely", "stg_users"]);
+    assert_eq!(names(&["model.p.lonely"]), ["lonely"]);
+    assert!(
+        select(&p, &["nope".to_owned()])
+            .unwrap_err()
+            .contains("nope")
+    );
+}
+
+#[test]
+fn every_reuse_says_the_relation_was_not_checked() {
+    let p = project();
+    let state = built(&p);
+    let plan = plan(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0),
+    )
+    .unwrap();
+    for entry in plan.with_action(PlanAction::Reuse) {
+        assert!(
+            entry
+                .evidence
+                .iter()
+                .any(|e| e.kind == "relation_exists" && e.exactness == Exactness::None),
+            "{}",
+            entry.name
+        );
+    }
+}
+
+/// `project()` with `name`'s relation fact set, and every other one present.
+fn with_relations(name: &str, fact: &RelationFact) -> Project {
+    let mut p = project();
+    for node in &mut p.nodes {
+        node.relation = if node.name == name {
+            fact.clone()
+        } else {
+            RelationFact::Present(Some("table".to_owned()))
+        };
+    }
+    p
+}
+
+#[test]
+fn a_missing_relation_is_built_and_its_readers_see_new_data() {
+    let state = built(&project());
+    let p = with_relations("stg_orders", &RelationFact::Missing);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::RelationMissing));
+    // Not a code change: readers follow their freshness policy, as for new data.
+    assert_eq!(got["orders"], build(ReasonCode::NewUpstreamData));
+    assert_eq!(got["stg_users"], reuse(ReasonCode::Unchanged));
+    assert_eq!(got["lonely"], reuse(ReasonCode::Unchanged));
+
+    let plan = plan(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap();
+    let entry = |name: &str| plan.entries.iter().find(|e| e.name == name).unwrap();
+    assert_eq!(
+        entry("stg_orders").reasons[0].message,
+        "its table isn't in the warehouse"
+    );
+    let relation = |name: &str| {
+        entry(name)
+            .evidence
+            .iter()
+            .find(|e| e.kind == "relation_exists")
+            .map(|e| (e.value.clone(), e.exactness))
+    };
+    assert_eq!(
+        relation("stg_orders"),
+        Some((Some("missing".to_owned()), Exactness::Exact))
+    );
+    assert_eq!(
+        relation("stg_users"),
+        Some((Some("table".to_owned()), Exactness::Exact))
+    );
+}
+
+#[test]
+fn an_unverified_relation_is_built_and_says_why() {
+    let state = built(&project());
+    let p = with_relations("lonely", &RelationFact::Unverified("no access".to_owned()));
+    let plan = plan(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap();
+    let lonely = plan.entries.iter().find(|e| e.name == "lonely").unwrap();
+    assert_eq!(lonely.action, PlanAction::Build);
+    assert_eq!(lonely.reasons[0].code, ReasonCode::RelationUnverified);
+    assert!(
+        lonely.reasons[0].message.ends_with(": no access"),
+        "{}",
+        lonely.reasons[0].message
+    );
+}
+
+#[test]
+fn relation_facts_only_matter_for_reuse() {
+    // A node built anyway keeps its own reason, whatever its relation.
+    let p = with_relations("stg_orders", &RelationFact::Missing);
+    let got = actions(&p, None, T0);
+    assert_eq!(got["stg_orders"], build(ReasonCode::NeverBuilt));
+}
+
+#[test]
+fn reuse_candidates_are_what_would_be_reused_unchecked() {
+    let state = built(&project());
+    let mut p = with_relations("stg_orders", &RelationFact::Missing);
+    // Facts already set don't change what is worth checking.
+    p.nodes[2] = node("orders", &["stg_orders"], "changed");
+    let candidates = reuse_candidates(
+        &p,
+        Some((SnapshotId(1), &state)),
+        Timestamp::from_unix(T0 + 60),
+        PlanOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        candidates,
+        ["model.p.lonely", "model.p.stg_orders", "model.p.stg_users"]
+    );
+    assert!(
+        reuse_candidates(&p, None, Timestamp::from_unix(T0), PlanOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn once_relations_are_checked_an_unchecked_one_is_never_reused() {
+    let p = project();
+    let state = built(&p);
+    let plan = ods_state::plan_with(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+        PlanOptions::default().relations_checked(),
+    )
+    .unwrap();
+    for entry in &plan.entries {
+        assert_eq!(entry.action, PlanAction::Build, "{}", entry.name);
+    }
+    assert_eq!(
+        plan.entries[0].reasons[0].code,
+        ReasonCode::RelationUnverified
+    );
+}
+
+#[test]
+fn reuse_candidates_ignore_a_full_refresh() {
+    // A full refresh depends on the selection, so candidates are planned without it:
+    // a reader of a full-refreshed node may still be reused when that node isn't
+    // selected, and must be checked.
+    let mut p = project();
+    p.nodes[0] = p.nodes[0].clone().full_refresh_rebuilds();
+    let state = built(&p);
+    let at = Timestamp::from_unix(T0 + 60);
+    let plain = reuse_candidates(
+        &p,
+        Some((SnapshotId(1), &state)),
+        at,
+        PlanOptions::default(),
+    );
+    let refreshed = reuse_candidates(
+        &p,
+        Some((SnapshotId(1), &state)),
+        at,
+        PlanOptions::default().full_refresh(),
+    );
+    assert_eq!(plain.unwrap(), refreshed.unwrap());
+}
+
+#[test]
+fn state_from_another_target_builds_everything_and_says_why() {
+    // The caller plans without the other target's builds, and says why.
+    let p = project();
+    let plan = ods_state::plan_with(
+        &p,
+        None,
+        &all(&p),
+        Timestamp::from_unix(T0),
+        PlanOptions::default().target_changed(),
+    )
+    .unwrap();
+    for entry in &plan.entries {
+        assert_eq!(entry.action, PlanAction::Build, "{}", entry.name);
+        assert_eq!(
+            entry.reasons[0].code,
+            ReasonCode::TargetChanged,
+            "{}",
+            entry.name
+        );
+    }
+}
+
+#[test]
+fn a_source_version_measured_before_the_last_build_is_not_evidence() {
+    let p = project();
+    let snapshot = built(&p);
+    let mut stale = p.clone();
+    // The same file of versions as at record time, measured before the build.
+    stale.sources[0] =
+        source("raw_orders", Some("v1")).observed_at(Some(Timestamp::from_unix(T0 - 10)));
+    let got = actions(&stale, Some(&snapshot), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::MissingDataEvidence));
+    stale.sources[0].observed_at = None;
+    assert_eq!(
+        actions(&stale, Some(&snapshot), T0 + 60)["stg_orders"],
+        build(ReasonCode::MissingDataEvidence)
+    );
+}
+
+#[test]
+fn a_node_without_inputs_is_built_unless_self_contained() {
+    let p = Project::new(
+        vec![
+            node("hardcoded", &[], "h"),
+            node("seedlike", &[], "s").self_contained(),
+        ],
+        vec![],
+    );
+    let state = built(&p);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["hardcoded"], build(ReasonCode::MissingDataEvidence));
+    assert_eq!(got["seedlike"], reuse(ReasonCode::Unchanged));
+}
+
+#[test]
+fn an_unknown_dependency_propagates_like_a_code_change() {
+    let mut p = project();
+    p.nodes[0].parents.push("metric.p.unknown".into());
+    p.nodes[2].policy.lag_tolerance_secs = 3600;
+    let state = built(&p);
+    let got = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(got["stg_orders"], build(ReasonCode::UnknownDependency));
+    assert_eq!(
+        got["orders"],
+        build(ReasonCode::UpstreamCodeChanged),
+        "not deferred by lag tolerance"
+    );
+}
+
+#[test]
+fn which_parent_build_a_node_read_is_recorded_by_run_not_clock() {
+    let p = project();
+    let first = built(&p);
+    assert_eq!(
+        first.nodes["model.p.orders"].parents["model.p.stg_orders"],
+        "run-1"
+    );
+    // Run 2 rebuilds stg_orders only, with a clock that runs behind.
+    let results = [RunResult::new(
+        "model.p.stg_orders",
+        Outcome::Success,
+        Some(Timestamp::from_unix(T0 - 500)),
+    )];
+    let second = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &results,
+        "run-2",
+        Timestamp::from_unix(T0 - 400),
+        true,
+    )
+    .snapshot;
+    assert_eq!(
+        actions(&p, Some(&second), T0 + 60)["orders"],
+        build(ReasonCode::NewUpstreamData),
+        "a parent rebuilt by another run is new data, whatever the clocks say"
+    );
+}
+
+fn messages(project: &Project, snapshot: &StateSnapshot) -> BTreeMap<String, String> {
+    plan(
+        project,
+        Some((SnapshotId(1), snapshot)),
+        &all(project),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap()
+    .entries
+    .into_iter()
+    .map(|e| (e.name, e.reasons[0].message.clone()))
+    .collect()
+}
+
+#[test]
+fn a_formatting_only_change_is_reused_and_named() {
+    let with_raw = |raw: &str| Ok(fp("so").unwrap().with_cosmetic("sql", raw));
+    let mut p = project();
+    p.nodes[0].fingerprint = with_raw("select 1");
+    let state = built(&p);
+    p.nodes[0].fingerprint = with_raw("SELECT 1 -- one");
+    assert_eq!(
+        actions(&p, Some(&state), T0 + 60)["stg_orders"],
+        reuse(ReasonCode::Unchanged)
+    );
+    let why = &messages(&p, &state)["stg_orders"];
+    assert!(why.contains("only formatting changed (sql)"), "{why}");
+    assert_eq!(
+        messages(&p, &state)["orders"],
+        "code and inputs unchanged since run run-1"
+    );
+}
+
+#[test]
+fn a_new_fingerprint_scheme_rebuilds_once_and_says_why() {
+    let p = project();
+    let state = built(&p);
+    let mut upgraded = p.clone();
+    upgraded.nodes[0].fingerprint = Ok(Fingerprint::from_content([
+        (Fingerprint::SCHEME, "v2"),
+        ("file", "so"),
+        ("config", "{}"),
+    ]));
+    assert_eq!(
+        actions(&upgraded, Some(&state), T0 + 60)["stg_orders"],
+        build(ReasonCode::CodeChanged)
+    );
+    let why = &messages(&upgraded, &state)["stg_orders"];
+    assert!(why.contains("fingerprints code differently"), "{why}");
+}
+
+#[test]
+fn a_build_with_passing_tests_is_tested_and_a_test_run_marks_the_rest() {
+    use ods_state::{TestResult, record_tests};
+    // Every node has checks except `lonely`.
+    let mut p = project();
+    for n in &mut p.nodes {
+        if n.name != "lonely" {
+            n.checks = Some(format!("checks-{}", n.name));
+        }
+    }
+    let results: Vec<RunResult> = p
+        .nodes
+        .iter()
+        .map(|n| {
+            let r = RunResult::new(&n.id, Outcome::Success, Some(Timestamp::from_unix(T0)));
+            if matches!(n.name.as_str(), "orders" | "lonely") {
+                r.tested()
+            } else {
+                r
+            }
+        })
+        .collect();
+    let built = record(&p, None, &results, "run-1", Timestamp::from_unix(T0), true).snapshot;
+    let tested = |p: &Project, s: &StateSnapshot, name: &str| {
+        let id = format!("model.p.{name}");
+        let node = p.nodes.iter().find(|n| n.id == id).unwrap();
+        node.is_tested(&s.nodes[&id])
+    };
+    assert!(tested(&p, &built, "orders"));
+    assert!(!tested(&p, &built, "report"), "built without its tests");
+    assert!(
+        !tested(&p, &built, "lonely"),
+        "no checks: nothing vouches for it"
+    );
+
+    let recorded = record_tests(
+        &p,
+        (Some(SnapshotId(1)), &built),
+        &[
+            TestResult::new("model.p.report", true, None),
+            TestResult::new("model.p.stg_orders", false, None),
+            TestResult::new("model.p.lonely", true, None),
+            TestResult::new("model.p.nope", true, None),
+        ],
+        "test-1",
+        Timestamp::from_unix(T0 + 10),
+    );
+    assert_eq!(recorded.passed, ["model.p.report"]);
+    assert_eq!(recorded.failed, ["model.p.stg_orders"]);
+    assert_eq!(recorded.ignored, ["model.p.lonely", "model.p.nope"]);
+    let after = &recorded.snapshot;
+    assert!(tested(&p, after, "report"));
+    assert!(!tested(&p, after, "stg_orders"));
+    assert!(!tested(&p, after, "lonely"));
+    // A test run builds nothing: builds are unchanged, so nothing is replanned.
+    assert_eq!(after.nodes["model.p.report"].run_id, "run-1");
+    for (name, decision) in actions(&p, Some(after), T0 + 60) {
+        assert_eq!(decision, reuse(ReasonCode::Unchanged), "{name}");
+    }
+
+    // Changing a node's checks makes its build untested again (M2).
+    let mut changed = p.clone();
+    changed
+        .nodes
+        .iter_mut()
+        .find(|n| n.name == "report")
+        .unwrap()
+        .checks = Some("checks-report-v2".to_owned());
+    assert!(!tested(&changed, after, "report"));
+    // Records from before checks were fingerprinted don't count.
+    let mut old = after.clone();
+    old.nodes
+        .get_mut("model.p.report")
+        .unwrap()
+        .tested
+        .as_mut()
+        .unwrap()
+        .checks = None;
+    assert!(!tested(&p, &old, "report"));
+}
+
+#[test]
+fn a_failed_build_clears_the_tested_mark_it_kept() {
+    let mut p = project();
+    for n in &mut p.nodes {
+        n.checks = Some("checks".to_owned());
+    }
+    let all = |outcome, tested: bool| -> Vec<RunResult> {
+        p.nodes
+            .iter()
+            .map(|n| {
+                let r = RunResult::new(&n.id, outcome, Some(Timestamp::from_unix(T0)));
+                if tested { r.tested() } else { r }
+            })
+            .collect()
+    };
+    let first = record(
+        &p,
+        None,
+        &all(Outcome::Success, true),
+        "run-1",
+        Timestamp::from_unix(T0),
+        true,
+    )
+    .snapshot;
+    assert!(first.nodes["model.p.orders"].tested.is_some());
+    // Its build ran again but failed (or its tests did): the kept build may be gone.
+    let failed = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &all(Outcome::Failed, false),
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert_eq!(failed.nodes["model.p.orders"].run_id, "run-1");
+    assert!(failed.nodes["model.p.orders"].tested.is_none());
+    // Skipped: nothing ran, so nothing changed.
+    let skipped = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &all(Outcome::Skipped, false),
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert!(skipped.nodes["model.p.orders"].tested.is_some());
+}
+
+/// A full refresh corrects data: like a code change, it reaches everything
+/// downstream now, whatever their lag tolerance.
+#[test]
+fn a_full_refresh_reaches_everything_downstream_whatever_the_lag() {
+    use ods_state::{PlanOptions, plan_with};
+    let mut p = project();
+    // `stg_orders` is incremental; `orders` and `report` tolerate an hour of lag.
+    p.nodes[0] = p.nodes[0].clone().full_refresh_rebuilds();
+    p.nodes[2].policy.lag_tolerance_secs = 3600;
+    p.nodes[3].policy.lag_tolerance_secs = 3600;
+    let state = built(&p);
+    let plan = plan_with(
+        &p,
+        Some((SnapshotId(1), &state)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+        PlanOptions::default().full_refresh(),
+    )
+    .unwrap();
+    let why = |name: &str| {
+        let e = plan.entries.iter().find(|e| e.name == name).unwrap();
+        (e.action, e.reasons[0].code)
+    };
+    assert_eq!(
+        why("stg_orders"),
+        (PlanAction::Build, ReasonCode::FullRefreshRequested)
+    );
+    assert_eq!(
+        why("orders"),
+        (PlanAction::Build, ReasonCode::UpstreamFullRefresh)
+    );
+    // Two steps down, through a reader that isn't incremental itself.
+    assert_eq!(
+        why("report"),
+        (PlanAction::Build, ReasonCode::UpstreamFullRefresh)
+    );
+    // Nothing else is touched.
+    assert_eq!(why("stg_users"), (PlanAction::Reuse, ReasonCode::Unchanged));
+}
+
+#[test]
+fn a_full_refresh_rebuilds_the_selected_nodes_it_changes_and_their_readers() {
+    use ods_state::{PlanOptions, plan_with};
+    // `orders` is incremental: a full refresh rebuilds it from scratch.
+    let mut p = project();
+    let orders = p.nodes.iter().position(|n| n.name == "orders").unwrap();
+    p.nodes[orders] = p.nodes[orders].clone().full_refresh_rebuilds();
+    let state = built(&p);
+    let planned = |selected: &BTreeSet<String>| {
+        plan_with(
+            &p,
+            Some((SnapshotId(1), &state)),
+            selected,
+            Timestamp::from_unix(T0 + 60),
+            PlanOptions::default().full_refresh(),
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| {
+            (
+                e.name,
+                (e.action, e.reasons[0].code, e.reasons[0].message.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>()
+    };
+    let all = planned(&all(&p));
+    assert_eq!(
+        (all["orders"].0, all["orders"].1),
+        (PlanAction::Build, ReasonCode::FullRefreshRequested)
+    );
+    // Its reader is rebuilt too, and says where from.
+    assert_eq!(
+        (all["report"].0, all["report"].1),
+        (PlanAction::Build, ReasonCode::UpstreamFullRefresh)
+    );
+    assert_eq!(
+        all["report"].2,
+        "upstream full refresh: orders will be rebuilt from scratch"
+    );
+    // Nodes a full refresh doesn't change (tables, views) are still reused.
+    assert_eq!(all["stg_orders"].0, PlanAction::Reuse);
+    // Only selected nodes are forced.
+    let others: BTreeSet<String> = ["model.p.stg_orders".to_owned()].into();
+    assert_eq!(planned(&others)["stg_orders"].0, PlanAction::Reuse);
+    let unforced = actions(&p, Some(&state), T0 + 60);
+    assert_eq!(
+        unforced["orders"],
+        reuse(ReasonCode::Unchanged),
+        "without the option"
+    );
+}
+
+/// #232: a source's checks are recorded against its data, carried by every later
+/// snapshot until new results replace them, and never touched by node builds.
+#[test]
+fn source_checks_carry_over_builds_and_test_runs() {
+    use ods_state::{
+        SourceCheckAction, TestResult, record_source_checks, record_tests, select_sources,
+        source_checks,
+    };
+    let mut project = project();
+    for source in &mut project.sources {
+        source.checks = Some("checks-v1".to_owned());
+    }
+    let mut first = built(&project);
+    let recorded = record_source_checks(
+        &mut first,
+        &project,
+        &[TestResult::new(
+            "source.p.raw_orders",
+            true,
+            Some(Timestamp::from_unix(T0)),
+        )],
+        Timestamp::from_unix(T0),
+        true,
+    );
+    assert_eq!(recorded.passed, ["source.p.raw_orders"]);
+    // A later build, and a test-only run, keep it.
+    let results = [RunResult::new(
+        "model.p.orders",
+        Outcome::Success,
+        Some(Timestamp::from_unix(T0 + 10)),
+    )];
+    let second = record(
+        &project,
+        Some((SnapshotId(1), &first)),
+        &results,
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert_eq!(second.sources, first.sources);
+    let third = record_tests(
+        &project,
+        (Some(SnapshotId(2)), &second),
+        &[],
+        "run-3",
+        Timestamp::from_unix(T0 + 20),
+    )
+    .snapshot;
+    assert_eq!(third.sources, first.sources);
+    // Measured again after the pass, unchanged: raw_orders is skipped; raw_users
+    // (never tested) runs.
+    let scope = select_sources(&project, &[]).unwrap();
+    let decided: Vec<(String, SourceCheckAction)> =
+        source_checks(&project, Some(&third), &scope, false)
+            .into_iter()
+            .map(|c| (c.name, c.action))
+            .collect();
+    assert_eq!(
+        decided,
+        [
+            ("raw_orders".to_owned(), SourceCheckAction::Skip),
+            ("raw_users".to_owned(), SourceCheckAction::Test),
+        ]
+    );
+}
+
+/// #232: with `--select`, only the sources a `+` selector reaches as ancestors, as dbt
+/// selects them; a node selected alone doesn't bring in its sources.
+#[test]
+fn sources_are_selected_as_ancestors_only() {
+    use ods_state::select_sources;
+    let project = project();
+    let ids = |specs: &[&str]| -> Vec<String> {
+        let specs: Vec<String> = specs.iter().map(|s| (*s).to_owned()).collect();
+        select_sources(&project, &specs)
+            .unwrap()
+            .into_iter()
+            .collect()
+    };
+    assert_eq!(ids(&[]), ["source.p.raw_orders", "source.p.raw_users"]);
+    assert_eq!(ids(&["+orders"]), ["source.p.raw_orders"]);
+    assert_eq!(
+        ids(&["+report+"]),
+        ["source.p.raw_orders", "source.p.raw_users"]
+    );
+    assert!(ids(&["stg_orders"]).is_empty());
+    assert!(ids(&["stg_orders+"]).is_empty());
+    assert!(select_sources(&project, &["+nope".to_owned()]).is_err());
+}

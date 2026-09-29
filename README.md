@@ -8,10 +8,14 @@ and Databricks, and every decision it makes can be explained.
 >
 > **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
 > `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
+>
+> **Install:** from v0.0.1, `pip install opendatasuite` puts `ods` on your PATH next to
+> dbt. `cargo binstall`, direct downloads and Homebrew (coming soon): [`docs/install.md`](docs/install.md).
 
 | Module | What it does | Target |
 |---|---|---|
-| `ods state` | Incremental, explainable "what needs to run", handed back to dbt with exact selection | v0.1.0 |
+| `ods state` | Incremental, explainable "what needs to run", handed back to dbt with exact selection | v0.0.1 |
+| `ods serve` dashboard | Read-only web view of State, lineage and the catalog; every screen of the design by v0.1.0 | v0.0.1 (first screens), v0.1.0 (complete) |
 | `ods erd` / `ods usage` | Entity-relationship model and real consumer usage | v0.3.0 |
 | `ods ci` | Change impact, selective CI, and PR reports | v0.4.0 |
 | `ods lsp` + VS Code | Clean-room language server and editor extension | v0.5.0 |

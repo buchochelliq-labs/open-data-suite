@@ -1,0 +1,28 @@
+---
+source: crates/ods-cli/src/commands/doctor.rs
+expression: output
+---
+ODS doctor
+
+verdict: failed
+checks: 1 ok, 1 warning, 1 error, 1 unknown, 1 skipped
+
+Configuration
+  [ok] config.load (required): 1 configuration file(s) loaded
+    project file: ods.toml (loaded)
+
+Project
+  [warning ODS-W0206] project.freshness: the manifest is older than `models/orders.sql`
+    manifest_modified: 2026-01-01T00:00:00Z
+    hint: parse the project again: `dbt parse`
+
+Tools
+  [error ODS-E0502] tools.dbt (required): dbt can't be run
+    hint: install dbt-core
+
+Target
+  [unknown ODS-U0001] target.identity (required): not checked: `tools.dbt` failed
+    depends_on: tools.dbt
+
+Connectivity
+  [skipped] connectivity.relations: a live check: pass --connect to run it

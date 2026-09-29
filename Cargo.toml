@@ -24,20 +24,36 @@ ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
+ods-store-sqlite = { path = "providers/ods-store-sqlite" }
+ods-state = { path = "crates/ods-state" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
 # HTTP server for the hostable explorer; confined to ods-web (ADR-0009).
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 async-trait = "0.1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 # Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
 csv = "1"
+# Hex encoding of digests.
+hex = "0.4"
 insta = "1"
+# Escapes text and attribute values in the dashboard's server-rendered HTML (ADR-0009).
+html-escape = "0.2"
+# Date and time: parsing and printing `Timestamp`. No time zone database needed (UTC only).
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+# Opens the lineage viewer in the user's browser, on every platform (and WSL).
+opener = "0.8"
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
 # compression codecs dbt may use.
 parquet = { version = "60", default-features = false, features = ["zstd", "snap", "lz4", "flate2-zlib-rs"] }
+# Parses dbt's PEP 440 version (`1.9.0b1`) for `ods doctor` (#181, ADR-0023).
+pep440_rs = { version = "0.7", default-features = false }
+# Decodes the percent-encoded answer of the dbt relation probe (ADR-0022).
+percent-encoding = "2"
+# Graph algorithms: dependency order, cycles, shortest join paths.
+petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"
 # Terminal rendering; only ods-cli may depend on it (ADR-0003, enforced by check-layering.py).
@@ -46,12 +62,22 @@ rs-rich = "0.0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
+# POSIX shell quoting of command lines shown to people.
+shlex = "2"
 sha2 = "0.10"
+# Temporary files and directories (atomic writes, tests).
+tempfile = "3"
 # SQL parsing for column lineage (ADR-0008). Every 0.N release breaks the AST: pin and
 # upgrade deliberately.
 sqlparser = { version = "=0.63.0", features = ["visitor"] }
+# The local SQLite state store (#25, ADR-0013); bundles SQLite. 0.9 needs Rust 1.94.
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros"] }
+# Walks a dbt project's files, for `ods doctor`'s artifact freshness check (#181).
+walkdir = "2"
+# Formats OpenLineage run ids.
+uuid = { version = "1", default-features = false }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }

@@ -79,12 +79,58 @@ Always review generated SQL before relying on its results.
 
 Details: [CLI reference](cli.md#mcp-server-for-ai-agents), [ADR-0010](adr/0010-mcp-server.md).
 
+## State: what to build, what to reuse
+
+`ods state plan` compares the project with its last successful build and says, per
+node, **build** or **reuse**, with the reason and the evidence. That includes which parts
+of a model's code changed, which upstream data is new, and whether a lag tolerance
+defers it. It prints the `dbt build --select …` command for exactly what must run.
+`ods state record` takes the state from the dbt runs you already do: only nodes that
+succeeded advance.
+
+```console
+$ ods state plan          # after editing stg_orders and running dbt compile
+decision: 8 to build, 5 to reuse
+
+node                     action  why
+raw_orders               reuse   code and inputs unchanged since run d11a1309…
+stg_customers            reuse   code and inputs unchanged since run d11a1309…
+stg_orders               build   code changed since run d11a1309…: sql
+orders                   build   upstream code changed: stg_orders will be rebuilt
+customers                build   upstream code changed: orders will be rebuilt
+customer_segments        build   upstream code changed: customers will be rebuilt
+segment_summary          build   upstream code changed: customer_segments will be rebuilt
+…
+run: dbt build --select stg_orders order_events orders customer_order_rank customers customer_segments customers_snapshot_view segment_summary
+```
+
+(Output shortened; from the demo project.)
+
+Comments and whitespace don't count as changes: reformatting a model
+reuses it, and the plan says only formatting changed.
+
+`ods state run` does all of it: it compiles, plans, runs `dbt build` on exactly the
+nodes that must build, and records the result. Nodes that fail keep their last
+successful state and are built next time.
+
+```console
+$ ods state run           # after editing segment_summary
+plan: 1 to build, 12 to reuse
+ran: dbt build --select segment_summary …
+outcome: succeeded
+recorded: snapshot 2: 1 node advanced
+```
+
+Details: [CLI reference](cli.md#state-run),
+[ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md),
+[ADR-0014](adr/0014-executor-contract-and-state-run.md).
+
 ## dbt State configuration
 
 `ods state policies` reads dbt's State configuration (`lag_tolerance`,
 `require_fresh_data_from`, `build_after`) as you already write it, and shows each
 model's effective freshness policy. It is the first piece of ODS State, the
-incremental "what needs to run" planner planned for v0.1.0.
+incremental "what needs to run" planner planned for v0.0.1, the first release.
 
 Details: [CLI reference](cli.md#dbt-state-configuration),
 [ADR-0011](adr/0011-dbt-state-config-compatibility.md).

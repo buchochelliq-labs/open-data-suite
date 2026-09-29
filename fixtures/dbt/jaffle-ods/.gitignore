@@ -4,3 +4,4 @@ dbt_packages/
 .user.yml
 target-v2/
 dbt_internal_packages/
+target-build/

@@ -1,0 +1,31 @@
+# cargo-about: generates THIRD-PARTY-LICENSES.html, the licence notices shipped in every
+# release archive and wheel (#212): `cargo about generate --fail about.hbs`.
+#
+# Keep `accepted` in step with `[licenses] allow` in deny.toml. cargo-deny rejects any
+# other licence; cargo-about fails when it can't attribute a dependency to one of these.
+accepted = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+# The release targets (release.yml): linux-gnu for the Linux wheels, linux-musl for the
+# Linux archives.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+# Only what ends up in the binary: build tools (e.g. `cc`) and test crates aren't shipped.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# ODS's own crates (`publish = false`) are covered by LICENSE, shipped alongside.
+private = { ignore = true }

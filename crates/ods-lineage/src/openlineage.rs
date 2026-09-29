@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::graph::{ColumnGraph, NodeLineage};
+use crate::project::NodeKind;
 
 /// The `OpenLineage` event schema this module writes.
 pub const EVENT_SCHEMA: &str = "https://openlineage.io/spec/2-0-2/OpenLineage.json";
@@ -169,43 +170,30 @@ fn stable_uuid(name: &str) -> String {
     let hash = Sha256::digest(name.as_bytes());
     let mut b = [0u8; 16];
     b.copy_from_slice(&hash[..16]);
+    // The version and variant bits of a name-based UUID; the rest is the hash, so run
+    // ids stay the same as before.
     b[6] = (b[6] & 0x0f) | 0x50;
     b[8] = (b[8] & 0x3f) | 0x80;
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        b[0],
-        b[1],
-        b[2],
-        b[3],
-        b[4],
-        b[5],
-        b[6],
-        b[7],
-        b[8],
-        b[9],
-        b[10],
-        b[11],
-        b[12],
-        b[13],
-        b[14],
-        b[15]
-    )
+    uuid::Uuid::from_bytes(b).hyphenated().to_string()
 }
 
-/// One event per node that has SQL. Opaque models still get table-level lineage
-/// (inputs and output) but no column facet, so nothing is claimed that isn't known.
-/// Events are sorted by node id.
+/// One event per model or snapshot. Opaque ones (SQL that couldn't be analyzed, Python
+/// models, snapshots) still get table-level lineage: what their SQL reads, or else what
+/// they declare they depend on. They get no column facet, so nothing is claimed that
+/// isn't known. Events are sorted by node id.
 pub fn events(graph: &ColumnGraph, options: &ExportOptions) -> Vec<Value> {
     let ns = options.dataset_namespace.as_str();
     graph
         .nodes()
         .filter_map(|node| {
-            let lineage = node.lineage.as_ref()?;
-            let inputs: Vec<Value> = lineage
-                .relations_read
-                .iter()
-                .map(|r| dataset(ns, r))
-                .collect();
+            let reads: Vec<&RelationName> = match &node.lineage {
+                Some(lineage) => lineage.relations_read.iter().collect(),
+                None if matches!(node.kind, NodeKind::Model | NodeKind::Snapshot) => {
+                    node.depends_on.iter().collect()
+                }
+                None => return None,
+            };
+            let inputs: Vec<Value> = reads.into_iter().map(|r| dataset(ns, r)).collect();
             let mut output = dataset(ns, &node.relation);
             if let Some(facet) = column_lineage_facet(node, options) {
                 output["facets"] = json!({ "columnLineage": facet });

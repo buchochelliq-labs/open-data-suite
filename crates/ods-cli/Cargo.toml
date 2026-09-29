@@ -18,24 +18,47 @@ clap_complete.workspace = true
 ods-config.workspace = true
 ods-core.workspace = true
 ods-erd.workspace = true
-ods-mcp.workspace = true
 ods-lineage.workspace = true
+ods-mcp.workspace = true
 ods-provider-databricks.workspace = true
 ods-provider-dbt.workspace = true
 ods-provider-sqlparser.workspace = true
 ods-sdk.workspace = true
+ods-state.workspace = true
+ods-store-sqlite.workspace = true
 ods-web.workspace = true
+opener.workspace = true
+petgraph.workspace = true
 rs-rich.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+shlex.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 insta.workspace = true
+ods-provider-fake.workspace = true
 serde_json.workspace = true
 
 [lints]
 workspace = true
+
+# `cargo binstall --git https://github.com/buchochelliq-labs/open-data-suite ods-cli`
+# downloads the release archive instead of compiling (#212). The names match
+# .github/workflows/release.yml: `ods-v<version>-<target>.tar.gz` (`.zip` on Windows),
+# with the binary in a directory of the same name. On Linux, binstall falls back from
+# the gnu target to the static musl archives that are published.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/ods-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "ods-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"

@@ -11,8 +11,9 @@ LSP, Agent, Mesh, Synthetic). dbt is the first project format; Databricks/Unity
 Catalog is the first warehouse. Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before
 starting work — it maps every GitHub issue to a milestone and release.
 
-Current phase: **M0 Foundations → M1 State MVP (v0.1.0)**. Work outside M0/M1 needs
-a reason (e.g. the user asked for it explicitly).
+Current phase: **M0 Foundations → M1 State MVP (v0.0.1, the first public release)**. Work
+outside M0/M1 needs a reason (e.g. the user asked for it explicitly). Releases stay v0.0.x
+until the whole dashboard design is built; v0.1.0 means the dashboard is complete (UX1, #309).
 
 ## Non-negotiable architecture rules
 
@@ -100,6 +101,10 @@ unless they pass, or state exactly what failed.
 - Tests: unit tests next to code; integration tests use `fixtures/`. Snapshot tests
   (`insta`) for CLI JSON/plain output.
 - Comments explain *why*, not *what*. Keep doc comments on every public item.
+- Prefer a maintained crate over hand-written utilities (temp files, encoding, quoting,
+  time, UUIDs, opening files, …). Check for one before writing a helper, and if you
+  don't use one, say why in the PR. The licence rules under "Things agents must not do"
+  still apply.
 
 ## Workflow
 
@@ -108,9 +113,23 @@ unless they pass, or state exactly what failed.
   the harness assigns a branch.
 - Commits: Conventional Commits (`feat(state): …`, `fix(sdk): …`, `docs(adr): …`).
 - Keep PRs small and reviewable; do not widen scope beyond the issue's acceptance criteria.
-- New or changed persisted formats, CLI flags, or JSON output require tests and a
-  CHANGELOG entry (once #101 defines the format).
+- New or changed persisted formats, CLI flags, or JSON output require tests. Every
+  user-visible change adds an entry under `## [Unreleased]` in `CHANGELOG.md`, in the
+  format and with the breaking-change and deprecation rules of
+  [ADR-0019](docs/adr/0019-release-and-versioning.md).
 - Update `docs/ROADMAP.md` and `.github/milestones.json` together if milestone scope changes.
+- **Always check for merge conflicts and fix them.** Before pushing, and whenever `main`
+  or another open PR changes, test-merge each open PR you own with its base, and with
+  the other open PRs.
+  - **Conflict with the base:** merge the base in (no rebase or force-push on shared
+    branches) and resolve it keeping both sides' intent. Regenerate `Cargo.lock` with
+    cargo, never by hand. Rerun the checks above, then push.
+  - **Two open PRs conflict with each other:** resolve it before either merges, so it
+    works whichever merges first. Stack one on the other, or pre-resolve the shared
+    lines.
+  - **Stacks and squash merges:** when a stacked PR's base merges, retarget the upper
+    PR to `main` and merge `main` into it right away. Otherwise it can be merged into
+    the dead base branch.
 
 ## Skills & agents available (`.claude/`)
 

@@ -1,0 +1,1360 @@
+//! Runs dbt for ODS: the [`Executor`] contract over the dbt CLI (#23, ADR-0014).
+//!
+//! - [`prepare`](Executor::prepare) runs `dbt compile`, so the manifest carries the
+//!   compiled SQL fingerprints need, and, if asked, `dbt source freshness`.
+//! - [`execute`](Executor::execute) runs `dbt build --select …` with
+//!   [exact selectors](crate::selection) for the requested nodes, checked against the
+//!   manifest so that no other node matches; [`ExecutionMode::Run`] leaves out data tests and unit tests
+//!   (`--exclude-resource-type`, dbt 1.8+). Outcomes come from the `run_results.json`
+//!   that invocation wrote; a file left by an earlier invocation is never read as this
+//!   one's. Requested sources' data tests (#232) are selected themselves, exactly, in
+//!   the same invocation: `dbt build` runs them first and skips the selected nodes that
+//!   read a source whose test failed, as it does for any `dbt build`.
+//!
+//! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
+//!   asks the adapter which relations exist (#230).
+//! - [`probe`](RelationProbe::probe) runs one `dbt show --inline` query that runs a few
+//!   statements against each source's relation (ADR-0022).
+//!
+//! dbt's own output goes to ODS's stderr (or is captured), never to stdout, which
+//! carries ODS's report.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use ods_core::state::Timestamp;
+use ods_core::{Capability, CapabilitySet};
+use ods_sdk::contracts::changes::RequestedSource;
+use ods_sdk::contracts::executor::{
+    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
+    PrepareReport, PrepareRequest, RequestedNode,
+};
+use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, RelationProbe};
+use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
+use ods_sdk::{Provider, ProviderError, ProviderInfo};
+
+use crate::runs::{RunResults, RunStatus, SourceFreshness};
+
+/// The provider kind, as written in configuration.
+pub const KIND: &str = "dbt";
+
+/// Lines of captured dbt output kept in error messages.
+const OUTPUT_TAIL: usize = 20;
+
+/// Where dbt's own output goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum DbtOutput {
+    /// To ODS's stderr, as it runs.
+    #[default]
+    Stderr,
+    /// Captured; the last lines appear in error messages.
+    Capture,
+}
+
+/// A dbt command the executor is about to run, for callers that show progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DbtStep {
+    /// `dbt source freshness`: how new each source's data is.
+    SourceFreshness,
+    /// `dbt compile`: the compiled SQL fingerprints need.
+    Compile,
+    /// A dbt command that builds `nodes` nodes: `build`, or `run`, `seed` or
+    /// `snapshot` when they are all models, seeds or snapshots.
+    Build {
+        /// The dbt command, e.g. `run`.
+        command: &'static str,
+        /// How many nodes are selected.
+        nodes: usize,
+        /// Whether their tests run too.
+        tests: bool,
+        /// How many sources' tests run too (#232).
+        sources: usize,
+    },
+    /// `dbt test` of `nodes` nodes' tests, and `sources` sources'.
+    Test {
+        /// How many nodes' tests are selected.
+        nodes: usize,
+        /// How many sources' tests are selected (#232).
+        sources: usize,
+    },
+    /// `dbt compile --inline`: which target dbt builds in.
+    Identify,
+    /// `dbt show`: whether the relations of `nodes` nodes ODS would reuse still exist.
+    RelationCheck {
+        /// How many nodes ODS would reuse.
+        nodes: usize,
+    },
+    /// `dbt show`: statements run against the relations of `sources` sources.
+    RelationProbe {
+        /// How many sources were asked about.
+        sources: usize,
+    },
+}
+
+/// Called before each dbt command runs.
+pub type StepHook = Arc<dyn Fn(DbtStep) + Send + Sync>;
+
+/// Runs the dbt CLI.
+#[derive(Clone)]
+pub struct DbtExecutor {
+    program: PathBuf,
+    target_path: PathBuf,
+    project_dir: Option<PathBuf>,
+    profiles_dir: Option<PathBuf>,
+    target: Option<String>,
+    profile: Option<String>,
+    env: BTreeMap<String, String>,
+    output: DbtOutput,
+    vars: Option<String>,
+    on_step: Option<StepHook>,
+}
+
+// Environment values can be credentials: show only their names.
+impl std::fmt::Debug for DbtExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbtExecutor")
+            .field("program", &self.program)
+            .field("target_path", &self.target_path)
+            .field("project_dir", &self.project_dir)
+            .field("profiles_dir", &self.profiles_dir)
+            .field("target", &self.target)
+            .field("profile", &self.profile)
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .field("output", &self.output)
+            .field("vars", &self.vars)
+            .field("on_step", &self.on_step.is_some())
+            .finish()
+    }
+}
+
+impl DbtExecutor {
+    /// Runs `program` (e.g. `dbt`), writing artifacts to `target_path`, which ODS reads.
+    pub fn new(program: impl Into<PathBuf>, target_path: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            target_path: target_path.into(),
+            project_dir: None,
+            profiles_dir: None,
+            target: None,
+            profile: None,
+            env: BTreeMap::new(),
+            output: DbtOutput::default(),
+            vars: None,
+            on_step: None,
+        }
+    }
+
+    /// dbt's `--project-dir`.
+    #[must_use]
+    pub fn project_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.project_dir = Some(dir.into());
+        self
+    }
+
+    /// dbt's `--profiles-dir`.
+    #[must_use]
+    pub fn profiles_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.profiles_dir = Some(dir.into());
+        self
+    }
+
+    /// dbt's `--target` (the profile output, not the target directory).
+    #[must_use]
+    pub fn target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// dbt's `--profile`: the profile in `profiles.yml` to use, instead of the
+    /// project's.
+    #[must_use]
+    pub fn profile(mut self, profile: impl Into<String>) -> Self {
+        self.profile = Some(profile.into());
+        self
+    }
+
+    /// Sets an environment variable for dbt only.
+    #[must_use]
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
+    }
+
+    /// Where dbt's output goes.
+    #[must_use]
+    pub fn output(mut self, output: DbtOutput) -> Self {
+        self.output = output;
+        self
+    }
+
+    /// dbt's `--vars`, passed to every dbt command, so what is planned, built and
+    /// recorded all see the same values.
+    #[must_use]
+    pub fn vars(mut self, vars: impl Into<String>) -> Self {
+        self.vars = Some(vars.into());
+        self
+    }
+
+    /// Calls `hook` before each dbt command, e.g. to say which one runs and why.
+    #[must_use]
+    pub fn on_step(mut self, hook: impl Fn(DbtStep) + Send + Sync + 'static) -> Self {
+        self.on_step = Some(Arc::new(hook));
+        self
+    }
+
+    fn step(&self, step: DbtStep) {
+        if let Some(hook) = &self.on_step {
+            hook(step);
+        }
+    }
+
+    /// The target path as dbt must see it: absolute, since dbt resolves a relative one
+    /// against the project directory rather than where ODS runs.
+    fn target_path(&self) -> PathBuf {
+        std::path::absolute(&self.target_path).unwrap_or_else(|_| self.target_path.clone())
+    }
+
+    /// The arguments every invocation shares.
+    fn common_args(&self, command: &str) -> Vec<String> {
+        self.common_args_in(command, &self.target_path())
+    }
+
+    /// [`common_args`](Self::common_args), writing artifacts to `target_path` instead.
+    fn common_args_in(&self, command: &str, target_path: &Path) -> Vec<String> {
+        let mut args = vec![
+            "--target-path".to_owned(),
+            target_path.display().to_string(),
+        ];
+        // dbt's own variables are the defaults, as in dbt: they are removed from its
+        // environment, so they are passed as flags (#227).
+        let owned = |set: Option<String>, name: &str| set.or_else(|| self.env_value(name));
+        let settings = [
+            (
+                "--project-dir",
+                owned(
+                    self.project_dir.as_ref().map(|d| d.display().to_string()),
+                    "DBT_PROJECT_DIR",
+                ),
+            ),
+            (
+                "--profiles-dir",
+                owned(
+                    self.profiles_dir.as_ref().map(|d| d.display().to_string()),
+                    "DBT_PROFILES_DIR",
+                ),
+            ),
+            ("--profile", owned(self.profile.clone(), "DBT_PROFILE")),
+            ("--target", owned(self.target.clone(), "DBT_TARGET")),
+        ];
+        for (flag, value) in settings {
+            if let Some(value) = value {
+                args.extend([flag.to_owned(), value]);
+            }
+        }
+        if let Some(vars) = &self.vars {
+            args.extend(["--vars".to_owned(), vars.clone()]);
+        }
+        // So nothing in the environment or `dbt_project.yml` changes what is built.
+        args.extend(crate::settings::override_args(&self.env_report(), command));
+        args
+    }
+
+    /// The command line, for people.
+    fn display(&self, args: &[String]) -> String {
+        std::iter::once(self.program.display().to_string())
+            .chain(args.iter().map(|a| {
+                if a.is_empty() || a.contains(char::is_whitespace) {
+                    format!("'{a}'")
+                } else {
+                    a.clone()
+                }
+            }))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Runs dbt with `args`; returns whether it exited successfully and, if captured,
+    /// the tail of its output.
+    async fn invoke(&self, args: &[String]) -> Result<(bool, String), ProviderError> {
+        let (ok, tail, _) = self.invoke_with(args, false).await?;
+        Ok((ok, tail))
+    }
+
+    /// [`invoke`](Self::invoke), also returning what dbt printed to stdout when
+    /// `read_stdout`, which then never reaches ODS's stderr.
+    async fn invoke_with(
+        &self,
+        args: &[String],
+        read_stdout: bool,
+    ) -> Result<(bool, String, String), ProviderError> {
+        let mut command = tokio::process::Command::new(&self.program);
+        // ODS passes these settings as flags; their variables would only compete.
+        for name in crate::settings::owned() {
+            command.env_remove(name);
+        }
+        command
+            .args(args)
+            .envs(self.env.iter().filter(|(k, _)| {
+                crate::settings::class(k)
+                    .is_none_or(|c| !matches!(c, crate::settings::EnvClass::Owned { .. }))
+            }))
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        match self.output {
+            DbtOutput::Stderr => {
+                command
+                    .stdout(Stdio::from(std::io::stderr()))
+                    .stderr(Stdio::from(std::io::stderr()));
+            }
+            DbtOutput::Capture => {
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            }
+        }
+        if read_stdout {
+            command.stdout(Stdio::piped());
+        }
+        // Names only: values can be credentials (AGENTS.md rule 9).
+        tracing::info!(command = %self.display(args), "running dbt");
+        tracing::debug!(env = ?self.env.keys().collect::<Vec<_>>(), output = ?self.output, "dbt settings");
+        let started = std::time::Instant::now();
+        // Not `Command::output()`: tokio's always pipes stdout and stderr, which would
+        // swallow dbt's output in `DbtOutput::Stderr` mode.
+        let output = command
+            .spawn()
+            .map_err(|e| {
+                ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
+            })?
+            .wait_with_output()
+            .await
+            .map_err(|e| {
+                ProviderError::Other(format!("`{}` failed: {e}", self.program.display()))
+            })?;
+        tracing::info!(
+            exit = ?output.status.code(),
+            seconds = started.elapsed().as_secs_f64(),
+            "dbt finished"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let mut text = stdout.clone();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
+        Ok((output.status.success(), tail, stdout))
+    }
+
+    fn failure(what: &str, tail: &str) -> ProviderError {
+        if tail.trim().is_empty() {
+            ProviderError::Other(format!("{what}; see dbt's output above"))
+        } else {
+            ProviderError::Other(format!("{what}:\n{tail}"))
+        }
+    }
+
+    fn artifact(&self, name: &str) -> PathBuf {
+        self.target_path().join(name)
+    }
+
+    /// Where each node builds as the last [relation check](RelationInspector::inspect)
+    /// saw the project, from the manifest dbt parsed for it. Profile or project
+    /// settings changed since `manifest.json` was written show up here and not there,
+    /// so a caller about to use a checked relation compares the two.
+    ///
+    /// # Errors
+    /// When no check has left a readable manifest.
+    pub fn checked_relations(
+        &self,
+    ) -> Result<BTreeMap<String, crate::export::RelationFields>, ProviderError> {
+        let path = self
+            .target_path()
+            .join(RELATION_CHECK_DIR)
+            .join("manifest.json");
+        let manifest = crate::Manifest::read(&path).map_err(|e| {
+            ProviderError::Other(format!(
+                "the relation check's manifest `{}` can't be read: {e}",
+                path.display()
+            ))
+        })?;
+        Ok(manifest
+            .nodes
+            .iter()
+            .filter_map(|n| crate::export::RelationFields::of(n).map(|r| (n.unique_id.clone(), r)))
+            .collect())
+    }
+}
+
+fn invocation_of(path: &Path) -> Option<String> {
+    RunResults::read(path).ok().and_then(|r| r.invocation_id)
+}
+
+fn sources_invocation_of(path: &Path) -> Option<String> {
+    SourceFreshness::read(path)
+        .ok()
+        .and_then(|r| r.invocation_id)
+}
+
+fn is_check(id: &str) -> bool {
+    id.starts_with("test.") || id.starts_with("unit_test.")
+}
+
+/// dbt options that may be passed through (after `--`): they change how dbt runs or
+/// logs, never which nodes run, against what, or what their results mean. Anything else
+/// is refused: an option ODS doesn't know could select nodes, point at another
+/// warehouse, or build something that isn't the real thing.
+const PASSTHROUGH_FLAGS: [&str; 30] = [
+    "--fail-fast",
+    "--no-fail-fast",
+    "--debug",
+    "--no-debug",
+    "--quiet",
+    "--no-quiet",
+    "--use-colors",
+    "--no-use-colors",
+    "--use-colors-file",
+    "--no-use-colors-file",
+    "--partial-parse",
+    "--no-partial-parse",
+    "--static-parser",
+    "--no-static-parser",
+    "--version-check",
+    "--no-version-check",
+    "--print",
+    "--no-print",
+    "--warn-error",
+    "--no-warn-error",
+    "--store-failures",
+    "--no-store-failures",
+    "--show-resource-report",
+    "--no-show-resource-report",
+    "--introspect",
+    "--no-introspect",
+    "--cache-selected-only",
+    "--no-cache-selected-only",
+    "--send-anonymous-usage-stats",
+    "--no-send-anonymous-usage-stats",
+];
+
+/// Pass-through options that take a value, as `--opt value` or `--opt=value`.
+const PASSTHROUGH_OPTIONS: [&str; 9] = [
+    "--threads",
+    "--log-level",
+    "--log-level-file",
+    "--log-format",
+    "--log-format-file",
+    "--log-path",
+    "--log-file-max-bytes",
+    "--printer-width",
+    "--warn-error-options",
+];
+
+/// Short pass-through flags (`-x` fail fast, `-d` debug, `-q` quiet), alone or bundled.
+const PASSTHROUGH_SHORT: [char; 3] = ['x', 'd', 'q'];
+
+/// The arguments in `args` that may not be passed through.
+fn refused_args(args: &[String]) -> Vec<String> {
+    let mut refused = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            let name = format!("--{name}");
+            if PASSTHROUGH_FLAGS.contains(&name.as_str()) && value.is_none() {
+                continue;
+            }
+            if PASSTHROUGH_OPTIONS.contains(&name.as_str())
+                && (value.is_some() || args.next().is_some())
+            {
+                continue;
+            }
+            // Its value, if it takes one, isn't worth naming too.
+            if value.is_none() {
+                let mut peek = args.clone();
+                if peek.next().is_some_and(|v| !v.starts_with('-')) {
+                    args = peek;
+                }
+            }
+            refused.push(name);
+        } else if !arg
+            .strip_prefix('-')
+            .is_some_and(|c| !c.is_empty() && c.chars().all(|c| PASSTHROUGH_SHORT.contains(&c)))
+        {
+            refused.push(arg.clone());
+        }
+    }
+    refused
+}
+
+fn refuse_engine_args(args: &[String]) -> Result<(), ProviderError> {
+    let refused = refused_args(args);
+    if refused.is_empty() {
+        return Ok(());
+    }
+    Err(ProviderError::Other(format!(
+        "can't pass {} to dbt: only options that don't change which nodes run, where, or what their results mean are passed through ({}, {}, and -x, -d, -q). Use the matching ODS option instead where there is one (e.g. --select, --exclude, --resource-type, --full-refresh, --target, --project-dir, --vars)",
+        refused.join(", "),
+        PASSTHROUGH_OPTIONS.join(", "),
+        PASSTHROUGH_FLAGS
+            .iter()
+            .filter(|f| !f.starts_with("--no-"))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", "),
+    )))
+}
+
+impl DbtExecutor {
+    /// The dbt settings dbt would read from the environment: the process's, with this
+    /// executor's own variables over it.
+    fn env_report(&self) -> crate::settings::EnvReport {
+        let mut env: BTreeMap<String, String> = std::env::vars()
+            .filter(|(k, _)| k.starts_with("DBT_"))
+            .collect();
+        env.extend(self.env.clone());
+        crate::settings::EnvReport::of(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+
+    /// A variable dbt would read: this executor's own, else the process's; empty is
+    /// unset.
+    fn env_value(&self, name: &str) -> Option<String> {
+        self.env
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Warnings for the dbt settings in the environment that ODS overrides, e.g.
+    /// `DBT_DEFER`: they have no effect on its runs.
+    pub fn env_warnings(&self) -> Vec<String> {
+        self.env_report().warnings()
+    }
+
+    /// Refuses to run while dbt would read a setting from the environment that
+    /// changes what is built or recorded, and that no flag beats.
+    ///
+    /// # Errors
+    /// Names each such setting, and why.
+    pub fn refuse_env(&self) -> Result<(), ProviderError> {
+        match self.env_report().refusal() {
+            Some(why) => Err(ProviderError::Other(why)),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The dbt command for `mode` and the requested nodes: `test` for a test run; without
+/// tests, `run`, `seed` or `snapshot` when every node is of that one type, so dbt's
+/// own output reads as a user expects; otherwise `build`.
+fn dbt_command(mode: ExecutionMode, manifest: &crate::Manifest, ids: &[String]) -> &'static str {
+    match mode {
+        ExecutionMode::Test => return "test",
+        ExecutionMode::Build => return "build",
+        _ => {}
+    }
+    let kinds: BTreeSet<crate::ResourceType> = ids
+        .iter()
+        .filter_map(|id| manifest.nodes.iter().find(|n| &n.unique_id == id))
+        .map(|n| n.resource_type)
+        .collect();
+    match kinds.iter().collect::<Vec<_>>().as_slice() {
+        [crate::ResourceType::Model] => "run",
+        [crate::ResourceType::Seed] => "seed",
+        [crate::ResourceType::Snapshot] => "snapshot",
+        _ => "build",
+    }
+}
+
+/// Hooks and other operations dbt reports alongside the nodes: neither nodes nor checks.
+fn is_operation(id: &str) -> bool {
+    id.starts_with("operation.")
+}
+
+/// Every check the manifest this run wrote knows (data tests and unit tests), with
+/// the nodes it reads. `None` if that manifest can't be read or is from another
+/// invocation, so the caller assumes the worst.
+fn check_coverage(manifest: &Path, run: &RunResults) -> Option<BTreeMap<String, Vec<String>>> {
+    let Ok(manifest) = crate::Manifest::read(manifest) else {
+        tracing::info!("can't read the run's manifest: no test pass counts");
+        return None;
+    };
+    if manifest.invocation_id.is_none() || manifest.invocation_id != run.invocation_id {
+        tracing::info!(
+            manifest = ?manifest.invocation_id,
+            run = ?run.invocation_id,
+            "the manifest isn't from this run: no test pass counts"
+        );
+        return None;
+    }
+    Some(
+        manifest
+            .nodes
+            .iter()
+            .filter(|n| n.resource_type == crate::ResourceType::Test)
+            .map(|n| (n.unique_id.clone(), n.depends_on.clone()))
+            .chain(
+                manifest
+                    .unit_tests
+                    .iter()
+                    .map(|t| (t.unique_id.clone(), t.depends_on.clone())),
+            )
+            .collect(),
+    )
+}
+
+/// The checks in `run` (not requested nodes) whose status matches.
+fn checks_where(
+    run: &RunResults,
+    requested: &BTreeSet<&str>,
+    status: impl Fn(RunStatus) -> bool,
+) -> Vec<String> {
+    run.results
+        .iter()
+        .filter(|r| {
+            is_check(&r.unique_id) && !requested.contains(r.unique_id.as_str()) && status(r.status)
+        })
+        .map(|r| r.unique_id.clone())
+        .collect()
+}
+
+/// The checks in one run's results, and which nodes each covers.
+struct Checks<'r> {
+    mode: ExecutionMode,
+    failed: Vec<String>,
+    skipped: Vec<String>,
+    passed: Vec<String>,
+    /// Every result id in the run.
+    ran: BTreeSet<&'r str>,
+    coverage: Option<BTreeMap<String, Vec<String>>>,
+}
+
+impl<'r> Checks<'r> {
+    fn new(request: &ExecutionRequest, run: &'r RunResults, manifest: &Path) -> Self {
+        let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
+        Self {
+            mode: request.mode,
+            failed: checks_where(run, &requested, |s| {
+                s != RunStatus::Success && s != RunStatus::Skipped
+            }),
+            skipped: checks_where(run, &requested, |s| s == RunStatus::Skipped),
+            passed: checks_where(run, &requested, |s| s == RunStatus::Success),
+            ran: run.results.iter().map(|r| r.unique_id.as_str()).collect(),
+            coverage: check_coverage(manifest, run),
+        }
+    }
+
+    /// A failed or skipped check the manifest doesn't place could cover anything.
+    fn may_cover(&self, check: &str, node: &str) -> bool {
+        self.coverage.as_ref().is_none_or(|c| {
+            c.get(check)
+                .is_none_or(|deps| deps.iter().any(|d| d == node))
+        })
+    }
+
+    /// A pass only counts for the nodes the manifest says it checks.
+    fn covers(&self, check: &str, node: &str) -> bool {
+        self.coverage.as_ref().is_some_and(|c| {
+            c.get(check)
+                .is_some_and(|deps| deps.iter().any(|d| d == node))
+        })
+    }
+
+    fn failed_on(&self, node: &str) -> Vec<String> {
+        self.failed
+            .iter()
+            .filter(|c| self.may_cover(c, node))
+            .cloned()
+            .collect()
+    }
+
+    fn passed_on(&self, node: &str) -> Vec<String> {
+        self.passed
+            .iter()
+            .filter(|c| self.covers(c, node))
+            .cloned()
+            .collect()
+    }
+
+    /// Checks on the node that didn't run count as skipped: stopped early, deselected
+    /// (e.g. by indirect selection) or missing from the results, they tested nothing.
+    fn skipped_on(&self, node: &str) -> Vec<String> {
+        let mut skipped: BTreeSet<String> = self
+            .skipped
+            .iter()
+            .filter(|c| self.may_cover(c, node))
+            .cloned()
+            .collect();
+        if self.mode != ExecutionMode::Run
+            && let Some(coverage) = &self.coverage
+        {
+            skipped.extend(
+                coverage
+                    .iter()
+                    .filter(|(check, deps)| {
+                        deps.iter().any(|d| d == node) && !self.ran.contains(check.as_str())
+                    })
+                    .map(|(check, _)| check.clone()),
+            );
+        }
+        skipped.into_iter().collect()
+    }
+}
+
+/// Outcomes that are only their checks': every node in a test run, and every source.
+fn test_outcomes(
+    requested: &[RequestedNode],
+    run: &RunResults,
+    checks: &Checks<'_>,
+) -> Vec<NodeExecution> {
+    let finished = run
+        .generated_at
+        .as_deref()
+        .and_then(|t| Timestamp::parse(t).ok());
+    requested
+        .iter()
+        .map(|n| {
+            let failed = checks.failed_on(&n.id);
+            let skipped = checks.skipped_on(&n.id);
+            let passed = checks.passed_on(&n.id);
+            // Only checks that ran and passed vouch for a build.
+            let (status, message) = if !failed.is_empty() {
+                (ExecutionStatus::Failed, None)
+            } else if !skipped.is_empty() {
+                (ExecutionStatus::Skipped, None)
+            } else if passed.is_empty() {
+                (
+                    ExecutionStatus::Skipped,
+                    Some("no checks ran on it".to_owned()),
+                )
+            } else {
+                (ExecutionStatus::Success, None)
+            };
+            NodeExecution::new(n.id.clone(), status, finished, message)
+                .with_checks_failed(failed)
+                .with_checks_skipped(skipped)
+                .with_checks_passed(passed)
+        })
+        .collect()
+}
+
+/// Each requested node's and source's outcome, the failed checks, and the nodes built
+/// unrequested.
+fn outcomes(request: &ExecutionRequest, run: &RunResults, manifest: &Path) -> Outcomes {
+    let checks = Checks::new(request, run, manifest);
+    // In run mode no checks ran: sources are skipped.
+    let sources = if request.mode == ExecutionMode::Run {
+        request
+            .sources
+            .iter()
+            .map(|s| {
+                NodeExecution::new(
+                    s.id.clone(),
+                    ExecutionStatus::Skipped,
+                    None,
+                    Some("no checks run without tests".to_owned()),
+                )
+            })
+            .collect()
+    } else {
+        test_outcomes(&request.sources, run, &checks)
+    };
+    let (nodes, failed, unrequested) = node_outcomes(request, run, checks);
+    for n in nodes.iter().chain(&sources) {
+        tracing::debug!(
+            node = %n.node,
+            status = ?n.status,
+            checks_passed = ?n.checks_passed,
+            checks_failed = ?n.checks_failed,
+            checks_skipped = ?n.checks_skipped,
+            "dbt result"
+        );
+    }
+    Outcomes {
+        nodes,
+        sources,
+        checks_failed: failed,
+        unrequested,
+    }
+}
+
+/// What [`outcomes`] found.
+struct Outcomes {
+    nodes: Vec<NodeExecution>,
+    sources: Vec<NodeExecution>,
+    checks_failed: Vec<String>,
+    unrequested: Vec<String>,
+}
+
+/// The data tests on `sources` (#232), from the manifest: those that read one.
+fn source_tests(manifest: &crate::Manifest, sources: &[RequestedNode]) -> Vec<String> {
+    let mut tests: Vec<String> = sources
+        .iter()
+        .flat_map(|s| crate::fingerprint::checks_of(manifest, &s.id))
+        // Sources have no unit tests; only data tests can be selected by type.
+        .filter(|id| id.starts_with("test."))
+        .map(str::to_owned)
+        .collect();
+    tests.sort();
+    tests.dedup();
+    tests
+}
+
+fn node_outcomes(
+    request: &ExecutionRequest,
+    run: &RunResults,
+    checks: Checks<'_>,
+) -> (Vec<NodeExecution>, Vec<String>, Vec<String>) {
+    if request.mode == ExecutionMode::Test {
+        return (
+            test_outcomes(&request.nodes, run, &checks),
+            checks.failed,
+            Vec::new(),
+        );
+    }
+    let by_id: BTreeMap<&str, &crate::runs::NodeResult> = run
+        .results
+        .iter()
+        .map(|r| (r.unique_id.as_str(), r))
+        .collect();
+    let requested: BTreeSet<&str> = request.nodes.iter().map(|n| n.id.as_str()).collect();
+    let nodes = request
+        .nodes
+        .iter()
+        .map(|n| match by_id.get(n.id.as_str()) {
+            Some(r) => NodeExecution::new(
+                n.id.clone(),
+                match r.status {
+                    RunStatus::Success => ExecutionStatus::Success,
+                    RunStatus::Skipped => ExecutionStatus::Skipped,
+                    _ => ExecutionStatus::Failed,
+                },
+                r.completed_at
+                    .as_deref()
+                    .and_then(|t| Timestamp::parse(t).ok()),
+                Some(r.raw_status.clone()),
+            )
+            .with_checks_failed(checks.failed_on(&n.id))
+            .with_checks_skipped(checks.skipped_on(&n.id))
+            .with_checks_passed(checks.passed_on(&n.id)),
+            None => NodeExecution::new(
+                n.id.clone(),
+                ExecutionStatus::Skipped,
+                None,
+                Some("dbt didn't run it".to_owned()),
+            ),
+        })
+        .collect();
+    let unrequested = run
+        .results
+        .iter()
+        .filter(|r| {
+            !is_check(&r.unique_id)
+                && !is_operation(&r.unique_id)
+                && !requested.contains(r.unique_id.as_str())
+                && r.status != RunStatus::Skipped
+        })
+        .map(|r| r.unique_id.clone())
+        .collect();
+    (nodes, checks.failed, unrequested)
+}
+
+impl Provider for DbtExecutor {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo::new(
+            KIND,
+            "dbt",
+            env!("CARGO_PKG_VERSION"),
+            CapabilitySet::from([Capability::RelationExistence, Capability::RelationProbe]),
+        )
+    }
+}
+
+impl DbtExecutor {
+    /// Which dbt this is: `dbt --version`, read (#181). Its output is captured, never
+    /// shown. dbt itself may look up its latest release while answering; it reads no
+    /// profile and connects to no warehouse.
+    ///
+    /// `None` when dbt ran but printed no version ODS can read.
+    ///
+    /// # Errors
+    /// If the program can't be started, or exits with a failure.
+    pub async fn version(&self) -> Result<Option<crate::version::DbtVersion>, ProviderError> {
+        let quiet = Self {
+            output: DbtOutput::Capture,
+            ..self.clone()
+        };
+        let (ok, tail, stdout) = quiet.invoke_with(&["--version".to_owned()], true).await?;
+        if !ok {
+            return Err(Self::failure("`dbt --version` failed", &tail));
+        }
+        Ok(crate::version::DbtVersion::parse(&stdout))
+    }
+}
+
+/// Where the target check writes its artifacts, apart from the target path's own.
+const TARGET_CHECK_DIR: &str = "ods-target-check";
+
+impl DbtExecutor {
+    /// The target dbt builds in, without credentials (#227): one `dbt compile
+    /// --inline` of the non-secret fields of dbt's `target`, which resolves the
+    /// profile as every other dbt command here does.
+    ///
+    /// # Errors
+    /// If dbt can't render the profile, or its answer can't be read.
+    pub async fn identify(&self) -> Result<ods_core::state::TargetIdentity, ProviderError> {
+        self.refuse_env()?;
+        let target = self.target_path().join(TARGET_CHECK_DIR);
+        // A best effort: dbt parses from scratch without it, just more slowly.
+        if std::fs::create_dir_all(&target).is_ok() {
+            let _ = std::fs::copy(
+                self.artifact("partial_parse.msgpack"),
+                target.join("partial_parse.msgpack"),
+            );
+        }
+        let mut args = vec![
+            "compile".to_owned(),
+            "--quiet".to_owned(),
+            "--inline".to_owned(),
+            crate::target::QUERY.to_owned(),
+            "--output".to_owned(),
+            "json".to_owned(),
+            "--log-format".to_owned(),
+            "json".to_owned(),
+            // Rendering `target` needs no warehouse metadata.
+            "--no-populate-cache".to_owned(),
+            "--no-introspect".to_owned(),
+        ];
+        args.extend(self.common_args_in("compile", &target));
+        self.step(DbtStep::Identify);
+        let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
+        if !ok {
+            return Err(Self::failure(
+                "dbt couldn't say which target it builds in (`dbt compile --inline`)",
+                &tail,
+            ));
+        }
+        crate::target::parse(&stdout).map_err(|why| {
+            ProviderError::Other(format!(
+                "dbt couldn't say which target it builds in (`dbt compile --inline`): {why}"
+            ))
+        })
+    }
+}
+
+/// Where the relation check writes its artifacts: apart from the target path's own,
+/// which `dbt show` would otherwise overwrite with a manifest without compiled SQL.
+const RELATION_CHECK_DIR: &str = "ods-relation-check";
+
+#[async_trait]
+impl RelationInspector for DbtExecutor {
+    async fn inspect(&self, nodes: &[RequestedNode]) -> Result<RelationReport, ProviderError> {
+        self.refuse_env()?;
+        // dbt writes the manifest it checked here.
+        let target = self.aside(RELATION_CHECK_DIR, "relation check")?;
+        let checked_manifest = target.join("manifest.json");
+        let mut args = vec![
+            "show".to_owned(),
+            "--quiet".to_owned(),
+            "--inline".to_owned(),
+            crate::relations::QUERY.to_owned(),
+            "--output".to_owned(),
+            "json".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+            "--log-format".to_owned(),
+            "json".to_owned(),
+        ];
+        args.extend(self.common_args_in("show", &target));
+        self.step(DbtStep::RelationCheck { nodes: nodes.len() });
+        let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
+        if !ok {
+            return Err(Self::failure(
+                "the relation check (`dbt show`) failed",
+                &tail,
+            ));
+        }
+        let found = crate::relations::parse(&stdout).map_err(|why| {
+            ProviderError::Other(format!("the relation check (`dbt show`) failed: {why}"))
+        })?;
+        // Which nodes dbt checked: those of the project as it parsed it, which may not be
+        // the plan's (e.g. a model renamed since the compile). A node it didn't check is
+        // unknown, never present.
+        let manifest = crate::Manifest::read(&checked_manifest).map_err(|e| {
+            ProviderError::Other(format!(
+                "the relation check (`dbt show`) wrote no readable manifest: {e}"
+            ))
+        })?;
+        let checked = crate::relations::checkable(&manifest);
+        if found.checked != checked.len() {
+            return Err(ProviderError::Other(format!(
+                "the relation check saw {} relations, its manifest has {}",
+                found.checked,
+                checked.len()
+            )));
+        }
+        let nodes = nodes
+            .iter()
+            .map(|n| {
+                let presence = if !checked.contains(n.id.as_str()) {
+                    RelationPresence::Unknown("dbt didn't check it".to_owned())
+                } else if found.missing.contains(&n.id) {
+                    RelationPresence::Missing
+                } else {
+                    RelationPresence::Present { kind: None }
+                };
+                (n.id.clone(), presence)
+            })
+            .collect();
+        Ok(RelationReport::new(nodes))
+    }
+}
+
+#[async_trait]
+impl Executor for DbtExecutor {
+    async fn prepare(&self, request: &PrepareRequest) -> Result<PrepareReport, ProviderError> {
+        // Up front, so the reason isn't lost in whatever dbt makes of it.
+        self.refuse_env()?;
+        // Freshness first: every dbt command rewrites `manifest.json`, and only
+        // `compile`'s carries the compiled SQL fingerprints need.
+        let mut warnings = Vec::new();
+        let mut measured = false;
+        if request.measure_sources {
+            let sources = self.artifact("sources.json");
+            let before = sources_invocation_of(&sources);
+            let mut args = vec!["source".to_owned(), "freshness".to_owned()];
+            args.extend(self.common_args("source"));
+            self.step(DbtStep::SourceFreshness);
+            let (ok, _) = self.invoke(&args).await?;
+            let after = sources_invocation_of(&sources);
+            // A file from an earlier invocation says nothing about the data now.
+            measured = after.is_some() && after != before;
+            if !measured {
+                warnings.push(
+                    "`dbt source freshness` wrote no results: nodes reading sources are built"
+                        .to_owned(),
+                );
+            } else if !ok {
+                warnings.push(
+                    "`dbt source freshness` reported stale or unmeasurable sources".to_owned(),
+                );
+            }
+        }
+        let mut args = vec!["compile".to_owned()];
+        args.extend(self.common_args("compile"));
+        self.step(DbtStep::Compile);
+        let (ok, tail) = self.invoke(&args).await?;
+        if !ok {
+            return Err(Self::failure(
+                &format!("`{}` failed", self.display(&args)),
+                &tail,
+            ));
+        }
+        Ok(PrepareReport::new(measured, warnings))
+    }
+
+    async fn execute(&self, request: &ExecutionRequest) -> Result<ExecutionReport, ProviderError> {
+        // dbt reads an empty selection as "everything". Run mode runs no checks, so
+        // sources alone are nothing to run either.
+        if request.is_empty() || (request.mode == ExecutionMode::Run && request.nodes.is_empty()) {
+            return Err(ProviderError::Other(
+                "nothing to execute: the request names no nodes".to_owned(),
+            ));
+        }
+        // Exact selectors, from the manifest the plan was made from.
+        let manifest = crate::Manifest::read(&self.artifact("manifest.json")).map_err(|e| {
+            ProviderError::Other(format!(
+                "can't read the manifest to select nodes exactly: {e}"
+            ))
+        })?;
+        let ids: Vec<String> = request.nodes.iter().map(|n| n.id.clone()).collect();
+        // A source's tests are selected themselves: dbt reaches them through no node.
+        let tests = if request.mode == ExecutionMode::Run {
+            Vec::new()
+        } else {
+            source_tests(&manifest, &request.sources)
+        };
+        let selected: Vec<String> = ids.iter().chain(&tests).cloned().collect();
+        if selected.is_empty() {
+            // Only sources without tests: dbt would read no selection as everything.
+            return Err(ProviderError::Other(
+                "nothing to execute: the requested sources have no tests".to_owned(),
+            ));
+        }
+        let selectors = crate::selection::exact_selectors(&manifest, &selected).map_err(|why| {
+            ProviderError::Other(format!("can't select exactly the planned nodes: {why}"))
+        })?;
+        refuse_engine_args(&request.engine_args)?;
+        self.refuse_env()?;
+        let dbt_command = dbt_command(request.mode, &manifest, &ids);
+        let mut args = vec![dbt_command.to_owned(), "--select".to_owned()];
+        args.extend(selectors);
+        // `dbt snapshot` has no --full-refresh: a snapshot's history is the point.
+        if request.full_refresh && !matches!(dbt_command, "test" | "snapshot") {
+            args.push("--full-refresh".to_owned());
+        }
+        // Only `build` would run tests alongside; the others never do.
+        if request.mode == ExecutionMode::Run && dbt_command == "build" {
+            args.extend(
+                [
+                    "--exclude-resource-type",
+                    "test",
+                    "--exclude-resource-type",
+                    "unit_test",
+                ]
+                .map(str::to_owned),
+            );
+        }
+        args.extend(self.common_args(dbt_command));
+        args.extend(request.engine_args.iter().cloned());
+        let command = self.display(&args);
+        let results_path = self.artifact("run_results.json");
+        let before = invocation_of(&results_path);
+        let sources = if tests.is_empty() {
+            0
+        } else {
+            request.sources.len()
+        };
+        self.step(if request.mode == ExecutionMode::Test {
+            DbtStep::Test {
+                nodes: request.nodes.len(),
+                sources,
+            }
+        } else {
+            DbtStep::Build {
+                command: dbt_command,
+                nodes: request.nodes.len(),
+                tests: request.mode == ExecutionMode::Build,
+                sources,
+            }
+        });
+        let (ok, tail) = self.invoke(&args).await?;
+        let run = match RunResults::read(&results_path) {
+            Ok(run) if run.invocation_id.is_some() && run.invocation_id != before => run,
+            _ => {
+                return Err(Self::failure(
+                    &format!("`{command}` wrote no run results"),
+                    &tail,
+                ));
+            }
+        };
+        let outcomes = outcomes(request, &run, &self.artifact("manifest.json"));
+        let finished = run
+            .generated_at
+            .as_deref()
+            .and_then(|t| Timestamp::parse(t).ok())
+            .unwrap_or_else(Timestamp::now);
+        let report = ExecutionReport::new(
+            run.invocation_id.clone().unwrap_or_default(),
+            run.started_at
+                .as_deref()
+                .and_then(|t| Timestamp::parse(t).ok()),
+            finished,
+            outcomes.nodes,
+            outcomes.checks_failed,
+        )
+        .with_sources(outcomes.sources)
+        .with_unrequested(outcomes.unrequested)
+        .with_command(command);
+        Ok(if ok { report } else { report.failed() })
+    }
+}
+
+/// Where the relation probe writes its artifacts, apart from the target path's own and
+/// the relation check's, for the same reason.
+const RELATION_PROBE_DIR: &str = "ods-relation-probe";
+
+impl DbtExecutor {
+    /// Makes `dir`, under the target path, ready for a `dbt show` whose manifest is
+    /// read afterwards: one left by an earlier call must never pass for this one's.
+    fn aside(&self, dir: &str, what: &str) -> Result<PathBuf, ProviderError> {
+        let target = self.target_path().join(dir);
+        let manifest = target.join("manifest.json");
+        if let Err(e) = std::fs::remove_file(&manifest)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(ProviderError::Other(format!(
+                "can't clear `{}` for the {what}: {e}",
+                manifest.display()
+            )));
+        }
+        // A best effort: dbt parses from scratch without it, just more slowly.
+        if std::fs::create_dir_all(&target).is_ok() {
+            let _ = std::fs::copy(
+                self.artifact("partial_parse.msgpack"),
+                target.join("partial_parse.msgpack"),
+            );
+        }
+        Ok(target)
+    }
+}
+
+/// A probed relation's answer, checked against the request.
+fn probe_answer(found: crate::probe::Found, request: &ProbeRequest) -> ProbeAnswer {
+    use crate::probe::Found;
+    match found {
+        Found::Missing => ProbeAnswer::Unknown("dbt's adapter has no such relation".to_owned()),
+        Found::Kind(kind) => ProbeAnswer::Skipped(format!(
+            "a {}, not a {}",
+            if kind.is_empty() {
+                "relation of unknown kind"
+            } else {
+                &kind
+            },
+            request.filter().relation_kinds().join(" or ")
+        )),
+        Found::Format => ProbeAnswer::Skipped(format!(
+            "dbt's adapter doesn't confirm it is stored as {}",
+            request.filter().format().unwrap_or("the requested format")
+        )),
+        Found::Rows(rows) if rows.len() != request.statements().len() => {
+            ProbeAnswer::Unknown(format!(
+                "the probe returned {} rows for {} statements",
+                rows.len(),
+                request.statements().len()
+            ))
+        }
+        Found::Rows(rows) => ProbeAnswer::Rows(
+            rows.into_iter()
+                .zip(request.statements())
+                .map(|(mut row, statement)| {
+                    row.retain(|column, _| statement.columns().contains(column));
+                    row
+                })
+                .collect(),
+        ),
+    }
+}
+
+#[async_trait]
+impl RelationProbe for DbtExecutor {
+    async fn probe(
+        &self,
+        request: &ProbeRequest,
+        sources: &[RequestedSource],
+    ) -> Result<ProbeReport, ProviderError> {
+        self.refuse_env()?;
+        let target = self.aside(RELATION_PROBE_DIR, "relation probe")?;
+        let mut args = vec![
+            "show".to_owned(),
+            "--quiet".to_owned(),
+            "--inline".to_owned(),
+            crate::probe::query(request),
+            "--output".to_owned(),
+            "json".to_owned(),
+            "--limit".to_owned(),
+            "1".to_owned(),
+            "--log-format".to_owned(),
+            "json".to_owned(),
+        ];
+        args.extend(self.common_args_in("show", &target));
+        self.step(DbtStep::RelationProbe {
+            sources: sources.len(),
+        });
+        let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
+        if !ok {
+            return Err(Self::failure(
+                "the relation probe (`dbt show`) failed",
+                &tail,
+            ));
+        }
+        let probed = crate::probe::parse(&stdout).map_err(|why| {
+            ProviderError::Other(format!("the relation probe (`dbt show`) failed: {why}"))
+        })?;
+        // Which sources dbt probed: those of the project as it parsed it. A source it
+        // didn't probe is unknown.
+        let manifest = crate::Manifest::read(&target.join("manifest.json")).map_err(|e| {
+            ProviderError::Other(format!(
+                "the relation probe (`dbt show`) wrote no readable manifest: {e}"
+            ))
+        })?;
+        let known: BTreeSet<&str> = manifest
+            .nodes
+            .iter()
+            .filter(|n| n.resource_type == crate::ResourceType::Source)
+            .map(|n| n.unique_id.as_str())
+            .collect();
+        if probed.probed != known.len() {
+            return Err(ProviderError::Other(format!(
+                "the relation probe saw {} sources, its manifest has {}",
+                probed.probed,
+                known.len()
+            )));
+        }
+        // Only the requested sources are answered; the others are ignored.
+        let sources = sources
+            .iter()
+            .map(|s| {
+                let answer = match probed.sources.get(&s.id).cloned() {
+                    _ if !known.contains(s.id.as_str()) => ProbeAnswer::Unknown(
+                        "dbt didn't probe it: not a source of the project it parsed".to_owned(),
+                    ),
+                    Some(found) => probe_answer(found, request),
+                    None => ProbeAnswer::Unknown("dbt didn't report on it".to_owned()),
+                };
+                (s.id.clone(), answer)
+            })
+            .collect();
+        Ok(ProbeReport::new(sources))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(args: &[&str]) -> bool {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        refuse_engine_args(&args).is_err()
+    }
+
+    #[test]
+    fn only_known_harmless_engine_args_are_passed_through() {
+        for args in [
+            &["--select", "x"][..],
+            &["--select=x"],
+            &["-s", "x"],
+            &["-sx"],
+            &["-m", "x"],
+            &["--model", "x"],
+            &["--target", "prod"],
+            &["-tprod"],
+            &["-f"],
+            &["-xf"],
+            &["--vars", "{a: 1}"],
+            &["--no-write-json"],
+            &["--sample=3 days"],
+            &["--event-time-start", "2024-01-01"],
+            &["--indirect-selection=empty"],
+            &["--project-dir", "elsewhere"],
+            &["--profile", "other"],
+            &["--defer-state", "prod"],
+            &["--fail-fast=x"],
+            &["--threads"],
+            &["orders"],
+            &["-"],
+        ] {
+            assert!(refused(args), "{args:?}");
+        }
+        for args in [
+            &["--threads", "4"][..],
+            &["--threads=4"],
+            &["-x"],
+            &["-xq"],
+            &["--fail-fast"],
+            &["--debug"],
+            &["--store-failures"],
+            &["--log-level", "debug", "--no-use-colors"],
+        ] {
+            assert!(!refused(args), "{args:?}");
+        }
+        let named =
+            |args: &[&str]| refused_args(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+        assert_eq!(named(&["--select", "x", "--threads", "2"]), ["--select"]);
+        assert_eq!(named(&["-s", "x"]), ["-s", "x"]);
+    }
+}

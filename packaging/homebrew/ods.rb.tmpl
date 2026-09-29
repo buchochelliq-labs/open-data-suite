@@ -1,0 +1,42 @@
+# Homebrew formula for `ods`, rendered for each release by scripts/render-homebrew-formula.py
+# (release.yml) and attached to the GitHub release as `ods.rb`. Copy it to
+# `Formula/ods.rb` in the tap repository; see docs/install.md.
+#
+# Generated file: edit packaging/homebrew/ods.rb.tmpl in open-data-suite, not the tap.
+class Ods < Formula
+  desc "Explainable, provider-neutral tooling for dbt projects (OpenDataSuite)"
+  homepage "https://buchochelliq-labs.github.io/open-data-suite/"
+  version "${version}"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "${base_url}/ods-v${version}-aarch64-apple-darwin.tar.gz"
+      sha256 "${sha256_aarch64_apple_darwin}"
+    end
+    on_intel do
+      url "${base_url}/ods-v${version}-x86_64-apple-darwin.tar.gz"
+      sha256 "${sha256_x86_64_apple_darwin}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "${base_url}/ods-v${version}-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "${sha256_aarch64_unknown_linux_musl}"
+    end
+    on_intel do
+      url "${base_url}/ods-v${version}-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "${sha256_x86_64_unknown_linux_musl}"
+    end
+  end
+
+  def install
+    bin.install "ods"
+    doc.install "THIRD-PARTY-LICENSES.html", "CHANGELOG.md"
+  end
+
+  test do
+    assert_match "ods: #{version}", shell_output("#{bin}/ods version")
+  end
+end

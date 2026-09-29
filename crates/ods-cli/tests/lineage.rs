@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 
@@ -11,22 +10,17 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10")
 }
 
-struct Temp(PathBuf);
+/// A scratch directory, removed when dropped.
+struct Temp(tempfile::TempDir);
 
 impl Temp {
     fn new() -> Self {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("ods-cli-lineage-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
+        let dir = tempfile::tempdir().unwrap();
+        Self(dir)
     }
-}
 
-impl Drop for Temp {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 }
 
@@ -34,9 +28,9 @@ fn ods(args: &[&str]) -> Output {
     let home = Temp::new();
     Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(args)
-        .current_dir(&home.0)
+        .current_dir(home.path())
         .env_clear()
-        .env("XDG_CONFIG_HOME", &home.0)
+        .env("XDG_CONFIG_HOME", home.path())
         .output()
         .expect("failed to spawn ods")
 }
@@ -75,7 +69,10 @@ fn columns_trace_every_model_column_to_its_inputs() {
         "customers",
     ]);
     assert_eq!(result["summary"]["dialect"], "duckdb");
-    assert_eq!(result["summary"]["models_opaque"], 0);
+    assert_eq!(
+        result["summary"]["models_opaque"], 1,
+        "the Python model customer_segments"
+    );
     let model = &result["models"][0];
     assert_eq!(model["unique_id"], "model.jaffle_ods.customers");
     let lifetime = model["columns"]
@@ -123,9 +120,9 @@ fn impact_prunes_readers_that_do_not_use_the_changed_column() {
 fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
     let head = Temp::new();
     for file in ["manifest.json", "catalog.json"] {
-        fs::copy(fixture().join(file), head.0.join(file)).unwrap();
+        fs::copy(fixture().join(file), head.path().join(file)).unwrap();
     }
-    let manifest_path = head.0.join("manifest.json");
+    let manifest_path = head.path().join("manifest.json");
     let mut manifest: Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     let code = &mut manifest["nodes"]["model.jaffle_ods.orders"]["compiled_code"];
@@ -141,7 +138,7 @@ fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
         "lineage",
         "impact",
         "--target-dir",
-        head.0.to_str().unwrap(),
+        head.path().to_str().unwrap(),
         "--base",
         base.to_str().unwrap(),
     ]);
@@ -158,9 +155,13 @@ fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
         strings(&result["run"]),
         [
             "model.jaffle_ods.customer_order_rank",
+            // A Python model is opaque: it may use any column of `customers`, so it runs,
+            // and so does everything reading it.
+            "model.jaffle_ods.customer_segments",
             "model.jaffle_ods.customers",
             "model.jaffle_ods.customers_snapshot_view",
-            "model.jaffle_ods.orders"
+            "model.jaffle_ods.orders",
+            "model.jaffle_ods.segment_summary"
         ]
     );
     // `order_events` doesn't read `orders` at all, so it's neither run nor pruned.
@@ -170,7 +171,7 @@ fn impact_against_a_base_build_finds_the_real_change_and_its_consumers() {
 #[test]
 fn export_writes_openlineage_job_events_with_column_lineage() {
     let out_dir = Temp::new();
-    let file = out_dir.0.join("events.ndjson");
+    let file = out_dir.path().join("events.ndjson");
     let target = fixture();
     let result = json(&[
         "lineage",
@@ -184,13 +185,20 @@ fn export_writes_openlineage_job_events_with_column_lineage() {
         "--output-file",
         file.to_str().unwrap(),
     ]);
-    assert_eq!(result["events"], 8);
-    assert_eq!(result["with_column_lineage"], 8);
+    assert_eq!(result["events"], 10, "every model, the Python one included");
+    assert_eq!(result["with_column_lineage"], 9, "all but the Python model");
     let events: Vec<Value> = fs::read_to_string(&file)
         .unwrap()
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
+    // The Python model: table-level lineage from what it declares, no column facet.
+    let python = events
+        .iter()
+        .find(|e| e["job"]["name"] == "model.jaffle_ods.customer_segments")
+        .expect("an event for the Python model");
+    assert_eq!(python["inputs"][0]["name"], "jaffle_ods.main.customers");
+    assert!(python["outputs"][0].get("facets").is_none(), "{python:#}");
     let orders = events
         .iter()
         .find(|e| e["job"]["name"] == "model.jaffle_ods.orders")
@@ -217,7 +225,7 @@ fn export_writes_openlineage_job_events_with_column_lineage() {
         "AGGREGATION"
     );
     // Deterministic: the same inputs give byte-identical events.
-    let again = out_dir.0.join("again.ndjson");
+    let again = out_dir.path().join("again.ndjson");
     json(&[
         "lineage",
         "export",
@@ -265,7 +273,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
     let target = fixture();
     let target = target.to_str().unwrap();
     let write = |format: &str, extra: &[&str]| {
-        let file = out_dir.0.join(format!("graph.{format}"));
+        let file = out_dir.path().join(format!("graph.{format}"));
         let mut args = vec![
             "lineage",
             "graph",
@@ -282,7 +290,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
     };
 
     let (result, text) = write("json", &[]);
-    assert_eq!(result["nodes"], 11);
+    assert_eq!(result["nodes"], 13);
     let document: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(document["schema_version"], 1);
     let orders = document["nodes"]
@@ -320,7 +328,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
 #[test]
 fn view_writes_a_self_contained_offline_page() {
     let out_dir = Temp::new();
-    let file = out_dir.0.join("lineage.html");
+    let file = out_dir.path().join("lineage.html");
     let target = fixture();
     let result = json(&[
         "lineage",
@@ -353,9 +361,12 @@ fn view_writes_a_self_contained_offline_page() {
         .map(|(i, _)| &page[i..(i + 30).min(page.len())])
         .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
         .collect();
+    // Besides the SVG namespace, the one URL is a source comment in the inlined layout
+    // library (dagre), citing where its box-intersection formula comes from.
     assert!(
         urls.iter()
-            .all(|u| u.starts_with("http://www.w3.org/2000/svg")),
+            .all(|u| u.starts_with("http://www.w3.org/2000/svg")
+                || u.starts_with("http://math.stackexchange.com/")),
         "only the SVG namespace, no remote URLs: {urls:?}"
     );
 }
@@ -363,7 +374,7 @@ fn view_writes_a_self_contained_offline_page() {
 #[test]
 fn view_can_write_a_static_site_to_host() {
     let out_dir = Temp::new();
-    let site = out_dir.0.join("site");
+    let site = out_dir.path().join("site");
     let target = fixture();
     let result = json(&[
         "lineage",
@@ -404,9 +415,9 @@ fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
     // A seed's CSV changed: dbt's checksum differs, so everything downstream may change.
     let head = Temp::new();
     for file in ["manifest.json", "catalog.json"] {
-        fs::copy(fixture().join(file), head.0.join(file)).unwrap();
+        fs::copy(fixture().join(file), head.path().join(file)).unwrap();
     }
-    let manifest_path = head.0.join("manifest.json");
+    let manifest_path = head.path().join("manifest.json");
     let mut manifest: Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     manifest["nodes"]["seed.jaffle_ods.raw_payments"]["checksum"]["checksum"] =
@@ -418,7 +429,7 @@ fn impact_against_a_base_detects_changes_to_nodes_without_sql_lineage() {
         "lineage",
         "impact",
         "--target-dir",
-        head.0.to_str().unwrap(),
+        head.path().to_str().unwrap(),
         "--base",
         base.to_str().unwrap(),
     ]);
@@ -448,7 +459,7 @@ fn v2_fixture() -> PathBuf {
 fn dbt_1x_json_v2_json_and_v2_parquet_give_the_same_lineage() {
     let out = Temp::new();
     let graph = |target: &Path, artifacts: &str| {
-        let file = out.0.join(format!(
+        let file = out.path().join(format!(
             "{artifacts}-{}.json",
             target.file_name().unwrap().to_str().unwrap()
         ));
@@ -485,18 +496,21 @@ fn a_v2_target_without_json_is_read_from_the_information_schema() {
     let target = Temp::new();
     copy_dir(
         &v2_fixture().join("info_schema"),
-        &target.0.join("info_schema"),
+        &target.path().join("info_schema"),
     );
-    copy_dir(&v2_fixture().join("compiled"), &target.0.join("compiled"));
-    assert!(!target.0.join("manifest.json").exists());
+    copy_dir(
+        &v2_fixture().join("compiled"),
+        &target.path().join("compiled"),
+    );
+    assert!(!target.path().join("manifest.json").exists());
     let result = json(&[
         "lineage",
         "columns",
         "--target-dir",
-        target.0.to_str().unwrap(),
+        target.path().to_str().unwrap(),
     ]);
-    assert_eq!(result["summary"]["models_analyzed"], 8);
-    assert_eq!(result["summary"]["models_opaque"], 0);
+    assert_eq!(result["summary"]["models_analyzed"], 9);
+    assert_eq!(result["summary"]["models_opaque"], 1);
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -542,4 +556,116 @@ fn impact_on_a_column_that_does_not_exist_is_an_error_not_nothing() {
         "orders.nope=added",
     ]);
     assert!(added["run"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn seeds_get_column_lineage_without_a_catalog() {
+    // dbt 2.0's manifest.json, with no catalog: seed columns come from their CSV header.
+    let target = fixture().with_file_name("dbt-2.0");
+    let target = target.to_str().unwrap();
+    let impact = json(&[
+        "lineage",
+        "impact",
+        "--target-dir",
+        target,
+        "--artifacts",
+        "json",
+        "--column",
+        "raw_orders.status",
+    ]);
+    let run = strings(&impact["run"]);
+    assert!(run.contains(&"model.jaffle_ods.stg_orders".to_owned()));
+    assert!(
+        !run.contains(&"model.jaffle_ods.order_events".to_owned()),
+        "order_events doesn't read status, so a seed column change skips it: {run:?}"
+    );
+
+    let columns = json(&[
+        "lineage",
+        "columns",
+        "--target-dir",
+        target,
+        "--artifacts",
+        "json",
+        "--model",
+        "raw_orders",
+    ]);
+    let seed = &columns["upstreams"][0];
+    assert_eq!(seed["kind"], "seed");
+    let status = seed["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "status")
+        .unwrap();
+    assert_eq!(status["used_by"][0]["column"], "stg_orders.status");
+    assert_eq!(
+        status["used_by"][0]["used_by"][0]["column"],
+        "orders.status"
+    );
+    let reaches = strings(&status["reaches"]);
+    assert!(reaches.contains(&"orders.status".to_owned()));
+    assert!(
+        reaches.contains(&"customers_snapshot_view.lifetime_value".to_owned()),
+        "a filter on status shapes customers' rows, so everything downstream of them: {reaches:?}"
+    );
+}
+
+/// Like `ods --json`, run in `cwd` with `env`, returning the exit code and envelope.
+fn ods_in(cwd: &Path, env: &[(&str, &str)], args: &[&str]) -> (i32, Value) {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(args)
+        .arg("--json")
+        .current_dir(cwd)
+        .env_clear()
+        .env("XDG_CONFIG_HOME", cwd)
+        .envs(env.iter().copied())
+        .output()
+        .expect("failed to spawn ods");
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    (out.status.code().unwrap(), envelope)
+}
+
+/// The commands that read dbt's artifacts without running dbt find them as `ods state`
+/// does: `--target-dir`, `DBT_TARGET_PATH`, the configured dbt settings, then the
+/// project's `target` (`--project-dir`, `DBT_PROJECT_DIR`, configured `project_dir`).
+#[test]
+fn artifacts_are_found_where_the_project_is_configured() {
+    let dir = Temp::new();
+    copy_dir(&fixture(), &dir.path().join("transform/target"));
+    let sub = dir.path().join("elsewhere");
+    fs::create_dir_all(&sub).unwrap();
+
+    // Not in `./target`: an error.
+    let (code, _) = ods_in(&sub, &[], &["lineage", "columns"]);
+    assert_eq!(code, 1);
+    // `DBT_PROJECT_DIR`, as dbt reads it.
+    let project = dir.path().join("transform");
+    let project = project.to_str().unwrap();
+    let (code, json) = ods_in(
+        &sub,
+        &[("DBT_PROJECT_DIR", project)],
+        &["lineage", "columns"],
+    );
+    assert_eq!(code, 0, "{json:#}");
+    // `ods.toml`, from a directory below it.
+    fs::write(
+        dir.path().join("ods.toml"),
+        "[providers.dbt]\nkind = \"dbt\"\n\n[providers.dbt.settings]\nproject_dir = \"transform\"\n",
+    )
+    .unwrap();
+    for args in [
+        &["lineage", "columns"][..],
+        &["erd", "generate", "--format", "mermaid"][..],
+    ] {
+        let (code, json) = ods_in(&sub, &[], args);
+        assert_eq!(code, 0, "{args:?}: {json:#}");
+    }
+    // A flag still wins.
+    let (code, _) = ods_in(
+        &sub,
+        &[],
+        &["lineage", "columns", "--target-dir", "nowhere"],
+    );
+    assert_eq!(code, 1);
 }

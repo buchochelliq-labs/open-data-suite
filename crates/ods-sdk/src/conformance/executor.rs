@@ -1,0 +1,379 @@
+//! Conformance suite for [`Executor`].
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use super::Report;
+use crate::contracts::executor::{
+    ExecutionMode, ExecutionRequest, ExecutionStatus, Executor, PrepareRequest, RequestedNode,
+};
+
+/// What the suite needs from an executor under test.
+#[async_trait]
+pub trait ExecutorHarness: Send + Sync {
+    /// A fresh executor over a project the harness controls. Called once per case.
+    async fn executor(&self) -> Arc<dyn Executor>;
+
+    /// At least two nodes that build successfully and don't depend on each other.
+    fn buildable(&self) -> Vec<RequestedNode>;
+
+    /// A node that fails to build, if the harness can arrange one; `None` skips the case
+    /// that needs it.
+    fn failing(&self) -> Option<RequestedNode>;
+
+    /// The ids of the nodes built since the last [`executor`](Self::executor) call, or
+    /// `None` if the harness can't observe builds (which skips those checks).
+    async fn built(&self) -> Option<Vec<String>>;
+
+    /// A buildable node with checks that pass, and one without checks, if the harness
+    /// can arrange them; `None` skips the case that needs them.
+    fn checked_and_unchecked(&self) -> Option<(RequestedNode, RequestedNode)> {
+        None
+    }
+
+    /// A source with checks that pass, if the harness can arrange one; `None` skips the
+    /// case that needs it (#232).
+    fn checked_source(&self) -> Option<RequestedNode> {
+        None
+    }
+
+    /// A source with a check that fails, and a buildable node that reads it, if the
+    /// harness can arrange them; `None` skips the case that needs them (#232).
+    fn failing_source(&self) -> Option<(RequestedNode, RequestedNode)> {
+        None
+    }
+}
+
+fn ids(nodes: &[RequestedNode]) -> Vec<String> {
+    nodes.iter().map(|n| n.id.clone()).collect()
+}
+
+async fn assert_built(harness: &dyn ExecutorHarness, case: &str, expected: &[String]) {
+    if let Some(mut built) = harness.built().await {
+        built.sort();
+        let mut expected = expected.to_vec();
+        expected.sort();
+        assert_eq!(built, expected, "{case}: built");
+    }
+}
+
+async fn builds_exactly_the_requested_nodes(harness: &dyn ExecutorHarness) {
+    let case = "builds_exactly_the_requested_nodes";
+    let executor = harness.executor().await;
+    let all = harness.buildable();
+    assert!(
+        all.len() >= 2,
+        "{case}: the harness needs two buildable nodes"
+    );
+    let one = vec![all[0].clone()];
+    let report = executor
+        .execute(&ExecutionRequest::new(one.clone(), ExecutionMode::Run))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(
+        report
+            .nodes
+            .iter()
+            .map(|n| n.node.clone())
+            .collect::<Vec<_>>(),
+        ids(&one),
+        "{case}: reported nodes"
+    );
+    assert_eq!(
+        report.nodes[0].status,
+        ExecutionStatus::Success,
+        "{case}: status"
+    );
+    assert!(report.succeeded, "{case}: succeeded");
+    assert!(report.unrequested.is_empty(), "{case}: {report:?}");
+    assert_built(harness, case, &ids(&one)).await;
+}
+
+async fn reports_every_node_once_in_request_order(harness: &dyn ExecutorHarness) {
+    let case = "reports_every_node_once_in_request_order";
+    let executor = harness.executor().await;
+    let mut nodes = harness.buildable();
+    nodes.reverse();
+    let report = executor
+        .execute(&ExecutionRequest::new(nodes.clone(), ExecutionMode::Build))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(
+        report
+            .nodes
+            .iter()
+            .map(|n| n.node.clone())
+            .collect::<Vec<_>>(),
+        ids(&nodes),
+        "{case}: reported nodes"
+    );
+    assert!(
+        report
+            .nodes
+            .iter()
+            .all(|n| n.status == ExecutionStatus::Success),
+        "{case}: {report:?}"
+    );
+    assert_built(harness, case, &ids(&nodes)).await;
+}
+
+async fn refuses_an_empty_request(harness: &dyn ExecutorHarness) {
+    let case = "refuses_an_empty_request";
+    let executor = harness.executor().await;
+    let result = executor
+        .execute(&ExecutionRequest::new(Vec::new(), ExecutionMode::Build))
+        .await;
+    assert!(result.is_err(), "{case}: {result:?}");
+    assert_built(harness, case, &[]).await;
+}
+
+async fn failures_are_reported_not_errors(harness: &dyn ExecutorHarness, failing: RequestedNode) {
+    let case = "failures_are_reported_not_errors";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(&ExecutionRequest::new(
+            vec![failing.clone()],
+            ExecutionMode::Run,
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(report.nodes.len(), 1, "{case}: {report:?}");
+    assert_eq!(report.nodes[0].node, failing.id, "{case}: node");
+    assert_eq!(
+        report.nodes[0].status,
+        ExecutionStatus::Failed,
+        "{case}: status"
+    );
+    assert!(!report.succeeded, "{case}: succeeded");
+}
+
+async fn unknown_nodes_never_succeed(harness: &dyn ExecutorHarness) {
+    let case = "unknown_nodes_never_succeed";
+    let executor = harness.executor().await;
+    let unknown = RequestedNode::new("model.suite.no_such_node", "no_such_node");
+    match executor
+        .execute(&ExecutionRequest::new(vec![unknown], ExecutionMode::Run))
+        .await
+    {
+        Err(_) => {}
+        Ok(report) => {
+            assert!(!report.succeeded, "{case}: {report:?}");
+            assert!(
+                report
+                    .nodes
+                    .iter()
+                    .all(|n| n.status != ExecutionStatus::Success),
+                "{case}: {report:?}"
+            );
+        }
+    }
+    assert_built(harness, case, &[]).await;
+}
+
+async fn run_ids_are_unique(harness: &dyn ExecutorHarness) {
+    let case = "run_ids_are_unique";
+    let executor = harness.executor().await;
+    let request = ExecutionRequest::new(vec![harness.buildable()[0].clone()], ExecutionMode::Run);
+    let first = executor
+        .execute(&request)
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let second = executor
+        .execute(&request)
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_ne!(first.run_id, second.run_id, "{case}");
+}
+
+async fn prepare_builds_nothing(harness: &dyn ExecutorHarness) {
+    let case = "prepare_builds_nothing";
+    let executor = harness.executor().await;
+    executor
+        .prepare(&PrepareRequest::new())
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_built(harness, case, &[]).await;
+}
+
+async fn a_test_run_builds_nothing(harness: &dyn ExecutorHarness) {
+    let case = "a_test_run_builds_nothing";
+    let executor = harness.executor().await;
+    let nodes = harness.buildable();
+    let report = executor
+        .execute(&ExecutionRequest::new(nodes.clone(), ExecutionMode::Test))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let reported: Vec<String> = report.nodes.iter().map(|n| n.node.clone()).collect();
+    assert_eq!(
+        reported,
+        ids(&nodes),
+        "{case}: every node reported once, in order"
+    );
+    assert_built(harness, case, &[]).await;
+}
+
+/// Only checks that ran and passed vouch for a node: a test run of a node without
+/// checks doesn't fully check it (#220).
+async fn only_checks_that_ran_vouch_for_a_node(
+    harness: &dyn ExecutorHarness,
+    checked: RequestedNode,
+    unchecked: RequestedNode,
+) {
+    let case = "only_checks_that_ran_vouch_for_a_node";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(&ExecutionRequest::new(
+            vec![checked.clone(), unchecked.clone()],
+            ExecutionMode::Test,
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let of = |id: &str| {
+        report
+            .nodes
+            .iter()
+            .find(|n| n.node == id)
+            .unwrap_or_else(|| panic!("{case}: {id} not reported"))
+    };
+    let checked = of(&checked.id);
+    assert!(
+        checked.fully_checked() && !checked.checks_passed.is_empty(),
+        "{case}: a node whose checks passed is fully checked and lists them: {checked:?}"
+    );
+    let unchecked = of(&unchecked.id);
+    assert!(
+        !unchecked.fully_checked() && unchecked.status != ExecutionStatus::Success,
+        "{case}: a node without checks isn't tested: {unchecked:?}"
+    );
+    assert_built(harness, case, &[]).await;
+}
+
+/// A source's checks run when asked, and it is reported once, apart from the nodes
+/// (#232). Run mode runs no checks, so sources alone are nothing to run.
+async fn source_checks_are_reported_per_source(
+    harness: &dyn ExecutorHarness,
+    source: RequestedNode,
+) {
+    let case = "source_checks_are_reported_per_source";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(
+            &ExecutionRequest::new(Vec::new(), ExecutionMode::Test)
+                .with_sources(vec![source.clone()]),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert!(report.nodes.is_empty(), "{case}: {report:?}");
+    assert_eq!(report.sources.len(), 1, "{case}: {report:?}");
+    let checked = &report.sources[0];
+    assert_eq!(checked.node, source.id, "{case}: source");
+    assert!(
+        checked.fully_checked(),
+        "{case}: a source whose checks passed is fully checked: {checked:?}"
+    );
+    assert!(report.succeeded, "{case}: {report:?}");
+    let run_only = executor
+        .execute(&ExecutionRequest::new(Vec::new(), ExecutionMode::Run).with_sources(vec![source]))
+        .await;
+    assert!(run_only.is_err(), "{case}: {run_only:?}");
+    assert_built(harness, case, &[]).await;
+}
+
+/// A failing source check fails the execution, and in a build the requested nodes that
+/// read the source aren't built, as when a parent fails (#232).
+async fn a_failing_source_check_skips_its_readers(
+    harness: &dyn ExecutorHarness,
+    source: RequestedNode,
+    reader: RequestedNode,
+) {
+    let case = "a_failing_source_check_skips_its_readers";
+    let executor = harness.executor().await;
+    let report = executor
+        .execute(
+            &ExecutionRequest::new(vec![reader.clone()], ExecutionMode::Build)
+                .with_sources(vec![source.clone()]),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    assert_eq!(report.sources.len(), 1, "{case}: {report:?}");
+    assert_eq!(report.sources[0].node, source.id, "{case}: source");
+    assert_eq!(
+        report.sources[0].status,
+        ExecutionStatus::Failed,
+        "{case}: {report:?}"
+    );
+    assert!(!report.checks_failed.is_empty(), "{case}: {report:?}");
+    assert_eq!(report.nodes.len(), 1, "{case}: {report:?}");
+    assert_eq!(
+        report.nodes[0].status,
+        ExecutionStatus::Skipped,
+        "{case}: the reader isn't built: {report:?}"
+    );
+    assert!(!report.succeeded, "{case}: {report:?}");
+    assert_built(harness, case, &[]).await;
+}
+
+/// Runs every case. Panics with the case name on the first failure.
+pub async fn run(harness: &dyn ExecutorHarness) -> Report {
+    let mut report = Report::default();
+    builds_exactly_the_requested_nodes(harness).await;
+    report.passed.push("builds_exactly_the_requested_nodes");
+    reports_every_node_once_in_request_order(harness).await;
+    report
+        .passed
+        .push("reports_every_node_once_in_request_order");
+    refuses_an_empty_request(harness).await;
+    report.passed.push("refuses_an_empty_request");
+    match harness.failing() {
+        Some(failing) => {
+            failures_are_reported_not_errors(harness, failing).await;
+            report.passed.push("failures_are_reported_not_errors");
+        }
+        None => report.skipped.push((
+            "failures_are_reported_not_errors",
+            "the harness can't arrange a failing node".to_owned(),
+        )),
+    }
+    unknown_nodes_never_succeed(harness).await;
+    report.passed.push("unknown_nodes_never_succeed");
+    run_ids_are_unique(harness).await;
+    report.passed.push("run_ids_are_unique");
+    prepare_builds_nothing(harness).await;
+    report.passed.push("prepare_builds_nothing");
+    a_test_run_builds_nothing(harness).await;
+    report.passed.push("a_test_run_builds_nothing");
+    match harness.checked_and_unchecked() {
+        Some((checked, unchecked)) => {
+            only_checks_that_ran_vouch_for_a_node(harness, checked, unchecked).await;
+            report.passed.push("only_checks_that_ran_vouch_for_a_node");
+        }
+        None => report.skipped.push((
+            "only_checks_that_ran_vouch_for_a_node",
+            "the harness can't arrange a node with checks and one without".to_owned(),
+        )),
+    }
+    match harness.checked_source() {
+        Some(source) => {
+            source_checks_are_reported_per_source(harness, source).await;
+            report.passed.push("source_checks_are_reported_per_source");
+        }
+        None => report.skipped.push((
+            "source_checks_are_reported_per_source",
+            "the harness can't arrange a source with checks".to_owned(),
+        )),
+    }
+    match harness.failing_source() {
+        Some((source, reader)) => {
+            a_failing_source_check_skips_its_readers(harness, source, reader).await;
+            report
+                .passed
+                .push("a_failing_source_check_skips_its_readers");
+        }
+        None => report.skipped.push((
+            "a_failing_source_check_skips_its_readers",
+            "the harness can't arrange a source whose check fails".to_owned(),
+        )),
+    }
+    report
+}

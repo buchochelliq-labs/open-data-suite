@@ -2,34 +2,27 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ods_config::{ConfigError, FileKind, FlagValue, Inputs, OutputFormat, SecretRef, Source, load};
 
-/// A fresh directory per test (no extra dev-dependency needed).
-struct Dir(PathBuf);
+/// A scratch directory, removed when dropped.
+struct Dir(tempfile::TempDir);
 
 impl Dir {
     fn new() -> Self {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("ods-config-test-{}-{n}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
+        let dir = tempfile::tempdir().unwrap();
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 
     fn write(&self, rel: &str, text: &str) -> PathBuf {
-        let path = self.0.join(rel);
+        let path = self.path().join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, text).unwrap();
         path
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -297,9 +290,9 @@ fn effective_config_never_contains_secret_values() {
 fn missing_files_are_reported_but_not_errors() {
     let dir = Dir::new();
     let loaded = load(&inputs(
-        Some(dir.0.join("nope.toml")),
+        Some(dir.path().join("nope.toml")),
         None,
-        Some(dir.0.join("x.toml")),
+        Some(dir.path().join("x.toml")),
     ))
     .unwrap();
     assert!(loaded.files.iter().all(|f| !f.loaded));
@@ -321,18 +314,21 @@ fn malformed_toml_names_the_file() {
 fn discovery_finds_the_nearest_project_file_and_user_dir() {
     let dir = Dir::new();
     let project = dir.write("repo/ods.toml", "");
-    let nested = dir.0.join("repo/models/staging");
+    let nested = dir.path().join("repo/models/staging");
     fs::create_dir_all(&nested).unwrap();
     // Built from the temp dir so they are absolute on every OS (`/cfg` is not
     // absolute on Windows, and relative XDG paths are ignored).
-    let (cfg, home) = (dir.0.join("cfg"), dir.0.join("home"));
+    let (cfg, home) = (dir.path().join("cfg"), dir.path().join("home"));
     let (cfg_str, home_str) = (cfg.display().to_string(), home.display().to_string());
     let found = Inputs::discover(
         &nested,
         &env(&[("XDG_CONFIG_HOME", &cfg_str), ("HOME", &home_str)]),
     );
     assert_eq!(found.project_file.as_deref(), Some(project.as_path()));
-    assert_eq!(found.local_file, Some(dir.0.join("repo/.ods/local.toml")));
+    assert_eq!(
+        found.local_file,
+        Some(dir.path().join("repo/.ods/local.toml"))
+    );
     assert_eq!(found.user_file, Some(cfg.join("ods/config.toml")));
 
     let home_only = Inputs::discover(&nested, &env(&[("HOME", &home_str)]));
@@ -502,7 +498,7 @@ fn env_segments_match_existing_keys_case_insensitively() {
 fn explain_inputs_report_a_missing_project_file_and_ignore_relative_xdg() {
     let dir = Dir::new();
     let found = Inputs::discover(
-        &dir.0,
+        dir.path(),
         &env(&[("XDG_CONFIG_HOME", "relative/cfg"), ("HOME", "/home/u")]),
     );
     assert_eq!(
@@ -516,7 +512,7 @@ fn explain_inputs_report_a_missing_project_file_and_ignore_relative_xdg() {
         .find(|f| f.kind == FileKind::Project)
         .expect("listed");
     assert!(!project.loaded);
-    assert_eq!(project.path, dir.0.join("ods.toml"));
+    assert_eq!(project.path, dir.path().join("ods.toml"));
 }
 
 #[test]
@@ -525,4 +521,32 @@ fn keys_containing_dots_are_quoted_in_errors() {
     let project = dir.write("ods.toml", "[providers.\"a.b\"]\nkind = 1\n");
     let err = load(&inputs(None, Some(project), None)).unwrap_err();
     assert!(err.to_string().contains("providers.\"a.b\".kind"), "{err}");
+}
+
+#[test]
+fn state_settings_are_validated_and_layered() {
+    let dir = Dir::new();
+    let project = dir.write(
+        "ods.toml",
+        "[state]\ndb = \"state/ods.db\"\nenvironment = \"dev\"\n",
+    );
+    let mut i = inputs(None, Some(project.clone()), None);
+    let loaded = load(&i).unwrap();
+    assert_eq!(loaded.config.state.db.as_deref(), Some("state/ods.db"));
+    assert_eq!(loaded.config.state.environment.as_deref(), Some("dev"));
+
+    i.env = env(&[("ODS__STATE__ENVIRONMENT", "ci")]);
+    let loaded = load(&i).unwrap();
+    assert_eq!(loaded.config.state.environment.as_deref(), Some("ci"));
+    assert_eq!(
+        loaded.effective(&key("state.environment")).unwrap().source,
+        Source::Env {
+            var: "ODS__STATE__ENVIRONMENT".to_owned()
+        }
+    );
+
+    let typo = dir.write("typo/ods.toml", "[state]\nmode = \"auto\"\n");
+    let err = load(&inputs(None, Some(typo), None)).unwrap_err();
+    assert_eq!(err.code(), "ODS-E0102");
+    assert!(err.to_string().contains("unknown field `mode`"), "{err}");
 }

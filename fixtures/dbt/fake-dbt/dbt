@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""A stand-in for the dbt CLI in ODS's tests: no warehouse, no network.
+
+It answers `compile`, `build` and `source freshness` by writing artifacts derived from
+the committed jaffle-ods `dbt build` artifacts, with a fresh invocation id each time,
+the way dbt would, and ODS's relation check (`show --inline`). Environment:
+
+  FAKE_DBT_BASE  directory with the base manifest.json [default: ../jaffle-ods/artifacts/dbt-1.10-build]
+  FAKE_DBT_FAIL  comma-separated node names that fail to build
+  FAKE_DBT_FAIL_TEST  comma-separated test names that fail
+  FAKE_DBT_SKIP_TEST  comma-separated test names reported as skipped (as after --fail-fast)
+  FAKE_DBT_LOG   file to append the ids of built nodes to, one per line
+  FAKE_DBT_EXIT  exit with this status after writing nothing (e.g. a connection failure)
+  FAKE_DBT_KEEP_MANIFEST  `build` leaves manifest.json alone (as if another command wrote it)
+  FAKE_DBT_NO_TESTS  `test` runs no tests and succeeds (as with `--indirect-selection empty`)
+  FAKE_DBT_DROPPED  file of node ids whose relations are gone, one per line; building a
+                    node brings it back [default: every relation exists]
+  FAKE_DBT_SHOW_FAIL  the relation check fails, as when the warehouse can't be reached
+  FAKE_DBT_SHOW_MOVED  comma-separated node ids the relation check finds in schema `moved`,
+                    as when the profile changed since manifest.json was written
+  FAKE_DBT_CALLS  file to append each command to, one per line
+  FAKE_DBT_TARGET_HOST  where the target is, for ODS's target check [default: fake-host]
+  FAKE_DBT_TARGET_FAIL  the target check fails, as when the profile can't be rendered
+  FAKE_DBT_SEEN  file to append, per call, its arguments and the names of the DBT_*
+                 variables it was given, as one JSON line
+  FAKE_DBT_SOURCES  add two sources, `raw.orders` (read by stg_orders) and
+                    `raw.payments` (read by stg_payments), each with a not_null source
+                    test (`source_not_null_raw_<table>_id`), to the manifest (#232); `3`
+                    also adds `raw.customers` (read by stg_customers)
+  FAKE_DBT_ADAPTER  the manifest's `metadata.adapter_type` [default: the base manifest's];
+                    also the plugin `--version` lists [default: duckdb]
+  FAKE_DBT_VERSION  the version `--version` reports [default: 1.10.23]
+  FAKE_DBT_PROBE  JSON file standing in for the warehouse, for ODS's relation probe
+                  (`show --inline` of an `ods_relation_probe` query): source name (e.g.
+                  `raw.orders`) -> {"type": "table", "formats": ["delta"], "rows":
+                  {"<statement template>": {"<column>": "<value>"}}}. A source not in it
+                  has no relation; a statement with no row returns none. Read on each call,
+                  so a test can change it between runs.
+  FAKE_DBT_PROBE_FAIL  the relation probe fails, as when a statement is refused
+  FAKE_DBT_LOADED_AT  `source freshness` results: comma-separated
+                      `raw.orders=2026-01-01T00:00:00Z`; a source not listed isn't
+                      measured. When the project has sources, `source freshness` takes
+                      its measurement in a second of its own, after earlier commands'
+                      and before later ones', as time passes between real commands.
+"""
+
+import datetime
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+import urllib.parse
+import uuid
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.environ.get("FAKE_DBT_BASE") or os.path.join(
+    HERE, "..", "jaffle-ods", "artifacts", "dbt-1.10-build"
+)
+STATE = ("model", "seed", "snapshot")
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def names(env):
+    return {n for n in os.environ.get(env, "").split(",") if n}
+
+
+def parse(argv):
+    words, options, key = [], {}, None
+    for arg in argv:
+        if arg.startswith("--"):
+            key = arg[2:]
+            options.setdefault(key, [])
+        elif key is not None:
+            options[key].append(arg)
+        else:
+            words.append(arg)
+    return words, options
+
+
+def write(path, doc):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=1)
+
+
+def metadata(kind, version, invocation, started):
+    return {
+        "dbt_schema_version": f"https://schemas.getdbt.com/dbt/{kind}/v{version}.json",
+        "dbt_version": "1.10.23",
+        "generated_at": now(),
+        "invocation_id": invocation,
+        "invocation_started_at": started,
+        "env": {},
+    }
+
+
+def result(unique_id, status, at):
+    timing = [{"name": "execute", "started_at": at, "completed_at": now()}]
+    return {"unique_id": unique_id, "status": status, "timing": timing, "message": status}
+
+
+def fqn_selects(node, selector):
+    """dbt's QualifiedNameSelectorMethod: the fqn, or the fqn without its package."""
+    fqn = node["fqn"]
+    return is_selected_node(fqn, node, selector) or is_selected_node(fqn[1:], node, selector)
+
+
+def is_selected_node(fqn, node, selector):
+    """dbt's is_selected_node, without wildcards."""
+    if not fqn:
+        return False
+    parts = selector.split(".")
+    if node.get("version") is not None:
+        if fqn[-2] == selector or "_".join(fqn[-2:]) == "_".join(parts[-2:]):
+            return True
+    elif fqn[-1] == selector:
+        return True
+    flat = [p for seg in fqn for p in seg.split(".")]
+    return len(flat) >= len(parts) and flat[: len(parts)] == parts
+
+
+def path_selects(node, path):
+    ofp = node.get("original_file_path", "")
+    return ofp == path or ofp.startswith(path.rstrip("/") + "/")
+
+
+def selects(token, node):
+    """One `--select` token: comma-separated criteria, all of which must match."""
+    for criterion in token.split(","):
+        method, _, value = criterion.rpartition(":")
+        if method in ("", "fqn"):
+            ok = fqn_selects(node, value)
+        elif method == "path":
+            ok = path_selects(node, value)
+        elif method == "resource_type":
+            ok = node["resource_type"] == value
+        else:
+            raise SystemExit(f"fake dbt: unsupported selector {criterion}")
+        if not ok:
+            return False
+    return True
+
+
+def add_sources(manifest):
+    """FAKE_DBT_SOURCES: two sources with a test each, read by the staging models."""
+    nodes = manifest["nodes"]
+    template = nodes["test.jaffle_ods.not_null_stg_orders_order_id.81cfe2fe64"]
+    tables = [("orders", "stg_orders"), ("payments", "stg_payments")]
+    if os.environ.get("FAKE_DBT_SOURCES") == "3":
+        tables.append(("customers", "stg_customers"))
+    for table, reader in tables:
+        source_id = f"source.jaffle_ods.raw.{table}"
+        manifest["sources"][source_id] = {
+            "unique_id": source_id, "resource_type": "source", "package_name": "jaffle_ods",
+            "name": table, "source_name": "raw", "fqn": ["jaffle_ods", "raw", table],
+            "original_file_path": "models/sources.yml", "config": {"enabled": True},
+            "relation_name": f'"jaffle_ods"."main"."raw_{table}"',
+            "loaded_at_field": "loaded_at",
+        }
+        name = f"source_not_null_raw_{table}_id"
+        test = json.loads(json.dumps(template))
+        test.update({
+            "name": name, "unique_id": f"test.jaffle_ods.{name}.0000000000",
+            "fqn": ["jaffle_ods", name], "alias": name, "column_name": "id",
+            "original_file_path": "models/sources.yml", "attached_node": None,
+            "refs": [], "sources": [["raw", table]],
+            "compiled_code": f'select id from "jaffle_ods"."main"."raw_{table}" where id is null',
+        })
+        test["depends_on"]["nodes"] = [source_id]
+        test["test_metadata"]["kwargs"] = {
+            "column_name": "id", "model": f"{{{{ get_where_subquery(source('raw', '{table}')) }}}}",
+        }
+        nodes[test["unique_id"]] = test
+        nodes[f"model.jaffle_ods.{reader}"]["depends_on"]["nodes"].append(source_id)
+
+
+def loaded_at():
+    """FAKE_DBT_LOADED_AT, by source name."""
+    pairs = (p.split("=", 1) for p in os.environ.get("FAKE_DBT_LOADED_AT", "").split(",") if "=" in p)
+    return {name: at for name, at in pairs}
+
+
+def next_second():
+    """Waits for the next whole second: ODS compares times to the second."""
+    t = time.time()
+    time.sleep(int(t) + 1 - t + 0.01)
+
+
+def dropped():
+    path = os.environ.get("FAKE_DBT_DROPPED")
+    if not path or not os.path.exists(path):
+        return set()
+    with open(path) as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def rebuilt(ids):
+    """Built relations exist again."""
+    path = os.environ.get("FAKE_DBT_DROPPED")
+    if path and os.path.exists(path):
+        gone = dropped() - set(ids)
+        with open(path, "w") as f:
+            f.writelines(i + "\n" for i in sorted(gone))
+
+
+def shown(column, answer):
+    """One ShowNode event with a one-row, one-column result, as `--log-format json` prints it."""
+    preview = json.dumps([{column: json.dumps(answer)}])
+    print(json.dumps({"data": {"preview": preview}, "info": {"name": "ShowNode", "code": "Q041"}}))
+
+
+def probe(query, manifest, target):
+    """ODS's relation probe, answered from FAKE_DBT_PROBE as the query's Jinja would."""
+    if os.environ.get("FAKE_DBT_PROBE_FAIL"):
+        print(json.dumps({"data": {"exc": "DESCRIBE HISTORY refused"}, "info": {"name": "MainEncounteredError"}}))
+        return 2
+    kinds = json.loads(re.search(r"rel\.type not in (\[[^\]]*\])", query).group(1))
+    fmt = re.search(r"rel\.is_(\w+) is sameas true", query)
+    statements = json.loads(re.search(r"set qs = (.*?) -%}", query).group(1))
+    warehouse = {}
+    if os.environ.get("FAKE_DBT_PROBE"):
+        with open(os.environ["FAKE_DBT_PROBE"]) as f:
+            warehouse = json.load(f)
+    write(os.path.join(target, "manifest.json"), manifest)
+    quote = lambda v: urllib.parse.quote(str(v), safe="/")
+    out = {}
+    for source_id, s in manifest["sources"].items():
+        rel = warehouse.get(f"{s['source_name']}.{s['name']}")
+        if rel is None:
+            out[quote(source_id)] = {"missing": 1}
+        elif rel.get("type") not in kinds:
+            out[quote(source_id)] = {"kind": quote(rel.get("type") or "")}
+        elif fmt and fmt.group(1) not in rel.get("formats", []):
+            out[quote(source_id)] = {"format": 0}
+        else:
+            rows = []
+            for template, columns in statements:
+                row = rel.get("rows", {}).get(template, {})
+                rows.append({c: quote(row[c]) for c in columns if row.get(c) is not None})
+            out[quote(source_id)] = {"rows": rows}
+    shown("ods_probe", {"ods_relation_probe": 1, "probed": len(manifest["sources"]), "sources": out})
+    # A real probe takes seconds: what runs next starts in a later second than ODS's
+    # reading, which it compares to the second.
+    if manifest["sources"]:
+        next_second()
+    return 0
+
+
+def show(options, manifest, target):
+    """ODS's relation check and relation probe: one ShowNode event each."""
+    query = (options.get("inline") or [""])[0]
+    if "ods_relation_probe" in query:
+        return probe(query, manifest, target)
+    if "ods_relation_check" not in query:
+        print(f"fake dbt: unsupported show {query!r}", file=sys.stderr)
+        return 2
+    if os.environ.get("FAKE_DBT_SHOW_FAIL"):
+        print(json.dumps({"data": {"exc": "can't connect"}, "info": {"name": "MainEncounteredError"}}))
+        return 2
+    for node_id in filter(None, os.environ.get("FAKE_DBT_SHOW_MOVED", "").split(",")):
+        node = manifest["nodes"][node_id]
+        node["schema"] = "moved"
+        node["relation_name"] = f'"{node["database"]}"."moved"."{node["alias"]}"'
+    # Like dbt, it writes the manifest of the project it parsed.
+    write(os.path.join(target, "manifest.json"), manifest)
+    checked = [i for i, n in manifest["nodes"].items()
+               if n["resource_type"] in STATE and n["config"].get("materialized") != "ephemeral"]
+    gone = sorted(set(checked) & dropped())
+    shown("ods_relations", {"ods_relation_check": 1, "checked": len(checked), "missing": gone})
+    return 0
+
+
+def main():
+    words, options = parse(sys.argv[1:])
+    if os.environ.get("FAKE_DBT_SEEN"):
+        with open(os.environ["FAKE_DBT_SEEN"], "a") as f:
+            seen = {"argv": sys.argv[1:], "env": sorted(k for k in os.environ if k.startswith("DBT_"))}
+            f.write(json.dumps(seen) + "\n")
+    if os.environ.get("FAKE_DBT_CALLS") and words:
+        with open(os.environ["FAKE_DBT_CALLS"], "a") as f:
+            f.write(" ".join(words) + "\n")
+    if "version" in options:
+        adapter = os.environ.get("FAKE_DBT_ADAPTER", "duckdb")
+        print(f"Core:\n  - installed: {os.environ.get('FAKE_DBT_VERSION', '1.10.23')} (fake)\n\n"
+              f"Plugins:\n  - {adapter}: 1.10.0 (fake)")
+        return 0
+    if os.environ.get("FAKE_DBT_EXIT"):
+        print("fake dbt: failing before writing anything", file=sys.stderr)
+        return int(os.environ["FAKE_DBT_EXIT"])
+    target = (options.get("target-path") or ["target"])[0]
+    invocation, started = str(uuid.uuid4()), now()
+    # Like dbt, it logs to stdout as it runs.
+    print(f"fake dbt: {' '.join(words)}", flush=True)
+    with open(os.path.join(BASE, "manifest.json")) as f:
+        manifest = json.load(f)
+    manifest["metadata"]["invocation_id"] = invocation
+    manifest["metadata"]["generated_at"] = now()
+    manifest.setdefault("sources", {})
+    if os.environ.get("FAKE_DBT_ADAPTER"):
+        manifest["metadata"]["adapter_type"] = os.environ["FAKE_DBT_ADAPTER"]
+    if os.environ.get("FAKE_DBT_SOURCES"):
+        add_sources(manifest)
+
+    if words[:1] == ["show"]:
+        return show(options, manifest, target)
+
+    if words[:1] == ["compile"] and "ods_target" in (options.get("inline") or [""])[0]:
+        # ODS's target check: the target as dbt would render it.
+        if os.environ.get("FAKE_DBT_TARGET_FAIL"):
+            print("fake dbt: can't render the profile", file=sys.stderr)
+            return 2
+        answer = {
+            "ods_target": 1,
+            "name": (options.get("target") or ["dev"])[0],
+            "profile": (options.get("profile") or ["jaffle_ods"])[0],
+            "type": "fake",
+            "location": os.environ.get("FAKE_DBT_TARGET_HOST", "fake-host"),
+            "location_digest": hashlib.md5(os.environ.get("FAKE_DBT_TARGET_HOST", "fake-host").encode()).hexdigest(),
+            "database": "jaffle_ods",
+        }
+        print(json.dumps({"data": {"compiled": json.dumps(answer)}, "info": {"name": "CompiledNode"}}))
+        return 0
+
+    if words[:2] == ["source", "freshness"]:
+        # Like dbt, it rewrites the manifest, and without compiled SQL.
+        for node in manifest["nodes"].values():
+            node.pop("compiled_code", None)
+            node["compiled"] = False
+        write(os.path.join(target, "manifest.json"), manifest)
+        if manifest["sources"]:
+            next_second()
+        measured = loaded_at()
+        results = [{"unique_id": source_id, "status": "pass", "max_loaded_at": measured[f"raw.{s['name']}"],
+                    "snapshotted_at": now()}
+                   for source_id, s in manifest["sources"].items() if f"raw.{s['name']}" in measured]
+        doc = {"metadata": metadata("sources", 3, invocation, started), "results": results, "elapsed_time": 0}
+        write(os.path.join(target, "sources.json"), doc)
+        if manifest["sources"]:
+            next_second()
+        return 0
+
+    if not (words[:1] == ["build"] and os.environ.get("FAKE_DBT_KEEP_MANIFEST")):
+        write(os.path.join(target, "manifest.json"), manifest)
+    # Like dbt, it records the vars it ran with (parsed; JSON stands in for YAML here).
+    raw_vars = (options.get("vars") or ["{}"])[0]
+    try:
+        run_vars = json.loads(raw_vars)
+    except ValueError:
+        run_vars = raw_vars
+    if words[:1] == ["compile"]:
+        doc = {"metadata": metadata("run-results", 6, invocation, started),
+               "results": [], "elapsed_time": 0, "args": {"which": "compile", "vars": run_vars}}
+        write(os.path.join(target, "run_results.json"), doc)
+        return 0
+    # `run`, `seed` and `snapshot` build only their own resource type, and never tests.
+    only = {"run": "model", "seed": "seed", "snapshot": "snapshot"}
+    if words[:1] not in (["build"], ["test"]) and words[0] not in only:
+        print(f"fake dbt: unsupported command {words}", file=sys.stderr)
+        return 2
+
+    excluded = set(options.get("exclude-resource-type", []))
+    if words[0] in only:
+        excluded.add("test")
+    nodes = manifest["nodes"]
+    chosen = [i for i, n in nodes.items()
+              if n["resource_type"] in STATE
+              and n["resource_type"] == only.get(words[0], n["resource_type"])
+              and any(selects(t, n) for t in options.get("select", []))]
+    fail, fail_tests = names("FAKE_DBT_FAIL"), names("FAKE_DBT_FAIL_TEST")
+    skip_tests = names("FAKE_DBT_SKIP_TEST")
+
+    def test_status(test):
+        if test["name"] in skip_tests:
+            return "skipped"
+        return "fail" if test["name"] in fail_tests else "pass"
+
+    # Tests selected themselves, e.g. a source's (#232).
+    direct = [i for i, n in nodes.items()
+              if n["resource_type"] == "test" and "test" not in excluded
+              and any(selects(t, n) for t in options.get("select", []))]
+    outcome, results = {}, []
+    if words[:1] == ["test"]:
+        # Tests of the selected nodes (eager indirect selection); nothing is built.
+        for test_id, test in nodes.items():
+            deps = test.get("depends_on", {}).get("nodes", [])
+            if os.environ.get("FAKE_DBT_NO_TESTS"):
+                break
+            if test["resource_type"] == "test" and (any(d in chosen for d in deps) or test_id in direct):
+                results.append(result(test_id, test_status(test), started))
+        doc = {"metadata": metadata("run-results", 6, invocation, started),
+               "results": results, "elapsed_time": 0, "args": {"which": "test", "vars": run_vars}}
+        write(os.path.join(target, "run_results.json"), doc)
+        return 1 if any(r["status"] == "fail" for r in results) else 0
+    # Source tests first: like `dbt build`, a failing one skips the selected nodes that
+    # read the source, and theirs.
+    failed_sources = set()
+    for test_id in direct:
+        deps = nodes[test_id].get("depends_on", {}).get("nodes", [])
+        if deps and all(d.startswith("source.") for d in deps):
+            status = test_status(nodes[test_id])
+            results.append(result(test_id, status, started))
+            if status == "fail":
+                failed_sources.update(deps)
+    # Parents first, as dbt runs them.
+    pending = list(chosen)
+    while pending:
+        progressed = False
+        for node_id in list(pending):
+            depends = nodes[node_id].get("depends_on", {}).get("nodes", [])
+            parents = [p for p in depends if p in chosen]
+            if any(p not in outcome for p in parents):
+                continue
+            pending.remove(node_id)
+            progressed = True
+            if any(outcome[p] != "success" for p in parents) or failed_sources & set(depends):
+                status = "skipped"
+            elif nodes[node_id]["name"] in fail:
+                status = "error"
+            else:
+                status = "success"
+            outcome[node_id] = status
+            results.append(result(node_id, status, started))
+        if not progressed:
+            break
+    built = [i for i, s in outcome.items() if s == "success"]
+    rebuilt(built)
+    if "test" not in excluded:
+        for test_id, test in nodes.items():
+            deps = test.get("depends_on", {}).get("nodes", [])
+            if test["resource_type"] == "test" and deps and all(d in outcome for d in deps):
+                ok = all(outcome[d] == "success" for d in deps)
+                status = test_status(test) if ok else "skipped"
+                results.append(result(test_id, status, started))
+    if os.environ.get("FAKE_DBT_LOG"):
+        with open(os.environ["FAKE_DBT_LOG"], "a") as f:
+            for node_id in built:
+                f.write(node_id + "\n")
+    doc = {"metadata": metadata("run-results", 6, invocation, started),
+           "results": results, "elapsed_time": 0, "args": {"which": words[0], "vars": run_vars}}
+    write(os.path.join(target, "run_results.json"), doc)
+    failed = any(r["status"] in ("error", "fail") for r in results)
+    return 1 if failed else 0
+
+
+sys.exit(main())

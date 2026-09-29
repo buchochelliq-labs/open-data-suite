@@ -1,0 +1,66 @@
+# dbt-core 1.12 with dbt-duckdb, for the real-dbt tests in CI (#233; `real-dbt` job in
+# .github/workflows/ci.yml). Every package is pinned, so a dbt or dependency release
+# changes nothing in CI until this file does. To bump: in a Python 3.11 venv,
+#   pip install dbt-core==1.12.<patch> dbt-duckdb==<version>
+#   pip freeze
+# then replace the pins below and run the job's tests locally with ODS_TEST_DBT set
+# to that venv's bin/dbt.
+agate==1.9.1
+annotated-types==0.8.0
+attrs==26.1.0
+babel==2.18.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.5.0
+colorama==0.4.6
+daff==1.4.2
+dbt-adapters==1.24.5
+dbt-common==1.39.0
+dbt-core==1.12.5
+dbt-core-experimental-parser==2.0.5
+dbt-duckdb==1.11.0
+dbt-extractor==0.6.0
+dbt-protos==1.0.565
+deepdiff==8.6.2
+duckdb==1.5.5
+idna==3.20
+importlib_metadata==9.0.1
+isodate==0.7.2
+Jinja2==3.1.6
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+leather==0.4.1
+MarkupSafe==3.0.3
+mashumaro==3.17
+metricflow==0.213.0
+more-itertools==10.8.0
+msgpack==1.2.2
+networkx==3.6.1
+opentelemetry-api==1.45.0
+orderly-set==5.5.0
+packaging==26.3
+parsedatetime==2.6
+pathspec==1.0.4
+protobuf==6.33.6
+pydantic==2.13.5
+pydantic_core==2.46.5
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+python-slugify==9.1.2
+pytimeparse==1.1.8
+pytz==2026.4
+PyYAML==6.0.3
+RapidFuzz==3.14.6
+referencing==0.37.0
+requests==2.34.2
+rpds-py==2026.6.3
+six==1.17.0
+snowplow-tracker==1.1.0
+sqlglot==30.20.0
+sqlparse==0.6.0
+tabulate==0.10.0
+text-unidecode==1.3
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.8.0
+zipp==4.1.0

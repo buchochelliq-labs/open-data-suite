@@ -1,0 +1,84 @@
+---
+source: crates/ods-web/tests/dashboard.rs
+expression: pretty(&body)
+---
+{
+  "mode": "local",
+  "project": "jaffle_ods",
+  "read_only": true,
+  "schema_version": 1,
+  "sections": [
+    {
+      "href": "./",
+      "key": "home",
+      "label": "Home",
+      "note": null,
+      "status": "current"
+    },
+    {
+      "href": null,
+      "key": "catalog",
+      "label": "Catalog",
+      "note": null,
+      "status": "planned"
+    },
+    {
+      "href": "lineage",
+      "key": "lineage",
+      "label": "Lineage",
+      "note": null,
+      "status": "available"
+    },
+    {
+      "href": null,
+      "key": "state",
+      "label": "State",
+      "note": "State pages are planned; the State module works from the CLI (ods state …)",
+      "status": "planned"
+    },
+    {
+      "href": null,
+      "key": "erd",
+      "label": "ERD",
+      "note": "ERD pages are planned; the ERD module works from the CLI (ods erd …)",
+      "status": "planned"
+    },
+    {
+      "href": null,
+      "key": "usage",
+      "label": "Usage",
+      "note": null,
+      "status": "planned"
+    },
+    {
+      "href": null,
+      "key": "ci",
+      "label": "CI · Impact",
+      "note": null,
+      "status": "planned"
+    },
+    {
+      "href": null,
+      "key": "agent",
+      "label": "Agent",
+      "note": null,
+      "status": "planned"
+    },
+    {
+      "href": null,
+      "key": "settings",
+      "label": "Settings",
+      "note": null,
+      "status": "planned"
+    }
+  ],
+  "snapshot": {
+    "id": 3,
+    "recorded_at": "2026-09-29T11:56:00Z"
+  },
+  "target": {
+    "kind": "warehouse",
+    "name": "dev",
+    "recorded": true
+  }
+}

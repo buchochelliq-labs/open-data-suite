@@ -21,6 +21,12 @@ use serde::{Deserialize, Serialize};
 pub enum Capability {
     /// Relations carry a monotonic content version (e.g. a table version number).
     RelationVersions,
+    /// A few read-only statements can be run against each of a set of relations, in
+    /// one batch, and their first rows read back (ADR-0022).
+    RelationProbe,
+    /// Whether a node's relation (table or view) exists in the warehouse can be checked,
+    /// in one batch, before the node is reused (#230).
+    RelationExistence,
     /// A relation can be copied without copying its data (zero-copy or shallow clone).
     ZeroCopyClone,
     /// A relation can be replaced atomically, with no window where it is missing.
@@ -83,8 +89,10 @@ impl FromStr for CustomCapability {
 
 impl Capability {
     /// Every well-known capability, for documentation and tests.
-    pub const WELL_KNOWN: [Capability; 11] = [
+    pub const WELL_KNOWN: [Capability; 13] = [
         Capability::RelationVersions,
+        Capability::RelationProbe,
+        Capability::RelationExistence,
         Capability::ZeroCopyClone,
         Capability::AtomicReplace,
         Capability::ChangeTracking,
@@ -101,6 +109,8 @@ impl Capability {
     pub fn name(&self) -> &str {
         match self {
             Capability::RelationVersions => "relation_versions",
+            Capability::RelationProbe => "relation_probe",
+            Capability::RelationExistence => "relation_existence",
             Capability::ZeroCopyClone => "zero_copy_clone",
             Capability::AtomicReplace => "atomic_replace",
             Capability::ChangeTracking => "change_tracking",
@@ -243,6 +253,16 @@ mod tests {
             "x-acme.bulk_load".parse::<Capability>(),
             Ok(Capability::Custom("x-acme.bulk_load".parse().unwrap()))
         );
+    }
+
+    #[test]
+    fn well_known_names_are_unique() {
+        let names: BTreeSet<&str> = Capability::WELL_KNOWN
+            .iter()
+            .map(Capability::name)
+            .collect();
+        assert_eq!(names.len(), Capability::WELL_KNOWN.len());
+        assert!(names.contains("relation_probe"));
     }
 
     #[test]

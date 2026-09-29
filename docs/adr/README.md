@@ -16,5 +16,16 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0010](0010-mcp-server.md) | `ods mcp`, a read-only, local MCP server | Proposed | #169 |
 | [0011](0011-dbt-state-config-compatibility.md) | Read dbt State configuration as-is | Proposed | #168, #19 |
 | [0012](0012-erd-from-tests-and-constraints.md) | An ERD from tests and constraints, with evidence | Proposed | #60–#65, #169 |
+| [0013](0013-state-snapshots-fingerprints-and-store.md) | State snapshots, fingerprints and the state store | Proposed | #11, #13, #16, #18, #20, #22, #25 |
+| [0014](0014-executor-contract-and-state-run.md) | The Executor contract and `ods state run` | Proposed | #23, #24, #211 |
+| [0015](0015-cli-compatibility-front-ends.md) | A dbt-shaped CLI, and compatibility front-ends for other tools' CLIs | Proposed | #224, #225, #226 |
+| [0016](0016-relation-existence-before-reuse.md) | Check that a relation still exists before reusing it | Proposed | #230 |
+| [0017](0017-state-per-target.md) | State per dbt target, with a non-secret target identity | Proposed | #227 |
+| [0018](0018-state-store-migrations-and-recovery.md) | State store migrations, integrity and recovery | Proposed | #188 |
+| [0019](0019-release-and-versioning.md) | Release and versioning strategy | Proposed | #101, #212 |
+| [0020](0020-dbt-state-interop-and-favor-state.md) | dbt state interop: export a state that `--favor-state` can trust, and import dbt runs | Proposed | #296 |
+| [0021](0021-databricks-authentication.md) | Databricks authentication: U2M first, M2M for CI, tokens never persisted | Proposed | #297 |
+| [0022](0022-delta-table-versions-as-source-evidence.md) | Delta table versions as source change evidence, read through dbt | Proposed | #17, #16 |
+| [0023](0023-ods-doctor-diagnostics.md) | `ods doctor`: typed health checks, stable codes and exit semantics | Proposed | #181 |
 
 Planned for M0: ADR-0007 clean-room & licensing policy (#10).

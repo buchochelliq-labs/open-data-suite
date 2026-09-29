@@ -27,6 +27,14 @@ pub trait Module {
         None
     }
 
+    /// Whether the module reports invalid configuration itself, as a finding, instead of
+    /// the framework failing with exit status 4 before it runs (`ods doctor`). It then
+    /// runs on configuration from the flags alone, with the failure in
+    /// [`Context::config_failure`].
+    fn diagnoses_config(&self) -> bool {
+        false
+    }
+
     /// Runs the subcommand with its parsed arguments.
     ///
     /// # Errors
@@ -44,6 +52,41 @@ pub struct Context<'a> {
     pub config: &'a Loaded,
     out: &'a mut dyn Write,
     root: &'a Command,
+    /// Whether and how to print progress lines on stderr.
+    pub progress: ProgressSettings,
+    /// Why the configuration couldn't be loaded, for a module that
+    /// [diagnoses it](Module::diagnoses_config); `config` then holds the flags alone.
+    pub config_failure: Option<ConfigFailure>,
+}
+
+/// Why the configuration couldn't be loaded. The message never holds a configured value
+/// that could be a secret (ADR-0005).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigFailure {
+    /// The stable error code, e.g. `ODS-E0101`.
+    pub code: &'static str,
+    /// What is wrong, naming the file, variable or key.
+    pub message: String,
+}
+
+impl ConfigFailure {
+    /// A failure with its code.
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Progress lines on stderr: short notes between another tool's output saying which
+/// step runs and why. Off with `-q`; never on stdout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProgressSettings {
+    /// Print them.
+    pub enabled: bool,
+    /// Style them with ANSI escapes.
+    pub ansi: bool,
 }
 
 impl<'a> Context<'a> {
@@ -59,7 +102,23 @@ impl<'a> Context<'a> {
             config,
             out,
             root,
+            progress: ProgressSettings::default(),
+            config_failure: None,
         }
+    }
+
+    /// Records why the configuration couldn't be loaded (see [`Module::diagnoses_config`]).
+    #[must_use]
+    pub fn with_config_failure(mut self, failure: Option<ConfigFailure>) -> Self {
+        self.config_failure = failure;
+        self
+    }
+
+    /// Sets how progress lines are shown.
+    #[must_use]
+    pub fn with_progress(mut self, progress: ProgressSettings) -> Self {
+        self.progress = progress;
+        self
     }
 
     /// Writes a command result in the active output mode.
@@ -68,6 +127,18 @@ impl<'a> Context<'a> {
     /// Returns a [`CliError`] if writing fails.
     pub fn emit<T: Present>(&mut self, result: &T) -> Result<(), CliError> {
         present::emit(result, &self.output, self.out).map_err(CliError::from)
+    }
+
+    /// Renders the result of a command that failed anyway (e.g. a run whose successes
+    /// were recorded but some nodes failed) and returns the error to exit with. The
+    /// error is reported once: inside the JSON envelope, or on stderr otherwise.
+    ///
+    /// # Errors
+    /// Always: `error`, or the failure to write the output.
+    pub fn emit_failed<T: Present>(&mut self, result: &T, error: CliError) -> Result<(), CliError> {
+        present::emit_with_error(result, &error, &self.output, self.out)?;
+        self.out.flush()?;
+        Err(error.in_envelope())
     }
 
     /// Raw stdout, for output that is not a result model (e.g. completion scripts).

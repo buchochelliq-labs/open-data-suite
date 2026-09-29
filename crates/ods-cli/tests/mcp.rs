@@ -155,7 +155,10 @@ fn every_tool_answers_from_the_fixture() {
         gaps.iter()
             .all(|g| g["yaml"].as_str().unwrap().starts_with("- name: "))
     );
-    assert_eq!(structured(&r[10])["opaque"], json!([]));
+    let opaque = structured(&r[10])["opaque"].as_array().unwrap().clone();
+    assert_eq!(opaque.len(), 1, "{opaque:?}");
+    assert_eq!(opaque[0]["name"], "customer_segments", "the Python model");
+    assert_eq!(opaque[0]["reads"], json!(["jaffle_ods.main.customers"]));
     assert_eq!(structured(&r[11])["comparison"]["missing"], 1);
 }
 

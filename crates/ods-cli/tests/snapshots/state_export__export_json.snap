@@ -1,0 +1,263 @@
+---
+source: crates/ods-cli/tests/state_export.rs
+expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
+---
+{
+  "dbt_state": "export",
+  "upstream": "prod",
+  "scope": "jaffle_ods/default",
+  "based_on": 1,
+  "target": {
+    "name": "dev",
+    "profile": "jaffle_ods",
+    "kind": "fake",
+    "location": "fake-host",
+    "location_digest": "647923f19b3462a158d718187b8217d5",
+    "database": "jaffle_ods"
+  },
+  "relations_checked": true,
+  "manifest_sha256": "<sha256>",
+  "written": [
+    "ods-export.json",
+    "manifest.json"
+  ],
+  "counts": [
+    {
+      "reason": "not_deferrable",
+      "pointer": "unchanged",
+      "nodes": 12
+    },
+    {
+      "reason": "not_built_here",
+      "pointer": "upstream",
+      "nodes": 6
+    },
+    {
+      "reason": "built_here",
+      "pointer": "this_target",
+      "nodes": 7
+    }
+  ],
+  "nodes": [
+    {
+      "node": "model.jaffle_ods.customer_order_rank",
+      "pointer": "upstream",
+      "reason": "not_built_here",
+      "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.customer_segments",
+      "pointer": "upstream",
+      "reason": "not_built_here",
+      "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.customers",
+      "pointer": "upstream",
+      "reason": "not_built_here",
+      "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.customers_snapshot_view",
+      "pointer": "upstream",
+      "reason": "not_built_here",
+      "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.order_events",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "model.jaffle_ods.order_events",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "model.jaffle_ods.orders",
+      "pointer": "upstream",
+      "reason": "not_built_here",
+      "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.segment_summary",
+      "pointer": "upstream",
+      "reason": "not_built_here",
+      "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.stg_customers",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "model.jaffle_ods.stg_customers",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "model.jaffle_ods.stg_orders",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "model.jaffle_ods.stg_orders",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "model.jaffle_ods.stg_payments",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "model.jaffle_ods.stg_payments",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "seed.jaffle_ods.raw_customers",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "seed.jaffle_ods.raw_customers",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "seed.jaffle_ods.raw_orders",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "seed.jaffle_ods.raw_orders",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "seed.jaffle_ods.raw_payments",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "seed.jaffle_ods.raw_payments",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
+    },
+    {
+      "node": "test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.not_null_orders_order_id.cf6c17daed",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.not_null_stg_orders_order_id.81cfe2fe64",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.not_null_stg_payments_payment_id.c19cc50075",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.relationships_customer_order_rank_order_id__order_id__ref_orders_.10125cf94b",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.relationships_stg_payments_order_id__order_id__ref_stg_orders_.8426a3f3d3",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.unique_customer_order_rank_order_id.3ddaa5af35",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.unique_customers_customer_id.c5af1ff4b1",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.unique_orders_order_id.fed79b3a6e",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.unique_stg_orders_order_id.e3b841c71a",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.unique_stg_payments_payment_id.3744510712",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    }
+  ]
+}

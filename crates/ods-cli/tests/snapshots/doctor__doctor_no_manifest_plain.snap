@@ -1,0 +1,22 @@
+---
+source: crates/ods-cli/tests/doctor.rs
+expression: project.redact(&plain)
+---
+ODS doctor
+
+verdict: failed
+checks: 1 ok, 0 warning, 1 error, 2 unknown, 0 skipped
+options: --project
+
+Project
+  [ok] project.dbt_project (required): found `./dbt_project.yml`
+    project_dir: . (default)
+  [error ODS-E0201] project.manifest (required): cannot read `target/info_schema/v1/dbt.models.parquet`: no manifest.json and no dbt Information Schema
+    target_dir: target (default)
+    hint: dbt writes it when it parses the project: run `dbt parse`, or `ods state compile`
+  [unknown ODS-U0001] project.name: not checked: `project.manifest` failed
+    depends_on: project.manifest
+    hint: fix `project.manifest` first
+  [unknown ODS-U0001] project.freshness: not checked: `project.manifest` failed
+    depends_on: project.manifest
+    hint: fix `project.manifest` first

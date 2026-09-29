@@ -1,0 +1,86 @@
+name: Packaging
+
+# Checks the pieces release.yml publishes, on pull requests that change them (#212):
+# the wheel installs with pip and puts a working `ods` on PATH on Linux, macOS and
+# Windows; the licence notices generate; the release scripts pass their self-tests.
+# Native debug builds keep it cheap; release.yml builds every target for real.
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "about.toml"
+      - "about.hbs"
+      - "deny.toml"
+      - "packaging/**"
+      - "scripts/changelog-section.py"
+      - "scripts/render-homebrew-formula.py"
+      - "crates/ods-cli/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/packaging.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/changelog-section.py --self-test
+      - run: python3 scripts/changelog-section.py Unreleased
+      - run: python3 scripts/render-homebrew-formula.py --self-test
+      - name: The rendered formula is valid Ruby
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            echo "$(printf '0%.0s' $(seq 64))  ods-v0.0.0-$t.tar.gz"
+          done > sums
+          python3 scripts/render-homebrew-formula.py --version 0.0.0 --sums sums > ods.rb
+          ruby -c ods.rb
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - name: Third-party licence notices
+        run: cargo about generate --fail --locked about.hbs -o THIRD-PARTY-LICENSES.html
+
+  wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wheel
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        shell: bash
+        run: |
+          python -m pip install "maturin==1.15.0"
+          maturin build --locked --out wheels
+      - name: pip install into a fresh venv, then ods version
+        shell: bash
+        run: |
+          python -m venv venv
+          if [ -d venv/Scripts ]; then bin="$PWD/venv/Scripts"; else bin="$PWD/venv/bin"; fi
+          "$bin/python" -m pip install --no-index --find-links wheels opendatasuite
+          export PATH="$bin:$PATH"
+          command -v ods
+          ods version
+          ods version --output json | python -c 'import json, sys; assert json.load(sys.stdin)["command"] == "version"'

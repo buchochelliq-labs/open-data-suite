@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, SystemTime};
 
 use axum::Router;
-use axum::extract::{Query, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
@@ -17,6 +17,7 @@ use ods_lineage::export::GraphNode;
 use ods_lineage::{Change, ColumnChangeKind, ColumnGraph, GraphDocument};
 use serde::{Deserialize, Serialize};
 
+use crate::dashboard::{Dashboard, HomeView, ShellView};
 use crate::search::search;
 
 /// Everything the server shows, rebuilt by the [`Loader`] when artifacts change.
@@ -29,6 +30,9 @@ pub struct Snapshot {
     pub graph: ColumnGraph,
     /// Where it came from, e.g. the target directory.
     pub source: String,
+    /// The project, its state and plan, for the dashboard. Without one, Home says
+    /// nothing is known about the project's state.
+    pub dashboard: Option<Dashboard>,
 }
 
 impl Snapshot {
@@ -38,7 +42,23 @@ impl Snapshot {
             document,
             graph,
             source: source.into(),
+            dashboard: None,
         }
+    }
+
+    /// Adds what the dashboard shows.
+    #[must_use]
+    pub fn with_dashboard(mut self, dashboard: Dashboard) -> Self {
+        self.dashboard = Some(dashboard);
+        self
+    }
+
+    /// The dashboard's facts, or, without any, a project named after nothing with no
+    /// state store.
+    fn dashboard(&self) -> Dashboard {
+        self.dashboard
+            .clone()
+            .unwrap_or_else(|| Dashboard::new("project", "default"))
     }
 }
 
@@ -202,10 +222,15 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
     // redirects there.
     let at = |path: &str| format!("{base_path}{path}");
     let mut app = Router::new()
-        .route(&at("/"), get(index))
-        .route(&at("/index.html"), get(index))
+        .route(&at("/"), get(home))
+        .route(&at("/index.html"), get(home))
+        // Relative to `lineage`, the explorer's `api/...` resolves to `<base>/api/...`.
+        .route(&at("/lineage"), get(explorer))
         .route(&at("/healthz"), get(|| async { "ok" }))
         .route(&at("/api/version"), get(version))
+        .route(&at("/api/shell"), get(shell))
+        .route(&at("/api/home"), get(home_api))
+        .route(&at("/assets/fonts/{file}"), get(font))
         .route(&at("/api/graph"), get(graph))
         .route(&at("/api/search"), get(search_handler))
         .route(&at("/api/node"), get(node))
@@ -267,18 +292,58 @@ async fn security_headers(mut response: Response) -> Response {
         (
             header::CONTENT_SECURITY_POLICY,
             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-             img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+             img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; \
+             base-uri 'none'",
         ),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::REFERRER_POLICY, "no-referrer"),
-        (header::CACHE_CONTROL, "no-store"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+    // Data changes with every reload, so nothing is cached, unless a route says
+    // otherwise (the vendored fonts).
+    headers
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     response
 }
 
-async fn index(State(state): State<Shared>) -> Response {
+/// Home: the dashboard's first page.
+async fn home(State(state): State<Shared>) -> Html<String> {
+    let generation = state.generation.load(Ordering::SeqCst);
+    let dashboard = state.current().dashboard();
+    Html(crate::home::home_page(
+        &dashboard.shell("home"),
+        &dashboard.home(state.details),
+        generation,
+    ))
+}
+
+async fn shell(State(state): State<Shared>) -> Json<ShellView> {
+    Json(state.current().dashboard().shell("home"))
+}
+
+async fn home_api(State(state): State<Shared>) -> Json<HomeView> {
+    Json(state.current().dashboard().home(state.details))
+}
+
+/// The dashboard's vendored fonts; nothing else is served from disk or memory by name.
+async fn font(Path(file): Path<String>) -> Response {
+    match crate::fonts::font(&file) {
+        // The files never change within a build of ODS, so browsers may keep them.
+        Some(font) => (
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            font.bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn explorer(State(state): State<Shared>) -> Response {
     // The first paint is embedded, with its generation so the page notices any reload
     // after it; the page then polls the API.
     let generation = state.generation.load(Ordering::SeqCst);

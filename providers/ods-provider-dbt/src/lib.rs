@@ -16,10 +16,24 @@
 //! the same [`Manifest`].
 
 mod artifacts;
+pub mod executor;
+pub mod export;
+pub mod fingerprint;
 mod info_schema;
+pub mod normalize;
+mod probe;
+mod relations;
+mod runs;
+mod seeds;
+pub mod selection;
+pub mod settings;
 pub mod state_config;
+mod target;
+pub mod version;
 
 pub use artifacts::{
     ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtConstraint, DbtError,
-    DbtTest, Manifest, ManifestNode, ResourceType,
+    DbtMacro, DbtTest, DbtUnitTest, Manifest, ManifestNode, ResourceType,
 };
+pub use runs::{NodeResult, RunResults, RunStatus, SourceFreshness};
+pub use target::strip_credentials;

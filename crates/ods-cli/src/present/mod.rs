@@ -109,6 +109,30 @@ pub fn emit<T: Present>(
     }
 }
 
+/// Like [`emit`], for a command that produced a result but failed: in JSON mode the
+/// envelope carries both the result and the error as a diagnostic. Other modes render
+/// the result; the error goes to stderr as usual.
+///
+/// # Errors
+/// Returns any error from writing to `out` or serialising the result.
+pub fn emit_with_error<T: Present>(
+    result: &T,
+    error: &CliError,
+    settings: &OutputSettings,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    if settings.mode != Mode::Json {
+        return emit(result, settings, out);
+    }
+    let diagnostic = Diagnostic {
+        level: Severity::Error,
+        code: error.code,
+        message: error.message.clone(),
+        hint: error.hint.clone(),
+    };
+    write_envelope(out, T::COMMAND, Some(result), &[diagnostic])
+}
+
 /// Writes a failed command's JSON envelope: `result` is `null` and the error is the
 /// only diagnostic (ADR-0004 §4). Only used in JSON mode; other modes report errors
 /// as text on stderr.

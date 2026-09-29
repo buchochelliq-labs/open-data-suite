@@ -2,6 +2,8 @@
 
 mod completions;
 mod config;
+mod doctor;
+mod doctor_checks;
 mod erd;
 mod lineage;
 mod mcp;
@@ -9,17 +11,29 @@ mod mcp_data;
 mod mcp_tools;
 mod planned;
 mod serve;
+mod serve_dashboard;
 mod state;
+mod state_doctor;
+mod state_explain;
+mod state_export;
+mod state_plan;
+mod state_retry;
+mod state_run;
+mod state_settings;
+mod state_test;
+mod state_versions;
 mod version;
 
 pub use completions::Completions;
 pub use config::Config;
+pub use doctor::Doctor;
 pub use erd::ErdCommand;
 pub use lineage::Lineage;
 pub use mcp::Mcp;
 pub use planned::Planned;
 pub use serve::Serve;
 pub use state::State;
+pub(crate) use state_settings::validate as validate_provider_settings;
 pub use version::Version;
 
 use crate::module::Registry;
@@ -76,6 +90,9 @@ pub fn default_registry() -> Registry {
         .register(Box::new(Mcp))
         .expect("built-in command names are unique and not reserved");
     registry
+        .register(Box::new(Doctor))
+        .expect("built-in command names are unique and not reserved");
+    registry
         .register(Box::new(Config))
         .expect("built-in command names are unique and not reserved");
     registry
@@ -105,6 +122,7 @@ mod tests {
                 "lineage",
                 "serve",
                 "mcp",
+                "doctor",
                 "config",
                 "version",
                 "completions"

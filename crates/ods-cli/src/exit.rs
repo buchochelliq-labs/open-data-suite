@@ -77,6 +77,20 @@ pub mod codes {
     pub const LINEAGE_TARGET: &str = "ODS-E0203";
     /// `ods serve` can't bind its address or stopped with an I/O error.
     pub const SERVE: &str = "ODS-E0301";
+    /// The state database can't be opened, read or written, or is from a newer ODS.
+    pub const STATE_STORE: &str = "ODS-E0401";
+    /// Another run recorded state first; plan again and retry.
+    pub const STATE_CONFLICT: &str = "ODS-E0402";
+    /// A run's results or source freshness can't be read, or a State option is invalid.
+    pub const STATE_INPUT: &str = "ODS-E0403";
+    /// The executor (e.g. dbt) couldn't run, or reported failed nodes or checks.
+    pub const STATE_EXECUTION: &str = "ODS-E0404";
+    /// The state database is damaged; `ods state doctor` says how (#188).
+    pub const STATE_DAMAGED: &str = "ODS-E0405";
+    /// `ods state export` couldn't write its directory: another export holds the lock,
+    /// or a file couldn't be written or replaced. The message names the files already
+    /// replaced.
+    pub const STATE_EXPORT: &str = "ODS-E0406";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active
@@ -94,6 +108,9 @@ pub struct CliError {
     pub hint: Option<String>,
     /// The underlying I/O error kind, when the failure came from I/O.
     io_kind: Option<io::ErrorKind>,
+    /// Whether the command already wrote this error into its JSON envelope, alongside
+    /// its result.
+    in_envelope: bool,
 }
 
 impl CliError {
@@ -105,6 +122,7 @@ impl CliError {
             message: message.into(),
             hint: None,
             io_kind: None,
+            in_envelope: false,
         }
     }
 
@@ -113,6 +131,19 @@ impl CliError {
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
+    }
+
+    /// Marks the error as already written into the command's JSON envelope (see
+    /// [`Context::emit_failed`](crate::module::Context::emit_failed)).
+    #[must_use]
+    pub(crate) fn in_envelope(mut self) -> Self {
+        self.in_envelope = true;
+        self
+    }
+
+    /// Whether the error is already in the command's JSON envelope.
+    pub(crate) fn is_in_envelope(&self) -> bool {
+        self.in_envelope
     }
 
     /// Whether the failure came from writing output (so stdout cannot carry the report).
@@ -135,6 +166,7 @@ impl From<io::Error> for CliError {
             message: format!("failed to write output: {err}"),
             hint: None,
             io_kind: Some(err.kind()),
+            in_envelope: false,
         }
     }
 }

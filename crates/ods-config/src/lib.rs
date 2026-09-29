@@ -21,7 +21,7 @@ pub use load::{
 };
 pub use model::{
     CONFIG_VERSION, ColorPreference, Config, LogConfig, LogLevel, OutputConfig, OutputFormat,
-    PolicyConfig, ProjectConfig, ProviderConfig,
+    PolicyConfig, ProjectConfig, ProviderConfig, StateConfig,
 };
 pub use secret::{SecretRef, is_secret_key};
 pub use source::{FileKind, Source};

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ODS impact simulator</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;background:#F7F8FA;color:#18202A}
+a{color:#3F51D8;text-decoration:none}a:hover{color:#2B3AA8;text-decoration:underline}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #F7F8FA; font-size: 14px">
+<nav aria-label="Main" style="width: 224px; flex-shrink: 0; background: #FFFFFF; border-right: 1px solid #D8DEE6; display: flex; flex-direction: column; padding: 16px 12px; box-sizing: border-box; gap: 16px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3F51D8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>
+<span style="font-weight: 600; font-size: 16px; letter-spacing: 0.02em">OpenDataSuite</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="proj">Project</label>
+<button id="proj" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">jaffle_ods<span style="color: #5B6776">▾</span></button>
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="tgt">Target</label>
+<button id="tgt" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2F6FD6"></span>dev · databricks</span><span style="color: #5B6776">▾</span></button>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>Home</a>
+<a href="Catalog.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3"></path></svg>Catalog</a>
+<a href="Lineage.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; background: #E8EBFB; color: #2B3AA8; font-weight: 500">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"></rect><path d="M7 11v4a2 2 0 0 0 2 2h4"></path><rect x="13" y="13" width="8" height="8" rx="2"></rect></svg>Lineage</a>
+<div style="display: flex; flex-direction: column; gap: 2px; padding-left: 38px; font-size: 13px">
+<a href="Lineage.dc.html" style="height: 30px; display: flex; align-items: center; color: #18202A">Graph</a>
+<a href="Impact.dc.html" aria-current="page" style="height: 30px; display: flex; align-items: center; color: #2B3AA8; font-weight: 500">Impact simulator</a>
+</div>
+<a href="Plan.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></svg>State</a>
+<a href="Erd.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.9 12.1 20 3M17 6l3 3M15 8l2 2"></path></svg>ERD</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>Usage</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><path d="M6 9v12M18 15V9a3 3 0 0 0-3-3h-4M13 3 10 6l3 3"></path></svg>CI · Impact</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4M9 13v2M15 13v2"></path></svg>Agent</a>
+</div>
+<div style="margin-top: auto; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid #D8DEE6; padding-top: 12px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; color: #5B6776">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</a>
+<span style="font-size: 12px; color: #5B6776; padding: 4px 10px">Local · read-only</span>
+</div>
+</nav>
+<main style="flex-grow: 1; display: flex; flex-direction: column; min-width: 0">
+<header style="height: 56px; flex-shrink: 0; background: #FFFFFF; border-bottom: 1px solid #D8DEE6; display: flex; align-items: center; gap: 12px; padding: 0 24px">
+<a href="Lineage.dc.html">Lineage</a><span style="color: #8A94A3">/</span><span style="font-weight: 500">Impact simulator</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #5B6776; border: 1px solid #D8DEE6; border-radius: 999px; padding: 4px 10px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #1F8A4C"></span>column lineage · snapshot 3 · nothing is run</span>
+</header>
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<section style="flex-grow: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; min-width: 0">
+<section aria-label="Proposed change" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: flex-end; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="col" style="font-size: 12px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em">Column</label>
+<input id="col" value="orders.amount" style="height: 32px; width: 200px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; font-family: 'IBM Plex Mono',monospace; font-size: 13px; color: #18202A">
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span id="chg" style="font-size: 12px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em">Change</span>
+<div role="group" aria-labelledby="chg" style="display: flex">
+<button aria-pressed="false" style="height: 32px; padding: 0 14px; border: 1px solid #D8DEE6; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer; border-radius: 6px 0 0 6px">rename</button>
+<button aria-pressed="true" style="height: 32px; padding: 0 14px; border: 1px solid #3F51D8; background: #E8EBFB; font: inherit; color: #2B3AA8; font-weight: 500; cursor: pointer; margin-left: -1px">type change</button>
+<button aria-pressed="false" style="height: 32px; padding: 0 14px; border: 1px solid #D8DEE6; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer; border-radius: 0 6px 6px 0; margin-left: -1px">drop</button>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="newtype" style="font-size: 12px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em">Type</label>
+<span style="display: flex; align-items: center; gap: 8px; font-family: 'IBM Plex Mono',monospace; font-size: 13px"><span>double</span><span style="color: #5B6776">→</span><input id="newtype" placeholder="[new type]" style="height: 32px; width: 120px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; font-family: 'IBM Plex Mono',monospace; font-size: 13px; color: #18202A"></span>
+</div>
+<button style="margin-left: auto; height: 32px; padding: 0 12px; border: 1px solid #3F51D8; border-radius: 6px; background: #3F51D8; font: inherit; color: #FFFFFF; font-weight: 500; cursor: pointer">Simulate</button>
+</div>
+<div style="display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid #EBD3A8; border-left: 3px solid #B7791F; border-radius: 6px; background: #FDF8EF; font-size: 13px; color: #4A3A1A"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B7791F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20z"></path><path d="M12 10v4M12 17h.01"></path></svg><span><span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">orders</span> has an enforced contract that declares <span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">amount</span> as <span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">double</span>. Change the contract in <span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">schema.yml</span> with the SQL, or the orders build fails.</span></div>
+</section>
+<div style="display: flex; align-items: center; gap: 12px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Results</h2>
+<span style="font-size: 13px; color: #5B6776">6 must run · 7 skipped · 13 nodes</span>
+<button style="margin-left: auto; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>Export CSV</button>
+<button style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a1 1 0 0 1 1-1h10"></path></svg>Copy selector</button>
+</div>
+<section aria-label="Must run" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #D8DEE6"><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #DCE8FB; color: #1F4FA0">MUST RUN</span><span style="font-weight: 600">6 nodes</span><span style="font-size: 13px; color: #5B6776">read orders.amount directly or through another column</span></div>
+<div style="display: grid; grid-template-columns: 200px 180px 130px minmax(0, 1fr); font-size: 13px">
+<span style="color: #5B6776; padding: 8px 0; background: #EEF1F5; font-size: 12px; padding-left: 16px">Node</span><span style="color: #5B6776; padding: 8px 0; background: #EEF1F5; font-size: 12px">Columns affected</span><span style="color: #5B6776; padding: 8px 0; background: #EEF1F5; font-size: 12px">How it reads</span><span style="color: #5B6776; padding: 8px 0; background: #EEF1F5; font-size: 12px; padding-right: 16px">Reason</span>
+<sc-for list="{{must}}" as="m" hint-placeholder-count="6">
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; padding-left: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px"><a href="Model.dc.html" style="font-family: 'IBM Plex Mono',monospace">{{m.node}}</a><span style="font-size: 11px; font-weight: 500; padding: 0 6px; border-radius: 999px; border: 1px {{m.confBorder}} {{m.confColor}}; color: {{m.confText}}">{{m.conf}}</span></span>
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; font-family: 'IBM Plex Mono',monospace; font-size: 12px; color: #18202A">{{m.cols}}</span>
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5"><span style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: #EEF1F5; color: #18202A">{{m.how}}</span></span>
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; padding-right: 16px; color: #4A5462; line-height: 1.4">{{m.why}}</span>
+</sc-for>
+</div>
+</section>
+<section aria-label="Skipped" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #D8DEE6"><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #D5F0EC; color: #0B6B60">SKIPPED</span><span style="font-weight: 600">7 nodes, with reason</span></div>
+<div style="display: grid; grid-template-columns: 380px minmax(0, 1fr); font-size: 13px">
+<sc-for list="{{skipped}}" as="s" hint-placeholder-count="3">
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; padding-left: 16px; font-family: 'IBM Plex Mono',monospace">{{s.nodes}}</span>
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; padding-right: 16px; color: #4A5462">{{s.why}}</span>
+</sc-for>
+</div>
+</section>
+</section>
+<aside aria-label="Change summary" style="width: 340px; flex-shrink: 0; background: #FFFFFF; border-left: 1px solid #D8DEE6; display: flex; flex-direction: column">
+<div style="padding: 16px; border-bottom: 1px solid #D8DEE6; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Column trail</h2>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-family: 'IBM Plex Mono',monospace; font-size: 12px">
+<li style="padding: 4px 8px; border: 2px solid #3F51D8; border-radius: 6px; align-self: flex-start">orders.amount</li>
+<li style="padding-left: 14px; color: #5B6776; font-family: 'IBM Plex Sans',sans-serif">sum() · aggregation</li>
+<li style="padding: 4px 8px; border: 1px solid #D8DEE6; border-radius: 6px; align-self: flex-start">customers.lifetime_value</li>
+<li style="padding-left: 14px; color: #5B6776; font-family: 'IBM Plex Sans',sans-serif">case when … &gt;= 25</li>
+<li style="padding: 4px 8px; border: 1px solid #D8DEE6; border-radius: 6px; align-self: flex-start">customers.value_tier</li>
+</ol>
+</div>
+<div style="padding: 16px; border-bottom: 1px solid #D8DEE6; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Selector</h2>
+<code style="padding: 8px 10px; background: #F7F8FA; border: 1px solid #EEF1F5; border-radius: 6px; font-family: 'IBM Plex Mono',monospace; font-size: 13px">dbt build --select orders+</code>
+<span style="font-size: 12px; color: #5B6776">Every descendant of orders must run, so the selector is simply <span style="font-family: 'IBM Plex Mono',monospace">orders+</span>.</span>
+</div>
+<div style="padding: 16px; border-bottom: 1px solid #D8DEE6; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Exposures</h2>
+<span style="color: #4A5462">[none declared]</span>
+<span style="font-size: 12px; color: #5B6776">Declare exposures in YAML to see dashboards and apps here.</span>
+</div>
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Tests that run with it</h2>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12px">
+<li><span style="font-family: 'IBM Plex Mono',monospace">orders.order_id</span> <span style="color: #5B6776">unique, not_null</span></li>
+<li><span style="font-family: 'IBM Plex Mono',monospace">orders.customer_id</span> <span style="color: #5B6776">relationships → customers</span></li>
+<li><span style="font-family: 'IBM Plex Mono',monospace">customers.customer_id</span> <span style="color: #5B6776">unique, not_null</span></li>
+<li><span style="font-family: 'IBM Plex Mono',monospace">customer_order_rank.order_id</span> <span style="color: #5B6776">unique, relationships → orders</span></li>
+</ul>
+</div>
+</aside>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const parsed = { conf: 'parsed', confColor: '#1F8A4C', confText: '#1F6B3C', confBorder: 'solid' };
+const inferred = { conf: 'inferred', confColor: '#6B7684', confText: '#4A5462', confBorder: 'dashed' };
+const opaque = { conf: 'opaque', confColor: '#B7791F', confText: '#7A5212', confBorder: 'solid' };
+const must = [
+Object.assign({ node: 'orders', cols: 'amount', how: 'changed here', why: 'The column being changed. Contract must be updated with it.' }, parsed),
+Object.assign({ node: 'customers', cols: 'lifetime_value, value_tier', how: 'aggregation', why: 'Reads amount through sum() (aggregation). value_tier reads lifetime_value.' }, parsed),
+Object.assign({ node: 'customer_order_rank', cols: 'amount, running_amount', how: 'direct · window', why: 'Selects amount as is; running_amount is sum(amount) over a window.' }, parsed),
+Object.assign({ node: 'customers_snapshot_view', cols: 'lifetime_value, value_tier', how: 'select *', why: 'select * from customers: every column of customers passes through.' }, parsed),
+Object.assign({ node: 'customer_segments', cols: '[unknown]', how: 'Python model', why: 'Reads customers, but Python can\'t be parsed: assumed to read every column.' }, opaque),
+Object.assign({ node: 'segment_summary', cols: 'segment, customers', how: 'via opaque', why: 'Reads customer_segments, which is opaque, so it is assumed affected.' }, inferred)
+];
+const skipped = [
+{ nodes: 'order_events', why: 'Doesn\'t read amount. It reads stg_orders and stg_payments, not orders.' },
+{ nodes: 'stg_customers, stg_orders, stg_payments', why: 'Upstream of orders: a change to orders.amount can\'t reach them.' },
+{ nodes: 'raw_customers, raw_orders, raw_payments', why: 'Seeds upstream of orders.' }
+];
+return { must, skipped };
+}
+}
+</script>
+</body>
+</html>
