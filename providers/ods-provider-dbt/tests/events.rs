@@ -317,3 +317,27 @@ fn the_reports_status_wins_over_the_logs() {
         NodeRunStatus::Success
     );
 }
+
+/// Codex review on #327: a log with structured lines but no node event (dbt dropped
+/// them, e.g. at a higher log level) doesn't make the run `live`: its stats come from
+/// the results.
+#[test]
+fn a_log_without_node_events_is_not_live() {
+    let run = RunResults::read(&fixture("dbt-1.10-events/run_results.json")).unwrap();
+    let (request, report) = request_and_report(&run);
+    let sink = CollectedEvents::new();
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), LogLevel::Info);
+    let shown = bridge.line(&format!(
+        r#"{{"info":{{"level":"info","name":"Note","msg":"Running with dbt","invocation_id":"{}","ts":"2026-09-29T22:00:12Z"}}}}"#,
+        report.run_id
+    ));
+    assert!(shown.is_some());
+    assert!(
+        sink.events().is_empty(),
+        "nothing starts before a node event"
+    );
+    bridge.finish(&report, &run);
+    let summary = RunSummary::from_events(&sink.events());
+    assert!(!summary.live);
+    assert_eq!(summary.run_id.as_deref(), Some(report.run_id.as_str()));
+}
