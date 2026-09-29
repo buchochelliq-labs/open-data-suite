@@ -1033,8 +1033,9 @@ rule that fails is the node's reason:
   artifacts ODS reads were compiled with refs resolved to prod. A node whose SQL names
   prod's relations then differs from what ODS recorded, and points upstream
   (`code_changed_since_build`). That is conservative: it can send more nodes upstream
-  than needed, never fewer. Build with `ods state build`, or run `dbt compile` (not
-  deferred) before exporting, to point them here.
+  than needed, never fewer. Nodes that only read sources, or whose parents weren't
+  deferred, aren't affected. Don't run `dbt compile` just to avoid it before a
+  `dbt retry`: it replaces the run results the retry reads.
 
 `--output json` returns every node's choice (`pointer`: `this_target`, `upstream` or
 `unchanged`), `reason`, the recorded `run_id` and `built_at` it rests on, the fingerprint
