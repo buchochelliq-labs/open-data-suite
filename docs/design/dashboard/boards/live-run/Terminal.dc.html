@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Terminal · ods state run</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1100px; height: 700px; box-sizing: border-box; padding: 28px 32px; background: #12161E; color: #D8DEE9; font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.6; display: flex; flex-direction: column; gap: 2px; white-space: pre">
+<div style="color: #8FA1C7">$ ods state run</div>
+<div style="color: #AEB8C8">plan  7 to build · 6 kept (not selected) · target dev</div>
+<div style="color: #AEB8C8">check 6 kept relations: all present</div>
+<div> </div>
+<div style="color: #7C889C">TIME      NODE                       MAT     STATUS    TOOK   ROWS</div>
+<div>14:02:05  stg_orders                 view    <span style="color: #7FB3FF">BUILT</span>     1.9s   —</div>
+<div>14:02:07  orders                     table   <span style="color: #7FB3FF">BUILT</span>     4.2s   99</div>
+<div>14:02:11  customer_order_rank        table   <span style="color: #7FB3FF">BUILT</span>     1.9s   99</div>
+<div>14:02:11  customers                  table   <span style="color: #7FB3FF">BUILT</span>     2.7s   100</div>
+<div>14:02:14  customers_snapshot_view    view    <span style="color: #7FB3FF">BUILT</span>     1.3s   —</div>
+<div>14:02:14  customer_segments          table   <span style="color: #FF8A80">FAILED</span>    3.6s   —</div>
+<div>          <span style="color: #AEB8C8">KeyError: [value removed] · full message in logs/dbt.log</span></div>
+<div>14:02:18  segment_summary            table   <span style="color: #E0B7B0">SKIPPED</span>   —      —      <span style="color: #AEB8C8">upstream customer_segments failed</span></div>
+<div> </div>
+<div style="color: #7C889C">running now appears here while the run is going:</div>
+<div style="color: #AEB8C8">⠋ customers (thread 1) 1.8s · customer_order_rank (thread 2) 1.2s · 4 of 7 finished</div>
+<div> </div>
+<div style="color: #FFFFFF; font-weight: 500">done  13.3s · 5 built · 1 failed · 1 skipped · 6 kept</div>
+<div style="color: #AEB8C8">rows  at least 298 affected (2 views didn't report rows)</div>
+<div style="color: #AEB8C8">state snapshot 4 recorded with the 5 successful builds; customer_segments keeps its build from run b6802661</div>
+<div> </div>
+<div>next  <span style="color: #8FA1C7">ods state retry --failed</span>   ·   runs  <span style="color: #8FA1C7">ods state history</span></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1100,"height":700}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

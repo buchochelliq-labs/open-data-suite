@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Failed node · error explained</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1040px; box-sizing: border-box; padding: 40px; background: #F6F7F9; color: #1B2130; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; display: flex; flex-direction: column; gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<h1 style="margin: 0; font-size: 22px; font-weight: 600">When a node fails: what went wrong, why ODS thinks so, what to try</h1>
+<p style="margin: 0; color: #4A5462; max-width: 900px">Shown in the failed node's panel, on the Run page and in the terminal summary. Explanations are marked by how sure ODS is. dbt's own words stay one click away, with values and SQL removed.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: start">
+
+<section aria-label="Matched error with evidence" style="background: #FFFFFF; border: 1px solid #E3C3BF; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<span style="padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #FBE3E1; color: #A1261B">FAILED</span>
+<span style="padding: 2px 7px; border: 1px solid #D3D8E0; border-radius: 999px; font-size: 11px; color: #4A5462">database error · missing column</span>
+<span style="padding: 2px 7px; border-radius: 999px; font-size: 11px; background: #DCE8FB; color: #1F4FA0">known pattern + evidence</span>
+</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 500">customers</div>
+<h2 style="margin: 0; font-size: 17px; font-weight: 600; line-height: 1.35">A column this model reads no longer exists upstream</h2>
+<p style="margin: 0; color: #1B2130; line-height: 1.5"><code style="font-family: 'IBM Plex Mono', monospace">customers</code> selects <code style="font-family: 'IBM Plex Mono', monospace">first_name</code> from <code style="font-family: 'IBM Plex Mono', monospace">stg_customers</code>, but that model no longer produces it.</p>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHY ODS THINKS SO</div>
+<ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45">
+<li><code style="font-family: 'IBM Plex Mono', monospace">stg_customers</code> changed in this run (sql) and was rebuilt first.</li>
+<li>Column lineage: <code style="font-family: 'IBM Plex Mono', monospace">stg_customers</code> now outputs <code style="font-family: 'IBM Plex Mono', monospace">given_name</code>, not <code style="font-family: 'IBM Plex Mono', monospace">first_name</code>.</li>
+<li><code style="font-family: 'IBM Plex Mono', monospace">customers</code> last built fine in run b6802661, before that change.</li>
+</ul>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHERE</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">models/marts/customers.sql:23</div>
+<div style="font-size: 12px; color: #5B6474">compiled line 31 · target/compiled/…/customers.sql</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHAT TO TRY</div>
+<ol style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45">
+<li>Use <code style="font-family: 'IBM Plex Mono', monospace">given_name</code> in customers.sql, or restore <code style="font-family: 'IBM Plex Mono', monospace">first_name</code> in stg_customers.</li>
+<li>Check what else reads it:</li>
+</ol>
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">ods lineage impact --column stg_customers.first_name=removed</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">ods state retry --failed</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
+</div>
+
+<div style="padding: 10px 12px; background: #F6F7F9; border-radius: 8px; line-height: 1.45"><span style="font-weight: 600">Impact:</span> blocks 2 downstream nodes (customer_segments, segment_summary were skipped). Their last good builds are kept.</div>
+
+<details style="border-top: 1px solid #EEF0F3; padding-top: 10px">
+<summary style="cursor: pointer; color: #2B3AA8">What dbt said</summary>
+<pre style="margin: 8px 0 0 0; padding: 10px; background: #12161E; color: #D8DEE9; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; white-space: pre-wrap">Database Error in model customers (models/marts/customers.sql)
+  [UNRESOLVED_COLUMN] A column or function parameter with name `first_name` cannot be resolved. Did you mean one of: [`given_name`, …]
+  compiled code at target/compiled/…/customers.sql</pre>
+<div style="margin-top: 6px; font-size: 12px; color: #5B6474">Literal values and SQL removed. Full text: logs/dbt.log</div>
+</details>
+</section>
+
+<section aria-label="Compile error" style="background: #FFFFFF; border: 1px solid #E3C3BF; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<span style="padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #FBE3E1; color: #A1261B">FAILED</span>
+<span style="padding: 2px 7px; border: 1px solid #D3D8E0; border-radius: 999px; font-size: 11px; color: #4A5462">compilation error · unknown macro</span>
+<span style="padding: 2px 7px; border-radius: 999px; font-size: 11px; background: #DCE8FB; color: #1F4FA0">known pattern</span>
+</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 500">orders</div>
+<h2 style="margin: 0; font-size: 17px; font-weight: 600; line-height: 1.35">dbt couldn't find the macro <code style="font-family: 'IBM Plex Mono', monospace">cents_to_dollars</code></h2>
+<p style="margin: 0; line-height: 1.5">The model calls a macro that isn't defined in this project or its installed packages, so dbt stopped before running any SQL. Nothing was changed in the warehouse.</p>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHY ODS THINKS SO</div>
+<ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45">
+<li>The macro isn't in the manifest's macros.</li>
+<li><code style="font-family: 'IBM Plex Mono', monospace">packages.yml</code> changed since the last run; <code style="font-family: 'IBM Plex Mono', monospace">dbt_packages/</code> may be out of date.</li>
+</ul>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHERE</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">models/marts/orders.sql:14</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHAT TO TRY</div>
+<ol style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45">
+<li>Install packages, then retry.</li>
+<li>Or check the name: a macro called <code style="font-family: 'IBM Plex Mono', monospace">cents_to_dollar</code> exists.</li>
+</ol>
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">dbt deps &amp;&amp; ods state retry --failed</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
+</div>
+<details style="border-top: 1px solid #EEF0F3; padding-top: 10px">
+<summary style="cursor: pointer; color: #2B3AA8">What dbt said</summary>
+<pre style="margin: 8px 0 0 0; padding: 10px; background: #12161E; color: #D8DEE9; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; white-space: pre-wrap">Compilation Error in model orders (models/marts/orders.sql)
+  'cents_to_dollars' is undefined. This can happen when calling a macro that does not exist.</pre>
+</details>
+</section>
+
+<section aria-label="Unrecognised error" style="background: #FFFFFF; border: 1px solid #E3C3BF; border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<span style="padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #FBE3E1; color: #A1261B">FAILED</span>
+<span style="padding: 2px 7px; border: 1px solid #D3D8E0; border-radius: 999px; font-size: 11px; color: #4A5462">database error</span>
+<span style="padding: 2px 7px; border: 1px dashed #AEB6C2; border-radius: 999px; font-size: 11px; color: #4A5462">not recognised</span>
+</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 500">fct_revenue_daily</div>
+<h2 style="margin: 0; font-size: 17px; font-weight: 600; line-height: 1.35">The warehouse rejected the query</h2>
+<p style="margin: 0; line-height: 1.5">ODS doesn't recognise this error, so it won't guess the cause. Here is what it does know.</p>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHAT ODS KNOWS</div>
+<ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45">
+<li>It failed after 2m 14s, during execution (compile succeeded).</li>
+<li>Its code didn't change since its last successful build in run 51aa02e7.</li>
+<li>Upstream <code style="font-family: 'IBM Plex Mono', monospace">stg_payments</code> has new data since then (table version 812 → 830).</li>
+<li>It failed the same way in 2 of its last 5 runs.</li>
+</ul>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHAT TO TRY</div>
+<ol style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45">
+<li>Read dbt's message below and the full log.</li>
+<li>If it may be transient (timeouts, locks), retry just this node.</li>
+</ol>
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #E3E6EB; border-radius: 6px"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">ods state retry --failed</code><button type="button" style="margin-left: auto; height: 26px; padding: 0 8px; border: 1px solid #D3D8E0; border-radius: 5px; background: #FFFFFF; font: inherit; font-size: 12px; cursor: pointer">Copy</button></div>
+<button type="button" disabled style="height: 34px; padding: 0 12px; border: 1px dashed #AEB6C2; border-radius: 6px; background: #F6F7F9; color: #4A5462; font: inherit; text-align: left; display: flex; align-items: center; gap: 8px">Ask the ODS agent to investigate <span style="margin-left: auto; padding: 1px 6px; border: 1px dashed #AEB6C2; border-radius: 999px; font-size: 10px; font-weight: 600">PLANNED</span></button>
+</div>
+<details open style="border-top: 1px solid #EEF0F3; padding-top: 10px">
+<summary style="cursor: pointer; color: #2B3AA8">What dbt said</summary>
+<pre style="margin: 8px 0 0 0; padding: 10px; background: #12161E; color: #D8DEE9; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; white-space: pre-wrap">Database Error in model fct_revenue_daily (models/marts/fct_revenue_daily.sql)
+  [DELTA_…] Operation failed: [value removed]</pre>
+<div style="margin-top: 6px; font-size: 12px; color: #5B6474">Literal values and SQL removed. Full text: logs/dbt.log</div>
+</details>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
