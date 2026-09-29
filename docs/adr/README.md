@@ -26,5 +26,6 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0020](0020-dbt-state-interop-and-favor-state.md) | dbt state interop: export a state that `--favor-state` can trust, and import dbt runs | Proposed | #296 |
 | [0021](0021-databricks-authentication.md) | Databricks authentication: U2M first, M2M for CI, tokens never persisted | Proposed | #297 |
 | [0022](0022-delta-table-versions-as-source-evidence.md) | Delta table versions as source change evidence, read through dbt | Proposed | #17, #16 |
+| [0023](0023-ods-doctor-diagnostics.md) | `ods doctor`: typed health checks, stable codes and exit semantics | Proposed | #181 |
 
 Planned for M0: ADR-0007 clean-room & licensing policy (#10).

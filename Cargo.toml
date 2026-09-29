@@ -48,6 +48,8 @@ opener = "0.8"
 # Reads dbt v2's Parquet "dbt Information Schema" (#12). Without Arrow; only the
 # compression codecs dbt may use.
 parquet = { version = "60", default-features = false, features = ["zstd", "snap", "lz4", "flate2-zlib-rs"] }
+# Parses dbt's PEP 440 version (`1.9.0b1`) for `ods doctor` (#181, ADR-0023).
+pep440_rs = { version = "0.7", default-features = false }
 # Decodes the percent-encoded answer of the dbt relation probe (ADR-0022).
 percent-encoding = "2"
 # Graph algorithms: dependency order, cycles, shortest join paths.
@@ -72,6 +74,8 @@ sqlparser = { version = "=0.63.0", features = ["visitor"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros"] }
+# Walks a dbt project's files, for `ods doctor`'s artifact freshness check (#181).
+walkdir = "2"
 # Formats OpenLineage run ids.
 uuid = { version = "1", default-features = false }
 toml = "1"

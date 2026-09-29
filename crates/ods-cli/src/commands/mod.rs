@@ -2,6 +2,8 @@
 
 mod completions;
 mod config;
+mod doctor;
+mod doctor_checks;
 mod erd;
 mod lineage;
 mod mcp;
@@ -24,6 +26,7 @@ mod version;
 
 pub use completions::Completions;
 pub use config::Config;
+pub use doctor::Doctor;
 pub use erd::ErdCommand;
 pub use lineage::Lineage;
 pub use mcp::Mcp;
@@ -87,6 +90,9 @@ pub fn default_registry() -> Registry {
         .register(Box::new(Mcp))
         .expect("built-in command names are unique and not reserved");
     registry
+        .register(Box::new(Doctor))
+        .expect("built-in command names are unique and not reserved");
+    registry
         .register(Box::new(Config))
         .expect("built-in command names are unique and not reserved");
     registry
@@ -116,6 +122,7 @@ mod tests {
                 "lineage",
                 "serve",
                 "mcp",
+                "doctor",
                 "config",
                 "version",
                 "completions"

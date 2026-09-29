@@ -1,0 +1,347 @@
+---
+source: crates/ods-cli/tests/doctor.rs
+expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
+---
+{
+  "schema_version": {
+    "major": 0,
+    "minor": 1
+  },
+  "command": "doctor",
+  "ods_version": "[ods-version]",
+  "result": {
+    "scope": {
+      "project_only": false,
+      "provider": null,
+      "connect": false
+    },
+    "verdict": "healthy",
+    "strict": false,
+    "summary": {
+      "ok": 13,
+      "warning": 0,
+      "error": 0,
+      "unknown": 0,
+      "skipped": 2
+    },
+    "checks": [
+      {
+        "id": "config.load",
+        "category": "config",
+        "status": "ok",
+        "required": true,
+        "message": "no configuration file: built-in defaults apply",
+        "evidence": [
+          {
+            "key": "user file",
+            "value": "[dir]/home/ods/config.toml",
+            "source": "not found"
+          },
+          {
+            "key": "project file",
+            "value": "[dir]/ods.toml",
+            "source": "not found"
+          },
+          {
+            "key": "profile",
+            "value": "none"
+          }
+        ]
+      },
+      {
+        "id": "config.values",
+        "category": "config",
+        "status": "ok",
+        "required": false,
+        "message": "1 value(s) set",
+        "evidence": [
+          {
+            "key": "output.format",
+            "value": "\"json\"",
+            "source": "flag --json"
+          }
+        ]
+      },
+      {
+        "id": "config.resolution",
+        "category": "config",
+        "status": "ok",
+        "required": true,
+        "message": "where ODS finds the project, dbt and the state",
+        "evidence": [
+          {
+            "key": "program",
+            "value": "dbt",
+            "source": "default"
+          },
+          {
+            "key": "project_dir",
+            "value": "unset",
+            "source": "dbt's default"
+          },
+          {
+            "key": "profiles_dir",
+            "value": "unset",
+            "source": "dbt's default"
+          },
+          {
+            "key": "profile",
+            "value": "unset",
+            "source": "dbt's default"
+          },
+          {
+            "key": "target",
+            "value": "unset",
+            "source": "dbt's default"
+          },
+          {
+            "key": "target_dir",
+            "value": "target",
+            "source": "default"
+          },
+          {
+            "key": "state_db",
+            "value": ".ods/state.db",
+            "source": "default"
+          },
+          {
+            "key": "environment",
+            "value": "default",
+            "source": "default"
+          }
+        ]
+      },
+      {
+        "id": "project.dbt_project",
+        "category": "project",
+        "provider": "dbt",
+        "status": "ok",
+        "required": true,
+        "message": "found `./dbt_project.yml`",
+        "evidence": [
+          {
+            "key": "project_dir",
+            "value": ".",
+            "source": "default"
+          }
+        ]
+      },
+      {
+        "id": "project.manifest",
+        "category": "project",
+        "provider": "dbt",
+        "status": "ok",
+        "required": true,
+        "message": "manifest.json schema v12, written by dbt 1.10.23",
+        "evidence": [
+          {
+            "key": "target_dir",
+            "value": "target",
+            "source": "default"
+          },
+          {
+            "key": "format",
+            "value": "manifest.json"
+          },
+          {
+            "key": "schema_version",
+            "value": "12"
+          },
+          {
+            "key": "dbt_version",
+            "value": "1.10.23"
+          },
+          {
+            "key": "nodes",
+            "value": "25"
+          }
+        ]
+      },
+      {
+        "id": "project.name",
+        "category": "project",
+        "provider": "dbt",
+        "status": "ok",
+        "required": false,
+        "message": "project `jaffle_ods`",
+        "evidence": [
+          {
+            "key": "project_name",
+            "value": "jaffle_ods"
+          }
+        ]
+      },
+      {
+        "id": "project.freshness",
+        "category": "project",
+        "provider": "dbt",
+        "status": "ok",
+        "required": false,
+        "message": "the manifest is newer than every project file",
+        "evidence": [
+          {
+            "key": "manifest",
+            "value": "target/manifest.json"
+          },
+          {
+            "key": "manifest_modified",
+            "value": "2026-01-01T01:00:00Z"
+          },
+          {
+            "key": "newest_project_file",
+            "value": "./models/orders.sql"
+          },
+          {
+            "key": "newest_project_file_modified",
+            "value": "2026-01-01T00:00:00Z"
+          }
+        ]
+      },
+      {
+        "id": "tools.dbt",
+        "category": "tools",
+        "provider": "dbt",
+        "status": "ok",
+        "required": true,
+        "message": "dbt 1.10.23",
+        "evidence": [
+          {
+            "key": "program",
+            "value": "dbt",
+            "source": "default"
+          },
+          {
+            "key": "version",
+            "value": "1.10.23"
+          },
+          {
+            "key": "adapters",
+            "value": "duckdb 1.10.0"
+          }
+        ]
+      },
+      {
+        "id": "tools.adapter",
+        "category": "tools",
+        "provider": "dbt",
+        "status": "ok",
+        "required": false,
+        "message": "dbt has the `duckdb` adapter the manifest was written with",
+        "evidence": [
+          {
+            "key": "adapter",
+            "value": "duckdb",
+            "source": "manifest"
+          }
+        ]
+      },
+      {
+        "id": "target.identity",
+        "category": "target",
+        "provider": "dbt",
+        "status": "ok",
+        "required": true,
+        "message": "dbt builds in target `dev`",
+        "evidence": [
+          {
+            "key": "target",
+            "value": "dev",
+            "source": "profile's default"
+          },
+          {
+            "key": "profile",
+            "value": "jaffle_ods"
+          },
+          {
+            "key": "kind",
+            "value": "fake"
+          },
+          {
+            "key": "location",
+            "value": "fake-host"
+          },
+          {
+            "key": "database",
+            "value": "jaffle_ods"
+          },
+          {
+            "key": "environment",
+            "value": "default",
+            "source": "default"
+          }
+        ]
+      },
+      {
+        "id": "state_store.database",
+        "category": "state_store",
+        "provider": "sqlite",
+        "status": "ok",
+        "required": true,
+        "message": "no state database yet: the first run creates it",
+        "evidence": [
+          {
+            "key": "state_db",
+            "value": ".ods/state.db",
+            "source": "default"
+          }
+        ]
+      },
+      {
+        "id": "capabilities.relation_existence",
+        "category": "capabilities",
+        "provider": "dbt",
+        "status": "ok",
+        "required": false,
+        "message": "a build is reused only after checking its relation still exists",
+        "evidence": [
+          {
+            "key": "provider",
+            "value": "dbt (dbt)"
+          },
+          {
+            "key": "capabilities",
+            "value": "relation_existence, relation_probe"
+          }
+        ]
+      },
+      {
+        "id": "capabilities.relation_versions",
+        "category": "capabilities",
+        "provider": "dbt",
+        "status": "ok",
+        "required": false,
+        "message": "no table versions, and none needed: the project has no sources",
+        "evidence": [
+          {
+            "key": "adapter",
+            "value": "duckdb",
+            "source": "manifest"
+          },
+          {
+            "key": "missing_capability",
+            "value": "relation_versions"
+          }
+        ]
+      },
+      {
+        "id": "connectivity.relations",
+        "category": "connectivity",
+        "provider": "dbt",
+        "status": "skipped",
+        "required": false,
+        "message": "a live check: pass --connect to run it",
+        "evidence": []
+      },
+      {
+        "id": "connectivity.table_versions",
+        "category": "connectivity",
+        "provider": "dbt",
+        "status": "skipped",
+        "required": false,
+        "message": "a live check: pass --connect to run it",
+        "evidence": []
+      }
+    ]
+  },
+  "diagnostics": []
+}

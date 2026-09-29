@@ -874,6 +874,28 @@ impl Provider for DbtExecutor {
     }
 }
 
+impl DbtExecutor {
+    /// Which dbt this is: `dbt --version`, read (#181). Its output is captured, never
+    /// shown. dbt itself may look up its latest release while answering; it reads no
+    /// profile and connects to no warehouse.
+    ///
+    /// `None` when dbt ran but printed no version ODS can read.
+    ///
+    /// # Errors
+    /// If the program can't be started, or exits with a failure.
+    pub async fn version(&self) -> Result<Option<crate::version::DbtVersion>, ProviderError> {
+        let quiet = Self {
+            output: DbtOutput::Capture,
+            ..self.clone()
+        };
+        let (ok, tail, stdout) = quiet.invoke_with(&["--version".to_owned()], true).await?;
+        if !ok {
+            return Err(Self::failure("`dbt --version` failed", &tail));
+        }
+        Ok(crate::version::DbtVersion::parse(&stdout))
+    }
+}
+
 /// Where the target check writes its artifacts, apart from the target path's own.
 const TARGET_CHECK_DIR: &str = "ods-target-check";
 

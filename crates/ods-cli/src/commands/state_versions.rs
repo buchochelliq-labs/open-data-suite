@@ -17,7 +17,7 @@ use super::state_plan::{Workspace, block_on};
 use crate::exit::CliError;
 
 /// Whether the dbt adapter `adapter_type` has a change provider.
-fn has_change_provider(adapter_type: Option<&str>) -> bool {
+pub(super) fn has_change_provider(adapter_type: Option<&str>) -> bool {
     // Delta table versions, read through dbt's own connection (ADR-0022 §1).
     adapter_type == Some("databricks")
 }

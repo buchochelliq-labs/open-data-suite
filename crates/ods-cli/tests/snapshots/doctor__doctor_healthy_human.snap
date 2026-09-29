@@ -1,0 +1,77 @@
+---
+source: crates/ods-cli/tests/doctor.rs
+expression: project.redact(&human)
+---
+ODS doctor
+
+verdict  healthy
+checks   13 ok, 0 warning, 0 error, 0 unknown, 2 skipped
+
+Configuration
+├── [ok] config.load (required): no configuration file: built-in defaults apply
+│   ├── user file: [dir]/home/ods/config.toml (not found)
+│   ├── project file: [dir]/ods.toml (not found)
+│   └── profile: none
+├── [ok] config.values: 3 value(s) set
+│   ├── output.color: "never" (flag --color)
+│   ├── output.format: "human" (flag --output)
+│   └── output.width: 400 (flag --width)
+└── [ok] config.resolution (required): where ODS finds the project, dbt and the state
+    ├── program: dbt (default)
+    ├── project_dir: unset (dbt's default)
+    ├── profiles_dir: unset (dbt's default)
+    ├── profile: unset (dbt's default)
+    ├── target: unset (dbt's default)
+    ├── target_dir: target (default)
+    ├── state_db: .ods/state.db (default)
+    └── environment: default (default)
+
+Project
+├── [ok] project.dbt_project (required): found `./dbt_project.yml`
+│   └── project_dir: . (default)
+├── [ok] project.manifest (required): manifest.json schema v12, written by dbt 1.10.23
+│   ├── target_dir: target (default)
+│   ├── format: manifest.json
+│   ├── schema_version: 12
+│   ├── dbt_version: 1.10.23
+│   └── nodes: 25
+├── [ok] project.name: project `jaffle_ods`
+│   └── project_name: jaffle_ods
+└── [ok] project.freshness: the manifest is newer than every project file
+    ├── manifest: target/manifest.json
+    ├── manifest_modified: 2026-01-01T01:00:00Z
+    ├── newest_project_file: ./models/orders.sql
+    └── newest_project_file_modified: 2026-01-01T00:00:00Z
+
+Tools
+├── [ok] tools.dbt (required): dbt 1.10.23
+│   ├── program: dbt (default)
+│   ├── version: 1.10.23
+│   └── adapters: duckdb 1.10.0
+└── [ok] tools.adapter: dbt has the `duckdb` adapter the manifest was written with
+    └── adapter: duckdb (manifest)
+
+Target
+└── [ok] target.identity (required): dbt builds in target `dev`
+    ├── target: dev (profile's default)
+    ├── profile: jaffle_ods
+    ├── kind: fake
+    ├── location: fake-host
+    ├── database: jaffle_ods
+    └── environment: default (default)
+
+State store
+└── [ok] state_store.database (required): no state database yet: the first run creates it
+    └── state_db: .ods/state.db (default)
+
+Capabilities
+├── [ok] capabilities.relation_existence: a build is reused only after checking its relation still exists
+│   ├── provider: dbt (dbt)
+│   └── capabilities: relation_existence, relation_probe
+└── [ok] capabilities.relation_versions: no table versions, and none needed: the project has no sources
+    ├── adapter: duckdb (manifest)
+    └── missing_capability: relation_versions
+
+Connectivity
+├── [skipped] connectivity.relations: a live check: pass --connect to run it
+└── [skipped] connectivity.table_versions: a live check: pass --connect to run it
