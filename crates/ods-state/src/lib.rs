@@ -10,11 +10,14 @@
 //! - [`split_retry`] narrows a plan to the nodes a retry of failures builds (#292);
 //! - [`source_checks`] decides which sources' checks run (their data is new or
 //!   unknown), and [`record_source_checks`] records their results (#232);
+//! - [`choose_pointers`] decides where an exported state's deferred references point:
+//!   this target's build, or the upstream's (#296, ADR-0020);
 //! - [`explain`], [`node_history`], [`diff_states`] and [`diff_project`] explain
 //!   decisions, past builds and differences (#21).
 //!
 //! Missing or uncertain evidence always means BUILD (AGENTS.md rule 3).
 
+mod defer;
 mod explain;
 mod planner;
 mod recorder;
@@ -22,6 +25,10 @@ mod retry;
 mod selection;
 mod sources;
 
+pub use defer::{
+    EXPORT_SCHEMA_VERSION, ExportRecord, Pointer, PointerChoice, PointerReason, UpstreamNode,
+    choose_pointers, defer_candidates,
+};
 pub use explain::{
     Change, Explanation, NodeDiff, NodeEvent, StateDiff, changes, diff_project, diff_states,
     explain, node_history,
