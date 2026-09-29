@@ -99,12 +99,22 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   recorded it. The binary decides what a layer is (the model's first folder under the
   model paths, from the artifacts) and says so; `ods-web` names no build tool. Decisions
   come from the same `Planner` as Home, per request; lineage confidence from the graph
-  document the server already holds.
+  document the server already holds. The binary reads the latest snapshot and history
+  once and derives both the planner's input and the last builds from that read, so the
+  builds shown and the decisions can't rest on different snapshots.
+- **Offline decisions:** this plan checks no relation, so a reuse is shown as taken on
+  trust ("its relation isn't checked by this plan; it is when a run starts"), and the
+  view model carries it (`relations_checked: false`, `caveats`).
 - **Pages:** `<base>/catalog` and `<base>/catalog/<id>`. A page one level down emits
   `<meta name="ods-root" content="../">` and prefixes its links and font URLs, since
   the CSP's `base-uri 'none'` rules out `<base>`; the shared script reads it to find
   the API. Filters are a plain `GET` form, so the URL is the state and the page works
   without script.
+- **Inline scripts:** besides the shared script, these pages add small static inline
+  scripts (submit a facet form on change and restore focus; bind `/` to the Catalog's
+  search; filter columns; copy the page's link). They embed no data, so the existing
+  `script-src 'unsafe-inline'` covers them; a CSP hash per script is a possible
+  tightening, not needed for them to work.
 - **API:** `/api/catalog` (`CatalogView`, same query as the page) and
   `/api/catalog/<id>` (`ModelView`, every tab), `GET` only, at `schema_version` 1.
   Beyond loopback they omit file paths and error text.

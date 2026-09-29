@@ -21,31 +21,52 @@ expression: pretty(view)
       "data_type": "BIGINT",
       "description": "The order.",
       "name": "id",
+      "possibly_stale": false,
       "tests": [
         "unique"
       ],
+      "type_as_of": "2026-09-28T08:00:00Z",
       "type_source": "warehouse",
       "upstream": [
         "raw_orders.id"
-      ]
+      ],
+      "upstream_inferred": false
     },
     {
       "constraints": [],
       "data_type": "varchar",
       "description": null,
       "name": "status",
+      "possibly_stale": false,
       "tests": [],
+      "type_as_of": null,
       "type_source": "declared",
-      "upstream": []
+      "upstream": [],
+      "upstream_inferred": false
     },
     {
       "constraints": [],
       "data_type": null,
       "description": null,
       "name": "amount",
+      "possibly_stale": false,
       "tests": [],
+      "type_as_of": null,
       "type_source": null,
-      "upstream": []
+      "upstream": [],
+      "upstream_inferred": false
+    },
+    {
+      "constraints": [],
+      "data_type": "TEXT",
+      "description": null,
+      "name": "legacy",
+      "possibly_stale": true,
+      "tests": [],
+      "type_as_of": "2026-09-28T08:00:00Z",
+      "type_source": "warehouse",
+      "upstream": [],
+      "upstream_inferred": false
     }
   ],
   "decision": {
@@ -57,11 +78,15 @@ expression: pretty(view)
         "message": "code changed since run 9ea38bd5: sql"
       }
     ],
-    "summary": "code changed since run 9ea38bd5: sql"
+    "summary": "sql changed since run 9ea38bd5"
   },
   "decisions": {
     "based_on": 2,
+    "caveats": [
+      "Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts)."
+    ],
     "error": null,
+    "relations_checked": false,
     "state": "recorded",
     "warnings": []
   },
@@ -87,7 +112,8 @@ expression: pretty(view)
   "lineage_notes": [],
   "links": {
     "lineage": "lineage?node=model.shop.orders",
-    "why": "state/plan?node=model.shop.orders"
+    "why": "state/plan?node=model.shop.orders",
+    "why_available": false
   },
   "materialization": "view",
   "name": "orders",
@@ -99,18 +125,33 @@ expression: pretty(view)
   ],
   "tests": [
     {
-      "column": "id",
+      "column": "ID",
       "id": "test.shop.unique_orders_id.1",
       "kind": "data",
-      "last_outcome": null,
+      "last_outcome": {
+        "at": "2026-09-28T09:05:00Z",
+        "outcome": "passed",
+        "run_id": "9ea38bd5-0000-4000-8000-000000000002"
+      },
       "name": "unique"
     },
     {
       "column": null,
       "id": "unit_test.shop.orders.totals",
       "kind": "unit",
-      "last_outcome": null,
+      "last_outcome": {
+        "at": "2026-09-28T09:05:00Z",
+        "outcome": "passed",
+        "run_id": "9ea38bd5-0000-4000-8000-000000000002"
+      },
       "name": "totals"
+    },
+    {
+      "column": null,
+      "id": "test.shop.elsewhere.3",
+      "kind": "data",
+      "last_outcome": null,
+      "name": "elsewhere"
     }
   ],
   "type_label": "model",

@@ -4,14 +4,17 @@
 //!
 //! The binary reads the project's artifacts and the state store and fills a
 //! [`CatalogInput`] with neutral facts (ADR-0001, ADR-0009); decisions come from the
-//! same plan Home shows, made again for every request. Nothing here guesses: a type,
-//! a layer or a test outcome that isn't recorded is shown as unknown (AGENTS rule 3).
+//! same plan Home shows, made again for each request as of its time.
+//! Nothing here guesses: a type or a test outcome that isn't recorded is shown as
+//! unknown, and what is derived (a layer, column lineage that isn't parsed, a column
+//! only the warehouse catalog lists) is marked so (AGENTS rule 3).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ods_core::Confidence;
 use ods_core::state::{ExecutionPlan, PlanAction, PlanEntry, ReasonCode, Timestamp};
 use ods_lineage::GraphDocument;
+use ods_lineage::export::{ColumnEdge, GraphNode};
 use serde::Serialize;
 
 use crate::dashboard::{DASHBOARD_SCHEMA_VERSION, Dashboard, StateInput, StateStatus};
@@ -32,8 +35,11 @@ pub struct CatalogInput {
     pub layer_source: Option<String>,
     /// Names of other nodes the project's nodes read (e.g. sources), by id.
     pub names: BTreeMap<String, String>,
-    /// Each node's last successful build, from the latest snapshot, by id.
+    /// Each node's last successful build, from the latest snapshot, by id. It must
+    /// come from the same snapshot the plan is made against.
     pub last_builds: BTreeMap<String, LastBuild>,
+    /// When the warehouse catalog that column types come from was written, if known.
+    pub warehouse_as_of: Option<String>,
 }
 
 impl CatalogInput {
@@ -64,6 +70,13 @@ impl CatalogInput {
     #[must_use]
     pub fn with_last_builds(mut self, builds: BTreeMap<String, LastBuild>) -> Self {
         self.last_builds = builds;
+        self
+    }
+
+    /// Says when the warehouse catalog was written.
+    #[must_use]
+    pub fn with_warehouse_as_of(mut self, generated_at: Option<String>) -> Self {
+        self.warehouse_as_of = generated_at;
         self
     }
 }
@@ -155,6 +168,8 @@ pub struct CatalogColumn {
     pub description: Option<String>,
     /// Its declared constraints, e.g. `not_null`, `primary_key`.
     pub constraints: Vec<String>,
+    /// What lists it; empty when unknown.
+    pub listed_by: Vec<ColumnSource>,
 }
 
 impl CatalogColumn {
@@ -165,8 +180,23 @@ impl CatalogColumn {
             data_type: None,
             description: None,
             constraints: Vec::new(),
+            listed_by: Vec::new(),
         }
     }
+}
+
+/// What says a column exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ColumnSource {
+    /// Declared in the project, as of its current artifacts.
+    Declared,
+    /// The warehouse's catalog, as of when it was written: it may be older than the
+    /// code.
+    WarehouseCatalog,
+    /// The data file a seed loads, as verified against the project.
+    File,
 }
 
 /// What kind of test.
@@ -192,6 +222,8 @@ pub struct CatalogTest {
     pub column: Option<String>,
     /// What kind of test.
     pub kind: TestKind,
+    /// Whether it is one of the checks a recorded build's test record vouches for.
+    pub covered_by_checks: bool,
 }
 
 impl CatalogTest {
@@ -207,7 +239,16 @@ impl CatalogTest {
             name: name.into(),
             column,
             kind,
+            covered_by_checks: false,
         }
+    }
+
+    /// Says whether it is one of the node's checks, which a recorded build's test
+    /// record vouches for as a set.
+    #[must_use]
+    pub fn covered(mut self, covered: bool) -> Self {
+        self.covered_by_checks = covered;
+        self
     }
 }
 
@@ -408,8 +449,8 @@ impl LineageConfidence {
         }
     }
 
-    fn of(document: &GraphDocument, id: &str) -> Self {
-        match document.nodes.iter().find(|n| n.id == id) {
+    fn of(node: Option<&GraphNode>) -> Self {
+        match node {
             Some(n) if n.opaque => Self::Opaque,
             Some(n) => match n.confidence {
                 Some(Confidence::Exact) => Self::Parsed,
@@ -477,6 +518,12 @@ pub struct DecisionsBasis {
     pub error: Option<String>,
     /// What qualifies the plan.
     pub warnings: Vec<String>,
+    /// Whether the plan checked that reused nodes' relations still exist. Always false
+    /// here: the dashboard plans offline.
+    pub relations_checked: bool,
+    /// What the decisions don't say, e.g. that a reuse is taken on trust until a run
+    /// checks the relation.
+    pub caveats: Vec<String>,
 }
 
 /// A facet and its values.
@@ -551,6 +598,8 @@ pub struct CatalogView {
     pub query: CatalogQuery,
     /// Where the decisions come from.
     pub decisions: DecisionsBasis,
+    /// How layers are worked out: they are derived, never declared.
+    pub layer_source: Option<String>,
     /// The facets, in order; counts are over every node.
     pub facets: Vec<Facet>,
     /// How many nodes there are.
@@ -583,6 +632,11 @@ pub struct ColumnView {
     pub data_type: Option<String>,
     /// Where the type comes from.
     pub type_source: Option<TypeSource>,
+    /// For a warehouse type: when the warehouse catalog was written, if known.
+    pub type_as_of: Option<String>,
+    /// Only the warehouse catalog lists it, and neither the project nor the lineage
+    /// of its current code does: it may have been dropped since.
+    pub possibly_stale: bool,
     /// Its description.
     pub description: Option<String>,
     /// Tests on it, by name.
@@ -591,6 +645,8 @@ pub struct ColumnView {
     pub constraints: Vec<String>,
     /// The columns it is computed from, as `node.column`, from the lineage graph.
     pub upstream: Vec<String>,
+    /// Whether `upstream` is inferred rather than parsed from the code.
+    pub upstream_inferred: bool,
 }
 
 /// A test on the model page.
@@ -606,8 +662,22 @@ pub struct TestView {
     pub column: Option<String>,
     /// What kind of test.
     pub kind: TestKind,
-    /// Its own last outcome; always `None` until outcomes are recorded per test.
-    pub last_outcome: Option<String>,
+    /// Its last recorded outcome: only as part of the node's checks, which the state
+    /// records passing as a set; `None` when not recorded.
+    pub last_outcome: Option<TestOutcome>,
+}
+
+/// A test's recorded outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct TestOutcome {
+    /// Always `passed`: only passing checks are recorded.
+    pub outcome: &'static str,
+    /// The run that ran it.
+    pub run_id: String,
+    /// When.
+    pub at: Timestamp,
 }
 
 /// When a node's checks last all passed.
@@ -646,6 +716,8 @@ pub struct ModelLinks {
     pub lineage: String,
     /// Why the plan decided what it did.
     pub why: String,
+    /// Whether the `why` page is served yet; until then it is shown as planned.
+    pub why_available: bool,
 }
 
 /// A model page: everything about one node, for every tab.
@@ -734,22 +806,75 @@ fn short(run_id: &str) -> String {
     run_id.chars().take(8).collect()
 }
 
-/// What the catalog pages need from the dashboard, worked out once per request.
+/// What a reuse doesn't say when the plan was made offline (AGENTS rules 3 and 4).
+pub(crate) const REUSE_CAVEAT: &str = "Reuse is decided offline: a reused node's relation \
+    isn't checked by this plan (it is when a run starts).";
+
+/// The same, for one node.
+pub(crate) const REUSE_RELATION: &str = "not checked by this plan; checked when a run starts";
+
+/// What the catalog pages need from the dashboard, worked out once per request, with
+/// everything looked up by id indexed once.
 struct Context<'a> {
     input: &'a CatalogInput,
-    document: &'a GraphDocument,
     basis: DecisionsBasis,
-    plan: Option<ExecutionPlan>,
     details: bool,
+    entries: BTreeMap<&'a str, &'a PlanEntry>,
+    graph: BTreeMap<&'a str, &'a GraphNode>,
+    nodes: BTreeMap<&'a str, &'a CatalogNode>,
+    children: BTreeMap<&'a str, Vec<&'a str>>,
+    /// Run ids to shorten in messages, longest first so none is cut by another.
+    runs: Vec<&'a str>,
 }
 
 impl<'a> Context<'a> {
     fn new(
         dashboard: &'a Dashboard,
+        plan: Option<&'a ExecutionPlan>,
+        basis: DecisionsBasis,
         document: &'a GraphDocument,
         details: bool,
-        now: Timestamp,
     ) -> Self {
+        let input = &dashboard.catalog;
+        let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for node in &input.nodes {
+            for parent in &node.depends_on {
+                children
+                    .entry(parent.as_str())
+                    .or_default()
+                    .push(node.id.as_str());
+            }
+        }
+        let mut runs: Vec<&str> = input
+            .last_builds
+            .values()
+            .map(|b| b.run_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        runs.sort_by_key(|r| std::cmp::Reverse(r.len()));
+        Self {
+            input,
+            basis,
+            details,
+            entries: plan
+                .iter()
+                .flat_map(|p| &p.entries)
+                .map(|e| (e.node.as_str(), e))
+                .collect(),
+            graph: document.nodes.iter().map(|n| (n.id.as_str(), n)).collect(),
+            nodes: input.nodes.iter().map(|n| (n.id.as_str(), n)).collect(),
+            children,
+            runs,
+        }
+    }
+
+    /// The plan and what it rests on, for `now`.
+    fn plan(
+        dashboard: &Dashboard,
+        details: bool,
+        now: Timestamp,
+    ) -> (Option<ExecutionPlan>, DecisionsBasis) {
         let (state, plan, error, warnings) = match &dashboard.state {
             StateInput::NoStore { .. } => (StateStatus::NoStore, None, None, Vec::new()),
             StateInput::Unreadable { .. } => (StateStatus::Unreadable, None, None, Vec::new()),
@@ -776,27 +901,27 @@ impl<'a> Context<'a> {
                 }
             }
         };
-        Self {
-            input: &dashboard.catalog,
-            document,
-            basis: DecisionsBasis {
-                state,
-                based_on: plan.as_ref().and_then(|p| p.based_on.map(|s| s.0)),
-                error,
-                warnings,
+        let reuses = plan
+            .as_ref()
+            .is_some_and(|p: &ExecutionPlan| p.with_action(PlanAction::Reuse).next().is_some());
+        let basis = DecisionsBasis {
+            state,
+            based_on: plan.as_ref().and_then(|p| p.based_on.map(|s| s.0)),
+            error,
+            warnings,
+            relations_checked: false,
+            caveats: if reuses {
+                vec![REUSE_CAVEAT.to_owned()]
+            } else {
+                Vec::new()
             },
-            plan,
-            details,
-        }
-    }
-
-    fn entry(&self, id: &str) -> Option<&PlanEntry> {
-        self.plan.as_ref()?.entries.iter().find(|e| e.node == id)
+        };
+        (plan, basis)
     }
 
     /// The decision for a node: the plan's, or what the state says without one.
     fn decision(&self, id: &str) -> DecisionView {
-        if let Some(entry) = self.entry(id) {
+        if let Some(entry) = self.entries.get(id) {
             let reasons: Vec<ReasonView> = entry
                 .reasons
                 .iter()
@@ -817,12 +942,24 @@ impl<'a> Context<'a> {
                 }
                 _ => Decision::Build,
             };
-            let summary = reasons.first().map_or_else(
+            let summary = match (reasons.first(), self.input.last_builds.get(id)) {
+                // `sql changed since run 9ea38bd5`: what changed, from the plan, and
+                // the run that built what is there now.
+                (Some(r), Some(build))
+                    if r.code == ReasonCode::CodeChanged
+                        && !entry.changed_components.is_empty() =>
+                {
+                    format!(
+                        "{} changed since run {}",
+                        entry.changed_components.join(", "),
+                        short(&build.run_id)
+                    )
+                }
+                (Some(r), _) => r.message.clone(),
                 // A build without a reason would be a planner bug: say so rather than
                 // invent one.
-                || "no reason recorded".to_owned(),
-                |r| r.message.clone(),
-            );
+                (None, _) => "no reason recorded".to_owned(),
+            };
             return DecisionView {
                 decision,
                 reasons,
@@ -861,13 +998,8 @@ impl<'a> Context<'a> {
 
     /// Long run ids read better short, as in the table.
     fn shorten(&self, message: &str) -> String {
-        let runs: BTreeSet<&str> = self
-            .input
-            .last_builds
-            .values()
-            .map(|b| b.run_id.as_str())
-            .collect();
-        runs.into_iter()
+        self.runs
+            .iter()
             .fold(message.to_owned(), |m, run| m.replace(run, &short(run)))
     }
 
@@ -880,20 +1012,16 @@ impl<'a> Context<'a> {
         })
     }
 
+    fn confidence(&self, id: &str) -> LineageConfidence {
+        LineageConfidence::of(self.graph.get(id).copied())
+    }
+
     fn name(&self, id: &str) -> String {
-        self.input
-            .nodes
-            .iter()
-            .find(|n| n.id == id)
+        self.nodes
+            .get(id)
             .map(|n| n.name.clone())
             .or_else(|| self.input.names.get(id).cloned())
-            .or_else(|| {
-                self.document
-                    .nodes
-                    .iter()
-                    .find(|n| n.id == id)
-                    .map(|n| n.name.clone())
-            })
+            .or_else(|| self.graph.get(id).map(|n| n.name.clone()))
             .unwrap_or_else(|| id.to_owned())
     }
 
@@ -901,13 +1029,16 @@ impl<'a> Context<'a> {
         NodeLink {
             id: id.to_owned(),
             name: self.name(id),
-            href: self
-                .input
-                .nodes
-                .iter()
-                .any(|n| n.id == id)
-                .then(|| node_href(id)),
+            href: self.nodes.contains_key(id).then(|| node_href(id)),
         }
+    }
+
+    /// Links to `ids`, by name then id, once each.
+    fn links<'i>(&self, ids: impl IntoIterator<Item = &'i str>) -> Vec<NodeLink> {
+        let mut links: Vec<NodeLink> = ids.into_iter().map(|id| self.link(id)).collect();
+        links.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        links.dedup_by(|a, b| a.id == b.id);
+        links
     }
 
     fn row(&self, node: &CatalogNode) -> CatalogRow {
@@ -919,7 +1050,7 @@ impl<'a> Context<'a> {
             layer: node.layer.clone(),
             materialization: node.materialization.clone(),
             tags: node.tags.clone(),
-            lineage: LineageConfidence::of(self.document, &node.id),
+            lineage: self.confidence(&node.id),
             decision: self.decision(&node.id),
             health: None,
             last_build: self.last_build(&node.id),
@@ -965,33 +1096,148 @@ fn matches(row: &CatalogRow, query: &CatalogQuery) -> bool {
     facets && search
 }
 
+/// A sort key: missing values last either way.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum SortKey {
+    Rank(usize),
+    Text(String),
+}
+
 fn sort(rows: &mut [CatalogRow], query: &CatalogQuery) {
-    // Missing values sort last either way, then by name, so the order is total.
-    let key = |row: &CatalogRow| -> (bool, String) {
-        let value = match query.sort.as_str() {
-            "type" => Some(row.type_label.clone()),
-            "layer" => row.layer.clone(),
-            "materialized" => row.materialization.clone(),
-            "lineage" => Some(row.lineage.key().to_owned()),
-            "decision" => Some(row.decision.decision.key().to_owned()),
-            "last_built" => row.last_build.as_ref().map(|b| b.built_at.to_string()),
-            _ => Some(row.name.clone()),
-        };
-        (value.is_none(), value.unwrap_or_default())
+    let key = |row: &CatalogRow| -> Option<SortKey> {
+        match query.sort.as_str() {
+            "type" => Some(SortKey::Text(row.type_label.clone())),
+            "layer" => row.layer.clone().map(SortKey::Text),
+            "materialized" => row.materialization.clone().map(SortKey::Text),
+            // Decisions and confidences in the facets' order, not alphabetically.
+            "lineage" => CONFIDENCES
+                .iter()
+                .position(|c| *c == row.lineage)
+                .map(SortKey::Rank),
+            "decision" => DECISIONS
+                .iter()
+                .position(|d| *d == row.decision.decision)
+                .map(SortKey::Rank),
+            "last_built" => row
+                .last_build
+                .as_ref()
+                .map(|b| SortKey::Text(b.built_at.to_string())),
+            _ => Some(SortKey::Text(row.name.clone())),
+        }
     };
     rows.sort_by(|a, b| {
         let (ka, kb) = (key(a), key(b));
-        let order = ka.1.cmp(&kb.1);
-        let order = if query.descending {
-            order.reverse()
-        } else {
-            order
+        let order = match (&ka, &kb) {
+            (Some(x), Some(y)) if query.descending => y.cmp(x),
+            (Some(x), Some(y)) => x.cmp(y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
         };
-        ka.0.cmp(&kb.0)
-            .then(order)
+        order
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.id.cmp(&b.id))
     });
+}
+
+/// Every decision, in the order the facet lists them.
+const DECISIONS: [Decision; 4] = [
+    Decision::Build,
+    Decision::Reuse,
+    Decision::NeverBuilt,
+    Decision::Unknown,
+];
+
+/// Every confidence, strongest first.
+const CONFIDENCES: [LineageConfidence; 6] = [
+    LineageConfidence::Parsed,
+    LineageConfidence::Inferred,
+    LineageConfidence::Observed,
+    LineageConfidence::Unknown,
+    LineageConfidence::Opaque,
+    LineageConfidence::NotApplicable,
+];
+
+/// The order of a facet's values: fixed for decisions and confidences (all listed,
+/// zeros too), layers upstream first (by the shallowest node in the DAG), seeds last
+/// among materializations, the rest alphabetical.
+fn facet_order(
+    cx: &Context<'_>,
+    all: &[CatalogRow],
+    key: &str,
+    counts: &BTreeMap<String, usize>,
+) -> Vec<(String, String)> {
+    match key {
+        "decision" => DECISIONS
+            .iter()
+            .map(|d| (d.key().to_owned(), d.label().to_owned()))
+            .collect(),
+        "lineage" => CONFIDENCES
+            .iter()
+            .map(|c| (c.key().to_owned(), c.key().to_owned()))
+            .collect(),
+        "layer" => {
+            let depths = dag_depths(cx);
+            let mut depth: BTreeMap<&str, usize> = BTreeMap::new();
+            for row in all {
+                if let Some(layer) = &row.layer {
+                    let d = depths.get(row.id.as_str()).copied().unwrap_or(usize::MAX);
+                    let e = depth.entry(layer.as_str()).or_insert(usize::MAX);
+                    *e = (*e).min(d);
+                }
+            }
+            let mut layers: Vec<(&str, usize)> = depth.into_iter().collect();
+            layers.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)));
+            layers
+                .into_iter()
+                .map(|(l, _)| (l.to_owned(), l.to_owned()))
+                .collect()
+        }
+        _ => {
+            let mut values: Vec<&String> = counts.keys().collect();
+            if key == "materialized" {
+                values.sort_by_key(|v| (v.as_str() == "seed", v.as_str()));
+            }
+            values.into_iter().map(|v| (v.clone(), v.clone())).collect()
+        }
+    }
+}
+
+/// Each node's depth in the build graph: 0 when it reads no other node here, else one
+/// more than its deepest parent. From the project's own edges, so a node whose
+/// lineage couldn't be analyzed still has its place.
+fn dag_depths<'a>(cx: &Context<'a>) -> BTreeMap<&'a str, usize> {
+    fn depth<'a>(
+        id: &'a str,
+        cx: &Context<'a>,
+        memo: &mut BTreeMap<&'a str, usize>,
+        visiting: &mut BTreeSet<&'a str>,
+    ) -> usize {
+        if let Some(d) = memo.get(id) {
+            return *d;
+        }
+        // A cycle would be a broken project; stop rather than loop.
+        if !visiting.insert(id) {
+            return 0;
+        }
+        let d = cx.nodes.get(id).map_or(0, |node| {
+            node.depends_on
+                .iter()
+                .filter_map(|p| cx.nodes.get_key_value(p.as_str()).map(|(k, _)| *k))
+                .map(|p| depth(p, cx, memo, visiting) + 1)
+                .max()
+                .unwrap_or(0)
+        });
+        visiting.remove(id);
+        memo.insert(id, d);
+        d
+    }
+    let mut memo = BTreeMap::new();
+    let mut visiting = BTreeSet::new();
+    for id in cx.nodes.keys() {
+        depth(id, cx, &mut memo, &mut visiting);
+    }
+    memo
 }
 
 /// The facets, with their values' counts over every node in `all`.
@@ -1005,56 +1251,15 @@ fn facets(cx: &Context<'_>, all: &[CatalogRow], query: &CatalogQuery) -> Vec<Fac
                     *counts.entry(value).or_default() += 1;
                 }
             }
-            // The decisions always list every value, so a zero says "none", not
-            // "not shown"; confidences list those present, strongest first.
-            let fixed: Option<Vec<(&str, &str)>> = match key {
-                "decision" => Some(
-                    [
-                        Decision::Build,
-                        Decision::Reuse,
-                        Decision::NeverBuilt,
-                        Decision::Unknown,
-                    ]
-                    .iter()
-                    .map(|d| (d.key(), d.label()))
-                    .collect(),
-                ),
-                "lineage" => Some(
-                    [
-                        LineageConfidence::Parsed,
-                        LineageConfidence::Inferred,
-                        LineageConfidence::Observed,
-                        LineageConfidence::Unknown,
-                        LineageConfidence::Opaque,
-                        LineageConfidence::NotApplicable,
-                    ]
-                    .iter()
-                    .map(|c| (c.key(), c.key()))
-                    .filter(|(key, _)| counts.contains_key(*key))
-                    .collect(),
-                ),
-                _ => None,
-            };
-            let mut values: Vec<FacetValue> = match fixed {
-                Some(fixed) => fixed
-                    .into_iter()
-                    .map(|(value, label)| FacetValue {
-                        value: value.to_owned(),
-                        label: label.to_owned(),
-                        count: counts.get(value).copied().unwrap_or(0),
-                        selected: false,
-                    })
-                    .collect(),
-                None => counts
-                    .iter()
-                    .map(|(value, count)| FacetValue {
-                        value: value.clone(),
-                        label: value.clone(),
-                        count: *count,
-                        selected: false,
-                    })
-                    .collect(),
-            };
+            let mut values: Vec<FacetValue> = facet_order(cx, all, key, &counts)
+                .into_iter()
+                .map(|(value, label)| FacetValue {
+                    count: counts.get(&value).copied().unwrap_or(0),
+                    selected: query.selected(key, &value),
+                    value,
+                    label,
+                })
+                .collect();
             // A selected value no node has any more still shows, to be cleared.
             for wanted in query.filters.get(key).into_iter().flatten() {
                 if !values.iter().any(|v| &v.value == wanted) {
@@ -1062,12 +1267,9 @@ fn facets(cx: &Context<'_>, all: &[CatalogRow], query: &CatalogQuery) -> Vec<Fac
                         value: wanted.clone(),
                         label: wanted.clone(),
                         count: 0,
-                        selected: false,
+                        selected: true,
                     });
                 }
-            }
-            for value in &mut values {
-                value.selected = query.selected(key, &value.value);
             }
             Facet {
                 key,
@@ -1077,15 +1279,14 @@ fn facets(cx: &Context<'_>, all: &[CatalogRow], query: &CatalogQuery) -> Vec<Fac
                         cx.input
                             .layer_source
                             .clone()
-                            .unwrap_or_else(|| "no layers: the project doesn't say".to_owned()),
+                            .unwrap_or_else(|| "No layers: the project doesn't say.".to_owned()),
                     ),
                     "lineage" => {
                         Some("Column lineage from the SQL; seeds have none (n/a).".to_owned())
                     }
-                    "decision" => Some(
-                        "From the plan against the latest snapshot, made for this request."
-                            .to_owned(),
-                    ),
+                    "decision" => Some(format!(
+                        "From the plan against the latest snapshot, made offline. {REUSE_CAVEAT}"
+                    )),
                     _ => None,
                 },
                 values,
@@ -1113,7 +1314,8 @@ impl Dashboard {
         details: bool,
         now: Timestamp,
     ) -> CatalogView {
-        let cx = Context::new(self, document, details, now);
+        let (plan, basis) = Context::plan(self, details, now);
+        let cx = Context::new(self, plan.as_ref(), basis, document, details);
         let all: Vec<CatalogRow> = cx.input.nodes.iter().map(|n| cx.row(n)).collect();
         let facets = facets(&cx, &all, query);
         let mut rows: Vec<CatalogRow> = all.into_iter().filter(|r| matches(r, query)).collect();
@@ -1122,6 +1324,7 @@ impl Dashboard {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             query: query.clone(),
             decisions: cx.basis.clone(),
+            layer_source: cx.input.layer_source.clone(),
             facets,
             total: cx.input.nodes.len(),
             rows,
@@ -1142,37 +1345,14 @@ impl Dashboard {
         now: Timestamp,
     ) -> Option<ModelView> {
         let node = self.catalog.nodes.iter().find(|n| n.id == id)?;
-        let cx = Context::new(self, document, details, now);
+        let (plan, basis) = Context::plan(self, details, now);
+        let cx = Context::new(self, plan.as_ref(), basis, document, details);
         let decision = cx.decision(id);
-        let graph_node = document.nodes.iter().find(|n| n.id == id);
-        let columns = node
-            .columns
-            .iter()
-            .map(|c| ColumnView {
-                name: c.name.clone(),
-                data_type: c.data_type.as_ref().map(|(t, _)| t.clone()),
-                type_source: c.data_type.as_ref().map(|(_, s)| *s),
-                description: c.description.clone(),
-                tests: node
-                    .tests
-                    .iter()
-                    .filter(|t| t.column.as_deref() == Some(c.name.as_str()))
-                    .map(|t| t.name.clone())
-                    .collect(),
-                constraints: c.constraints.clone(),
-                upstream: column_inputs(&cx, id, &c.name),
-            })
-            .collect();
-        let downstream: Vec<NodeLink> = cx
-            .input
-            .nodes
-            .iter()
-            .filter(|n| n.depends_on.iter().any(|d| d == id))
-            .map(|n| cx.link(&n.id))
-            .collect();
-        let mut upstream: Vec<NodeLink> = node.depends_on.iter().map(|d| cx.link(d)).collect();
-        upstream.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
-        upstream.dedup_by(|a, b| a.id == b.id);
+        let graph_node = cx.graph.get(id).copied();
+        let lineage = cx.confidence(id);
+        let columns = column_views(&cx, node, document, lineage);
+        let upstream = cx.links(node.depends_on.iter().map(String::as_str));
+        let downstream = cx.links(cx.children.get(id).into_iter().flatten().copied());
         let checks_changed = decision
             .reasons
             .iter()
@@ -1187,6 +1367,9 @@ impl Dashboard {
                 at: *at,
                 checks_changed_since: checks_changed,
             });
+        // Each test the record vouches for passed with the rest of the checks; the
+        // others' outcomes aren't recorded.
+        let vouched = checks_passed.as_ref().filter(|c| !c.checks_changed_since);
         let encoded = encode(id);
         Some(ModelView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
@@ -1204,7 +1387,7 @@ impl Dashboard {
             decision,
             decisions: cx.basis.clone(),
             last_build: cx.last_build(id),
-            lineage: LineageConfidence::of(document, id),
+            lineage,
             lineage_notes: graph_node
                 .map(|n| n.diagnostics.clone())
                 .unwrap_or_default(),
@@ -1224,26 +1407,84 @@ impl Dashboard {
                     name: t.name.clone(),
                     column: t.column.clone(),
                     kind: t.kind,
-                    last_outcome: None,
+                    last_outcome: vouched
+                        .filter(|_| t.covered_by_checks)
+                        .map(|c| TestOutcome {
+                            outcome: "passed",
+                            run_id: c.run_id.clone(),
+                            at: c.at,
+                        }),
                 })
                 .collect(),
             checks_passed,
             links: ModelLinks {
                 lineage: format!("lineage?node={encoded}"),
                 why: format!("state/plan?node={encoded}"),
+                why_available: false,
             },
         })
     }
 }
 
-/// The columns `column` of node `id` is computed from, from the lineage graph: `node.column`
-/// for another node's, the bare name for the node's own.
-fn column_inputs(cx: &Context<'_>, id: &str, column: &str) -> Vec<String> {
-    let mut inputs: Vec<String> = cx
-        .document
-        .column_edges
+/// The columns of `node`, whose lineage confidence is `lineage`.
+fn column_views(
+    cx: &Context<'_>,
+    node: &CatalogNode,
+    document: &GraphDocument,
+    lineage: LineageConfidence,
+) -> Vec<ColumnView> {
+    let id = node.id.as_str();
+    let graph_node = cx.graph.get(id).copied();
+    // Column lineage is fact only when parsed from the code (AGENTS rule 3).
+    let upstream_inferred = lineage != LineageConfidence::Parsed;
+    let mut edges: BTreeMap<&str, Vec<&ColumnEdge>> = BTreeMap::new();
+    for edge in document.column_edges.iter().filter(|e| e.to.node == id) {
+        if let Some(column) = edge.to.column.as_deref() {
+            edges.entry(column).or_default().push(edge);
+        }
+    }
+    let code_columns: BTreeSet<String> = graph_node
+        .map(|n| n.columns.iter().map(|c| c.to_lowercase()).collect())
+        .unwrap_or_default();
+    node.columns
         .iter()
-        .filter(|e| e.to.node == id && e.to.column.as_deref() == Some(column))
+        .map(|c| {
+            let warehouse = c
+                .data_type
+                .as_ref()
+                .is_some_and(|(_, s)| *s == TypeSource::Warehouse);
+            ColumnView {
+                name: c.name.clone(),
+                data_type: c.data_type.as_ref().map(|(t, _)| t.clone()),
+                type_source: c.data_type.as_ref().map(|(_, s)| *s),
+                type_as_of: cx.input.warehouse_as_of.clone().filter(|_| warehouse),
+                possibly_stale: c.listed_by == [ColumnSource::WarehouseCatalog]
+                    && !code_columns.contains(&c.name.to_lowercase()),
+                description: c.description.clone(),
+                tests: node
+                    .tests
+                    .iter()
+                    .filter(|t| {
+                        t.column
+                            .as_deref()
+                            .is_some_and(|col| col.eq_ignore_ascii_case(&c.name))
+                    })
+                    .map(|t| t.name.clone())
+                    .collect(),
+                constraints: c.constraints.clone(),
+                upstream: column_inputs(cx, id, edges.get(c.name.as_str())),
+                upstream_inferred,
+            }
+        })
+        .collect()
+}
+
+/// The columns a column is computed from (its incoming `edges`): `node.column` for
+/// another node's, the bare name for the node's own.
+fn column_inputs(cx: &Context<'_>, id: &str, edges: Option<&Vec<&ColumnEdge>>) -> Vec<String> {
+    let mut inputs: Vec<String> = edges
+        .into_iter()
+        .flatten()
         .filter_map(|e| {
             let from = e.from.column.as_deref()?;
             Some(if e.from.node == id {

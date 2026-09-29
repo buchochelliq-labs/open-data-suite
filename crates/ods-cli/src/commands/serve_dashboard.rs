@@ -14,6 +14,7 @@ use ods_core::state::Timestamp;
 use ods_lineage::GraphFilter;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
+use ods_web::catalog::LastBuild;
 use ods_web::dashboard::{
     ModuleState, ModuleStatus, OpaqueNode, Planner, RECENT_RUNS, Recorded, RunRecord, StateInput,
     StoreLocation, Target,
@@ -144,10 +145,10 @@ impl DashboardSource {
                 OpaqueNode::new(id, name, why)
             })
             .collect();
-        let state = self.state(Arc::clone(&ws));
-        // The Catalog (#313): the project's nodes and their last builds.
-        let catalog =
-            super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, &ws.state_db, &ws.scope);
+        let (state, last_builds) = self.state(Arc::clone(&ws));
+        // The Catalog (#313): the project's nodes, and their last builds from the
+        // snapshot the plan is made against.
+        let catalog = super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         let target = self
             .settings
@@ -164,11 +165,13 @@ impl DashboardSource {
             .with_catalog(catalog)
     }
 
-    fn state(&self, ws: Arc<Workspace>) -> StateInput {
+    /// What the store holds, and each node's last build (#313), from one read, so
+    /// the plan and the builds shown with it rest on the same snapshot.
+    fn state(&self, ws: Arc<Workspace>) -> (StateInput, BTreeMap<String, LastBuild>) {
         let store = store_location(&ws.state_db);
         // Never created here: the dashboard only reads (AGENTS rule 5, #310).
         if !ws.state_db.is_file() {
-            return StateInput::NoStore { store };
+            return (StateInput::NoStore { store }, BTreeMap::new());
         }
         let unreadable = |error: String| {
             tracing::warn!(%error, "dashboard: the state store can't be read");
@@ -189,13 +192,15 @@ impl DashboardSource {
             }
             let latest = db.latest(&ws.scope).await?;
             db.close().await;
-            Ok::<_, ods_sdk::ProviderError>((history.len(), runs, latest))
+            Ok::<_, ods_sdk::ProviderError>((history, runs, latest))
         });
-        let (counted, runs, latest) = match read {
+        let (history, runs, latest) = match read {
             Ok(Ok(read)) => read,
-            Ok(Err(e)) => return unreadable(e.to_string()),
-            Err(e) => return unreadable(e.message),
+            Ok(Err(e)) => return (unreadable(e.to_string()), BTreeMap::new()),
+            Err(e) => return (unreadable(e.message), BTreeMap::new()),
         };
+        let counted = history.len();
+        let last_builds = super::serve_catalog::last_builds(latest.as_ref(), &history);
         // Plans depend on time (lag tolerances expire), so Home plans again on every
         // request, as of then; this first plan is the fallback.
         let settings = self.settings.clone();
@@ -211,12 +216,13 @@ impl DashboardSource {
             Ok((plan, warnings)) => (Ok(plan), warnings),
             Err(error) => (Err(error), Vec::new()),
         };
-        StateInput::Recorded(Box::new(
+        let state = StateInput::Recorded(Box::new(
             Recorded::new(store, runs, counted.min(SNAPSHOTS_COUNTED), plan)
                 .capped(counted > SNAPSHOTS_COUNTED)
                 .with_warnings(warnings)
                 .with_planner(planner),
-        ))
+        ));
+        (state, last_builds)
     }
 }
 

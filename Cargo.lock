@@ -1493,6 +1493,7 @@ name = "ods-web"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "form_urlencoded",
  "html-escape",
  "insta",
  "ods-core",

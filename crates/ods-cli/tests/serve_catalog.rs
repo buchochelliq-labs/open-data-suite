@@ -116,12 +116,12 @@ fn without_a_state_store_the_catalog_lists_the_manifest_and_never_built() {
     assert_eq!(counts(&view, "type"), pairs(&[("model", 10), ("seed", 3)]));
     assert_eq!(
         counts(&view, "layer"),
-        pairs(&[("marts", 7), ("staging", 3)]),
-        "the folders under models/"
+        pairs(&[("staging", 3), ("marts", 7)]),
+        "the folders under models/, upstream first"
     );
     assert_eq!(
         counts(&view, "materialized"),
-        pairs(&[("seed", 3), ("table", 6), ("view", 4)])
+        pairs(&[("table", 6), ("view", 4), ("seed", 3)])
     );
     assert!(counts(&view, "tag").is_empty(), "the fixture has no tags");
     assert_eq!(
@@ -238,10 +238,27 @@ fn the_catalog_shows_the_plan_and_the_builds_the_state_store_recorded() {
     assert_eq!(decisions["reuse"], home["plan"]["reuse"].as_u64().unwrap());
     assert_eq!(decisions["reuse"], 13, "nothing changed since the build");
     let run = home["runs"][0]["run_id"].as_str().unwrap();
+    // The builds shown and the decisions rest on the same snapshot: every build is
+    // one the plan's snapshot records, never a later one.
+    let based_on = view["decisions"]["based_on"].as_u64().unwrap();
     for row in view["rows"].as_array().unwrap() {
         assert_eq!(row["last_build"]["snapshot"], 1, "{row}");
+        assert!(
+            row["last_build"]["snapshot"].as_u64().unwrap() <= based_on,
+            "{row}"
+        );
         assert_eq!(row["last_build"]["run_id"], run, "{row}");
+        assert_eq!(row["decision"]["decision"], "reuse", "{row}");
     }
+    // Reuse is offline: the relation isn't claimed to be checked.
+    assert_eq!(view["decisions"]["relations_checked"], false);
+    assert!(
+        view["decisions"]["caveats"][0]
+            .as_str()
+            .unwrap()
+            .contains("isn't checked by this plan"),
+        "{view}"
+    );
 
     let model = json(&server, "api/catalog/model.jaffle_ods.orders");
     assert_eq!(model["decision"]["decision"], "reuse");

@@ -54,8 +54,9 @@ the changelog was introduced.
   sort are kept in the URL, each node's next-run pill and last successful build, and a
   `[n]` health placeholder (#117). `/catalog/<unique_id>` has Overview, Code, Columns,
   Lineage, State and Tests tabs; column types are shown only when the artifacts record
-  them, and test outcomes only when recorded. Without a state store every node reads
-  *never built*. `/api/catalog` and `/api/catalog/<unique_id>` return the same view
+  them (warehouse types as of the catalog's date), inferred layers and column lineage
+  are marked, and test outcomes only when recorded. A *Reuse* says its relation isn't
+  checked by the offline plan. Without a state store every node reads *never built*. `/api/catalog` and `/api/catalog/<unique_id>` return the same view
   models at `schema_version` 1 (ADR-0009).
 - `ods doctor` checks that ODS can work in the current project: configuration (files,
   profile, every effective value and where it came from, credentials only as

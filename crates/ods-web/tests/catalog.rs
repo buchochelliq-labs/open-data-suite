@@ -14,8 +14,8 @@ use ods_lineage::{GraphFilter, LineageNode, LineageProject, MemoryCache, NodeKin
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
 use ods_web::catalog::{
-    CatalogColumn, CatalogInput, CatalogNode, CatalogQuery, CatalogTest, LastBuild, TestKind,
-    TypeSource,
+    CatalogColumn, CatalogInput, CatalogNode, CatalogQuery, CatalogTest, ColumnSource, LastBuild,
+    TestKind, TypeSource,
 };
 use ods_web::dashboard::{Recorded, RunRecord, StateInput};
 use ods_web::{Dashboard, ServeOptions, Snapshot, router};
@@ -35,9 +35,25 @@ fn at(text: &str) -> Timestamp {
     Timestamp::parse(text).unwrap()
 }
 
-/// The lineage graph: `orders` is parsed from `raw_orders`; `customers` couldn't be
-/// analyzed (the fake has no script for it), so it is opaque.
+/// The lineage graph: `orders` is parsed from `raw_orders`; `customers`' lineage is
+/// only inferred.
 fn lineage() -> Snapshot {
+    let inferred = QueryLineage::new(
+        vec![OutputColumn::new(
+            "total",
+            [(
+                ColumnRef::new(rel("orders"), "id"),
+                EdgeKind::Direct(DirectKind::Identity),
+            )]
+            .into(),
+            "id",
+            Confidence::Inferred,
+        )],
+        std::collections::BTreeSet::default(),
+        [rel("orders")].into(),
+        "rows",
+        vec![],
+    );
     let lineage = QueryLineage::new(
         vec![OutputColumn::new(
             "id",
@@ -54,7 +70,9 @@ fn lineage() -> Snapshot {
         "rows",
         vec![],
     );
-    let analyzer = FakeSqlLineageAnalyzer::new().with("orders.sql", lineage);
+    let analyzer = FakeSqlLineageAnalyzer::new()
+        .with("orders.sql", lineage)
+        .with("customers.sql", inferred);
     let project = LineageProject::new(vec![
         LineageNode::new("seed.shop.raw_orders", rel("raw_orders"), NodeKind::Seed)
             .with_columns(["id"]),
@@ -94,22 +112,32 @@ fn nodes() -> Vec<CatalogNode> {
     id.data_type = Some(("BIGINT".into(), TypeSource::Warehouse));
     id.description = Some("The order.".into());
     id.constraints = vec!["not_null".into()];
+    id.listed_by = vec![ColumnSource::Declared, ColumnSource::WarehouseCatalog];
     let mut status = CatalogColumn::new("status");
     status.data_type = Some(("varchar".into(), TypeSource::Declared));
-    orders.columns = vec![id, status, CatalogColumn::new("amount")];
+    status.listed_by = vec![ColumnSource::Declared];
+    // Only the warehouse catalog lists it, and the code's lineage doesn't have it.
+    let mut legacy = CatalogColumn::new("legacy");
+    legacy.data_type = Some(("TEXT".into(), TypeSource::Warehouse));
+    legacy.listed_by = vec![ColumnSource::WarehouseCatalog];
+    orders.columns = vec![id, status, CatalogColumn::new("amount"), legacy];
     orders.tests = vec![
         CatalogTest::new(
             "test.shop.unique_orders_id.1",
             "unique",
-            Some("id".into()),
+            Some("ID".into()),
             TestKind::Data,
-        ),
+        )
+        .covered(true),
         CatalogTest::new(
             "unit_test.shop.orders.totals",
             "totals",
             None,
             TestKind::Unit,
-        ),
+        )
+        .covered(true),
+        // Attached here, but not one of the checks the record vouches for.
+        CatalogTest::new("test.shop.elsewhere.3", "elsewhere", None, TestKind::Data),
     ];
 
     let mut customers = CatalogNode::new("model.shop.customers", HOSTILE_NAME, "model");
@@ -118,6 +146,9 @@ fn nodes() -> Vec<CatalogNode> {
     customers.materialization = Some("table".into());
     customers.depends_on = vec!["model.shop.orders".into()];
     customers.code = Some(HOSTILE_SQL.into());
+    let mut total = CatalogColumn::new("total");
+    total.listed_by = vec![ColumnSource::Declared];
+    customers.columns = vec![total];
 
     vec![customers, raw, orders]
 }
@@ -148,13 +179,17 @@ fn plan() -> ExecutionPlan {
                 &format!("code and inputs unchanged since run {RUN_1}"),
                 0,
             ),
-            entry(
-                "model.shop.orders",
-                PlanAction::Build,
-                ReasonCode::CodeChanged,
-                &format!("code changed since run {RUN_2}: sql"),
-                1,
-            ),
+            {
+                let mut orders = entry(
+                    "model.shop.orders",
+                    PlanAction::Build,
+                    ReasonCode::CodeChanged,
+                    &format!("code changed since run {RUN_2}: sql"),
+                    1,
+                );
+                orders.changed_components = vec!["sql".into()];
+                orders
+            },
             entry(
                 "model.shop.customers",
                 PlanAction::Build,
@@ -173,6 +208,7 @@ fn catalog_input() -> CatalogInput {
             "source.shop.app.events".to_owned(),
             "app.events".to_owned(),
         )]))
+        .with_warehouse_as_of(Some("2026-09-28T08:00:00Z".into()))
         .with_last_builds(BTreeMap::from([
             (
                 "seed.shop.raw_orders".to_owned(),
@@ -392,12 +428,16 @@ fn facet_counts_match_the_nodes_and_the_plan() {
     assert_eq!(decisions["unknown"], 0);
     assert_eq!(decisions.values().sum::<u64>(), input.nodes.len() as u64);
 
-    // Lineage confidence from the graph: one parsed, one opaque, the seed has none.
+    // Lineage confidence from the graph: one parsed, one inferred, the seed has none;
+    // every confidence is listed, zeros too.
     assert_eq!(
         facet(&view, "lineage"),
         BTreeMap::from([
             ("parsed".to_owned(), 1),
-            ("opaque".to_owned(), 1),
+            ("inferred".to_owned(), 1),
+            ("observed".to_owned(), 0),
+            ("unknown".to_owned(), 0),
+            ("opaque".to_owned(), 0),
             ("n/a".to_owned(), 1),
         ])
     );
@@ -425,7 +465,7 @@ fn facets_filter_and_are_kept_in_the_url() {
         2,
         "counts are over every node"
     );
-    let view = json(addr, "/api/catalog?lineage=opaque");
+    let view = json(addr, "/api/catalog?lineage=inferred");
     assert_eq!(names(&view), ["model.shop.customers"]);
     let view = json(addr, "/api/catalog?tag=core");
     assert_eq!(names(&view), ["model.shop.orders"]);
@@ -458,17 +498,17 @@ fn facets_filter_and_are_kept_in_the_url() {
 
     let (status, _, page) = get(addr, "/catalog?layer=staging&sort=type");
     assert_eq!(status, 200);
-    assert!(page.contains(r#"<input type="checkbox" name="layer" value="staging" checked>"#));
-    assert!(page.contains(r#"<input type="checkbox" name="layer" value="marts">"#));
+    assert!(page.contains(r#"name="layer" value="staging" checked>"#));
+    assert!(page.contains(r#"name="layer" value="marts">"#));
     assert!(page.contains(r#"data-shown="1">1 of 3 nodes"#), "{page}");
     // Sorting keeps the filters, and the filters keep the sort.
     assert!(
-        page.contains(r#"<a href="catalog?layer=staging">Name"#),
+        page.contains(r#"<a href="catalog?layer=staging" aria-label="Sort by name">Name"#),
         "name is the default sort"
     );
     assert!(
         page.contains(
-            r#"<a href="catalog?layer=staging&amp;sort=type&amp;desc=1" class="on">Type"#
+            r#"<a href="catalog?layer=staging&amp;sort=type&amp;desc=1" class="on" aria-label="Sort by type">Type"#
         )
     );
     assert!(page.contains(r#"<input type="hidden" name="sort" value="type">"#));
@@ -499,7 +539,7 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
     ));
     assert!(
         page.contains(
-            r#"<span class="pill build" title="code changed since run 9ea38bd5: sql">BUILD</span>"#
+            r#"<span class="pill build" title="sql changed since run 9ea38bd5">BUILD</span>"#
         ),
         "{page}"
     );
@@ -508,7 +548,7 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
         r#"<span class="pill never_built" title="no successful build recorded">NEVER BUILT</span>"#
     ));
     assert!(page.contains(
-        r#"title="snapshot 2, run 9ea38bd5-0000-4000-8000-000000000002">2 · 9ea38bd5</span>"#
+        r#"title="snapshot 2, run 9ea38bd5-0000-4000-8000-000000000002, finished 2026-09-28T09:00:00Z">2 · 9ea38bd5</span>"#
     ));
     assert!(page.contains(r#"<span class="never">never built</span>"#));
     assert!(page.contains(">[n]</span>"), "health waits for #117");
@@ -518,7 +558,18 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
         page.contains("the folder under the model paths"),
         "the layer says where it comes from"
     );
-    assert!(page.contains(r#"<span class="cdot opaque"></span>opaque"#));
+    assert!(page.contains(r#"<span class="cdot inferred"></span>inferred"#));
+    assert!(page.contains(r#"<th aria-sort="ascending"><a href="catalog?desc=1" class="on" aria-label="Sort by name">Name"#), "{page}");
+    assert!(
+        page.contains(r#"<th><a href="catalog?sort=type" aria-label="Sort by type">Type"#),
+        "only the sorted column has aria-sort"
+    );
+    assert!(page.contains("Layer*"), "the layer is marked as derived");
+    assert!(
+        !page.contains(r#"id="search""#),
+        "the Catalog has one search, its own"
+    );
+    assert!(page.contains(r#"<input id="catq" form="facets" name="q""#));
 }
 
 #[test]
@@ -540,7 +591,8 @@ fn a_model_page_has_a_tab_for_each_part() {
     assert!(
         page.contains(r#"data-tab="relationships">Relationships<span class="chip">Planned</span>"#)
     );
-    assert!(page.contains(r#"<span class="pill big build" title="code changed since run 9ea38bd5: sql">BUILD next run · code changed</span>"#), "{page}");
+    assert!(page.contains(r#"<span class="pill big build" title="sql changed since run 9ea38bd5">BUILD next run · code changed</span>"#), "{page}");
+    assert!(page.contains(r#"<span class="crumb">shop</span><span class="crumb-sep">/</span><a class="crumb" href="../catalog">Catalog</a><span class="crumb-sep">/</span><span class="crumb-here">orders</span>"#), "{page}");
     assert!(page.contains("One row per order."));
     assert!(
         page.contains(
@@ -548,26 +600,19 @@ fn a_model_page_has_a_tab_for_each_part() {
         )
     );
     assert!(
-        page.contains(r#"<a href="../state/plan?node=model.shop.orders">Why this decision</a>"#)
+        page.contains(r#"<span class="soon" title="The plan's Why page is planned">Why this decision<span class="chip">Planned</span></span>"#),
+        "Why is planned until its page is served"
     );
+    assert!(!page.contains("state/plan"));
     assert!(page.contains("snapshot 2 · run"));
     assert!(
         page.contains(r#"<code class="fg">models/staging/orders.sql</code>"#),
         "paths on loopback"
     );
-    assert!(page.contains("← raw_orders.id"), "column lineage");
-
-    let (_, _, page) = get(addr, &format!("{path}?tab=columns"));
-    assert!(page.contains(r#"aria-current="page" data-tab="columns""#));
     assert!(
-        page.contains(r#"<span class="mono" title="From the warehouse catalog">BIGINT</span>"#)
+        page.contains("<span>←&nbsp;raw_orders.id</span>"),
+        "column lineage, on its own line"
     );
-    assert!(page.contains(r#"varchar <span class="muted">(declared)</span>"#));
-    assert!(
-        page.contains(r#"<span class="unknown-type""#),
-        "an unknown type is marked, not guessed"
-    );
-    assert!(page.contains("<td>unique</td><td>not_null</td>"), "{page}");
 
     let (_, _, page) = get(addr, &format!("{path}?tab=code"));
     assert!(
@@ -603,14 +648,12 @@ fn a_model_page_has_a_tab_for_each_part() {
     );
     assert!(page.contains("From the plan against snapshot 2"));
 
-    let (_, _, page) = get(addr, &format!("{path}?tab=tests"));
-    assert!(page.contains(r#"title="test.shop.unique_orders_id.1">unique</td>"#));
-    assert!(page.contains("<td>unit</td>"));
     assert!(
-        page.contains("not recorded"),
-        "no per-test outcome is invented"
+        page.contains(
+            r#"<time datetime="2026-09-28T09:00:00Z" title="2026-09-28T09:00:00Z" data-relative>"#
+        ),
+        "relative, exact in the tooltip"
     );
-    assert!(page.contains("All of its checks last passed on its current build in run"));
 
     let (_, _, page) = get(addr, &format!("{path}?tab=nonsense"));
     assert!(
@@ -748,4 +791,158 @@ fn queries_round_trip_through_the_url() {
         pairs("type=seed&tag=a&tag=b&q=x&sort=layer&desc=1"),
         "stable order; unknown keys and sorts are dropped"
     );
+}
+
+#[test]
+fn reuse_is_never_claimed_to_be_checked() {
+    let addr = start(recorded());
+    let view = json(addr, "/api/catalog");
+    assert_eq!(view["decisions"]["relations_checked"], false);
+    assert_eq!(
+        view["decisions"]["caveats"][0],
+        "Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts)."
+    );
+    let (_, _, page) = get(addr, "/catalog");
+    assert!(!page.contains("relation checked"), "{page}");
+    assert!(page.contains(
+        r#"<span class="pill reuse" title="code and inputs unchanged since run e6f54fe3; its relation is not checked by this plan; checked when a run starts">REUSE</span>"#
+    ), "{page}");
+    assert!(
+        page.contains(
+            "unchanged; its relation isn't checked by this plan (it is when a run starts)"
+        )
+    );
+    let decision_note = view["facets"][4]["note"].as_str().unwrap();
+    assert!(
+        decision_note.contains("isn't checked by this plan"),
+        "{decision_note}"
+    );
+
+    let (_, _, page) = get(addr, "/catalog/seed.shop.raw_orders");
+    assert!(page.contains(r#"<span class="muted">Relation</span><span>not checked by this plan; checked when a run starts</span>"#), "{page}");
+    let (_, _, page) = get(addr, "/catalog/seed.shop.raw_orders?tab=state");
+    assert!(page.contains("Reuse is decided offline"), "{page}");
+    let (_, _, page) = get(addr, "/catalog/model.shop.orders");
+    assert!(
+        page.contains(r#"<span class="muted">Relation</span><span>not needed: it builds</span>"#)
+    );
+
+    // Nothing reused: no caveat.
+    let view = json(start(no_store()), "/api/catalog");
+    assert!(view["decisions"]["caveats"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn odd_node_urls_get_the_shells_404_or_a_redirect() {
+    let addr = start(recorded());
+    let (status, head, page) = get(addr, "/catalog/%FF%FE");
+    assert_eq!(status, 404, "not axum's plain 400: {page}");
+    assert!(head.contains("content-type: text/html"), "{head}");
+    assert!(page.contains("No such node"));
+    let (status, _, _) = get(addr, "/api/catalog/%FF%FE");
+    assert_eq!(status, 404);
+    let (status, head, _) = get(addr, "/catalog/");
+    assert_eq!(status, 308);
+    assert!(head.contains("location: /catalog\r\n"), "{head}");
+}
+
+#[test]
+fn facets_and_sorts_follow_their_meaning_not_the_alphabet() {
+    let addr = start(recorded());
+    let view = json(addr, "/api/catalog");
+    let values = |key: &str| -> Vec<String> {
+        view["facets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["key"] == key)
+            .unwrap()["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["value"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(values("layer"), ["staging", "marts"], "upstream first");
+    assert_eq!(
+        values("materialized"),
+        ["table", "view", "seed"],
+        "seeds last"
+    );
+    assert_eq!(
+        values("decision"),
+        ["build", "reuse", "never_built", "unknown"]
+    );
+    assert_eq!(view["layer_source"], "the folder under the model paths");
+    // Decisions sort in the facet's order: build, reuse, never built.
+    let view = json(addr, "/api/catalog?sort=decision");
+    assert_eq!(
+        names(&view),
+        [
+            "model.shop.orders",
+            "seed.shop.raw_orders",
+            "model.shop.customers"
+        ]
+    );
+}
+
+#[test]
+fn the_columns_tab_says_where_types_and_lineage_come_from() {
+    let addr = start(recorded());
+    let path = "/catalog/model.shop.orders";
+    let (_, _, page) = get(addr, &format!("{path}?tab=columns"));
+    assert!(page.contains(r#"aria-current="page" data-tab="columns""#));
+    assert!(
+        page.contains(r#"<span class="mono" title="From the warehouse catalog, as of 2026-09-28T08:00:00Z">BIGINT</span>"#)
+    );
+    assert!(page.contains("Warehouse types are as of its catalog, written 2026-09-28T08:00:00Z."));
+    assert!(
+        page.contains(r#"legacy <span class="stale""#),
+        "a column only the warehouse catalog lists may have been dropped: {page}"
+    );
+    assert!(
+        !page.contains(r#"id <span class="stale""#),
+        "declared columns are current"
+    );
+    assert!(page.contains(r#"varchar <span class="muted">(declared)</span>"#));
+    assert!(
+        page.contains(r#"<span class="unknown-type""#),
+        "an unknown type is marked, not guessed"
+    );
+    assert!(
+        page.contains("<td>unique</td><td>not_null</td>"),
+        "column tests match whatever the case: {page}"
+    );
+    assert!(
+        page.contains("←&nbsp;raw_orders.id</td>"),
+        "parsed lineage is plain"
+    );
+    let (_, _, page) = get(addr, "/catalog/model.shop.customers?tab=columns");
+    assert!(
+        page.contains(r#"←&nbsp;orders.id <span class="inferred""#),
+        "lineage that isn't parsed is marked inferred: {page}"
+    );
+    let (_, _, page) = get(addr, "/catalog/model.shop.customers");
+    assert!(
+        page.contains(r#"<span>←&nbsp;orders.id <span class="inferred""#),
+        "on the overview too"
+    );
+}
+
+#[test]
+fn the_tests_tab_shows_only_recorded_outcomes() {
+    let addr = start(recorded());
+    let path = "/catalog/model.shop.orders";
+    let (_, _, page) = get(addr, &format!("{path}?tab=tests"));
+    assert!(page.contains(r#"title="test.shop.unique_orders_id.1">unique</td>"#));
+    assert!(page.contains("<td>unit</td>"));
+    assert!(page.contains("The last build's recorded checks passed together in run"));
+    assert!(page.contains("Outcomes aren't kept per test yet"));
+    // The tests the record vouches for passed; the other isn't recorded.
+    assert_eq!(page.matches(r#"<span class="passed""#).count(), 2, "{page}");
+    assert!(page.contains(r#"title="test.shop.elsewhere.3">elsewhere</td><td class="mono"></td><td>data</td><td><span class="muted" title="Not among the checks a recorded build passed">not recorded</span>"#), "{page}");
+    let model = json(addr, "/api/catalog/model.shop.orders");
+    assert_eq!(model["tests"][0]["last_outcome"]["outcome"], "passed");
+    assert_eq!(model["tests"][0]["last_outcome"]["run_id"], RUN_2);
+    assert!(model["tests"][2]["last_outcome"].is_null());
 }

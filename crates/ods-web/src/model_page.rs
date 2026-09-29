@@ -9,9 +9,12 @@ use std::fmt::Write as _;
 
 use html_escape::{encode_double_quoted_attribute as attr, encode_text as text};
 
-use crate::catalog::{ColumnView, Decision, ModelView, NodeLink, TestKind, TypeSource};
-use crate::catalog_page::{CSS, confidence, decision_pill, last_built, pill};
+use crate::catalog::{
+    ColumnView, Decision, ModelView, NodeLink, REUSE_CAVEAT, REUSE_RELATION, TestKind, TypeSource,
+};
+use crate::catalog_page::{CSS, confidence, decision_pill, pill, why};
 use crate::dashboard::ShellView;
+use crate::home::PageFrame;
 
 /// The page's links resolve from one level down.
 const ROOT: &str = "../";
@@ -64,8 +67,15 @@ pub(crate) fn model_page(
     }
     b.push_str("</div>");
     b.push_str(SCRIPT);
-    let title = format!("Catalog / {}", view.name);
-    crate::home::shell_at(shell, &title, &b, generation, ROOT, CSS)
+    let title = format!("{} · Catalog", view.name);
+    let frame = PageFrame {
+        title: &title,
+        crumbs: &[("Catalog", Some("catalog")), (&view.name, None)],
+        root: ROOT,
+        css: CSS,
+        search: true,
+    };
+    crate::home::shell_at(shell, &frame, &b, generation)
 }
 
 /// No such node.
@@ -74,7 +84,64 @@ pub(crate) fn not_found_page(shell: &ShellView, id: &str, generation: u64) -> St
         r#"<div class="content"><section class="card empty" data-state="not_found"><h2>No such node</h2><p>The project has no node <code>{id}</code>. It may have been renamed or removed since the link was made.</p><p><a href="{ROOT}catalog">Back to the Catalog</a></p></section></div>"#,
         id = text(id),
     );
-    crate::home::shell_at(shell, "Not found", &body, generation, ROOT, CSS)
+    let frame = PageFrame {
+        title: "Not found",
+        crumbs: &[("Catalog", Some("catalog")), ("Not found", None)],
+        root: ROOT,
+        css: CSS,
+        search: true,
+    };
+    crate::home::shell_at(shell, &frame, &body, generation)
+}
+
+/// `3 h ago`, with the exact time in the tooltip (the script fills in the relative
+/// time; without it, the exact time shows).
+fn when(at: &str) -> String {
+    format!(
+        r#"<time datetime="{at}" title="{at}" data-relative>{at}</time>"#,
+        at = attr(at)
+    )
+}
+
+/// The link to Why, or, until that page is served, its name greyed as planned.
+fn why_link(view: &ModelView) -> String {
+    if view.links.why_available {
+        format!(
+            r#"<a href="{ROOT}{}">Why this decision</a>"#,
+            attr(&view.links.why)
+        )
+    } else {
+        r#"<span class="soon" title="The plan's Why page is planned">Why this decision<span class="chip">Planned</span></span>"#.to_owned()
+    }
+}
+
+/// Whether the node's relation was checked, for the decision it has.
+fn relation(view: &ModelView) -> &'static str {
+    match view.decision.decision {
+        Decision::Reuse => REUSE_RELATION,
+        Decision::Build | Decision::NeverBuilt => "not needed: it builds",
+        Decision::Unknown => "unknown",
+    }
+}
+
+/// `←&nbsp;orders.amount`, marked when inferred.
+fn computed_from(column: &ColumnView) -> String {
+    if column.upstream.is_empty() {
+        return String::new();
+    }
+    let inputs = column
+        .upstream
+        .iter()
+        .map(|u| format!("←&nbsp;{}", text(u)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if column.upstream_inferred {
+        format!(
+            r#"{inputs} <span class="inferred" title="Not parsed from the code: inferred">inferred</span>"#
+        )
+    } else {
+        inputs
+    }
 }
 
 fn link(node: &NodeLink) -> String {
@@ -104,7 +171,7 @@ fn headline(view: &ModelView) -> String {
     };
     format!(
         r#"<span class="pill big {class}" title="{why}">{label} {detail}</span>"#,
-        why = attr(&view.decision.summary),
+        why = attr(&why(&view.decision)),
         detail = text(&detail),
     )
 }
@@ -149,13 +216,13 @@ fn head(b: &mut String, view: &ModelView, current: &str) {
     }
     let build = match &view.last_build {
         Some(build) => format!(
-            r#"<span class="fg">{snap}run <span class="mono" title="{run}">{short}</span> · <time datetime="{at}" data-relative>{at}</time></span>"#,
+            r#"<span class="fg">{snap}run <span class="mono" title="{run}">{short}</span> · {at}</span>"#,
             snap = build
                 .snapshot
                 .map_or_else(String::new, |s| format!("snapshot {s} · ")),
             run = attr(&build.run_id),
             short = text(&build.short_run_id),
-            at = attr(&build.built_at.to_string()),
+            at = when(&build.built_at.to_string()),
         ),
         None => r#"<span class="fg">never</span>"#.to_owned(),
     };
@@ -216,11 +283,11 @@ fn state_card(b: &mut String, view: &ModelView) {
     };
     let _ = write!(
         b,
-        r#"<section class="card" aria-label="State"><h2>State</h2><div class="kv"><span class="muted">Next run</span><span class="next {class}">{next}</span></div><div class="kv"><span class="muted">Because</span><span>{why}</span></div><div class="kv"><span class="muted">Last build</span><span>{last}</span></div><a href="{ROOT}{href}">Why this decision</a></section>"#,
+        r#"<section class="card" aria-label="State"><h2>State</h2><div class="kv"><span class="muted">Next run</span><span class="next {class}">{next}</span></div><div class="kv"><span class="muted">Because</span><span>{because}</span></div><div class="kv"><span class="muted">Relation</span><span>{relation}</span></div>{link}</section>"#,
         next = text(next),
-        why = text(&view.decision.summary),
-        last = last_built(view.last_build.as_ref()),
-        href = attr(&view.links.why),
+        because = text(&view.decision.summary),
+        relation = text(relation(view)),
+        link = why_link(view),
     );
 }
 
@@ -261,8 +328,12 @@ fn type_cell(column: &ColumnView) -> String {
             text(t)
         ),
         (Some(t), _) => format!(
-            r#"<span class="mono" title="From the warehouse catalog">{}</span>"#,
-            text(t)
+            r#"<span class="mono" title="{title}">{}</span>"#,
+            text(t),
+            title = attr(&column.type_as_of.as_ref().map_or_else(
+                || "From the warehouse catalog, as of when it was written".to_owned(),
+                |at| format!("From the warehouse catalog, as of {at}")
+            )),
         ),
         (None, _) => r#"<span class="unknown-type" title="Not in the artifacts: generate the warehouse catalog, or declare a data type">unknown</span>"#.to_owned(),
     }
@@ -291,41 +362,61 @@ fn columns(b: &mut String, view: &ModelView, full: bool) {
             .as_deref()
             .filter(|d| !d.trim().is_empty())
             .map_or_else(String::new, |d| text(d).into_owned());
-        let tests = column.tests.join(" · ");
-        let from = if column.upstream.is_empty() {
-            String::new()
+        let tests = text(&column.tests.join(" · ")).into_owned();
+        let from = computed_from(column);
+        let name = if column.possibly_stale {
+            format!(
+                r#"{} <span class="stale" title="Only the warehouse catalog lists it; the project and the lineage of its current code don't, so it may have been dropped since">possibly dropped</span>"#,
+                text(&column.name)
+            )
         } else {
-            format!("← {}", column.upstream.join(", "))
+            text(&column.name).into_owned()
         };
         if full {
             let _ = write!(
                 b,
                 r#"<tr data-column="{name_attr}"><td class="mono">{name}</td><td>{ty}</td><td class="muted">{description}</td><td>{tests}</td><td>{constraints}</td><td class="muted">{from}</td></tr>"#,
                 name_attr = attr(&column.name),
-                name = text(&column.name),
                 ty = type_cell(column),
-                tests = text(&tests),
                 constraints = text(&column.constraints.join(" · ")),
-                from = text(&from),
             );
         } else {
-            let meta = [tests, from]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · ");
+            // Tests, then lineage, each on its own line.
+            let meta = [tests, from].into_iter().filter(|s| !s.is_empty()).fold(
+                String::new(),
+                |mut out, s| {
+                    let _ = write!(out, "<span>{s}</span>");
+                    out
+                },
+            );
             let _ = write!(
                 b,
-                r#"<tr data-column="{name_attr}"><td class="mono">{name}</td><td class="muted">{description}</td><td class="muted">{meta}</td></tr>"#,
+                r#"<tr data-column="{name_attr}"><td class="mono">{name}</td><td class="muted">{description}</td><td class="muted meta">{meta}</td></tr>"#,
                 name_attr = attr(&column.name),
-                name = text(&column.name),
-                meta = text(&meta),
             );
         }
     }
     b.push_str("</tbody></table>");
-    if full && view.columns.iter().any(|c| c.data_type.is_none()) {
-        b.push_str(r#"<p class="f-note">A type is only shown when the artifacts record it: from the warehouse catalog, or declared in the project (marked declared).</p>"#);
+    if full {
+        let as_of = view
+            .columns
+            .iter()
+            .find_map(|c| c.type_as_of.as_deref())
+            .map_or_else(String::new, |at| {
+                format!(" Warehouse types are as of its catalog, written {at}.")
+            });
+        let _ = write!(
+            b,
+            r#"<p class="f-note">A type is only shown when the artifacts record it: from the warehouse catalog, or declared in the project (marked declared).{}</p>"#,
+            text(&as_of)
+        );
+    }
+    if view
+        .columns
+        .iter()
+        .any(|c| c.upstream_inferred && !c.upstream.is_empty())
+    {
+        b.push_str(r#"<p class="f-note">Column lineage marked inferred wasn't parsed from the code; it may be incomplete or wrong.</p>"#);
     }
     b.push_str("</section>");
 }
@@ -419,28 +510,34 @@ fn state(b: &mut String, view: &ModelView) {
     let basis = match (view.decisions.based_on, &view.decisions.error) {
         (_, Some(error)) => format!("The plan couldn't be made: {error}"),
         (Some(snapshot), None) => format!(
-            "From the plan against snapshot {snapshot}, made for this request (ods state plan)."
+            "From the plan against snapshot {snapshot}, made offline for this request (ods state plan)."
         ),
         (None, None) => "No plan: nothing is recorded to compare with.".to_owned(),
     };
     let _ = write!(
         b,
-        r#"<p class="f-note">{basis}</p><a href="{ROOT}{href}">Why this decision</a></section>"#,
+        r#"<div class="kv"><span class="muted">Relation</span><span>{relation}</span></div><p class="f-note">{basis}</p>{caveat}{link}</section>"#,
+        relation = text(relation(view)),
         basis = text(&basis),
-        href = attr(&view.links.why),
+        caveat = if view.decision.decision == Decision::Reuse {
+            format!(r#"<p class="f-note">{}</p>"#, text(REUSE_CAVEAT))
+        } else {
+            String::new()
+        },
+        link = why_link(view),
     );
     b.push_str(r#"</div><div class="stack"><section class="card" aria-label="Last build"><h2>Last successful build</h2>"#);
     match &view.last_build {
         Some(build) => {
             let _ = write!(
                 b,
-                r#"<div class="kv"><span class="muted">Snapshot</span><span>{snap}</span></div><div class="kv"><span class="muted">Run</span><span class="mono" title="{run}">{short}</span></div><div class="kv"><span class="muted">Finished</span><time datetime="{at}">{at}</time></div>"#,
+                r#"<div class="kv"><span class="muted">Snapshot</span><span>{snap}</span></div><div class="kv"><span class="muted">Run</span><span class="mono" title="{run}">{short}</span></div><div class="kv"><span class="muted">Finished</span>{at}</div>"#,
                 snap = build
                     .snapshot
                     .map_or_else(|| "unknown".to_owned(), |s| s.to_string()),
                 run = attr(&build.run_id),
                 short = text(&build.short_run_id),
-                at = attr(&build.built_at.to_string()),
+                at = when(&build.built_at.to_string()),
             );
         }
         None => b.push_str(r#"<p class="muted">Never: no successful build is recorded.</p>"#),
@@ -458,12 +555,12 @@ fn tests(b: &mut String, view: &ModelView) {
         Some(passed) => {
             let _ = write!(
                 b,
-                r#"<p class="checks">All of its checks last passed on its current build in run <span class="mono" title="{run}">{short}</span>, <time datetime="{at}" data-relative>{at}</time>.{changed}</p>"#,
+                r#"<p class="checks">The last build's recorded checks passed together in run <span class="mono" title="{run}">{short}</span>, {at}. Outcomes aren't kept per test yet: a test reads <i>passed</i> when it is one of those checks.{changed}</p>"#,
                 run = attr(&passed.run_id),
                 short = text(&passed.run_id.chars().take(8).collect::<String>()),
-                at = attr(&passed.at.to_string()),
+                at = when(&passed.at.to_string()),
                 changed = if passed.checks_changed_since {
-                    " Its checks changed since, so that no longer vouches for them."
+                    " The checks changed since, so that record no longer vouches for any of them."
                 } else {
                     ""
                 },
@@ -487,9 +584,14 @@ fn tests(b: &mut String, view: &ModelView) {
                     TestKind::Unit => "unit",
                     _ => "data",
                 },
-                outcome = test.last_outcome.as_deref().map_or_else(
-                    || r#"<span class="muted" title="Outcomes aren't recorded per test yet">not recorded</span>"#.to_owned(),
-                    |o| text(o).into_owned()
+                outcome = test.last_outcome.as_ref().map_or_else(
+                    || r#"<span class="muted" title="Not among the checks a recorded build passed">not recorded</span>"#.to_owned(),
+                    |o| format!(
+                        r#"<span class="passed" title="Passed with the node's other checks, {at}">{outcome} · run <span class="mono">{short}</span></span>"#,
+                        at = attr(&o.at.to_string()),
+                        outcome = text(o.outcome),
+                        short = text(&o.run_id.chars().take(8).collect::<String>()),
+                    )
                 ),
             );
         }

@@ -610,39 +610,52 @@ shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served
 The **Catalog** (`/catalog`, #313) lists every model, seed and snapshot in the
 manifest, with facets to filter by and counts over every node:
 - **resource type**, **materialization** and **tags** (the resolved `config.tags`);
-- **layer:** a model's first folder under the model paths (from its `fqn`, e.g.
-  `models/marts/…` → `marts`). Seeds and models at the top of a model path have none;
-  the layer is never guessed from a name;
+- **layer** (marked *Layer\**, as it is inferred, not declared): a model's first
+  folder under the model paths (from its `fqn`, e.g. `models/marts/…` → `marts`),
+  listed upstream first. Seeds and models at the top of a model path have none; the
+  layer is never guessed from a name;
 - **next-run decision:** *Build*, *Reuse*, *Never built* (no successful build is
   recorded, so it builds) or *Unknown* (the plan couldn't be made, or the store can't be
   read), from the plan against the latest snapshot, made again on every request as on
-  Home;
+  Home. The plan is made offline, so a *Reuse* is taken on trust: the reused node's
+  relation isn't checked by this plan, only when a run starts (`ods state build`).
+  The page and `decisions.caveats` in the API say so;
 - **lineage confidence:** *parsed*, *inferred*, *observed*, *unknown*, *opaque*, or
-  *n/a* for seeds.
+  *n/a* for seeds. Every value is listed, with its count, even when zero.
 
-The table sorts by any column, and shows each node's last successful build (the
-snapshot and run that recorded it, and when) or *never built*. Health is `[n]` until
+The table sorts by any column (decisions and confidences in the facets' order), and
+shows each node's last successful build as `snapshot · run` (when, in the tooltip) or
+*never built*. The builds come from the same snapshot the plan is made against. The
+Catalog has its own name search (`/` focuses it) in place of the header's. Health is `[n]` until
 the health signals exist (#117). Facets, the name search and the sort are in the URL
 query (`/catalog?layer=marts&decision=build&sort=last_built&desc=1`), so a filtered
 view can be bookmarked; the page works without script.
 
 Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with tabs
 (`?tab=`):
-- **Overview:** description, columns, the current decision and a small lineage view;
+- **Overview:** description, columns, the current decision (with whether the relation
+  was checked) and a small lineage view;
 - **Code:** the code as written and, only if the artifacts carry it, as compiled;
 - **Columns:** name, type, description, tests, constraints and the columns each is
-  computed from. A type comes from `catalog.json` or a YAML `data_type` (marked
-  *declared*); otherwise it says *unknown*;
+  computed from. A type comes from `catalog.json`, as of when it was generated (the
+  page says when), or a YAML `data_type` (marked *declared*); otherwise it says
+  *unknown*. A column only `catalog.json` lists, which neither the project nor the
+  lineage of the current code has, is marked *possibly dropped*. Column lineage that
+  wasn't parsed from the code is marked *inferred*;
 - **Lineage:** the nodes it reads and that read it (the build graph, not
   relationships), linking to `/lineage?node=<unique_id>`;
-- **State:** the decision with the planner's reasons, the last successful build, and a
-  link to *Why* at `/state/plan?node=<unique_id>`;
-- **Tests:** its data and unit tests. Their outcomes aren't recorded per test, so each
-  says *not recorded*; when the state records that all of a node's checks passed on its
-  current build, the tab says when.
+- **State:** the decision with the planner's reasons, the relation check (*not checked
+  by this plan* for a reuse), and the last successful build. *Why this decision* will
+  link to `/state/plan?node=<unique_id>`; until that page is served it is greyed as
+  planned;
+- **Tests:** the data tests that read the node or are attached to it, and its unit
+  tests. Outcomes aren't kept per test: the state records that a build's checks passed
+  together, so each test among those checks reads *passed · run …*, and the rest *not
+  recorded*.
 
-Relationships and Usage are greyed as planned. An unknown id gets a 404 page. Without a
-state store, every node reads *never built* and its last build *never*.
+Relationships and Usage are greyed as planned. An unknown id, or one that isn't valid
+percent-encoding, gets a 404 page; `/catalog/` redirects to `/catalog`. Without a state
+store, every node reads *never built* and its last build *never*.
 
 `/api/catalog` (with the same query) and `/api/catalog/<unique_id>` return the view
 models the pages render, at `schema_version` 1; every tab's data is in the latter.

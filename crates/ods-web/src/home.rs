@@ -121,20 +121,41 @@ fn nav_item(out: &mut String, section: &NavSection, root: &str) {
 
 /// The whole page: the shell around `body`, titled `title`.
 fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
-    shell_at(shell, title, body, generation, "", "")
+    let frame = PageFrame {
+        title,
+        crumbs: &[(title, None)],
+        root: "",
+        css: "",
+        search: true,
+    };
+    shell_at(shell, &frame, body, generation)
 }
 
-/// [`shell`] for a page `root` below the dashboard's root (e.g. `../` for
-/// `catalog/<id>`), so its relative links, fonts and API calls still resolve, with
-/// the page's own stylesheet `css`.
+/// Where a page sits in the shell (#313).
+pub(crate) struct PageFrame<'a> {
+    /// The page's name, for the browser tab.
+    pub(crate) title: &'a str,
+    /// The breadcrumb after the project: labels, with links relative to the
+    /// dashboard's root; the last is the page itself.
+    pub(crate) crumbs: &'a [(&'a str, Option<&'a str>)],
+    /// From the page to the dashboard's root: empty, or e.g. `../` for
+    /// `catalog/<id>`, so its relative links, fonts and API calls still resolve.
+    pub(crate) root: &'a str,
+    /// The page's own stylesheet, after the shell's.
+    pub(crate) css: &'a str,
+    /// Whether the header has the search box (a page with its own search leaves it
+    /// out, so there aren't two that behave differently).
+    pub(crate) search: bool,
+}
+
+/// [`shell`] for a page placed as `frame` says.
 pub(crate) fn shell_at(
     shell: &ShellView,
-    title: &str,
+    frame: &PageFrame<'_>,
     body: &str,
     generation: u64,
-    root: &str,
-    css: &str,
 ) -> String {
+    let (title, root, css) = (frame.title, frame.root, frame.css);
     let mut out = String::with_capacity(32 * 1024);
     let target = match &shell.target.kind {
         Some(kind) => format!("{} · {}", shell.target.name, kind),
@@ -172,7 +193,7 @@ pub(crate) fn shell_at(
         project = text(&shell.project),
         target = text(&target),
         root_attr = attr(root),
-        fonts = crate::fonts::font_faces().replace("url('assets/", &format!("url('{root}assets/")),
+        fonts = crate::fonts::font_faces(root),
     );
     let (bottom, main): (Vec<_>, Vec<_>) = shell.sections.iter().partition(|s| s.key == "settings");
     for section in main {
@@ -197,8 +218,8 @@ pub(crate) fn shell_at(
 </nav>
 <main>
 <header class="top">
-<span class="crumb">{project}</span><span class="crumb-sep">/</span><span class="crumb-here">{title}</span>
-<label class="search" title="Opens the lineage explorer's search; selectors such as +orders are planned">{SEARCH}<input id="search" aria-label="Search models and columns" placeholder="Search models and columns" autocomplete="off"><kbd>/</kbd></label>
+<span class="crumb">{project}</span>{crumbs}
+{search}
 {snapshot}
 </header>
 {body}
@@ -209,8 +230,46 @@ pub(crate) fn shell_at(
 </html>
 "#,
         project = text(&shell.project),
-        title = text(title),
+        crumbs = crumbs(frame),
+        search = if frame.search {
+            search_box()
+        } else {
+            r#"<span class="top-gap"></span>"#.to_owned()
+        },
     );
+    out
+}
+
+/// The header's search box.
+fn search_box() -> String {
+    format!(
+        r#"<label class="search" title="Opens the lineage explorer's search; selectors such as +orders are planned">{SEARCH}<input id="search" aria-label="Search models and columns" placeholder="Search models and columns" autocomplete="off"><kbd>/</kbd></label>"#
+    )
+}
+
+/// ` / Catalog / customers`: linked but the last.
+fn crumbs(frame: &PageFrame<'_>) -> String {
+    let mut out = String::new();
+    let last = frame.crumbs.len().saturating_sub(1);
+    for (i, (label, href)) in frame.crumbs.iter().enumerate() {
+        out.push_str(r#"<span class="crumb-sep">/</span>"#);
+        match href {
+            Some(href) if i < last => {
+                let _ = write!(
+                    out,
+                    r#"<a class="crumb" href="{}">{}</a>"#,
+                    attr(&format!("{}{href}", frame.root)),
+                    text(label)
+                );
+            }
+            _ if i < last => {
+                let _ = write!(out, r#"<span class="crumb">{}</span>"#, text(label));
+            }
+            _ => {
+                let _ = write!(out, r#"<span class="crumb-here">{}</span>"#, text(label));
+            }
+        }
+    }
     out
 }
 

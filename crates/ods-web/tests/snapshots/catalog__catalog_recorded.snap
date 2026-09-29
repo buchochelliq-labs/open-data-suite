@@ -5,7 +5,11 @@ expression: pretty(view)
 {
   "decisions": {
     "based_on": 2,
+    "caveats": [
+      "Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts)."
+    ],
     "error": null,
+    "relations_checked": false,
     "state": "recorded",
     "warnings": []
   },
@@ -36,15 +40,15 @@ expression: pretty(view)
       "values": [
         {
           "count": 1,
-          "label": "marts",
-          "selected": false,
-          "value": "marts"
-        },
-        {
-          "count": 1,
           "label": "staging",
           "selected": false,
           "value": "staging"
+        },
+        {
+          "count": 1,
+          "label": "marts",
+          "selected": false,
+          "value": "marts"
         }
       ]
     },
@@ -53,12 +57,6 @@ expression: pretty(view)
       "label": "Materialization",
       "note": null,
       "values": [
-        {
-          "count": 1,
-          "label": "seed",
-          "selected": false,
-          "value": "seed"
-        },
         {
           "count": 1,
           "label": "table",
@@ -70,6 +68,12 @@ expression: pretty(view)
           "label": "view",
           "selected": false,
           "value": "view"
+        },
+        {
+          "count": 1,
+          "label": "seed",
+          "selected": false,
+          "value": "seed"
         }
       ]
     },
@@ -89,7 +93,7 @@ expression: pretty(view)
     {
       "key": "decision",
       "label": "Next-run decision",
-      "note": "From the plan against the latest snapshot, made for this request.",
+      "note": "From the plan against the latest snapshot, made offline. Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts).",
       "values": [
         {
           "count": 1,
@@ -130,6 +134,24 @@ expression: pretty(view)
         },
         {
           "count": 1,
+          "label": "inferred",
+          "selected": false,
+          "value": "inferred"
+        },
+        {
+          "count": 0,
+          "label": "observed",
+          "selected": false,
+          "value": "observed"
+        },
+        {
+          "count": 0,
+          "label": "unknown",
+          "selected": false,
+          "value": "unknown"
+        },
+        {
+          "count": 0,
           "label": "opaque",
           "selected": false,
           "value": "opaque"
@@ -143,6 +165,7 @@ expression: pretty(view)
       ]
     }
   ],
+  "layer_source": "the folder under the model paths",
   "query": {
     "descending": false,
     "filters": {},
@@ -167,7 +190,7 @@ expression: pretty(view)
       "id": "model.shop.customers",
       "last_build": null,
       "layer": "marts",
-      "lineage": "opaque",
+      "lineage": "inferred",
       "materialization": "table",
       "name": "</script><img src=x onerror=alert(1)>",
       "resource_type": "model",
@@ -184,7 +207,7 @@ expression: pretty(view)
             "message": "code changed since run 9ea38bd5: sql"
           }
         ],
-        "summary": "code changed since run 9ea38bd5: sql"
+        "summary": "sql changed since run 9ea38bd5"
       },
       "health": null,
       "href": "catalog/model.shop.orders",

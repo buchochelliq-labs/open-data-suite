@@ -240,6 +240,10 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         // The Catalog and the model pages (#313).
         .route(&at("/catalog"), get(catalog_routes::page))
         .route(&at("/catalog/{id}"), get(catalog_routes::model))
+        .route(&at("/catalog/"), {
+            let to = at("/catalog");
+            get(move || async move { Redirect::permanent(&to) })
+        })
         .route(&at("/api/catalog"), get(catalog_routes::api))
         .route(&at("/api/catalog/{id}"), get(catalog_routes::model_api));
     if !base_path.is_empty() {
