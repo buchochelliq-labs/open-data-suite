@@ -104,4 +104,5 @@ nav:
       - adr/0019-release-and-versioning.md
       - adr/0020-dbt-state-interop-and-favor-state.md
       - adr/0021-databricks-authentication.md
+      - adr/0022-delta-table-versions-as-source-evidence.md
   - Legal and trademarks: legal.md

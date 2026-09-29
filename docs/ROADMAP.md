@@ -101,7 +101,7 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 | #26 | Filesystem JSON StateStore (debugging) |
 | **#16** | Source/upstream change detection contract; includes dbt `sources.json` freshness (`max_loaded_at`) as change evidence for any warehouse |
 | **#19** *(M1 slice)* | Freshness policies, minimal: `AnyDependencyChanged` (default), `MaxStaleness` (per-node/group tolerance, **default 0**: rebuild on any new data) and forced rebuild; the policy used appears in `explain` |
-| **#17** *(M1 slice)* | Delta change detection, minimal: latest table version + commit timestamp for sources, behind the `relation_versions` capability |
+| **#17** *(M1 slice)* | Delta change detection, minimal: latest table version + commit timestamp for sources, behind the `relation_versions` capability, read through dbt (ADR-0022) |
 | #99 | Plugin conformance test suite (State-related contracts) |
 | **#168** | Read dbt State configs (`state:`, `freshness.build_after`, `loaded_at_*`) so existing dbt State projects work unchanged; dbt defaults (45m/`any`) only when the project already uses State, otherwise tolerance 0 |
 | **#211** | dbt executor: exact selection that can't widen (`fqn:`/selector file), no command-line length limit |
@@ -120,9 +120,11 @@ Goal: prove the core value — *"ODS decides WHAT runs, dbt decides HOW"* — lo
 models whose upstream data hasn't changed. Skipping on unchanged code *and* data is the
 minimum useful behaviour for the State MVP.
 
-**What the #17 slice pulls in:** a Databricks SQL connection to read table history (a
-thin subset of #15) and an `env:` secret resolver for its token (a subset of #126). The
-full #15/#126 stay in M2.
+**What the #17 slice pulls in:** table history is read through dbt's own connection
+(`dbt show --inline`), with the Delta query supplied by `ods-provider-databricks`
+([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)). ODS still handles no
+warehouse credential, so neither a Databricks SQL connection (#15) nor a secret
+resolver (#126) is needed for M1. Both stay in M2.
 
 **Staleness is propagated through views:** a view is only as fresh as its inputs, so
 #18 carries upstream freshness through view-materialised models.
