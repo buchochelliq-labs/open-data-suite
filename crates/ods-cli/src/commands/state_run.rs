@@ -362,10 +362,11 @@ pub(super) fn dbt_settings(args: &ArgMatches, settings: &StateSettings) -> Vec<D
             out.push(from(name, setting));
         }
     }
-    if let Some(value) = args.try_get_one::<String>("vars").ok().flatten() {
+    // Given, but never shown: vars can hold credentials (rule 9, #321).
+    if args.try_get_one::<String>("vars").ok().flatten().is_some() {
         out.push(DbtSetting {
             name: "vars",
-            value: value.clone(),
+            value: "[value removed]".to_owned(),
             source: "flag".to_owned(),
         });
     }
@@ -443,13 +444,19 @@ pub(super) fn dbt_args(args: &ArgMatches) -> Vec<String> {
 }
 
 pub(super) fn executor(args: &ArgMatches, settings: &StateSettings) -> DbtExecutor {
-    let mut executor = DbtExecutor::new(&settings.program.value, settings.target_dir()).output(
-        if args.get_one::<String>("dbt-output").map(String::as_str) == Some("capture") {
+    let capture = args.get_one::<String>("dbt-output").map(String::as_str) == Some("capture");
+    let mut executor = DbtExecutor::new(&settings.program.value, settings.target_dir())
+        .output(if capture {
             DbtOutput::Capture
         } else {
             DbtOutput::Stderr
-        },
-    );
+        })
+        // dbt's lines, read from its structured log, rendered here (#322, rule 7).
+        .on_output(|line| {
+            let text = crate::present::engine_line(line.time.as_deref(), &line.text);
+            // Best effort: showing dbt's output must never fail the run.
+            let _ = writeln!(std::io::stderr(), "{text}");
+        });
     if let Some(dir) = &settings.project_dir {
         executor = executor.project_dir(&dir.value);
     }
@@ -564,15 +571,17 @@ pub(super) struct Observed<'s> {
     journal: JournalSink,
     collected: CollectedEvents,
     steps: &'s Steps,
+    mode: ExecutionMode,
 }
 
 impl<'s> Observed<'s> {
-    /// For a run recorded beside `state_db`, with progress through `steps`.
-    pub(super) fn new(state_db: &Path, steps: &'s Steps) -> Self {
+    /// For a run in `mode` recorded beside `state_db`, with progress through `steps`.
+    pub(super) fn new(state_db: &Path, steps: &'s Steps, mode: ExecutionMode) -> Self {
         Self {
             journal: JournalSink::new(state_db),
             collected: CollectedEvents::new(),
             steps,
+            mode,
         }
     }
 
@@ -587,11 +596,13 @@ impl<'s> Observed<'s> {
 
 impl RunEventSink for Observed<'_> {
     fn emit(&self, event: RunEvent) {
+        // Whatever the executor filled in, only redacted text is kept or shown (rule 9).
+        let event = event.sanitized();
         if let RunEventKind::NodeFinished { node, stats } = &event.kind {
             let mut line = format!(
                 "{} {}",
                 display_name(node),
-                super::run_stats::status(stats).text
+                super::run_stats::status(stats, Some(self.mode)).text
             );
             if stats.took_ms().is_some() {
                 let _ = write!(line, " in {}", super::run_stats::took(stats));
@@ -777,12 +788,14 @@ fn vars_mismatch(args: &ArgMatches, target_dir: &Path) -> Option<String> {
             serde_json::from_str::<serde_json::Value>(given).is_ok_and(|g| &g != compiled)
         }
     };
+    // Which vars, but not their values: they can hold credentials (rule 9, #321).
+    let shown = |given: bool| if given { "other vars" } else { "none" };
     differs.then(|| {
         format!(
-            "the artifacts in {} were compiled with vars {}, but this run has {}: the plan may not match what dbt builds. Drop --no-compile, or pass the same --vars",
+            "the artifacts in {} were compiled with vars ({}), but this run has {}: the plan may not match what dbt builds. Drop --no-compile, or pass the same --vars",
             target_dir.display(),
-            compiled.map_or_else(|| "none".to_owned(), |v| v.to_string()),
-            given.map_or_else(|| "none".to_owned(), |v| format!("`{v}`")),
+            if compiled.is_some() { "some" } else { "none" },
+            shown(given.is_some()),
         )
     })
 }
@@ -1486,7 +1499,7 @@ pub(super) fn execute_observed(
     (state_db, steps): (&Path, &Steps),
     warnings: &mut Vec<String>,
 ) -> Result<(Result<ExecutionReport, ProviderError>, RunObserved), CliError> {
-    let observed = Observed::new(state_db, steps);
+    let observed = Observed::new(state_db, steps, request.mode);
     let executed = block_on(executor.execute_with_events(request, &observed))?;
     let (run_stats, journal, warning) = observed.finish();
     warnings.extend(warning);

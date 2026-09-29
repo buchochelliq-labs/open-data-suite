@@ -93,6 +93,33 @@ pub fn sanitize(text: &str) -> String {
         .collect()
 }
 
+/// A line of an engine's own output (e.g. dbt's), as streamed to stderr while it runs
+/// (#322): `HH:MM:SS  text`, or the text alone without a time. The engine's colour
+/// codes (`ESC [ … m`) are dropped, and any other control character is neutralised by
+/// [`sanitize`].
+pub fn engine_line(time: Option<&str>, text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            // Parameters and intermediates, up to the final byte (`m` for colours).
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+            continue;
+        }
+        plain.push(c);
+    }
+    let plain = sanitize(&plain);
+    match time {
+        Some(time) => format!("{}  {plain}", sanitize(time)),
+        None => plain,
+    }
+}
+
 /// Severity of a [`ViewNode::Notice`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -159,6 +186,18 @@ pub enum ViewNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_lines_drop_colours_and_neutralise_controls() {
+        assert_eq!(
+            engine_line(Some("14:02:05"), "OK [\u{1b}[32mOK\u{1b}[0m in 0.13s]\u{7}"),
+            "14:02:05  OK [OK in 0.13s]\u{FFFD}"
+        );
+        assert_eq!(
+            engine_line(None, "print from a model"),
+            "print from a model"
+        );
+    }
 
     #[test]
     fn sanitize_neutralises_escape_sequences() {

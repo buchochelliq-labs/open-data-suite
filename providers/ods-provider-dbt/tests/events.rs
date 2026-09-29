@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ods_core::state::Timestamp;
-use ods_provider_dbt::events::{Bridge, coverage};
+use ods_provider_dbt::events::{Bridge, LogLevel, UNREADABLE_LINE, coverage};
 use ods_provider_dbt::{Manifest, RunResults, RunStatus};
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, NodeExecution, RequestedNode,
@@ -72,9 +72,13 @@ fn a_real_dbt_build_log_becomes_run_events_with_stats() {
     let manifest = Manifest::read(&fixture("dbt-1.10-build/manifest.json")).unwrap();
     let (request, report) = request_and_report(&run);
     let sink = CollectedEvents::new();
-    let mut bridge = Bridge::new(&sink, &request, coverage(&manifest), false);
+    let mut bridge = Bridge::new(&sink, &request, coverage(&manifest), LogLevel::Info);
     let log = std::fs::read_to_string(fixture("dbt-1.10-events/dbt-stdout.jsonl")).unwrap();
-    let shown: Vec<String> = log.lines().filter_map(|l| bridge.line(l)).collect();
+    let shown: Vec<String> = log
+        .lines()
+        .filter_map(|l| bridge.line(l))
+        .map(|l| l.text)
+        .collect();
     let live = sink.events().len();
     bridge.finish(&report, &run);
     let events = sink.events();
@@ -131,9 +135,9 @@ fn a_real_dbt_build_log_becomes_run_events_with_stats() {
     let failed = stats("customers");
     assert_eq!(failed.status, NodeRunStatus::Error);
     let error = failed.error.as_ref().unwrap();
-    assert_eq!(error.kind.as_deref(), Some("Conversion Error"));
+    assert_eq!(error.kind(), Some("Conversion Error"));
     assert_eq!(
-        error.message,
+        error.message(),
         "Conversion Error: Could not convert string [value removed] to INT32"
     );
     assert_eq!(failed.tests.unwrap().skipped, 3);
@@ -145,7 +149,10 @@ fn a_real_dbt_build_log_becomes_run_events_with_stats() {
     assert_eq!(skipped.rows_affected, None);
 
     assert_eq!(run.totals.count(NodeRunStatus::Success), 9);
-    assert_eq!(run.totals.rows_unreported, 6, "the views and tables");
+    assert_eq!(
+        run.totals.rows_unreported, 7,
+        "the views and tables, and the failed model"
+    );
     assert_eq!(run.totals.count(NodeRunStatus::Error), 1);
     assert_eq!(run.totals.count(NodeRunStatus::Skipped), 3);
     assert_eq!(run.totals.rows_affected, 17);
@@ -180,11 +187,12 @@ fn without_a_structured_log_the_results_still_give_the_stats() {
     let run = RunResults::read(&fixture("dbt-1.10-events/run_results.json")).unwrap();
     let (request, report) = request_and_report(&run);
     let sink = CollectedEvents::new();
-    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), false);
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), LogLevel::Info);
     // dbt logged as text: nothing to read.
     assert_eq!(
         bridge
             .line("22:00:12  1 of 25 START seed file main.raw_customers")
+            .map(|l| l.text)
             .as_deref(),
         Some("22:00:12  1 of 25 START seed file main.raw_customers")
     );
@@ -203,7 +211,7 @@ fn without_a_structured_log_the_results_still_give_the_stats() {
         .error
         .as_ref()
         .unwrap();
-    assert!(!error.message.contains("SENTINEL"), "{error:?}");
+    assert!(!error.message().contains("SENTINEL"), "{error:?}");
 }
 
 #[test]
@@ -211,7 +219,7 @@ fn a_run_that_fails_to_finish_ends_unknown() {
     let run = RunResults::read(&fixture("dbt-1.10-events/run_results.json")).unwrap();
     let (request, _) = request_and_report(&run);
     let sink = CollectedEvents::new();
-    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), false);
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), LogLevel::Info);
     let log = std::fs::read_to_string(fixture("dbt-1.10-events/dbt-stdout.jsonl")).unwrap();
     for line in log.lines().take(20) {
         bridge.line(line);
@@ -230,5 +238,82 @@ fn a_run_that_fails_to_finish_ends_unknown() {
             .nodes
             .iter()
             .any(|n| n.stats.status == NodeRunStatus::Unknown)
+    );
+}
+
+/// The reviewers' probes (#322): what dbt prints is shown only when it can be read for
+/// sure; a line that can't be read never shows its text, and never reaches the events.
+#[test]
+fn unreadable_or_unlevelled_lines_are_never_shown() {
+    let request = ExecutionRequest::new(
+        vec![RequestedNode::new("model.p.a", "a")],
+        ExecutionMode::Build,
+    );
+    let sink = CollectedEvents::new();
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), LogLevel::Info);
+    let cases = [
+        // A number out of range: not readable JSON.
+        r#"{"info":{"level":"debug","name":"SQLQuery","msg":"select 'SECRET1'","invocation_id":"x"},"data":{"n":1e400}}"#,
+        // Cut short.
+        r#"{"info":{"level":"debug","name":"SQLQuery","msg":"select 'SECRET2'"},"data":{"sql":"select 'SECRET2'"}"#,
+        // No level.
+        r#"{"info":{"name":"SQLQuery","msg":"select 'SECRET3'"}}"#,
+        // A level in capitals is still debug.
+        r#"{"info":{"level":"DEBUG","name":"SQLQuery","msg":"select 'SECRET4'"}}"#,
+        // A model's print merged with a debug line.
+        r#"printed by a model {"info":{"level":"debug","name":"SQLQuery","msg":"select 'SECRET5'"}}"#,
+        // No `info`.
+        r#"{"data":{"msg":"select 'SECRET6'"}}"#,
+    ];
+    for line in cases {
+        let shown = bridge.line(line);
+        assert!(
+            shown.as_ref().is_none_or(|l| l.text == UNREADABLE_LINE),
+            "{line} => {shown:?}"
+        );
+    }
+    // A plain line (a model's print) is shown; an info line shows its message.
+    assert_eq!(
+        bridge.line("hello from a model").map(|l| l.text).as_deref(),
+        Some("hello from a model")
+    );
+    let info = bridge
+        .line(r#"{"info":{"level":"INFO","name":"Note","msg":"1 of 1 START","ts":"2026-09-29T22:00:12.1Z"}}"#)
+        .unwrap();
+    assert_eq!(
+        (info.time.as_deref(), info.text.as_str()),
+        (Some("22:00:12"), "1 of 1 START")
+    );
+    // A finish without a status is unknown, never an error or a success.
+    bridge.line(r#"{"info":{"level":"debug","name":"NodeStart","msg":"m","invocation_id":"x"},"data":{"node_info":{"unique_id":"model.p.a"}}}"#);
+    bridge.line(r#"{"info":{"level":"debug","name":"NodeFinished","msg":"m","invocation_id":"x"},"data":{"node_info":{"unique_id":"model.p.a"},"run_result":{"thread":"t"}}}"#);
+    let events = sink.events();
+    let json = serde_json::to_string(&events).unwrap();
+    assert!(!json.contains("SECRET"), "{json}");
+    let finished = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            RunEventKind::NodeFinished { stats, .. } => Some(stats.status),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished, NodeRunStatus::Unknown);
+}
+
+/// The report's status wins over the log's (ADR-0024): a node the log finished as
+/// unknown finishes again, as the report says.
+#[test]
+fn the_reports_status_wins_over_the_logs() {
+    let run = RunResults::read(&fixture("dbt-1.10-events/run_results.json")).unwrap();
+    let (request, report) = request_and_report(&run);
+    let sink = CollectedEvents::new();
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::default(), LogLevel::Info);
+    let id = &request.nodes[0].id;
+    bridge.line(&format!(r#"{{"info":{{"level":"debug","name":"NodeFinished","msg":"m","invocation_id":"{}"}},"data":{{"node_info":{{"unique_id":"{id}"}},"run_result":{{"status":"weird"}}}}}}"#, report.run_id));
+    bridge.finish(&report, &run);
+    let summary = RunSummary::from_events(&sink.events());
+    assert_eq!(
+        summary.get(id).unwrap().stats.status,
+        NodeRunStatus::Success
     );
 }

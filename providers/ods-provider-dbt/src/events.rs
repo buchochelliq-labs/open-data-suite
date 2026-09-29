@@ -30,8 +30,63 @@ use serde_json::Value;
 
 use crate::runs::{ResultDetails, RunResults, RunStatus, seconds_to_ms};
 
+/// dbt's error headers: `<kind> Error in <resource type> <name> (<path>)`.
+const HEADER_KINDS: [&str; 6] = [
+    "Runtime Error",
+    "Database Error",
+    "Compilation Error",
+    "Dependency Error",
+    "Parsing Error",
+    "Python Error",
+];
+
 /// Where an error's full text is.
 const DETAILS_AT: &str = "dbt's log file (logs/dbt.log in the project, unless --log-path)";
+
+/// How severe a dbt log line is, and the least severe a person sees (dbt's
+/// `--log-level`, or `DBT_LOG_LEVEL`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum LogLevel {
+    /// dbt's `debug`.
+    Debug,
+    /// dbt's `info`, the default.
+    Info,
+    /// dbt's `warn`.
+    Warn,
+    /// dbt's `error`.
+    Error,
+    /// Nothing is shown (`none`).
+    None,
+}
+
+impl LogLevel {
+    /// dbt's name for a level, in any case; `None` for anything else.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "debug" => Some(Self::Debug),
+            "info" => Some(Self::Info),
+            "warn" | "warning" => Some(Self::Warn),
+            "error" => Some(Self::Error),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// A line of dbt's output for people, as the bridge read it. The caller renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtLine {
+    /// When dbt logged it, `HH:MM:SS` in UTC, if it said.
+    pub time: Option<String>,
+    /// What dbt said.
+    pub text: String,
+}
+
+/// What a line that can't be read shows as: it may be a structured line that holds SQL
+/// or options, so it isn't shown.
+pub const UNREADABLE_LINE: &str = "[an unreadable dbt log line is hidden]";
 
 /// Turns dbt's JSON log lines, and its run results at the end, into run events.
 pub struct Bridge<'a> {
@@ -42,23 +97,24 @@ pub struct Bridge<'a> {
     requested_set: BTreeSet<String>,
     /// Check id → the nodes it reads, from the manifest.
     coverage: BTreeMap<String, Vec<String>>,
-    /// Print debug lines too (the user asked dbt for them).
-    show_debug: bool,
+    /// The least severe line shown.
+    show_from: LogLevel,
     run_id: Option<String>,
     last: Option<TimestampMs>,
-    finished: BTreeSet<String>,
+    /// Nodes finished from the log, with the stats they finished with.
+    finished: BTreeMap<String, NodeRunStats>,
     checks: BTreeSet<String>,
     ended: bool,
 }
 
 impl<'a> Bridge<'a> {
     /// A bridge for `request`'s run, reporting to `sink`. `coverage` maps each check
-    /// (test) to the nodes it reads; `show_debug` prints dbt's debug lines too.
+    /// (test) to the nodes it reads; lines at `show_from` and above are shown.
     pub fn new(
         sink: &'a dyn RunEventSink,
         request: &ExecutionRequest,
         coverage: BTreeMap<String, Vec<String>>,
-        show_debug: bool,
+        show_from: LogLevel,
     ) -> Self {
         let requested: Vec<String> = request.nodes.iter().map(|n| n.id.clone()).collect();
         Self {
@@ -68,10 +124,10 @@ impl<'a> Bridge<'a> {
             requested_set: requested.iter().cloned().collect(),
             requested,
             coverage,
-            show_debug,
+            show_from,
             run_id: None,
             last: None,
-            finished: BTreeSet::new(),
+            finished: BTreeMap::new(),
             checks: BTreeSet::new(),
             ended: false,
         }
@@ -114,16 +170,42 @@ impl<'a> Bridge<'a> {
         }
     }
 
-    /// Reads one line of dbt's standard output. Returns what people should see for it:
-    /// the line itself if it isn't one of dbt's JSON lines, the message of one at
-    /// `info` level or above (as `HH:MM:SS  message`, UTC), and nothing for debug
-    /// lines unless asked.
-    pub fn line(&mut self, line: &str) -> Option<String> {
-        let Ok(Value::Object(event)) = serde_json::from_str::<Value>(line) else {
-            return Some(line.to_owned());
+    /// Reads one line of dbt's standard output. Returns what people should see for it,
+    /// failing closed (AGENTS.md rule 9), since dbt's debug lines hold the SQL it runs
+    /// and the options it was given:
+    /// - one of dbt's JSON lines shows its `msg` only when its `level` is known and at
+    ///   least the level shown; a line without a level shows nothing;
+    /// - a line that starts with `{` but can't be read as one (cut, merged with other
+    ///   output, a number out of range) shows as [`UNREADABLE_LINE`];
+    /// - any other line (e.g. a Python model's `print`) is shown as it is, unless it
+    ///   holds a `{`, which could be a JSON line merged into it: then it shows as
+    ///   [`UNREADABLE_LINE`] too.
+    pub fn line(&mut self, line: &str) -> Option<DbtLine> {
+        let hidden = || {
+            Some(DbtLine {
+                time: None,
+                text: UNREADABLE_LINE.to_owned(),
+            })
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if !trimmed.starts_with('{') {
+            return if trimmed.contains('{') {
+                hidden()
+            } else {
+                Some(DbtLine {
+                    time: None,
+                    text: line.to_owned(),
+                })
+            };
+        }
+        let Ok(Value::Object(event)) = serde_json::from_str::<Value>(trimmed) else {
+            return hidden();
         };
         let Some(info) = event.get("info").and_then(Value::as_object) else {
-            return Some(line.to_owned());
+            return hidden();
         };
         let text = |key: &str| info.get(key).and_then(Value::as_str);
         let ts = text("ts").and_then(|t| TimestampMs::parse(t).ok());
@@ -139,16 +221,17 @@ impl<'a> Bridge<'a> {
             Some("NodeFinished") => self.node_finished(data, ts),
             _ => {}
         }
-        let level = text("level").unwrap_or("info");
-        if level == "debug" && !self.show_debug {
+        let level = text("level").and_then(LogLevel::parse)?;
+        if level == LogLevel::None || level < self.show_from || self.show_from == LogLevel::None {
             return None;
         }
         let msg = text("msg")?;
-        let time = text("ts").and_then(|t| t.get(11..19)).unwrap_or_default();
-        Some(if time.is_empty() {
-            msg.to_owned()
-        } else {
-            format!("{time}  {msg}")
+        Some(DbtLine {
+            time: text("ts")
+                .and_then(|t| t.get(11..19))
+                .filter(|t| t.bytes().all(|b| b.is_ascii_digit() || b == b':'))
+                .map(str::to_owned),
+            text: msg.to_owned(),
         })
     }
 
@@ -156,7 +239,7 @@ impl<'a> Bridge<'a> {
         let Some(id) = unique_id(data) else { return };
         if self.mode == ExecutionMode::Test
             || !self.requested_set.contains(id)
-            || self.finished.contains(id)
+            || self.finished.contains_key(id)
             || !self.started()
         {
             return;
@@ -199,13 +282,13 @@ impl<'a> Bridge<'a> {
         }
         if self.mode == ExecutionMode::Test
             || !self.requested_set.contains(&id)
-            || self.finished.contains(&id)
+            || self.finished.contains_key(&id)
         {
             return;
         }
         let details = result.map(log_details).unwrap_or_default();
-        let finished = node_stats(node_status(RunStatus::parse(status)), &details);
-        self.finished.insert(id.clone());
+        let finished = node_stats(node_status(status), &details);
+        self.finished.insert(id.clone(), finished.clone());
         self.emit(
             ts,
             RunEventKind::NodeFinished {
@@ -244,17 +327,30 @@ impl<'a> Bridge<'a> {
             .map(|r| (r.unique_id.as_str(), r))
             .collect();
         for node in &report.nodes {
-            if self.finished.contains(&node.node) {
-                continue;
-            }
             let status = NodeRunStatus::from(node.status);
-            // A test run built nothing: its nodes have no execution of their own.
-            let details = match results.get(node.node.as_str()) {
-                Some(r) if self.mode != ExecutionMode::Test => r.details.clone(),
-                _ => ResultDetails::default(),
+            let finished = match self.finished.get(&node.node) {
+                // The log finished it as the report says: nothing to add.
+                Some(live) if live.status == status => continue,
+                // The report's status wins (ADR-0024): the node finishes again, with the
+                // log's stats and the report's status.
+                Some(live) => {
+                    let mut corrected = live.clone();
+                    corrected.status = status;
+                    if status != NodeRunStatus::Error {
+                        corrected.error = None;
+                    }
+                    corrected
+                }
+                None => {
+                    // A test run built nothing: its nodes have no execution of their own.
+                    let details = match results.get(node.node.as_str()) {
+                        Some(r) if self.mode != ExecutionMode::Test => r.details.clone(),
+                        _ => ResultDetails::default(),
+                    };
+                    node_stats(status, &details)
+                }
             };
-            let finished = node_stats(status, &details);
-            self.finished.insert(node.node.clone());
+            self.finished.insert(node.node.clone(), finished.clone());
             self.emit(
                 Some(at),
                 RunEventKind::NodeFinished {
@@ -332,11 +428,14 @@ fn unique_id(data: Option<&Value>) -> Option<&str> {
 }
 
 /// As the report reads dbt's status for a requested node, so the two always agree.
-fn node_status(status: RunStatus) -> NodeRunStatus {
-    match status {
+/// dbt's status word in a log event, as a node's status. A missing or unknown word is
+/// `unknown` (rule 3); the report's status, from `run_results.json`, wins at the end.
+fn node_status(status: &str) -> NodeRunStatus {
+    match RunStatus::parse(status) {
         RunStatus::Success => NodeRunStatus::Success,
         RunStatus::Skipped => NodeRunStatus::Skipped,
-        _ => NodeRunStatus::Error,
+        RunStatus::Failed => NodeRunStatus::Error,
+        _ => NodeRunStatus::Unknown,
     }
 }
 
@@ -446,21 +545,41 @@ fn whole_number(value: &Value) -> Option<i64> {
     })
 }
 
+/// The kind of a dbt error header line, `Runtime Error in model orders
+/// (models/orders.sql)`: one of [`HEADER_KINDS`], then `in`, a resource type, a name
+/// and a parenthesised path ending the line. `None` for any other line.
+fn header_kind(line: &str) -> Option<&'static str> {
+    let kind = HEADER_KINDS.iter().find(|k| line.starts_with(*k))?;
+    let rest = line[kind.len()..].strip_prefix(" in ")?;
+    let mut words = rest.splitn(3, ' ');
+    let (resource, name, path) = (words.next()?, words.next()?, words.next()?);
+    let word = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_alphanumeric() || c == '_');
+    (word(resource) && !name.is_empty() && path.starts_with('(') && path.ends_with(')'))
+        .then_some(*kind)
+}
+
+/// Whether a line is the SQL echo some adapters add (`LINE 35: where …`).
+fn is_sql_echo(line: &str) -> bool {
+    line.strip_prefix("LINE ").is_some_and(|rest| {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        digits > 0 && rest[digits..].starts_with(':')
+    })
+}
+
 /// dbt's error message, summarised. dbt starts it with a header naming the kind and the
 /// node (`Runtime Error in model orders (models/orders.sql)`) and puts the engine's own
 /// message on the next line; the summary is that line, with the header's kind when
-/// the line has none.
+/// the line has none. SQL echo lines (`LINE 35: …`) are never used.
 pub fn error_summary(message: &str) -> Option<ErrorSummary> {
-    let mut lines = message.lines().map(str::trim).filter(|l| !l.is_empty());
+    let mut lines = message
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !is_sql_echo(l));
     let first = lines.next()?;
-    let header_kind = first
-        .split_once(" in ")
-        .filter(|_| first.ends_with(')'))
-        .map(|(kind, _)| kind);
-    let summary = match (header_kind, lines.next()) {
+    let summary = match (header_kind(first), lines.next()) {
         (Some(kind), Some(detail)) => {
             let summary = ErrorSummary::from_message(detail)?;
-            if summary.kind.is_none() {
+            if summary.kind().is_none() {
                 summary.with_kind(kind)
             } else {
                 summary
@@ -482,21 +601,36 @@ mod tests {
             "Runtime Error in model orders (models/marts/orders.sql)\n  Dependency Error: Cannot alter entry \"orders\" because there are entries that depend on it.",
         )
         .unwrap();
-        assert_eq!(s.kind.as_deref(), Some("Dependency Error"));
+        assert_eq!(s.kind(), Some("Dependency Error"));
         assert_eq!(
-            s.message,
+            s.message(),
             "Dependency Error: Cannot alter entry [value removed] because there are entries that depend on it."
         );
         let s = error_summary(
             "Compilation Error in model x (models/x.sql)\n  column 'sk_live' is not there",
         )
         .unwrap();
-        assert_eq!(s.kind.as_deref(), Some("Compilation Error"));
-        assert_eq!(s.message, "column [value removed] is not there");
-        assert!(s.details_at.is_some());
+        assert_eq!(s.kind(), Some("Compilation Error"));
+        assert_eq!(s.message(), "column [value removed] is not there");
+        assert!(s.details_at().is_some());
         let s = error_summary("KeyError: 'segment'").unwrap();
-        assert_eq!(s.message, "KeyError: [value removed]");
+        assert_eq!(s.message(), "KeyError: [value removed]");
         assert_eq!(error_summary("  \n"), None);
+        // Not a dbt header, though it has " in " and ends in `)`; and the SQL echo
+        // line is never used (#322 review).
+        let s = error_summary(
+            "Binder Error: column not found in table orders (did you mean total)\nLINE 35: where cast(secret_col as integer) = ssn_col",
+        )
+        .unwrap();
+        assert_eq!(s.kind(), Some("Binder Error"));
+        assert!(!s.message().contains("secret_col") && !s.message().contains("ssn_col"));
+        let s = error_summary(
+            "Database Error in model x (models/x.sql)\n  LINE 3: where token = 'sk_1'\n  002003 (42S02): SQL compilation error:\n  Object does not exist",
+        )
+        .unwrap();
+        assert_eq!(s.kind(), Some("Database Error"));
+        assert!(s.message().ends_with("SQL compilation error:"), "{s:?}");
+        assert!(!format!("{s:?}").contains("sk_1"));
     }
 
     #[test]

@@ -1105,15 +1105,25 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
 - **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
   streams to **stderr** as dbt writes it. For the build or test itself, ODS asks dbt
   for its structured log (`--log-format json --log-level debug`) to read each node's
-  progress (#322), and prints dbt's lines at `info` and above as `HH:MM:SS  message`,
-  with the time in UTC; the debug lines, which hold the SQL dbt runs and the options
-  it was given, aren't shown. Pass `-- --log-format text` to have dbt print as usual:
+  progress (#322), and prints dbt's lines as `HH:MM:SS  message`, with the time in
+  UTC and dbt's colours dropped, from the level dbt would show: `info`, or what
+  `DBT_LOG_LEVEL`, `-- --log-level`, `-- --debug` or `-- --quiet` ask for. The debug
+  lines, which hold the SQL dbt runs and the options it was given, aren't shown unless
+  asked. A line that should be one of dbt's JSON lines but can't be read (cut short,
+  or merged with other output), or one with no level, shows as `[an unreadable dbt log
+  line is hidden]`; other lines, such as a Python model's `print`, show as they are
+  unless they hold a `{`. dbt's own error lines are shown as dbt shows them, and can
+  quote values; ODS's report, `--json`, and the run journal only ever hold the redacted
+  summary. Pass `-- --log-format text` to have dbt print as usual:
   the run's stats then come from `run_results.json` at the end, not live. With
   `--dbt-output capture` dbt's output is hidden, and the last lines are quoted in the
   error if dbt fails.
 - **Each node's result**, as it finishes, is a step line too: `ods ▸ orders built in
   4.2s, 99 rows`, `ods ▸ customers failed in 3.6s (KeyError: [value removed])`,
   `ods ▸ segment_summary skipped`.
+- **`--vars` values** never appear in what ODS prints, logs or reports: the command
+  lines it logs (`-v`), the report's `dbt` and `ran` lines, and `execution.command` in
+  `--json` show `--vars '[value removed]'`. dbt still gets them.
 - **ODS's report** (the plan, the exact dbt command it ran, the outcome, the run's
   totals, what was recorded, and a table with each node's result, time taken, rows and
   why it ran) is printed to

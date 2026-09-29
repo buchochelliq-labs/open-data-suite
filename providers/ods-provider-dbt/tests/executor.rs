@@ -44,6 +44,10 @@ fn executor(dir: &Path) -> DbtExecutor {
     DbtExecutor::new(fake_dbt(), dir.join("target"))
         .env("FAKE_DBT_LOG", dir.join("built.log").display().to_string())
         .env("FAKE_DBT_FAIL", "stg_orders")
+        .env(
+            "FAKE_DBT_FAIL_MESSAGE",
+            "Runtime Error in model stg_orders (models/stg_orders.sql)\n  Can't cast 'SECRET_CONFORMANCE_2' to INT",
+        )
         .output(DbtOutput::Capture)
 }
 
@@ -64,6 +68,10 @@ impl ExecutorHarness for Harness {
         executor.prepare(&PrepareRequest::new()).await.unwrap();
         *self.dir.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir);
         Arc::new(executor)
+    }
+
+    fn failing_secret(&self) -> Option<String> {
+        Some("SECRET_CONFORMANCE_2".to_owned())
     }
 
     fn checked_source(&self) -> Option<RequestedNode> {

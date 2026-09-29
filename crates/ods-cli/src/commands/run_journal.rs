@@ -32,15 +32,33 @@ pub(super) fn path_for(state_db: &Path, run_id: &str) -> Option<PathBuf> {
     usable(run_id).then(|| dir_for(state_db).join(format!("{run_id}.jsonl")))
 }
 
-/// Whether a run id can be a file name as it is: 1 to 128 ASCII letters, digits, `-`,
-/// `_` and `.`, not starting with `.`.
+/// Whether a run id can be a file name as it is, on every system: 1 to 128 ASCII
+/// letters, digits, `-`, `_` and `.`, not starting or ending with `.`, and not a name
+/// Windows reserves for a device (`CON`, `NUL`, `COM1`, … in any case, with or
+/// without an extension). No maintained crate does only this; the list is short.
 fn usable(run_id: &str) -> bool {
+    const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    let stem = run_id
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let device = DEVICES.contains(&stem.as_str())
+        || ["COM", "LPT"].iter().any(|p| {
+            stem.strip_prefix(p)
+                .is_some_and(|n| n.len() == 1 && n.bytes().all(|b| b.is_ascii_digit()))
+        });
     (1..=128).contains(&run_id.len())
         && !run_id.starts_with('.')
+        && !run_id.ends_with('.')
+        && !device
         && run_id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
+
+/// A journal changed this recently may belong to a run still going: never pruned.
+const RECENT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 /// Appends a run's events to its journal. Opens the file at `run_started`, never
 /// overwriting one; if the journal can't be written, it says why once
@@ -92,7 +110,7 @@ impl JournalSink {
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("can't create `{}` for run journals: {e}", dir.display()))?;
         // Older journals go first, so the directory never holds more than `KEEP`.
-        prune(&dir, KEEP.saturating_sub(1));
+        prune(&dir, KEEP.saturating_sub(1), std::time::SystemTime::now());
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -140,9 +158,10 @@ impl RunEventSink for JournalSink {
     }
 }
 
-/// Deletes the oldest journals in `dir` until at most `keep` remain. Best effort: a
+/// Deletes the oldest journals in `dir` until at most `keep` remain, never one changed
+/// in the last [`RECENT`] (another run may still be writing it). Best effort: a
 /// journal that can't be deleted is left.
-fn prune(dir: &Path, keep: usize) {
+fn prune(dir: &Path, keep: usize, now: std::time::SystemTime) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -156,8 +175,13 @@ fn prune(dir: &Path, keep: usize) {
     }
     journals.sort();
     let excess = journals.len() - keep;
-    for (_, path) in journals.into_iter().take(excess) {
-        let _ = std::fs::remove_file(path);
+    for (modified, path) in journals.into_iter().take(excess) {
+        let recent = now
+            .duration_since(modified)
+            .map_or(true, |age| age < RECENT);
+        if !recent {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -223,7 +247,20 @@ mod tests {
     fn only_plain_run_ids_name_files() {
         assert!(usable("0e3c6a40-1b2c-4d5e-8f90-123456789abc"));
         assert!(usable("fake-run-1"));
-        for bad in ["", ".hidden", "../x", "a/b", "a b", &"x".repeat(129)] {
+        for bad in [
+            "",
+            ".hidden",
+            "../x",
+            "a/b",
+            "a b",
+            &"x".repeat(129),
+            "CON",
+            "nul",
+            "Aux.jsonl",
+            "com1",
+            "LPT9.x",
+            "trailing.",
+        ] {
             assert!(!usable(bad), "{bad}");
         }
     }
@@ -284,12 +321,14 @@ mod tests {
                 .unwrap();
         }
         std::fs::write(dir.path().join("keep.txt"), "").unwrap();
-        prune(dir.path(), 2);
+        // One changed just now: another run may be writing it, so it stays.
+        std::fs::write(dir.path().join("live.jsonl"), "").unwrap();
+        prune(dir.path(), 2, std::time::SystemTime::now());
         let mut left: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         left.sort();
-        assert_eq!(left, ["keep.txt", "r3.jsonl", "r4.jsonl"]);
+        assert_eq!(left, ["keep.txt", "live.jsonl", "r4.jsonl"]);
     }
 }
