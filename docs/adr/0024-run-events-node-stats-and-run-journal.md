@@ -74,8 +74,10 @@ Rules every executor follows, checked by the conformance suite (three new cases,
 all):
 - events are emitted in order, their times never go backwards, and all carry the same
   run id and the request's scope;
-- every requested node finishes exactly once, with the status the report gives it; node
-  events come queued, started, finished; nothing about a node follows its finish; node
+- every requested node finishes, and its last finish has the status the report gives
+  it (unknown if the report doesn't list it): a node finishes a second time only when
+  the report corrects the status reported live; node events come queued, started,
+  finished; nothing but such a correction follows a node's finish; node
   events name only requested or reported-unrequested nodes;
 - a success has no error, a node starts before it finishes, and error summaries quote
   nothing;

@@ -431,7 +431,7 @@ fn check_node_events(
     report: &ExecutionReport,
     events: &[RunEvent],
 ) {
-    // Every requested node finishes exactly once, as the report says (unknown when the
+    // Every requested node finishes, last as the report says (unknown when the
     // report doesn't list it); node events come in order (queued, started, finished)
     // and only for nodes the run touched.
     for requested in &request.nodes {
@@ -452,24 +452,25 @@ fn check_node_events(
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            finished.len(),
-            1,
-            "{case}: {} finishes once: {of:?}",
-            node.id
-        );
-        let stats = finished[0];
+        // It finishes; it may finish again only to take the report's status, so its
+        // last finish says what the report says.
+        let Some(&stats) = finished.last() else {
+            panic!("{case}: {} never finishes: {of:?}", node.id);
+        };
         assert_eq!(
             stats.status, expected,
             "{case}: {} finishes as the report says",
             node.id
         );
+        let first_finish = of
+            .iter()
+            .position(|e| matches!(e.kind, RunEventKind::NodeFinished { .. }))
+            .unwrap_or(of.len());
         assert!(
-            matches!(
-                of.last().map(|e| &e.kind),
-                Some(RunEventKind::NodeFinished { .. })
-            ),
-            "{case}: nothing about {} after it finished: {of:?}",
+            of[first_finish..]
+                .iter()
+                .all(|e| matches!(e.kind, RunEventKind::NodeFinished { .. })),
+            "{case}: nothing about {} after it finished but a correction: {of:?}",
             node.id
         );
         let position = |kind: fn(&RunEventKind) -> bool| of.iter().position(|e| kind(&e.kind));
@@ -507,7 +508,7 @@ fn check_node_events(
     }
 }
 
-/// Events frame the run and every requested node finishes once, as the report says
+/// Events frame the run and every requested node finishes as the report says
 /// (#322).
 async fn events_follow_the_run(harness: &dyn ExecutorHarness) {
     let case = "events_follow_the_run";
