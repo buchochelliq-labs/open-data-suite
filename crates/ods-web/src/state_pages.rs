@@ -941,7 +941,7 @@ fn target_text(row: &RunRow) -> String {
     )
 }
 
-const RUN_COLUMNS: &str = r#"<thead><tr><th scope="col"><span class="sr-only">Outcome</span></th><th scope="col">Run</th><th scope="col">Command</th><th scope="col">Target</th><th scope="col">Snapshot</th><th scope="col">Built</th><th scope="col" title="Kept earlier build: reused, not selected, or failed">Kept</th><th scope="col" title="Failed, or ran but not recorded">Failed</th><th scope="col">Skipped</th><th scope="col">Time</th><th scope="col">Duration</th><th scope="col">Triggered by</th></tr></thead>"#;
+const RUN_COLUMNS: &str = r#"<thead><tr><th scope="col"><span class="sr-only">Outcome</span></th><th scope="col">Run</th><th scope="col">Command</th><th scope="col">Target</th><th scope="col">Snapshot</th><th scope="col">Built</th><th scope="col" title="Kept earlier build: reused, not selected, or failed">Kept</th><th scope="col" title="Nodes that failed or ran but weren't recorded, and sources whose tests failed">Failed</th><th scope="col">Skipped</th><th scope="col">Time</th><th scope="col">Duration</th><th scope="col">Triggered by</th></tr></thead>"#;
 
 fn runs_html(shell: &ShellView, view: &RunsView, generation: u64) -> String {
     let mut b = String::with_capacity(32 * 1024);
@@ -983,7 +983,7 @@ fn runs_html(shell: &ShellView, view: &RunsView, generation: u64) -> String {
     }
     let _ = write!(
         b,
-        r#"<div class="st-legend"><span><span class="st-num built">n</span>built</span><span title="{kept}"><span class="st-num kept">n</span>kept earlier build: reused, not selected, or failed</span><span><span class="st-num failed">n</span>failed or not recorded</span><span><span class="st-num skipped">n</span>skipped: waited on a failed node</span><span><span class="st-glyph rec" aria-hidden="true"></span>recorded: outcome not stored</span><span>{NOT_RECORDED} not recorded</span><span class="st-right">Duration and user are not recorded yet.</span></div>"#,
+        r#"<div class="st-legend"><span><span class="st-num built">n</span>built</span><span title="{kept}"><span class="st-num kept">n</span>kept earlier build: reused, not selected, or failed</span><span><span class="st-num failed">n</span>failed: nodes that failed or weren't recorded, and sources whose tests failed</span><span><span class="st-num skipped">n</span>skipped: waited on a failed node</span><span><span class="st-glyph rec" aria-hidden="true"></span>recorded: outcome not stored</span><span>{NOT_RECORDED} not recorded</span><span class="st-right">Duration and user are not recorded yet.</span></div>"#,
         kept = attr(KEPT_NOTE),
     );
     if more {
@@ -1035,19 +1035,27 @@ fn last_run_notices(b: &mut String, view: &RunsView) {
 }
 
 fn failed_names(last: &LastRunView) -> String {
-    if last.failed.is_empty() {
-        String::new()
-    } else {
-        text(&format!(
+    let names = |nodes: &[crate::dashboard::state::NodeRef]| {
+        nodes
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut parts = Vec::new();
+    if !last.failed.is_empty() {
+        parts.push(format!(
             "; {} failed or weren't recorded",
-            last.failed
-                .iter()
-                .map(|n| n.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-        .into_owned()
+            names(&last.failed)
+        ));
     }
+    if !last.failed_source_tests.is_empty() {
+        parts.push(format!(
+            "; the tests of {} failed",
+            names(&last.failed_source_tests)
+        ));
+    }
+    text(&parts.concat()).into_owned()
 }
 
 /// The recorded runs, one table body per day.
@@ -1228,7 +1236,7 @@ fn facets(b: &mut String, view: &RunsView) {
 
 /// The last run, when it probably recorded no snapshot: its own row, first.
 fn last_run_row(b: &mut String, last: &LastRunView, view: &RunsView) {
-    let failed = !last.failed.is_empty() || !last.skipped.is_empty();
+    let failed = last.has_failures();
     let (date, time) = date_and_time(last.started_at);
     let selected = view.selected.as_deref() == Some("last");
     let outcome = if failed {
@@ -1265,7 +1273,7 @@ fn last_run_row(b: &mut String, last: &LastRunView, view: &RunsView) {
         chip = inferred_chip(NOTHING_NOTE),
         built = num_pill(Some(0), "built"),
         kept = NOT_RECORDED,
-        nfailed = num_pill(Some(last.failed.len()), "failed"),
+        nfailed = num_pill(Some(last.failures()), "failed"),
         nskipped = num_pill(Some(last.skipped.len()), "skipped"),
         time = text(&time),
     );
@@ -1324,7 +1332,7 @@ fn runs_side(b: &mut String, view: &RunsView) {
             short = attr(&row.short_run_id),
         );
     } else if let Some(last) = last.filter(|l| l.recorded_nothing_inferred && l.outcome_known) {
-        let failed = !last.failed.is_empty() || !last.skipped.is_empty();
+        let failed = last.has_failures();
         let outcome = if failed {
             RunOutcome::Failed
         } else {
@@ -1340,9 +1348,10 @@ fn runs_side(b: &mut String, view: &RunsView) {
             command = text(&last.command_name),
             at = text(&last.started_at.to_string()),
             counts = text(&format!(
-                "recorded nothing · {} failed or not recorded · {} skipped",
+                "recorded nothing · {} failed or not recorded · {} skipped · {} source tests failed",
                 last.failed.len(),
-                last.skipped.len()
+                last.skipped.len(),
+                last.failed_source_tests.len()
             )),
             chip = inferred_chip(NOTHING_NOTE),
             full = if last.command == last.command_name {
@@ -1387,6 +1396,18 @@ fn last_run_panels(b: &mut String, last: &LastRunView, snapshot: Option<u64>, ro
             );
         }
         b.push_str(r#"<pre class="st-error" title="Error output isn't recorded yet">[error excerpt]<span class="chip">Planned</span></pre><span class="st-small">It failed, or ran but its build couldn't be recorded. The run log isn't recorded yet.</span></div>"#);
+    }
+    if !last.failed_source_tests.is_empty() {
+        let names: Vec<String> = last
+            .failed_source_tests
+            .iter()
+            .map(|n| node_name(&n.node, &n.name, root))
+            .collect();
+        let _ = write!(
+            b,
+            r#"<div class="st-side-sec"><h3 class="st-label">Source tests failed</h3><span class="st-small">{}: their readers build again once the tests pass.</span></div>"#,
+            names.join(", ")
+        );
     }
     if !last.skipped.is_empty() {
         let names: Vec<String> = last

@@ -1041,3 +1041,56 @@ fn a_plan_that_builds_nothing_says_so_and_what_checks_relations() {
     let (status, _) = get(addr, "/state/");
     assert_eq!(status, 307, "the State section opens on the plan");
 }
+
+#[test]
+fn a_run_whose_only_failures_are_source_tests_failed() {
+    let only_sources = LastRun::new(
+        "ods state build",
+        "ods state build",
+        at("2026-09-29T00:04:10Z"),
+        "state.db.last-run.json",
+    )
+    .with_outcome(Some(LastOutcome::new(
+        vec![],
+        vec![],
+        vec!["source.shop.raw.orders".into()],
+    )))
+    .with_retry(
+        Some("ods state retry".into()),
+        Some("ods state retry --failed".into()),
+    );
+    // It recorded nothing (no snapshot has its id): its own row, failed.
+    let dashboard = with_last(scoped(
+        only_sources.clone(),
+        Some("7d21a0c4-0000-4000-8000-000000000004"),
+    ));
+    let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
+    assert!(view.last_run_listed);
+    assert_eq!(view.failed, 1, "counted as failed");
+    assert_eq!(view.selected.as_deref(), Some("last"));
+    let outcomes = view.facets.iter().find(|f| f.key == "outcome").unwrap();
+    let count = |value: &str| {
+        outcomes
+            .options
+            .iter()
+            .find(|o| o.value == value)
+            .unwrap()
+            .count
+    };
+    assert_eq!((count("failed"), count("succeeded")), (1, 0));
+    let last = view.last_run.as_ref().unwrap();
+    assert!(last.has_failures());
+    assert_eq!(last.failures(), 1);
+    assert_eq!(last.next[0].command, "ods state retry --failed");
+    let addr = start(dashboard);
+    let (_, page) = get(addr, "/state/runs");
+    assert!(page.contains("Source tests failed"), "{page}");
+    assert!(page.contains(">FAILED<"), "{page}");
+    assert!(!page.contains(">SUCCEEDED<"), "{page}");
+
+    // Tied to snapshot 3 by its run id: the row is failed too.
+    let dashboard = with_last(scoped(only_sources, Some(RUN_3)));
+    let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
+    assert_eq!(view.runs[0].outcome, RunOutcome::Failed);
+    assert_eq!(view.runs[0].failed, Some(1));
+}

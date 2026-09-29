@@ -493,3 +493,90 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     drop(server);
     assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
 }
+
+/// `ods state <command>` with the fake dbt in `dir`, as `fake_build` runs `build`.
+#[cfg(unix)]
+fn fake_state(dir: &Path, command: &str, envs: &[(&str, &str)]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", command, "--dbt"])
+        .arg(fixtures("fake-dbt/dbt"))
+        .args(["--dbt-output", "capture", "--target-dir"])
+        .arg(dir.join("target"))
+        .arg("--state-db")
+        .arg(dir.join(".ods/state.db"))
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", dir.join("base"))
+        .envs(envs.iter().copied())
+        .output()
+        .unwrap()
+}
+
+/// `ods state test` keeps how it ended, like `run` and `build` (#311 review): its
+/// run shows on the Runs page, for its scope, tied to the snapshot it recorded. A test
+/// run isn't offered `retry --failed`, which only retries builds.
+#[cfg(unix)]
+#[test]
+fn a_test_run_is_the_last_run_tied_to_its_snapshot() {
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    fs::create_dir_all(dir.join("base")).unwrap();
+    fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        dir.join("base/manifest.json"),
+    )
+    .unwrap();
+    // Built without tests, so `test` has something to run.
+    let out = fake_state(dir, "run", &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::thread::sleep(Duration::from_millis(1100));
+    let out = fake_state(
+        dir,
+        "test",
+        &[("FAKE_DBT_FAIL_TEST", "unique_orders_order_id")],
+    );
+    assert!(!out.status.success(), "a test fails");
+    let kept: Value =
+        serde_json::from_slice(&fs::read(dir.join(".ods/state.db.last-run.json")).unwrap())
+            .unwrap();
+    assert_eq!(kept["command"], "test", "{kept:#}");
+    assert_eq!(kept["scope"], "jaffle_ods/default", "{kept:#}");
+    assert!(kept["run_id"].is_string(), "{kept:#}");
+
+    let db = dir.join(".ods/state.db");
+    let server = serve(
+        &dir.join("target"),
+        &["--no-watch", "--state-db", db.to_str().unwrap()],
+    );
+    let (status, body) = get(&server, "api/state/runs");
+    assert_eq!(status, 200, "{body}");
+    let runs: Value = serde_json::from_str(&body).unwrap();
+    let newest = &runs["runs"][0];
+    assert_eq!(newest["run_id"], kept["run_id"], "{runs}");
+    assert_eq!(newest["from_last_run"], true, "{runs}");
+    assert_eq!(newest["outcome"], "failed", "{runs}");
+    assert_eq!(
+        newest["command"]
+            .as_str()
+            .unwrap()
+            .split(' ')
+            .take(3)
+            .collect::<Vec<_>>(),
+        ["ods", "state", "test"]
+    );
+    let last = &runs["last_run"];
+    assert_eq!(last["snapshot"], newest["snapshot"], "{last}");
+    assert_eq!(last["recorded_nothing_inferred"], false);
+    let next: Vec<&str> = last["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["command"].as_str().unwrap())
+        .collect();
+    assert_eq!(next, ["ods state retry"], "no --failed after a test run");
+}

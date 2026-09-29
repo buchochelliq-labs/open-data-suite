@@ -128,8 +128,22 @@ impl TestReport {
     /// Runs the tests and emits the report.
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let settings = StateSettings::resolve(args, ctx.config)?;
-        super::state_retry::remember(&test_command(), args, &settings);
+        let remembered = super::state_retry::remember(&test_command(), args, &settings);
         let report = Self::build(args, &settings, ctx.progress)?;
+        // How it ended, as `run` and `build` keep it: the dashboard shows the last run
+        // only for its scope, tied to its snapshot by run id (#311).
+        if let Some(remembered) = remembered {
+            remembered.finish(
+                report
+                    .execution
+                    .as_ref()
+                    .map_or_else(Default::default, |e| {
+                        super::state_retry::LastOutcome::of(e, report.record.is_some())
+                    }),
+                report.scope.clone(),
+                report.execution.as_ref().map(|e| e.run_id.clone()),
+            );
+        }
         if report.outcome == TestOutcome::Incomplete {
             let error = CliError::new(
                 ExitStatus::Failure,
