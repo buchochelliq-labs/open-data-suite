@@ -39,6 +39,8 @@ csv = "1"
 # Hex encoding of digests.
 hex = "0.4"
 insta = "1"
+# Escapes text and attribute values in the dashboard's server-rendered HTML (ADR-0009).
+html-escape = "0.2"
 # Date and time: parsing and printing `Timestamp`. No time zone database needed (UTC only).
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 # Opens the lineage viewer in the user's browser, on every platform (and WSL).

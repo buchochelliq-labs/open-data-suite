@@ -56,6 +56,40 @@ is checked in as released, with no npm build, and inlined into the page, so the 
 still works offline and under the server's inline-only CSP. Any further vendored library
 must also be permissively licensed and inlined the same way.
 
+*Amended 2026-09-29 (#310, the dashboard shell and Home):* `ods serve` grows into the
+read-only ODS Dashboard ([design](../design/dashboard/README.md)).
+- **Pages:** Home is served at `<base>/`, server-rendered from view models, with its
+  stylesheet and a small script inlined. The lineage explorer moves to `<base>/lineage`,
+  where its relative `api/…` still resolves to `<base>/api/…`.
+- **Data:** the binary still owns every provider. Its `Loader` now also fills a
+  neutral `ods_web::Dashboard` on the `Snapshot`: the project, planned nodes by kind,
+  the recent runs (`RunRecord`, derived from committed snapshots), the snapshot count,
+  the plan against the head, opaque nodes and module status. `ods-web` depends only on
+  `ods-core` types for it. The state store is opened read-only (no migration, never
+  created); without one, Home shows how to record a first run. The watcher also
+  watches the state database, its WAL and the source freshness results (even before
+  they exist), so a new run or measurement reloads open pages.
+- **Plans depend on time:** a lag tolerance can expire with no file changing, so the
+  binary also supplies a `Planner` (offline, cheap) and Home plans again as of each
+  request, instead of showing a plan made at load time. A timer at the earliest
+  lag-tolerance deadline was the alternative; it needs the planner to report
+  deadlines, and still goes stale between a deadline and the next reload.
+- **API:** `/api/shell` (`ShellView`) and `/api/home` (`HomeView`) return the view
+  models the page renders, at `schema_version` 1; additive fields keep it. They are
+  `GET` only, like every route. Beyond loopback, `/api/home` omits the store's path and
+  error text, as `/api/version` does.
+- **Fonts:** IBM Plex Sans (400, 500, 600) and Mono (400, 500), Latin-1 subsets as
+  released in `@ibm/plex-sans` 1.1.0 and `@ibm/plex-mono` 2.5.0, are vendored in
+  `crates/ods-web/assets/vendor/fonts/` with their licence, the
+  [SIL Open Font License 1.1](https://openfontlicense.org). OFL permits bundling and
+  redistribution with software (the fonts may not be sold alone, and a modified font
+  must be renamed; we ship them unmodified). `cargo-deny` doesn't see fonts, so this
+  note is their licence record. They are served from `<base>/assets/fonts/<file>`, and
+  the CSP gains only `font-src 'self'`: no font CDN, and the page works offline. An
+  installed copy (`local()`) is used first.
+- **Escaping:** server-rendered text and attributes go through the `html-escape` crate
+  (MIT).
+
 ## Decision
 - **New EDGE layer** between PROVIDER and BINARY in `scripts/check-layering.py`. EDGE
   crates may depend on anything up to MODULE, and not on providers. `axum` is confined to
@@ -76,6 +110,7 @@ must also be permissively licensed and inlined the same way.
   | `/api/node?id=` | a node (by id or unique name) plus its analyzed lineage |
   | `/api/impact?node=&column=&kind=` | `Change` plus `Impact`, with reasons and pruned readers |
   | `/healthz` | `ok` |
+  | `/api/shell`, `/api/home` | the dashboard's view models (amended 2026-09-29) |
 
   Breaking changes bump the API version. Additive fields don't.
 - **Safe by default:**

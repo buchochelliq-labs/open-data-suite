@@ -24,7 +24,7 @@ codes).
 | `ods lsp` | planned: M5 LSP & VS Code (v0.5.0) |
 | `ods agent` | planned: M6 ODS Agent (v0.6.0) |
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
-| `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
+| `ods serve` | available (preview): host the read-only dashboard, the lineage explorer and their JSON API, see [below](#the-dashboard) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
 | `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
@@ -522,7 +522,7 @@ The same page ships three ways ([ADR-0009](adr/0009-hostable-explorer-ods-web.md
 ```sh
 ods lineage view                              # one offline file, graph embedded
 ods lineage view --site public/lineage        # static site: index.html + graph.json
-ods serve                                     # http://127.0.0.1:8765/, live reload
+ods serve                                     # http://127.0.0.1:8765/lineage, live reload
 ods serve --host 0.0.0.0 --port 8080 --base-path /lineage   # behind a reverse proxy
 ```
 
@@ -530,14 +530,18 @@ A static site can go on any static web server (S3, GitHub Pages, nginx). Browser
 fetch `graph.json` from a `file://` page, so use `ods lineage view` for local files.
 
 `ods serve` analyzes the project once, then serves:
-- the explorer, which adds a *What if this changes?* panel that runs impact on the server;
+- the [dashboard](#the-dashboard) at `/`;
+- the explorer at `/lineage`, which adds a *What if this changes?* panel that runs
+  impact on the server;
 - a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
-  `/api/impact?node=&column=&kind=` and `/healthz`.
+  `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home` and `/healthz`.
 
-It checks `manifest.json`, `catalog.json` and the Information Schema every second. When
-they change (e.g. after `dbt compile`) it re-analyzes only the models that changed, and
-open pages reload. If a reload fails, the last good graph stays up and the error appears
-in `/api/version`.
+It checks `manifest.json`, `catalog.json`, the Information Schema and the state
+database and the source freshness results (`--sources`, else
+`<target-dir>/sources.json`, even before it exists) every second. When they change
+(e.g. after `dbt compile`, `dbt source freshness` or `ods state build`)
+it re-analyzes only the models that changed, and open pages reload. If a reload fails,
+the last good graph stays up and the error appears in `/api/version`.
 
 It listens on loopback by default and then only answers requests for `localhost`,
 `127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
@@ -553,8 +557,53 @@ plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
 | `--port PORT` | (`serve`) default `8765`; `0` picks a free port (the URL is printed) |
 | `--base-path PATH` | (`serve`) URL prefix, e.g. `/lineage`; the page is served at `/lineage/` |
 | `--allow-host NAME` | (`serve`) also accept this `Host` name, e.g. the one your reverse proxy forwards; repeatable |
-| `--no-watch` | (`serve`) don't reload when artifacts change |
+| `--no-watch` | (`serve`) don't reload when artifacts or the state store change |
+| `--state-db PATH`, `--environment NAME`, `--target NAME`, `--sources PATH` | (`serve`) which state the dashboard shows, as for `ods state plan`; the database is only read, never created or migrated |
 | `--site DIR` | (`lineage view`) write a static site instead of one file |
+
+### The dashboard
+
+`ods serve` opens on the ODS Dashboard's Home page: a read-only view of the project
+and its local state ([design](design/dashboard/README.md), #310). Run it from the
+project, where `ods state` keeps `.ods/state.db`:
+
+```sh
+ods state build        # record a run first, if you haven't
+ods serve              # then open http://127.0.0.1:8765/
+```
+
+Home shows:
+- **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
+  kept an earlier build; and how many snapshots are recorded;
+- **recent runs:** each recorded snapshot, its run, and how many nodes it built and how
+  many kept an earlier build. *Kept* is not the same as reused: a snapshot keeps the
+  last good build of a node the run reused, didn't select, or failed to build, and
+  can't tell them apart. Runs don't record their command yet (shown as —), and whether
+  some nodes failed isn't stored, so the outcome reads *recorded*, without a tick;
+- **needs attention:** from the plan against the latest snapshot (`ods state plan`),
+  nodes whose code changed and nodes whose evidence is missing, then opaque nodes whose
+  column lineage is unknown. Each links to the node in the explorer. Below them, *The
+  plan builds N nodes* counts every build by its main reason (e.g. `target changed`,
+  `never built`, `new upstream data`), including reasons the list doesn't show. It says
+  *Nothing* only when the plan builds nothing. The plan is made again on every page
+  load, because a lag tolerance can run out while no file changes;
+- **health and coverage:** `[n]` placeholders until the health signals exist (#117);
+- **modules:** *Ready* for what this page reads (lineage, and State once a run is
+  recorded); *Available* for modules that work from the CLI but aren't checked here
+  (ERD); *Planned* for the rest.
+
+Without a state database, Home says how to record a first run instead. If the project's
+own files can't be read (the artifacts, or a `--sources` file that is missing or
+malformed), it says so and doesn't open the store. Errors appear on the page on
+loopback, and in the server log (a warning) everywhere. The left
+navigation lists every section of the design; sections not built yet are greyed and
+marked *Planned*. The project and target pickers show the current ones; switching
+comes later. The search box hands its text to the explorer's search.
+
+The dashboard never writes configuration or state: the database is opened read-only,
+and every route is `GET`. `/api/shell` and `/api/home` return exactly what the page
+shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served by
+`ods serve` itself (no font CDN), with system fonts as the fallback.
 
 ## dbt State configuration
 

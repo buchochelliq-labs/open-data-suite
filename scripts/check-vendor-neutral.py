@@ -2,7 +2,8 @@
 """Enforce AGENTS.md rule 1: no vendor or runtime names in core code (#3, ADR-0006).
 
 Core, foundation, SDK and module crates must choose behaviour from capabilities, never
-from which warehouse or runtime is in use. This scans their non-test Rust source and
+from which warehouse or runtime is in use; `ods-web` only presents, so it names none
+either. This scans their non-test Rust source and
 fails if a vendor name appears in code or in a string literal. Provider crates
 (`providers/`) and the composition root (`ods-cli`) may name vendors.
 
@@ -26,6 +27,8 @@ NEUTRAL_CRATES = [
     "ods-core", "ods-events", "ods-config", "ods-policy", "ods-sdk",
     "ods-lineage", "ods-state", "ods-erd", "ods-usage", "ods-ci", "ods-lsp", "ods-agent",
     "ods-mesh", "ods-synthetic",
+    # EDGE: the explorer and dashboard present what the binary hands them (#310).
+    "ods-web",
 ]
 # Written without separators; parts are joined before matching. Common English words
 # (oracle, fabric) are left out to avoid false positives.

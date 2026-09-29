@@ -1,7 +1,8 @@
-//! `ods serve`: host the lineage explorer over HTTP (ADR-0009).
+//! `ods serve`: host the dashboard and the lineage explorer over HTTP (ADR-0009, #310).
 //!
 //! The composition root for `ods-web`: it builds [`Snapshot`]s from dbt artifacts with
-//! the same providers as `ods lineage`, and reloads them when the artifacts change.
+//! the same providers as `ods lineage`, adds the dashboard's facts from the state store
+//! (read-only), and reloads them when the artifacts or the state change.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -9,11 +10,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use ods_lineage::{GraphFilter, MemoryCache};
+use ods_lineage::MemoryCache;
 use ods_web::{Loader, ServeOptions, Snapshot, WebError};
 use serde::Serialize;
 
 use super::lineage::{LoadOptions, Loaded, Summary, common_args};
+use super::serve_dashboard::{DashboardSource, state_args};
 use super::state_settings::artifacts_dir;
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
@@ -27,9 +29,9 @@ const WATCH_EVERY: Duration = Duration::from_secs(1);
 
 impl Module for Serve {
     fn command(&self) -> Command {
-        common_args(
+        state_args(common_args(
             Command::new("serve")
-                .about("Host the lineage explorer and its read-only JSON API over HTTP")
+                .about("Host the read-only dashboard, the lineage explorer and their JSON API over HTTP")
                 .arg(
                     Arg::new("host")
                         .long("host")
@@ -64,9 +66,9 @@ impl Module for Serve {
                     Arg::new("no-watch")
                         .long("no-watch")
                         .action(ArgAction::SetTrue)
-                        .help("Don't reload when the dbt artifacts change"),
+                        .help("Don't reload when the dbt artifacts or the state store change"),
                 ),
-        )
+        ))
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
@@ -79,10 +81,14 @@ impl Module for Serve {
         // server that never starts. The server then takes this snapshot as its first.
         let first = Loaded::from_dir(&target_dir, &load, &cache)?;
         let summary = Summary::of(&first);
-        let initial = Mutex::new(Some(snapshot(&first, &target_dir)));
+        let source = Arc::new(DashboardSource::new(matches, ctx.config)?);
+        let initial = Mutex::new(Some(
+            source.snapshot(&first, target_dir.display().to_string()),
+        ));
         drop(first);
 
-        let loader = loader(target_dir.clone(), load, cache, initial);
+        let state_files = source.watched();
+        let loader = loader(target_dir.clone(), load, cache, initial, source);
         let host = matches
             .get_one::<IpAddr>("host")
             .copied()
@@ -105,6 +111,7 @@ impl Module for Serve {
         if watching {
             let mut files = watched(&target_dir);
             files.extend(matches.get_one::<String>("observed").map(PathBuf::from));
+            files.extend(state_files);
             options = options.with_watch(files, WATCH_EVERY);
         }
         let base_path = options.base_path().to_owned();
@@ -137,18 +144,6 @@ impl Module for Serve {
     }
 }
 
-/// The server's view of a loaded project.
-fn snapshot(loaded: &Loaded, target_dir: &Path) -> Snapshot {
-    let document = loaded
-        .graph
-        .document(&|id| loaded.node_name(id), &GraphFilter::default());
-    Snapshot::new(
-        document,
-        loaded.graph.clone(),
-        target_dir.display().to_string(),
-    )
-}
-
 /// Hands out `initial` first, then builds a fresh snapshot on every call; errors are
 /// reported by the server as text.
 fn loader(
@@ -156,6 +151,7 @@ fn loader(
     load: LoadOptions,
     cache: Arc<MemoryCache>,
     initial: Mutex<Option<Snapshot>>,
+    source: Arc<DashboardSource>,
 ) -> Loader {
     Arc::new(move || {
         if let Some(first) = initial
@@ -166,7 +162,7 @@ fn loader(
             return Ok(first);
         }
         let loaded = Loaded::from_dir(&target_dir, &load, &cache).map_err(|e| e.to_string())?;
-        Ok(snapshot(&loaded, &target_dir))
+        Ok(source.snapshot(&loaded, target_dir.display().to_string()))
     })
 }
 
@@ -195,7 +191,7 @@ impl Present for ServeReport {
 
     fn view(&self) -> ViewNode {
         let mut blocks = vec![
-            ViewNode::Heading("Lineage explorer".into()),
+            ViewNode::Heading("Dashboard".into()),
             self.summary.view(),
             ViewNode::KeyValue(vec![
                 (
@@ -205,7 +201,7 @@ impl Present for ServeReport {
                 (
                     "reload".into(),
                     vec![Span::plain(if self.watching {
-                        "when the dbt artifacts change"
+                        "when the dbt artifacts or the state store change"
                     } else {
                         "off"
                     })],
@@ -217,7 +213,7 @@ impl Present for ServeReport {
                 level: Level::Warning,
                 message: vec![Span::plain(
                     "listening beyond loopback: anyone who can reach this address can read \
-                     the project's lineage. There is no authentication; put it behind a proxy \
+                     the project's lineage and state. There is no authentication; put it behind a proxy \
                      that has some, and name it with --allow-host.",
                 )],
             });

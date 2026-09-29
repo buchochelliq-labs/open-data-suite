@@ -106,7 +106,7 @@ fn json(body: &str) -> serde_json::Value {
 fn the_api_answers_graph_search_node_and_impact_queries() {
     let addr = start("");
 
-    let (status, head, page) = get(addr, "/");
+    let (status, head, page) = get(addr, "/lineage");
     assert_eq!(status, 200);
     assert!(
         head.contains("content-security-policy: default-src 'none'"),
@@ -171,6 +171,10 @@ fn it_can_live_under_a_reverse_proxy_prefix() {
     assert_eq!(status, 308, "the page must load from the slash URL");
     assert!(head.contains("location: /lineage/"), "{head}");
     assert_eq!(get(addr, "/lineage/healthz").2, "ok");
+    assert!(
+        get(addr, "/lineage/lineage").2.contains(r#"content="api""#),
+        "the explorer sits next to Home, so its `api/...` resolves under the prefix"
+    );
     assert_eq!(get(addr, "/lineage/api/graph").0, 200);
     assert_eq!(get(addr, "/api/graph").0, 404);
 }
@@ -201,7 +205,7 @@ fn hostile_names_cannot_break_out_of_the_embedded_graph() {
     assert!(!page.contains(evil));
     assert!(page.contains(r"\u003c/script>\u003cscript>alert(1)\u003c/script>"));
     let addr = start_with(snapshot, "");
-    let (_, _, served) = get(addr, "/");
+    let (_, _, served) = get(addr, "/lineage");
     assert!(!served.contains(evil));
 }
 
@@ -247,7 +251,10 @@ fn every_delivery_mode_inlines_the_layout_library() {
     std::fs::remove_dir_all(dir).unwrap();
 
     let addr = start_with(snapshot, "");
-    assert!(get(addr, "/").2.contains(&inlined), "served without a CDN");
+    assert!(
+        get(addr, "/lineage").2.contains(&inlined),
+        "served without a CDN"
+    );
 }
 
 #[test]
