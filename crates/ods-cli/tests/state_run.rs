@@ -3466,3 +3466,52 @@ fn the_run_table_shows_time_taken_and_rows() {
         "{plain}"
     );
 }
+
+/// Codex review on #327: with the caller's own console level passed through to dbt
+/// (`-- --log-level warn`), dbt still streams its debug-level node events, so the
+/// stats are live; only lines at `warn` and above are shown.
+#[test]
+fn a_callers_log_level_only_filters_what_is_shown() {
+    let project = Project::new("log-level");
+    let seen = project.dir.join("seen");
+    let project = project.with("FAKE_DBT_SEEN", seen.to_str().unwrap());
+    let dbt = fixture("fake-dbt/dbt");
+    let (code, json, stderr) = project.ods_with_stderr(&[
+        "state",
+        "build",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--exclude-resource-type",
+        "test",
+        "--",
+        "--log-level",
+        "warn",
+    ]);
+    assert_eq!(code, 0, "{json:#}");
+    let stats = &json["result"]["run_stats"];
+    assert_eq!(stats["live"], true, "{stats:#}");
+    assert!(
+        stats["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["stats"]["thread"].is_string())
+    );
+    // Shown: the warning, not dbt's info lines.
+    assert!(
+        stderr.contains("fake dbt: a warning after the nodes"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("fake dbt: build"), "{stderr}");
+    assert!(!stderr.contains("SUCCESS model."), "{stderr}");
+    // dbt was asked for debug, and never for the caller's level.
+    let (argv, _) = project.seen().pop().unwrap();
+    let at = argv.iter().position(|a| a == "--log-level").unwrap();
+    assert_eq!(argv[at + 1], "debug", "{argv:?}");
+    assert_eq!(
+        argv.iter().filter(|a| *a == "--log-level").count(),
+        1,
+        "{argv:?}"
+    );
+    assert!(!argv.contains(&"warn".to_owned()), "{argv:?}");
+}

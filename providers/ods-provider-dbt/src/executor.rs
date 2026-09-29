@@ -1210,15 +1210,19 @@ impl Executor for DbtExecutor {
     ) -> Result<ExecutionReport, ProviderError> {
         let mut invocation = self.invocation(request)?;
         let own_format = passes(&request.engine_args, "--log-format");
-        let (show_from, own_level) = self.console_level(&request.engine_args);
+        let show_from = self.console_level(&request.engine_args);
         if !own_format {
-            // Before the caller's own options, which stay last as they were given.
+            // dbt's structured stream stays at debug, whatever the caller asked for:
+            // the node events are debug-level. The caller's console level (or
+            // `DBT_LOG_LEVEL`) only decides what is shown; `--log-level debug` is passed
+            // explicitly, so it also beats `DBT_LOG_LEVEL`.
             let at = invocation.args.len() - request.engine_args.len();
-            let mut logging = vec!["--log-format".to_owned(), "json".to_owned()];
-            if !own_level {
-                logging.extend(["--log-level".to_owned(), "debug".to_owned()]);
-            }
-            invocation.args.splice(at..at, logging);
+            let mut kept = console_free(&request.engine_args);
+            kept.splice(
+                0..0,
+                ["--log-format", "json", "--log-level", "debug"].map(str::to_owned),
+            );
+            invocation.args.splice(at.., kept);
         }
         let command = self.display(&invocation.args);
         let mut bridge = Bridge::new(events, request, invocation.coverage.clone(), show_from);
@@ -1244,22 +1248,14 @@ impl Executor for DbtExecutor {
 }
 
 impl DbtExecutor {
-    /// The least severe of dbt's lines a person sees, as dbt would pick it without ODS's
-    /// `--log-level debug`: the caller's `--log-level`, `--debug`/`-d` or
-    /// `--quiet`/`-q`, else `DBT_LOG_LEVEL`, else `info`. Also whether the caller set
-    /// the level with `--log-level` (then ODS doesn't).
-    fn console_level(&self, engine_args: &[String]) -> (crate::events::LogLevel, bool) {
+    /// The least severe of dbt's lines a person sees, as dbt would pick it without
+    /// ODS's `--log-level debug`: the caller's `--log-level` (`debug` reads as `info`:
+    /// debug lines hold SQL and options, and are never shown), else `--quiet`/`-q`
+    /// (errors only), else `DBT_LOG_LEVEL` (the same), else `info`. `--debug`/`-d`
+    /// shows `info` and above for the same reason.
+    fn console_level(&self, engine_args: &[String]) -> crate::events::LogLevel {
         use crate::events::LogLevel;
-        let short = |flag: char| {
-            engine_args.iter().any(|a| {
-                a.strip_prefix('-').is_some_and(|c| {
-                    !c.starts_with('-')
-                        && !c.is_empty()
-                        && c.chars().all(|c| PASSTHROUGH_SHORT.contains(&c))
-                        && c.contains(flag)
-                })
-            })
-        };
+        let at_least_info = |level: LogLevel| level.max(LogLevel::Info);
         let given = engine_args.iter().enumerate().find_map(|(i, a)| {
             a.strip_prefix("--log-level=").or_else(|| {
                 (a == "--log-level")
@@ -1268,19 +1264,51 @@ impl DbtExecutor {
             })
         });
         if let Some(level) = given {
-            return (LogLevel::parse(level).unwrap_or(LogLevel::Info), true);
+            return at_least_info(LogLevel::parse(level).unwrap_or(LogLevel::Info));
         }
-        let level = if engine_args.iter().any(|a| a == "--debug") || short('d') {
-            LogLevel::Debug
-        } else if engine_args.iter().any(|a| a == "--quiet") || short('q') {
-            LogLevel::Error
-        } else {
-            self.env_value("DBT_LOG_LEVEL")
-                .and_then(|l| LogLevel::parse(&l))
-                .unwrap_or(LogLevel::Info)
-        };
-        (level, false)
+        let quiet = engine_args
+            .iter()
+            .any(|a| a == "--quiet" || short_flags(a).is_some_and(|f| f.contains('q')));
+        if quiet {
+            return LogLevel::Error;
+        }
+        self.env_value("DBT_LOG_LEVEL")
+            .and_then(|l| LogLevel::parse(&l))
+            .map_or(LogLevel::Info, at_least_info)
     }
+}
+
+/// The short pass-through flags in `arg` (`-xq` → `xq`), if it is a bundle of them.
+fn short_flags(arg: &str) -> Option<&str> {
+    arg.strip_prefix('-').filter(|c| {
+        !c.starts_with('-') && !c.is_empty() && c.chars().all(|c| PASSTHROUGH_SHORT.contains(&c))
+    })
+}
+
+/// `args` without the options that set dbt's console level (`--log-level`, `--quiet`,
+/// `-q`, `--no-quiet`): with them dbt would drop the debug-level node events. What
+/// they ask for is still honoured, by what is shown ([`DbtExecutor::console_level`]).
+fn console_free(args: &[String]) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--log-level" {
+            args.next();
+            continue;
+        }
+        if arg.starts_with("--log-level=") || arg == "--quiet" || arg == "--no-quiet" {
+            continue;
+        }
+        if let Some(flags) = short_flags(arg).filter(|f| f.contains('q')) {
+            let rest: String = flags.chars().filter(|c| *c != 'q').collect();
+            if !rest.is_empty() {
+                kept.push(format!("-{rest}"));
+            }
+            continue;
+        }
+        kept.push(arg.clone());
+    }
+    kept
 }
 
 /// Whether `args` pass the dbt option `name`, as `name value` or `name=value`.
@@ -1578,6 +1606,43 @@ mod tests {
     fn refused(args: &[&str]) -> bool {
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
         refuse_engine_args(&args).is_err()
+    }
+
+    /// Codex review on #327: the caller's console level never reaches dbt's argv, so
+    /// the debug-level node events always come; it only decides what is shown.
+    #[test]
+    fn the_callers_console_level_only_filters_what_is_shown() {
+        use crate::events::LogLevel;
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            console_free(&args(&[
+                "--log-level",
+                "warn",
+                "--threads",
+                "4",
+                "--log-level=error",
+                "-xq",
+                "-q",
+                "--quiet",
+                "--log-level-file",
+                "debug",
+                "-d",
+            ])),
+            args(&["--threads", "4", "-x", "--log-level-file", "debug", "-d"])
+        );
+        let dbt = DbtExecutor::new("dbt", "target");
+        assert_eq!(
+            dbt.console_level(&args(&["--log-level", "warn"])),
+            LogLevel::Warn
+        );
+        assert_eq!(
+            dbt.console_level(&args(&["--log-level=debug"])),
+            LogLevel::Info
+        );
+        assert_eq!(dbt.console_level(&args(&["-xq"])), LogLevel::Error);
+        assert_eq!(dbt.console_level(&args(&["--debug"])), LogLevel::Info);
+        let env = DbtExecutor::new("dbt", "target").env("DBT_LOG_LEVEL", "WARN");
+        assert_eq!(env.console_level(&[]), LogLevel::Warn);
     }
 
     #[test]

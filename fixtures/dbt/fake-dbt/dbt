@@ -153,6 +153,8 @@ def log_results(json_logs, invocation, results):
         log(json_logs, invocation, "NodeFinished", "debug", f"Finished running node {r['unique_id']}",
             {"node_info": node_info, "run_result": run_result})
         log(json_logs, invocation, "LogModelResult", "info", f"{r['status'].upper()} {r['unique_id']}")
+    if results:
+        log(json_logs, invocation, "Note", "warn", "fake dbt: a warning after the nodes")
 
 
 def fqn_selects(node, selector):

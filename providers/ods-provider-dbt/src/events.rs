@@ -100,6 +100,9 @@ pub struct Bridge<'a> {
     /// The least severe line shown.
     show_from: LogLevel,
     run_id: Option<String>,
+    /// The run id and time of dbt's first structured line, until a node event shows
+    /// the log really reports progress: only then does the run start as `live`.
+    pending: Option<(String, Option<TimestampMs>)>,
     last: Option<TimestampMs>,
     /// Nodes finished from the log, with the stats they finished with.
     finished: BTreeMap<String, NodeRunStats>,
@@ -126,6 +129,7 @@ impl<'a> Bridge<'a> {
             coverage,
             show_from,
             run_id: None,
+            pending: None,
             last: None,
             finished: BTreeMap::new(),
             checks: BTreeSet::new(),
@@ -133,7 +137,8 @@ impl<'a> Bridge<'a> {
         }
     }
 
-    /// Whether the log has started the run: dbt printed a structured line.
+    /// Whether the run has started: the log reported a node (live), or [`Self::finish`]
+    /// or [`Self::abort`] started it from dbt's results (not live).
     pub fn started(&self) -> bool {
         self.run_id.is_some()
     }
@@ -211,11 +216,19 @@ impl<'a> Bridge<'a> {
         let ts = text("ts").and_then(|t| TimestampMs::parse(t).ok());
         if !self.started()
             && !self.ended
+            && self.pending.is_none()
             && let Some(id) = text("invocation_id").filter(|id| !id.is_empty())
         {
-            self.start(id.to_owned(), ts, true);
+            self.pending = Some((id.to_owned(), ts));
         }
         let data = event.get("data");
+        let node_event = matches!(text("name"), Some("NodeStart" | "NodeFinished"));
+        if node_event && unique_id(data).is_some() && !self.started() && !self.ended {
+            // The log reports node progress: the run is live.
+            if let Some((id, at)) = self.pending.take() {
+                self.start(id, at, true);
+            }
+        }
         match text("name") {
             Some("NodeStart") => self.node_start(data, ts, text("thread")),
             Some("NodeFinished") => self.node_finished(data, ts),
@@ -386,6 +399,13 @@ impl<'a> Bridge<'a> {
     /// The execution ended without results it could read: the run, if the log
     /// started it, finishes with an unknown outcome, and so do its unfinished nodes.
     pub fn abort(&mut self) {
+        if !self.started()
+            && !self.ended
+            && let Some((id, at)) = self.pending.take()
+        {
+            // dbt started, but its log reported no node: the run is kept, not live.
+            self.start(id, at, false);
+        }
         if self.started() && !self.ended {
             self.end(None, RunOutcome::Unknown);
         }
