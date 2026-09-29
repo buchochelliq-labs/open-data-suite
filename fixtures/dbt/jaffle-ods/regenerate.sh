@@ -11,6 +11,15 @@
 #   DBT_V2=.venv2/bin/dbt ./regenerate.sh
 #
 # Everything runs locally; no warehouse or network is used by dbt itself.
+#
+# artifacts/dbt-1.10-events (#322) is captured by hand, not by this script: on a fresh
+# copy of this project, with `where cast('sk_live_SENTINEL_42' as integer) = 1` appended
+# to models/marts/customers.sql so it fails,
+#   dbt build --profiles-dir . --log-format json --log-level debug \
+#     --vars '{secret_var: VARS_SENTINEL_42}' > dbt-stdout.jsonl
+# keeping the lines at info level and above, `NodeStart`, `NodeFinished`,
+# `MainReportArgs`, `RunResultError` and the first `SQLQuery` that holds the sentinel,
+# with the project's path replaced by <project_root>, and target/run_results.json.
 set -euo pipefail
 cd "$(dirname "$0")"
 export DBT_SEND_ANONYMOUS_USAGE_STATS=false

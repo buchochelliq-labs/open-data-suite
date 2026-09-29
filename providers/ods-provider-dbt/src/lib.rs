@@ -16,6 +16,7 @@
 //! the same [`Manifest`].
 
 mod artifacts;
+pub mod events;
 pub mod executor;
 pub mod export;
 pub mod fingerprint;
@@ -35,5 +36,5 @@ pub use artifacts::{
     ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtConstraint, DbtError,
     DbtMacro, DbtTest, DbtUnitTest, Manifest, ManifestNode, ResourceType,
 };
-pub use runs::{NodeResult, RunResults, RunStatus, SourceFreshness};
+pub use runs::{NodeResult, ResultDetails, RunResults, RunStatus, SourceFreshness};
 pub use target::strip_credentials;

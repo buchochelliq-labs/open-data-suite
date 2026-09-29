@@ -28,7 +28,8 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
-    fn parse(status: &str) -> Self {
+    /// dbt's status word, as `run_results.json` and its log events write it.
+    pub fn parse(status: &str) -> Self {
         match status {
             "success" | "pass" | "warn" => Self::Success,
             "error" | "fail" | "runtime error" => Self::Failed,
@@ -50,6 +51,43 @@ pub struct NodeResult {
     pub raw_status: String,
     /// When it finished executing, as dbt wrote it.
     pub completed_at: Option<String>,
+    /// What else dbt reported about it: timing, thread, adapter response, message
+    /// (#322).
+    pub details: ResultDetails,
+}
+
+/// What dbt reports about one node's execution besides its status, in
+/// `run_results.json` and in its structured `NodeFinished` log event (#322). Only
+/// what the stats of ADR-0024 use is read; never `compiled_code`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResultDetails {
+    /// The `compile` and `execute` steps: name, start and end, as dbt wrote them.
+    pub timing: Vec<(String, Option<String>, Option<String>)>,
+    /// `execution_time`, in milliseconds.
+    pub execution_ms: Option<u64>,
+    /// The thread that ran it (`thread_id`, or `thread` in log events).
+    pub thread: Option<String>,
+    /// `adapter_response`, as the adapter gave it.
+    pub adapter_response: Option<serde_json::Value>,
+    /// dbt's message: a status (`INSERT 6`) or, for an error, its text.
+    pub message: Option<String>,
+}
+
+/// Seconds as dbt writes them (`0.108`) in whole milliseconds; `None` unless finite and
+/// not negative.
+pub(crate) fn seconds_to_ms(seconds: f64) -> Option<u64> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let ms = (seconds * 1000.0).round();
+    // In range, so the cast is exact.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "checked finite, not negative, and far below 2^53"
+    )]
+    (ms < 9.0e15).then_some(ms as u64)
 }
 
 /// A dbt invocation's results.
@@ -108,6 +146,14 @@ struct RawNodeResult {
     status: String,
     #[serde(default)]
     timing: Vec<RawTiming>,
+    #[serde(default)]
+    execution_time: Option<f64>,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    adapter_response: Option<serde_json::Value>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -156,11 +202,23 @@ impl RunResults {
                     .find(|t| t.name == "execute")
                     .or_else(|| r.timing.last())
                     .and_then(|t| t.completed_at.clone());
+                let details = ResultDetails {
+                    timing: r
+                        .timing
+                        .iter()
+                        .map(|t| (t.name.clone(), t.started_at.clone(), t.completed_at.clone()))
+                        .collect(),
+                    execution_ms: r.execution_time.and_then(seconds_to_ms),
+                    thread: r.thread_id,
+                    adapter_response: r.adapter_response,
+                    message: r.message,
+                };
                 NodeResult {
                     status: RunStatus::parse(&r.status),
                     raw_status: r.status,
                     unique_id: r.unique_id,
                     completed_at,
+                    details,
                 }
             })
             .collect();

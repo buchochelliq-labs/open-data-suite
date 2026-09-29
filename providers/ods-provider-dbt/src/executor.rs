@@ -36,6 +36,9 @@ use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, Relation
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
+use ods_sdk::contracts::run_events::RunEventSink;
+
+use crate::events::Bridge;
 use crate::runs::{RunResults, RunStatus, SourceFreshness};
 
 /// The provider kind, as written in configuration.
@@ -292,19 +295,7 @@ impl DbtExecutor {
         args: &[String],
         read_stdout: bool,
     ) -> Result<(bool, String, String), ProviderError> {
-        let mut command = tokio::process::Command::new(&self.program);
-        // ODS passes these settings as flags; their variables would only compete.
-        for name in crate::settings::owned() {
-            command.env_remove(name);
-        }
-        command
-            .args(args)
-            .envs(self.env.iter().filter(|(k, _)| {
-                crate::settings::class(k)
-                    .is_none_or(|c| !matches!(c, crate::settings::EnvClass::Owned { .. }))
-            }))
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
+        let mut command = self.command(args);
         match self.output {
             DbtOutput::Stderr => {
                 command
@@ -345,6 +336,102 @@ impl DbtExecutor {
         let lines: Vec<&str> = text.lines().collect();
         let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
         Ok((output.status.success(), tail, stdout))
+    }
+
+    /// dbt with `args`, in the environment ODS gives it.
+    fn command(&self, args: &[String]) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(&self.program);
+        // ODS passes these settings as flags; their variables would only compete.
+        for name in crate::settings::owned() {
+            command.env_remove(name);
+        }
+        command
+            .args(args)
+            .envs(self.env.iter().filter(|(k, _)| {
+                crate::settings::class(k)
+                    .is_none_or(|c| !matches!(c, crate::settings::EnvClass::Owned { .. }))
+            }))
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        command
+    }
+
+    /// Runs dbt with `args`, reading its standard output line by line through
+    /// `bridge` as it comes (#322): what the bridge says people should see goes to
+    /// ODS's stderr, or into the captured tail. Returns whether dbt exited successfully
+    /// and, if captured, the tail of what it showed.
+    async fn invoke_streaming(
+        &self,
+        args: &[String],
+        bridge: &mut Bridge<'_>,
+    ) -> Result<(bool, String), ProviderError> {
+        use std::io::Write as _;
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+
+        let mut command = self.command(args);
+        command.stdout(Stdio::piped());
+        match self.output {
+            DbtOutput::Stderr => command.stderr(Stdio::from(std::io::stderr())),
+            DbtOutput::Capture => command.stderr(Stdio::piped()),
+        };
+        // Names only: values can be credentials (AGENTS.md rule 9).
+        tracing::info!(command = %self.display(args), "running dbt");
+        let started = std::time::Instant::now();
+        let mut child = command.spawn().map_err(|e| {
+            ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
+        })?;
+        let (Some(stdout), stderr) = (child.stdout.take(), child.stderr.take()) else {
+            return Err(ProviderError::Other(
+                "dbt's output couldn't be read".to_owned(),
+            ));
+        };
+        let capture = self.output == DbtOutput::Capture;
+        let mut shown: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        let read_out = async {
+            let mut reader = BufReader::new(stdout);
+            let mut buffer = Vec::new();
+            // Bytes, not `lines()`: a line that isn't UTF-8 mustn't stop the reading,
+            // or dbt would block on a full pipe.
+            while reader
+                .read_until(b'\n', &mut buffer)
+                .await
+                .is_ok_and(|n| n > 0)
+            {
+                let line = String::from_utf8_lossy(&buffer);
+                if let Some(text) = bridge.line(line.trim_end_matches(['\n', '\r'])) {
+                    if capture {
+                        shown.push_back(text);
+                        if shown.len() > OUTPUT_TAIL {
+                            shown.pop_front();
+                        }
+                    } else {
+                        // Best effort: showing progress must never fail the run.
+                        let _ = writeln!(std::io::stderr(), "{text}");
+                    }
+                }
+                buffer.clear();
+            }
+        };
+        let read_err = async {
+            let mut text = Vec::new();
+            if let Some(mut stderr) = stderr {
+                let _ = stderr.read_to_end(&mut text).await;
+            }
+            String::from_utf8_lossy(&text).into_owned()
+        };
+        let ((), errors) = tokio::join!(read_out, read_err);
+        let status = child.wait().await.map_err(|e| {
+            ProviderError::Other(format!("`{}` failed: {e}", self.program.display()))
+        })?;
+        tracing::info!(
+            exit = ?status.code(),
+            seconds = started.elapsed().as_secs_f64(),
+            "dbt finished"
+        );
+        let mut lines: Vec<String> = shown.into_iter().collect();
+        lines.extend(errors.lines().map(str::to_owned));
+        let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
+        Ok((status.success(), tail))
     }
 
     fn failure(what: &str, tail: &str) -> ProviderError {
@@ -869,7 +956,11 @@ impl Provider for DbtExecutor {
             KIND,
             "dbt",
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::from([Capability::RelationExistence, Capability::RelationProbe]),
+            CapabilitySet::from([
+                Capability::RelationExistence,
+                Capability::RelationProbe,
+                Capability::RunEvents,
+            ]),
         )
     }
 }
@@ -1058,6 +1149,86 @@ impl Executor for DbtExecutor {
     }
 
     async fn execute(&self, request: &ExecutionRequest) -> Result<ExecutionReport, ProviderError> {
+        let invocation = self.invocation(request)?;
+        let command = self.display(&invocation.args);
+        self.step(invocation.step);
+        let (ok, tail) = self.invoke(&invocation.args).await?;
+        self.outcome(request, &invocation, &command, ok, &tail)
+            .map(|(report, _)| report)
+    }
+
+    /// Runs dbt with `--log-format json --log-level debug` and turns its structured
+    /// events into run events as they come ([`crate::events`]). If the caller passed
+    /// `--log-format` to dbt, its logs can't be read: the events come from
+    /// `run_results.json` afterwards, not live.
+    async fn execute_with_events(
+        &self,
+        request: &ExecutionRequest,
+        events: &dyn RunEventSink,
+    ) -> Result<ExecutionReport, ProviderError> {
+        let mut invocation = self.invocation(request)?;
+        let own_format = passes(&request.engine_args, "--log-format");
+        let own_level = passes(&request.engine_args, "--log-level")
+            || request.engine_args.iter().any(|a| {
+                a == "--debug" || (a.starts_with('-') && !a.starts_with("--") && a.contains('d'))
+            });
+        if !own_format {
+            // Before the caller's own options, which stay last as they were given.
+            let at = invocation.args.len() - request.engine_args.len();
+            let mut logging = vec!["--log-format".to_owned(), "json".to_owned()];
+            if !own_level {
+                logging.extend(["--log-level".to_owned(), "debug".to_owned()]);
+            }
+            invocation.args.splice(at..at, logging);
+        }
+        let command = self.display(&invocation.args);
+        let mut bridge = Bridge::new(events, request, invocation.coverage.clone(), own_level);
+        self.step(invocation.step);
+        let invoked = if own_format {
+            self.invoke(&invocation.args).await
+        } else {
+            self.invoke_streaming(&invocation.args, &mut bridge).await
+        };
+        let outcome =
+            invoked.and_then(|(ok, tail)| self.outcome(request, &invocation, &command, ok, &tail));
+        match outcome {
+            Ok((report, run)) => {
+                bridge.finish(&report, &run);
+                Ok(report)
+            }
+            Err(error) => {
+                bridge.abort();
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Whether `args` pass the dbt option `name`, as `name value` or `name=value`.
+fn passes(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| {
+        a == name
+            || a.strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('='))
+    })
+}
+
+/// A dbt command about to build or test, and how to tell its results from an earlier
+/// invocation's.
+struct Invocation {
+    args: Vec<String>,
+    results_path: PathBuf,
+    /// The invocation id in `run_results.json` before this one ran.
+    before: Option<String>,
+    step: DbtStep,
+    /// Each check (test) and the nodes it reads, from the manifest.
+    coverage: BTreeMap<String, Vec<String>>,
+}
+
+impl DbtExecutor {
+    /// The dbt command for `request`, selecting exactly its nodes; refuses what it
+    /// can't run as asked.
+    fn invocation(&self, request: &ExecutionRequest) -> Result<Invocation, ProviderError> {
         // dbt reads an empty selection as "everything". Run mode runs no checks, so
         // sources alone are nothing to run either.
         if request.is_empty() || (request.mode == ExecutionMode::Run && request.nodes.is_empty()) {
@@ -1111,7 +1282,6 @@ impl Executor for DbtExecutor {
         }
         args.extend(self.common_args(dbt_command));
         args.extend(request.engine_args.iter().cloned());
-        let command = self.display(&args);
         let results_path = self.artifact("run_results.json");
         let before = invocation_of(&results_path);
         let sources = if tests.is_empty() {
@@ -1119,7 +1289,7 @@ impl Executor for DbtExecutor {
         } else {
             request.sources.len()
         };
-        self.step(if request.mode == ExecutionMode::Test {
+        let step = if request.mode == ExecutionMode::Test {
             DbtStep::Test {
                 nodes: request.nodes.len(),
                 sources,
@@ -1131,14 +1301,33 @@ impl Executor for DbtExecutor {
                 tests: request.mode == ExecutionMode::Build,
                 sources,
             }
-        });
-        let (ok, tail) = self.invoke(&args).await?;
-        let run = match RunResults::read(&results_path) {
-            Ok(run) if run.invocation_id.is_some() && run.invocation_id != before => run,
+        };
+        let coverage = crate::events::coverage(&manifest);
+        Ok(Invocation {
+            args,
+            results_path,
+            before,
+            step,
+            coverage,
+        })
+    }
+
+    /// The report of the invocation that just ran, from the `run_results.json` it
+    /// wrote, and those results.
+    fn outcome(
+        &self,
+        request: &ExecutionRequest,
+        invocation: &Invocation,
+        command: &str,
+        ok: bool,
+        tail: &str,
+    ) -> Result<(ExecutionReport, RunResults), ProviderError> {
+        let run = match RunResults::read(&invocation.results_path) {
+            Ok(run) if run.invocation_id.is_some() && run.invocation_id != invocation.before => run,
             _ => {
                 return Err(Self::failure(
                     &format!("`{command}` wrote no run results"),
-                    &tail,
+                    tail,
                 ));
             }
         };
@@ -1160,7 +1349,7 @@ impl Executor for DbtExecutor {
         .with_sources(outcomes.sources)
         .with_unrequested(outcomes.unrequested)
         .with_command(command);
-        Ok(if ok { report } else { report.failed() })
+        Ok((if ok { report } else { report.failed() }, run))
     }
 }
 

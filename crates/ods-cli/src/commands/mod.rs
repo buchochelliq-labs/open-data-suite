@@ -10,6 +10,8 @@ mod mcp;
 mod mcp_data;
 mod mcp_tools;
 mod planned;
+mod run_journal;
+mod run_stats;
 mod serve;
 mod serve_catalog;
 mod serve_dashboard;

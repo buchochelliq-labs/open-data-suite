@@ -22,7 +22,7 @@ serde.workspace = true
 # the workspace may depend on `serde_json::Map` ordering being sorted.
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["process"] }
+tokio = { workspace = true, features = ["process", "io-util"] }
 tracing.workspace = true
 
 [dev-dependencies]
