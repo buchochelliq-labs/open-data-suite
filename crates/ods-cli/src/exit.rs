@@ -87,6 +87,10 @@ pub mod codes {
     pub const STATE_EXECUTION: &str = "ODS-E0404";
     /// The state database is damaged; `ods state doctor` says how (#188).
     pub const STATE_DAMAGED: &str = "ODS-E0405";
+    /// `ods state export` couldn't write its directory: another export holds the lock,
+    /// or a file couldn't be written or replaced. The message names the files already
+    /// replaced.
+    pub const STATE_EXPORT: &str = "ODS-E0406";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active
