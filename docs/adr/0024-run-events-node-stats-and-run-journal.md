@@ -157,8 +157,10 @@ summaries and adapter extras are redacted and cut as above. `.last-run.json` kee
 redacting `--vars` values (#321); the journal never holds options at all. The dbt bridge
 (#322 part 2) reads dbt's structured log events and `run_results.json` only for the
 fields listed here, and never copies a log line's text except through
-`ErrorSummary`. A test runs a build with a sentinel in `--vars` and checks it reaches
-neither the journal nor the output.
+`ErrorSummary` (dbt's own lines are still shown on the terminal, as dbt shows them).
+A test runs a build with a sentinel in `--vars`, and a value in dbt's error message,
+and checks neither reaches the journal or the run's stats. (The report's `dbt` and
+`ran` lines still show the `--vars` given, as before this ADR: that is #321's.)
 
 ```mermaid
 graph LR
