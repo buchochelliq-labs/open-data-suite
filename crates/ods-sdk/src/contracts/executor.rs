@@ -44,19 +44,27 @@
 //!   `Build` mode, a requested node that reads a source whose checks failed, directly
 //!   or through other requested nodes, isn't built: it is `skipped`, as when a parent
 //!   fails. A request with neither nodes nor sources is empty.
+//! - [`execute_with_events`](Executor::execute_with_events) (0.4, #322, ADR-0024) does
+//!   what `execute` does and reports the run's [events](super::run_events) to a sink as
+//!   it goes. An executor with the [`run_events`](ods_core::Capability::RunEvents)
+//!   capability overrides it and reports them as they happen, with per-node stats; the
+//!   default rebuilds them from the final report ([`events_from_report`]). Either way
+//!   the events follow the rules in [`run_events`](super::run_events), and carry the
+//!   request's [`scope`](ExecutionRequest::scope).
 
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
 use ods_core::state::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use super::run_events::{RunEventSink, events_from_report};
 use crate::error::ProviderError;
 use crate::provider::{Contract, Provider};
 
 /// The `executor` contract.
 pub const EXECUTOR: Contract = Contract {
     name: "executor",
-    version: SchemaVersion::new(0, 3),
+    version: SchemaVersion::new(0, 4),
 };
 
 /// What [`Executor::prepare`] should do besides refreshing metadata.
@@ -104,7 +112,7 @@ impl PrepareReport {
 }
 
 /// Whether nodes are built, checked, or both.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ExecutionMode {
@@ -153,6 +161,9 @@ pub struct ExecutionRequest {
     /// Sources whose checks run too (not in [`ExecutionMode::Run`]), in the order the
     /// report lists them.
     pub sources: Vec<RequestedNode>,
+    /// The state scope the run is for (e.g. `shop/dev`), which its
+    /// [events](super::run_events) carry. The executor only passes it on.
+    pub scope: Option<String>,
 }
 
 impl ExecutionRequest {
@@ -164,7 +175,15 @@ impl ExecutionRequest {
             full_refresh: false,
             engine_args: Vec::new(),
             sources: Vec::new(),
+            scope: None,
         }
+    }
+
+    /// Names the state scope the run is for, which its events carry.
+    #[must_use]
+    pub fn with_scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = Some(scope.into());
+        self
     }
 
     /// Runs the checks on these sources too.
@@ -385,6 +404,26 @@ pub trait Executor: Provider {
     /// Returns [`ProviderError`] if the request is empty, or the execution couldn't be
     /// started or its outcome can't be read. Failed nodes are not errors.
     async fn execute(&self, request: &ExecutionRequest) -> Result<ExecutionReport, ProviderError>;
+
+    /// [`execute`](Self::execute), reporting the run's events to `events` (0.4, #322).
+    /// Executors with the [`run_events`](ods_core::Capability::RunEvents) capability
+    /// override it to report them as they happen. This default reports them after the
+    /// run, rebuilt from its report, with no per-node timing, rows or extras; if the
+    /// execution fails to start, it reports none.
+    ///
+    /// # Errors
+    /// As [`execute`](Self::execute).
+    async fn execute_with_events(
+        &self,
+        request: &ExecutionRequest,
+        events: &dyn RunEventSink,
+    ) -> Result<ExecutionReport, ProviderError> {
+        let report = self.execute(request).await?;
+        for event in events_from_report(request, &report) {
+            events.emit(event);
+        }
+        Ok(report)
+    }
 }
 
 #[cfg(test)]

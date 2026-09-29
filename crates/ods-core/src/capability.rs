@@ -47,6 +47,10 @@ pub enum Capability {
     LeaseExpiry,
     /// Each lock grant carries a strictly increasing fencing token.
     FencingTokens,
+    /// An executor reports a run's progress as it happens: node starts and finishes,
+    /// with per-node stats (#322, ADR-0024). Without it, a host still gets the run's
+    /// events, rebuilt from the final report, with no timing or rows.
+    RunEvents,
     /// A capability outside the well-known set, as `x-<namespace>.<name>`.
     Custom(CustomCapability),
 }
@@ -89,7 +93,7 @@ impl FromStr for CustomCapability {
 
 impl Capability {
     /// Every well-known capability, for documentation and tests.
-    pub const WELL_KNOWN: [Capability; 13] = [
+    pub const WELL_KNOWN: [Capability; 14] = [
         Capability::RelationVersions,
         Capability::RelationProbe,
         Capability::RelationExistence,
@@ -103,6 +107,7 @@ impl Capability {
         Capability::ConstraintMetadata,
         Capability::LeaseExpiry,
         Capability::FencingTokens,
+        Capability::RunEvents,
     ];
 
     /// The capability's stable name.
@@ -121,6 +126,7 @@ impl Capability {
             Capability::ConstraintMetadata => "constraint_metadata",
             Capability::LeaseExpiry => "lease_expiry",
             Capability::FencingTokens => "fencing_tokens",
+            Capability::RunEvents => "run_events",
             Capability::Custom(custom) => custom.as_str(),
         }
     }

@@ -109,6 +109,99 @@ impl<'de> Deserialize<'de> for Timestamp {
     }
 }
 
+/// A point in time, to the millisecond, in UTC: when something happened during a run
+/// (#322). [`Timestamp`] is to the second, which is too coarse to time a node that
+/// builds in under a second. Serialized as RFC 3339 with the fraction (`…05.123Z`),
+/// which reads back as the same value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TimestampMs(i64);
+
+impl TimestampMs {
+    /// Milliseconds since the Unix epoch, kept within the years -9999 to 9999 as
+    /// [`Timestamp::from_unix`] does.
+    pub const fn from_unix_millis(millis: i64) -> Self {
+        let min = Timestamp::MIN_UNIX * 1000;
+        let max = Timestamp::MAX_UNIX * 1000;
+        if millis < min {
+            Self(min)
+        } else if millis > max {
+            Self(max)
+        } else {
+            Self(millis)
+        }
+    }
+
+    /// Milliseconds since the Unix epoch.
+    pub const fn unix_millis(self) -> i64 {
+        self.0
+    }
+
+    /// Now, from the system clock.
+    pub fn now() -> Self {
+        Self::from_unix_millis(jiff::Timestamp::now().as_millisecond())
+    }
+
+    /// The same time, to the second (rounded down).
+    pub const fn to_seconds(self) -> Timestamp {
+        Timestamp::from_unix(self.0.div_euclid(1000))
+    }
+
+    /// Milliseconds from `earlier` to `self`, or `None` if `earlier` is later: a
+    /// duration is never made up.
+    pub fn millis_since(self, earlier: Self) -> Option<u64> {
+        u64::try_from(self.0.checked_sub(earlier.0)?).ok()
+    }
+
+    /// Parses what [`Timestamp::parse`] does, keeping milliseconds (finer fractions are
+    /// dropped).
+    ///
+    /// # Errors
+    /// Returns a reason if the text isn't such a timestamp.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let bad = || format!("`{text}` is not an RFC 3339 timestamp");
+        let text = text.trim();
+        let instant = match text.parse::<jiff::Timestamp>() {
+            Ok(instant) => instant,
+            Err(_) if !text.contains(['T', 't', ' ']) => return Err(bad()),
+            Err(_) => text
+                .parse::<jiff::civil::DateTime>()
+                .and_then(|civil| civil.to_zoned(jiff::tz::TimeZone::UTC))
+                .map_err(|_| bad())?
+                .timestamp(),
+        };
+        // `as_millisecond` truncates toward zero; round down before 1970 too.
+        let below = i64::from(instant.subsec_nanosecond() % 1_000_000 < 0);
+        Ok(Self::from_unix_millis(instant.as_millisecond() - below))
+    }
+}
+
+impl From<Timestamp> for TimestampMs {
+    fn from(at: Timestamp) -> Self {
+        Self::from_unix_millis(at.unix().saturating_mul(1000))
+    }
+}
+
+impl fmt::Display for TimestampMs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `from_unix_millis` keeps every value in jiff's range.
+        let instant = jiff::Timestamp::from_millisecond(self.0).map_err(|_| fmt::Error)?;
+        write!(f, "{instant:.3}")
+    }
+}
+
+impl Serialize for TimestampMs {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for TimestampMs {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
 // ---------------------------------------------------------------------------- fingerprints
 
 /// A node's code identity: named components, each a SHA-256 digest, and one digest over
@@ -780,6 +873,40 @@ mod tests {
         let json = serde_json::to_string(&base).unwrap();
         assert!(!json.contains("cosmetic"));
         assert_eq!(serde_json::from_str::<Fingerprint>(&json).unwrap(), base);
+    }
+
+    #[test]
+    fn millisecond_timestamps_keep_the_fraction_and_round_trip() {
+        let t = TimestampMs::parse("2026-09-25T03:14:58.849275Z").unwrap();
+        assert_eq!(t.to_string(), "2026-09-25T03:14:58.849Z");
+        assert_eq!(t.to_seconds().to_string(), "2026-09-25T03:14:58Z");
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(serde_json::from_str::<TimestampMs>(&json).unwrap(), t);
+        assert_eq!(
+            TimestampMs::parse("2026-09-25 03:14:58.1+00:00").unwrap(),
+            TimestampMs::from_unix_millis(t.unix_millis() - 749)
+        );
+        assert_eq!(
+            TimestampMs::from(Timestamp::from_unix(1)).to_string(),
+            "1970-01-01T00:00:01.000Z"
+        );
+        assert_eq!(
+            TimestampMs::parse("1969-12-31T23:59:59.9995Z")
+                .unwrap()
+                .unix_millis(),
+            -1
+        );
+        assert_eq!(TimestampMs::from_unix_millis(-1).to_seconds().unix(), -1);
+        assert_eq!(
+            t.millis_since(TimestampMs::from_unix_millis(t.unix_millis() - 1900)),
+            Some(1900)
+        );
+        assert_eq!(TimestampMs::from_unix_millis(0).millis_since(t), None);
+        assert_eq!(
+            TimestampMs::from_unix_millis(i64::MAX).to_seconds(),
+            Timestamp::from_unix(Timestamp::MAX_UNIX)
+        );
+        assert!(TimestampMs::parse("2026-09-25").is_err());
     }
 
     #[test]

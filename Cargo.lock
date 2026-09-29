@@ -1286,6 +1286,7 @@ dependencies = [
 name = "ods-config"
 version = "0.0.0"
 dependencies = [
+ "ods-core",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -1382,6 +1383,7 @@ dependencies = [
  "ods-config",
  "ods-core",
  "ods-sdk",
+ "serde_json",
  "tokio",
  "toml",
 ]

@@ -15,6 +15,7 @@
 //! | [`StateStore`](state_store::StateStore) | #11, #25, #188 | defined (ADR-0013, ADR-0018) |
 //! | `FingerprintProvider` | #13 | planned |
 //! | [`Executor`](executor::Executor) | #23, #24 | defined (ADR-0014) |
+//! | [Run events](run_events) (`Executor::execute_with_events`) | #322 | defined (ADR-0024) |
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
 //! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
 //! | [`RelationProbe`](probe::RelationProbe) | #17 | defined (ADR-0022) |
@@ -32,5 +33,6 @@ pub mod lock;
 pub mod observed_lineage;
 pub mod probe;
 pub mod relations;
+pub mod run_events;
 pub mod sql_lineage;
 pub mod state_store;
