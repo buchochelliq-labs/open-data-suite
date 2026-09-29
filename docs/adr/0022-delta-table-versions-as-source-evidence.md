@@ -63,8 +63,9 @@ Call the SQL Statement Execution API directly, authenticated as ADR-0021 decides
 
 ### Option B — Through dbt's connection, with the Delta query supplied by the Databricks provider (chosen)
 
-Run one `dbt show --inline` whose jinja asks each source's table for its latest history
-entry, as the relation check does (ADR-0016). dbt renders it with the user's profile.
+Run one `dbt show --inline` whose jinja asks each source's table for its identity and
+latest history entry, as the relation check does (ADR-0016). dbt renders it with the
+user's profile.
 
 - **Pros:**
   - No credential, no new connection settings, no HTTP client. It reads the same
@@ -75,10 +76,9 @@ entry, as the relation check does (ADR-0016). dbt renders it with the user's pro
 - **Cons:**
   - **Jinja can't catch an error.** One source that refuses `DESCRIBE HISTORY` fails
     the whole call, and then every source is unknown. That is conservative, but coarse.
-    A guard (below) skips the tables that would fail predictably.
-  - **The statements run one after another**, inside one dbt call. The cost grows with
-    the number of sources asked about. They are limited to the sources that could
-    change a decision (below).
+    A filter (below) skips the relations that would fail predictably.
+  - **The statements run one after another**, inside one dbt call, two per source.
+    The cost grows with the number of sources in the project.
   - Only works while dbt is the project format. That is true for M1, and the contract
     (below) doesn't assume it.
 
@@ -115,24 +115,38 @@ and the source counts as changed.**
   - `Err` means nothing was read.
   - It is read-only, and answers in one batch.
   - A conformance suite runs against the fake and the real implementation.
-- **`ods-sdk` gains `RelationProbe` 0.1**, a narrow contract for asking something
-  about each of a set of relations through a connection the provider already has.
-  - The request carries a *probe*: a per-relation statement template, an optional
-    jinja guard, and the column names to return.
-  - The answer is, per relation, the first row as strings, `skipped` (the guard said
-    no), or `unknown(why)`.
-  - The dbt executor implements it with `dbt show --inline` and advertises the
-    capability `relation_probe`.
+- **`ods-sdk` gains `RelationProbe` 0.1**, a narrow contract for running a few
+  read-only statements against each of a set of relations, through a connection the
+  provider already has. **The request is typed and says nothing about how it runs:**
+  - `statements`: SQL templates with one placeholder, `{relation}`. The implementation
+    fills it with the relation's name, quoted by its own rules.
+  - `filter`: which relations to run them on, as data. It holds the relation kinds
+    (`table`, `view`, …) and optionally a table format the implementation must be
+    able to confirm (`format: Some("<name>")`). A relation the implementation can't
+    show matches is `skipped`, never run.
+  - The answer is, per relation: the first row of each statement as named strings,
+    `skipped(why)`, or `unknown(why)`.
+  - **How the filter and statements are executed is the implementation's business.**
+    The dbt executor renders them into jinja inside `ods-provider-dbt`: the filter
+    becomes an `adapter.get_relation` check, and each statement a `run_query`. It
+    advertises the capability `relation_probe`. A native connection would implement
+    the same request with its own catalog lookups. Nothing in the SDK knows about
+    jinja or dbt.
 - **`ods-provider-databricks` implements `ChangeProvider`** as `DeltaVersions`. It is
-  built from any `RelationProbe`, and advertises `relation_versions`:
-  - the probe's statement is `DESCRIBE HISTORY <relation> LIMIT 1`, returning
-    `version` and `timestamp`;
-  - the guard skips relations the adapter doesn't report as Delta tables (views,
-    external non-Delta tables). A skipped source is `unknown("not a Delta table")`.
-    Before shipping, the `databricks` CI job must confirm that dbt-databricks 1.10
-    exposes this on the relation `adapter.get_relation` returns. If it doesn't, the
-    guard only checks that the relation is a table, and the rest is left to the
-    all-or-nothing failure above.
+  built from any `RelationProbe`, and advertises `relation_versions`. Its request:
+  - `filter`: tables whose format is Delta. Views and non-Delta tables are skipped,
+    and a skipped source is `unknown("not a Delta table")`.
+  - `statements`:
+    1. `DESCRIBE DETAIL {relation}`, for `id` (the table's UUID, new when a table is
+       dropped and created again) and `format`;
+    2. `DESCRIBE HISTORY {relation} LIMIT 1`, for `version` and `timestamp`.
+  - Before shipping, the `databricks` CI job must confirm that the dbt executor can
+    confirm the Delta format with dbt-databricks 1.10, from the relation
+    `adapter.get_relation` returns. If it can't, that relation is `skipped`, as the
+    contract requires. `DeltaVersions` then asks with a filter of tables only. Its
+    `DESCRIBE DETAIL` result is checked, and a non-Delta `format` makes that source
+    `unknown`. The remaining risk is the all-or-nothing failure above, when
+    `DESCRIBE HISTORY` refuses a non-Delta table.
 - **Neither provider depends on the other.** The CLI composes them:
 
 ```mermaid
@@ -148,31 +162,46 @@ graph LR
 
 ### 2. Choosing a version source
 
-- **The CLI picks the strategy with `ods_core::choose`:**
-  1. `relation_versions` (a `ChangeProvider` is available for the project's
-     warehouse);
-  2. `sources.json` `max_loaded_at`, as today;
+- **The planner chooses, not the CLI.** `ods-state` gains a function that takes, for
+  each source, the evidence the composition root collected: a `ChangeProvider`
+  answer, the `sources.json` `max_loaded_at`, or neither. It picks one with
+  `ods_core::choose` over the capabilities those inputs came with, in this order:
+  1. `relation_versions`: the table version;
+  2. `source_freshness`: `max_loaded_at`, as today;
   3. the conservative fallback: no version, so the source counts as changed.
-- **Which `ChangeProvider` applies** is decided at the CLI edge, from the adapter type
-  in the dbt manifest (`metadata.adapter_type`). Only the CLI maps an adapter type to
-  a provider. No core crate or module sees the name.
+
+  It records which strategy won, and why the ones before it didn't (e.g. "not a
+  Delta table"), as evidence on the source. Every composition root, the CLI or a
+  future server, gets the same order and the same explanation.
+- **The CLI only wires.** It maps the adapter type in the dbt manifest
+  (`metadata.adapter_type`) to a `ChangeProvider`, builds it over the dbt
+  executor's `RelationProbe`, calls it, and hands the answers to the planner. Only
+  the CLI sees the name. No core crate or module does.
 - **When a table version and `max_loaded_at` both exist, the table version wins.** It
   is `exact` and doesn't depend on a column the user has to maintain.
-- **Only the sources that could change a decision are asked about:** those read,
-  directly or through views, by a node the plan would otherwise reuse (the same
-  reasoning as ADR-0016's `reuse_candidates`). The list is passed to the query as a
-  dbt var (`ods_sources`), merged with the user's `--vars`, so the command line
-  doesn't grow with the project.
-- There is no call when nothing could be reused, e.g. on a first run, or when every
-  candidate is already building for another reason.
+- **Every source in the project is asked about, on every command that can build**
+  (`run`, `build`, `seed`, `snapshot`, `compile`, including `--dry-run`).
+  - **Why all, not only the ones that could change a decision:** a source with no
+    version today makes all its readers build, so a filter on "could be reused"
+    would never ask about it. It would never get a baseline, and reuse would never
+    start. Asking every time records a baseline on the first successful build.
+  - **The query is fixed-size.** Like ADR-0016's check, the jinja iterates
+    `graph.sources` itself. No list travels on the command line or in `--vars`, so
+    the call doesn't grow with the project, and partial parsing isn't invalidated.
+    The dbt executor answers only for the sources it was asked about, and ignores the
+    rest.
+- `ods state plan` stays offline and artifact-only, as ADR-0016 decided.
 
 ### 3. The version value
 
-- `DataVersion { value: "<version>@<commit timestamp>", exactness: exact,
+- `DataVersion { value: "<table id>/<version>", exactness: exact,
   source: "delta_history" }`.
-  - The timestamp is normalised with `Timestamp::parse`, as `max_loaded_at` is.
-  - It is part of the value because a table dropped and created again restarts at
-    version 0. The pair can't repeat.
+  - **The table id makes the pair unique.** A table dropped and created again gets a
+    new id and restarts at version 0, so the value can't repeat. The commit
+    timestamp isn't part of the value: timestamps lose precision when normalised,
+    and aren't needed for uniqueness. It is kept as evidence, as reported.
+  - **A missing or empty `id` or `version` makes the source `unknown`**, never a
+    partial value.
 - **Versions compare equal only when value, exactness and source are all equal**
   (`DataVersion`'s derived `PartialEq`, as today). The first run after switching from
   `max_loaded_at` to table versions therefore sees a change and builds once. That is
@@ -190,7 +219,7 @@ graph LR
 | What happens | Result |
 |---|---|
 | The `dbt show` call fails (a permission error, the warehouse is unreachable, an unexpected answer) | Every requested source is `unknown`. A warning names dbt's error, and those sources count as changed. |
-| The guard skips a relation | That source is `unknown("not a Delta table")`, and falls back to `max_loaded_at` if it has one. |
+| The filter skips a relation, or `DESCRIBE DETAIL` reports another format | That source is `unknown("not a Delta table")`, and falls back to `max_loaded_at` if it has one. |
 | A source the query didn't report | `unknown`. It is never treated as unchanged. |
 | The answer names a source nobody asked about | Ignored, as ADR-0016 does. |
 
@@ -201,8 +230,8 @@ graph LR
   version came from.
 - Step lines announce the probe (`dbt show: reading table versions for N sources`),
   as they announce the relation check.
-- `ods state plan` stays offline and artifact-only, as ADR-0016 decided. It uses
-  `sources.json` if present, and says table versions weren't read.
+- `ods state plan` uses `sources.json` if present, and says table versions weren't
+  read.
 
 ### 6. Persisted format
 
@@ -221,16 +250,12 @@ graph LR
     `LAST_ALTERED` or Iceberg snapshots, each as its own `ChangeProvider` with its own
     exactness.
 - **Negative / trade-offs:**
-  - **One unreadable table can blind the whole probe.** The guard limits this; if it
+  - **One unreadable table can blind the whole probe.** The filter limits this; if it
     proves common, Option A becomes the reason to build the native connection.
-  - **Serial statements add latency** proportional to the sources asked about. The
-    `databricks` job records the time per source, and a large project may need a
-    limit or a cache.
-  - **Passing `ods_sources` as a var makes dbt re-parse** the project for that call,
-    because vars invalidate partial parsing. It runs in its own target directory
-    (as ADR-0016's check does), so the build's partial-parse cache is untouched.
-    If the re-parse proves slow, the alternative is to iterate `graph.sources` and
-    filter in jinja by a short hash list.
+  - **Serial statements add latency:** two per source in the project, on every
+    command that can build. The `databricks` job records the time per source. A
+    large project may need a setting to turn the probe off, or a native connection
+    that runs them in parallel.
   - **Maintenance commits cause rebuilds** until the M2 follow-up.
   - **Two new contracts** to version and test.
 - **Follow-up issues:**
