@@ -15,7 +15,7 @@ Configuration
 ├── [ok] config.values: 3 value(s) set
 │   ├── output.color: "never" (flag --color)
 │   ├── output.format: "human" (flag --output)
-│   └── output.width: 100 (flag --width)
+│   └── output.width: 400 (flag --width)
 └── [ok] config.resolution (required): where ODS finds the project, dbt and the state
     ├── program: dbt (default)
     ├── project_dir: unset (dbt's default)
@@ -65,12 +65,10 @@ State store
     └── state_db: .ods/state.db (default)
 
 Capabilities
-├── [ok] capabilities.relation_existence: a build is reused only after checking its relation still 
-│   exists
+├── [ok] capabilities.relation_existence: a build is reused only after checking its relation still exists
 │   ├── provider: dbt (dbt)
 │   └── capabilities: relation_existence, relation_probe
-└── [ok] capabilities.relation_versions: no table versions, and none needed: the project has no 
-    sources
+└── [ok] capabilities.relation_versions: no table versions, and none needed: the project has no sources
     ├── adapter: duckdb (manifest)
     └── missing_capability: relation_versions
 

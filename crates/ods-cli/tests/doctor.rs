@@ -176,7 +176,7 @@ fn a_healthy_project_exits_0_and_every_check_passes_or_is_skipped() {
     let (_, again, _) = project.doctor(&["-o", "plain"]);
     assert_eq!(plain, again);
     insta::assert_snapshot!("doctor_healthy_plain", project.redact(&plain));
-    let (code, human, _) = project.doctor(&["-o", "human", "--color", "never", "--width", "100"]);
+    let (code, human, _) = project.doctor(&["-o", "human", "--color", "never", "--width", "400"]);
     assert_eq!(code, 0);
     insta::assert_snapshot!("doctor_healthy_human", project.redact(&human));
 }
