@@ -38,6 +38,14 @@ pub trait ExecutorHarness: Send + Sync {
         None
     }
 
+    /// A value that appears inside quotes, after a word with an apostrophe, in the
+    /// engine's message for the [failing](Self::failing) node (e.g. the engine says
+    /// `Can't cast 'SECRET' to INT`), if the harness can arrange one. The events must
+    /// never contain it (#322, AGENTS.md rule 9).
+    fn failing_secret(&self) -> Option<String> {
+        None
+    }
+
     /// A source with checks that pass, if the harness can arrange one; `None` skips the
     /// case that needs it (#232).
     fn checked_source(&self) -> Option<RequestedNode> {
@@ -405,7 +413,7 @@ fn check_events(
         );
     }
 
-    check_node_events(case, report, events);
+    check_node_events(case, request, report, events);
     let outcome = match &events[events.len() - 1].kind {
         RunEventKind::RunFinished { outcome } => *outcome,
         _ => unreachable!("checked above"),
@@ -417,13 +425,25 @@ fn check_events(
     }
 }
 
-fn check_node_events(case: &str, report: &ExecutionReport, events: &[RunEvent]) {
-    // Every requested node finishes exactly once, as the report says; node events come
-    // in order (queued, started, finished) and only for nodes the run touched.
-    for node in &report.nodes {
+fn check_node_events(
+    case: &str,
+    request: &ExecutionRequest,
+    report: &ExecutionReport,
+    events: &[RunEvent],
+) {
+    // Every requested node finishes exactly once, as the report says (unknown when the
+    // report doesn't list it); node events come in order (queued, started, finished)
+    // and only for nodes the run touched.
+    for requested in &request.nodes {
+        let expected = report
+            .nodes
+            .iter()
+            .find(|n| n.node == requested.id)
+            .map_or(NodeRunStatus::Unknown, |n| NodeRunStatus::from(n.status));
+        let node = requested;
         let of: Vec<&RunEvent> = events
             .iter()
-            .filter(|e| e.node() == Some(node.node.as_str()))
+            .filter(|e| e.node() == Some(node.id.as_str()))
             .collect();
         let finished: Vec<_> = of
             .iter()
@@ -436,14 +456,13 @@ fn check_node_events(case: &str, report: &ExecutionReport, events: &[RunEvent]) 
             finished.len(),
             1,
             "{case}: {} finishes once: {of:?}",
-            node.node
+            node.id
         );
         let stats = finished[0];
         assert_eq!(
-            stats.status,
-            NodeRunStatus::from(node.status),
+            stats.status, expected,
             "{case}: {} finishes as the report says",
-            node.node
+            node.id
         );
         assert!(
             matches!(
@@ -451,13 +470,13 @@ fn check_node_events(case: &str, report: &ExecutionReport, events: &[RunEvent]) 
                 Some(RunEventKind::NodeFinished { .. })
             ),
             "{case}: nothing about {} after it finished: {of:?}",
-            node.node
+            node.id
         );
         let position = |kind: fn(&RunEventKind) -> bool| of.iter().position(|e| kind(&e.kind));
         let queued = position(|k| matches!(k, RunEventKind::NodeQueued { .. }));
         let started = position(|k| matches!(k, RunEventKind::NodeStarted { .. }));
         if let (Some(q), Some(s)) = (queued, started) {
-            assert!(q < s, "{case}: {} queued before it started", node.node);
+            assert!(q < s, "{case}: {} queued before it started", node.id);
         }
         if stats.status == NodeRunStatus::Success {
             assert!(
@@ -466,11 +485,13 @@ fn check_node_events(case: &str, report: &ExecutionReport, events: &[RunEvent]) 
             );
         }
         if let (Some(start), Some(end)) = (stats.started_at, stats.finished_at) {
-            assert!(start <= end, "{case}: {} ends after it starts", node.node);
+            assert!(start <= end, "{case}: {} ends after it starts", node.id);
         }
         if let Some(error) = &stats.error {
-            assert!(
-                !error.message.contains(['\'', '"', '`']),
+            // Redacting a summary again changes nothing: no quoted value or SQL is left.
+            assert_eq!(
+                ods_core::redact::summary_line(error.message(), usize::MAX).as_deref(),
+                Some(error.message()),
                 "{case}: error summaries quote nothing: {error:?}"
             );
         }
@@ -478,7 +499,7 @@ fn check_node_events(case: &str, report: &ExecutionReport, events: &[RunEvent]) 
     for event in events {
         if let Some(node) = event.node() {
             assert!(
-                report.nodes.iter().any(|n| n.node == node)
+                request.nodes.iter().any(|n| n.id == node)
                     || report.unrequested.iter().any(|n| n == node),
                 "{case}: {node} is neither requested nor reported unrequested"
             );
@@ -515,6 +536,13 @@ async fn failed_nodes_finish_as_errors(harness: &dyn ExecutorHarness, failing: R
         })
         .unwrap_or_else(|| panic!("{case}: {} never finished", failing.id));
     assert_eq!(failed.status, NodeRunStatus::Error, "{case}: {failed:?}");
+    if let Some(secret) = harness.failing_secret() {
+        let text = format!("{events:?}");
+        assert!(
+            !text.contains(&secret),
+            "{case}: the engine's quoted value reached the events: {text}"
+        );
+    }
 }
 
 /// A node the engine doesn't know never finishes as a success in the events (#322).

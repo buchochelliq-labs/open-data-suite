@@ -18,6 +18,8 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- `SDK_VERSION` is now 0.2, as ADR-0019 bumps it whenever a contract changes (here the
+  executor contract, #322). Out-of-process plugins must be rebuilt against it.
 - The executor contract is now version 0.4: `Executor::execute_with_events` reports a
   run's events, and `ExecutionRequest` carries the state `scope` they are for. The
   method has a default, so an executor only changes to report events live.
@@ -38,7 +40,11 @@ the changelog was introduced.
   timestamp. A finished node carries its status, start and end, time taken (compile and
   execute when timed), rows affected, the engine's other reported values, thread, test
   counts and, when it failed, a one-line error summary with quoted values, numbers and
-  SQL removed. A stat that isn't reported is missing, never zero. Executors with the new
+  SQL removed (read failing closed: an apostrophe in `can't` opens no quote, and a line
+  whose quoting can't be read loses everything from its first quote). The engine's
+  other values and the thread are redacted too. A stat that isn't reported is missing,
+  never zero, and the rows total says `rows_at_least` when any node that ran, or may
+  have, didn't report rows. Executors with the new
   `run_events` capability report events live; for others they are rebuilt from the
   final report, without timing or rows. The fake executor simulates a run on parallel
   workers, and the executor conformance suite checks the events (14 cases).

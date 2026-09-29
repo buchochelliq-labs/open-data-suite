@@ -98,16 +98,32 @@ all):
 "Kept earlier build (not selected)" is not an executor status: the executor never sees
 nodes the plan reused. Hosts add it from the plan.
 
-Adapter extras come through by the engine's own key, so core names none (rule 1). A
-value is kept only as a single line, cut to 120 characters, and a node keeps at most
-16; providers pass only scalars, and drop keys that are free-text status messages or
-that the stats already carry (rows affected).
+Adapter extras come through by the engine's own key, so core names none (rule 1). Keys,
+values and thread names pass `ods_core::redact::value_line`: their first line, cut
+where SQL starts, with quoted spans removed (numbers are kept, as ids and counts are
+made of them), cut to 120 characters (keys and threads to 64); a node keeps at most 16
+extras. Providers pass only scalars, and drop keys that are free-text status messages
+or that the stats already carry (rows affected). `RunEvent::sanitized` applies all of
+this again, and hosts call it before keeping an event, so a provider that filled a
+field directly can't bypass it.
+
+**Totals.** `RunTotals::rows_affected` sums the rows reported. Every node that ran or
+may have (succeeded, failed, unknown, still running) and reported none counts in
+`rows_unreported`, and then `rows_at_least` is true (serialized, so JSON readers need
+not derive it): a run killed early totals "at least 0", never an exact 0. A requested
+node the report doesn't list finishes `unknown`.
 
 ### Error summaries
-`ErrorSummary::from_message` is the only way to make one: the first non-blank line of
-the engine's message, cut where a SQL statement starts, with quoted spans (`'…'`,
-`"…"`, `` `…` ``, `$$…$$`) and standalone numbers replaced by `[value removed]`,
-control characters dropped, and at most 200 characters; plus the error's kind when the
+`ErrorSummary::from_message` is the only way to make one (its fields are private, with
+getters): the first non-blank line of the engine's message, cut where a SQL statement
+or clause starts (`select`, `insert into`, `where`, `cast(`, …, with any whitespace or
+`(` after the keyword), with quoted spans (`'…'`, `"…"`, `` `…` ``, `$$…$$`,
+`$tag$…$tag$`) and standalone numbers replaced by `[value removed]`, control
+characters dropped, and at most 200 characters. Quoting is read failing closed: an
+apostrophe after a letter or digit (`can't`, `column's`) opens nothing, there are no
+escapes, and if a span doesn't close on its line, closes right after a backslash, or
+runs straight into a letter or digit, everything from the line's first quote on is
+removed; plus the error's kind when the
 line starts with one (`KeyError`, `Binder Error`), and optionally where the full message
 is (a log file). The redaction lives in `ods_core::redact`, which configuration errors
 (ADR-0005) now share. #320 made analyzer diagnostics name the construct instead of
