@@ -1440,6 +1440,7 @@ fn last_run_panels(b: &mut String, last: &LastRunView, snapshot: Option<u64>, ro
 
 // ---------------------------------------------------------------------------- run
 
+#[allow(clippy::too_many_lines, reason = "one page, built top to bottom")]
 fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: u64) -> String {
     let run = &view.run;
     let mut b = String::with_capacity(32 * 1024);
