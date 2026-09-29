@@ -31,9 +31,9 @@
       ]
     },
     {
-      "title": "M1 State MVP (v0.1.0)",
+      "title": "M1 State MVP (v0.0.1)",
       "due_on": "2026-12-18T00:00:00Z",
-      "description": "First public release: local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor; code- and data-aware (dbt source freshness, Delta table versions, staleness policies).",
+      "description": "First public release (v0.0.1): local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor; code- and data-aware (dbt source freshness, Delta table versions, staleness policies); first dashboard screens (#310-#313).",
       "issues": [
         11,
         12,
@@ -66,13 +66,25 @@
         229,
         230,
         232,
-        233
+        233,
+        310,
+        311,
+        312,
+        313
+      ]
+    },
+    {
+      "title": "UX1 ODS Dashboard (v0.1.0)",
+      "due_on": "2027-01-29T00:00:00Z",
+      "description": "Every screen in the dashboard design (docs/design/dashboard/). v0.1.0 ships only when the whole design is built; until then releases are v0.0.x. #310-#313 ship in v0.0.1 (M1).",
+      "issues": [
+        309
       ]
     },
     {
       "title": "M2 Databricks & data-aware State (v0.2.0)",
       "due_on": "2027-02-26T00:00:00Z",
-      "description": "Unity Catalog metadata, full Delta change providers, remaining freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets.",
+      "description": "Unity Catalog metadata, full Delta change providers, remaining freshness policies, REUSE/DEFER/CLONE, PostgreSQL store with locking, secrets. Ships after v0.1.0.",
       "issues": [
         15,
         29,
@@ -95,7 +107,7 @@
     {
       "title": "M3 ERD & Usage (v0.3.0)",
       "due_on": "2027-04-30T00:00:00Z",
-      "description": "Provider-neutral ERD with dbt provider and renderers; usage intelligence with Unity Catalog provider.",
+      "description": "Provider-neutral ERD with dbt provider and renderers; usage intelligence with Unity Catalog provider. Ships after v0.1.0.",
       "issues": [
         172,
         60,
@@ -114,7 +126,7 @@
     {
       "title": "M4 ODS CI (v0.4.0)",
       "due_on": "2027-06-30T00:00:00Z",
-      "description": "SQL parser, column lineage, change-impact engine, selective CI, PR reports, data diff.",
+      "description": "SQL parser, column lineage, change-impact engine, selective CI, PR reports, data diff. Ships after v0.1.0.",
       "issues": [
         75,
         84,
@@ -130,7 +142,7 @@
     {
       "title": "M5 LSP & VS Code (v0.5.0)",
       "due_on": "2027-08-31T00:00:00Z",
-      "description": "Clean-room LSP and VS Code extension.",
+      "description": "Clean-room LSP and VS Code extension. Ships after v0.1.0.",
       "issues": [
         67,
         68,
@@ -145,7 +157,7 @@
     {
       "title": "M6 ODS Agent (v0.6.0)",
       "due_on": "2027-10-29T00:00:00Z",
-      "description": "Agent runtime, BYOK LLM providers, policy/approval, patch engine, validation, first skills.",
+      "description": "Agent runtime, BYOK LLM providers, policy/approval, patch engine, validation, first skills. Ships after v0.1.0.",
       "issues": [
         32,
         33,
