@@ -21,6 +21,9 @@ State MVP. Entries below record changes since the changelog was introduced.
   is 0.3 (#288, #232).
 
 ### Added
+- A "State on Databricks" docs page shows `ods state` on a real Databricks workspace:
+  after one model changes, only it and the view reading it are rebuilt. Its screenshots
+  come from the nightly Databricks CI job (#302, #294).
 - `ods state retry --failed` reruns the last command, but builds only the nodes that
   failed, or were skipped because of a failure, and tests only the sources whose tests
   failed, as `dbt retry` does. They are still planned: a node the plan now reuses is

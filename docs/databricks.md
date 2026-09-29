@@ -47,8 +47,9 @@ ODS ran `dbt build` with exactly those two models selected, then recorded the ne
 state. Nothing else was touched in the warehouse.
 
 ## History
-Every successful run is a snapshot. A failed or partial run never replaces the last
-good one.
+Each run that builds something successfully records a snapshot. A node that fails,
+or is skipped, keeps its last successful entry. So after a partial run, the nodes that
+succeeded move on, and the rest stay exactly as they were.
 
 ```bash
 ods state history
