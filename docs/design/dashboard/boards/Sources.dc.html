@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ODS freshness evidence</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;background:#F7F8FA;color:#18202A}
+a{color:#3F51D8;text-decoration:none}a:hover{color:#2B3AA8;text-decoration:underline}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #F7F8FA; font-size: 14px">
+<nav aria-label="Main" style="width: 224px; flex-shrink: 0; background: #FFFFFF; border-right: 1px solid #D8DEE6; display: flex; flex-direction: column; padding: 16px 12px; box-sizing: border-box; gap: 16px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3F51D8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>
+<span style="font-weight: 600; font-size: 16px; letter-spacing: 0.02em">OpenDataSuite</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="proj">Project</label>
+<button id="proj" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">jaffle_ods<span style="color: #5B6776">▾</span></button>
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="tgt">Target</label>
+<button id="tgt" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2F6FD6"></span>dev · databricks</span><span style="color: #5B6776">▾</span></button>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>Home</a>
+<a href="Catalog.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; background: #E8EBFB; color: #2B3AA8; font-weight: 500">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3"></path></svg>Catalog</a>
+<div style="display: flex; flex-direction: column; gap: 2px; padding-left: 38px; font-size: 13px">
+<a href="Catalog.dc.html" style="height: 30px; display: flex; align-items: center; color: #18202A">Models</a>
+<a href="Sources.dc.html" aria-current="page" style="height: 30px; display: flex; align-items: center; color: #2B3AA8; font-weight: 500">Freshness evidence</a>
+</div>
+<a href="Lineage.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"></rect><path d="M7 11v4a2 2 0 0 0 2 2h4"></path><rect x="13" y="13" width="8" height="8" rx="2"></rect></svg>Lineage</a>
+<a href="Plan.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></svg>State</a>
+<a href="Erd.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.9 12.1 20 3M17 6l3 3M15 8l2 2"></path></svg>ERD</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>Usage</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><path d="M6 9v12M18 15V9a3 3 0 0 0-3-3h-4M13 3 10 6l3 3"></path></svg>CI · Impact</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4M9 13v2M15 13v2"></path></svg>Agent</a>
+</div>
+<div style="margin-top: auto; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid #D8DEE6; padding-top: 12px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; color: #5B6776">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</a>
+<span style="font-size: 12px; color: #5B6776; padding: 4px 10px">Local · read-only</span>
+</div>
+</nav>
+<main style="flex-grow: 1; display: flex; flex-direction: column; min-width: 0">
+<header style="height: 56px; flex-shrink: 0; background: #FFFFFF; border-bottom: 1px solid #D8DEE6; display: flex; align-items: center; gap: 12px; padding: 0 24px">
+<a href="Catalog.dc.html">Catalog</a><span style="color: #8A94A3">/</span><span style="font-weight: 500">Freshness evidence</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #5B6776; border: 1px solid #D8DEE6; border-radius: 999px; padding: 4px 10px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #1F8A4C"></span>snapshot 3 · 2026-09-29T00:02:37Z</span>
+</header>
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<section style="flex-grow: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; min-width: 0">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h1 style="margin: 0; font-size: 22px; font-weight: 600">Freshness evidence</h1>
+<p style="margin: 0; color: #5B6776">How ODS knows whether each project input changed since it was last built. jaffle_ods has seeds, not sources.</p>
+</div>
+<section aria-label="Evidence grades" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 14px 16px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px">
+<div style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #1F8A4C"></span><span style="display: flex; flex-direction: column; gap: 1px"><span style="font-weight: 600">exact</span><span style="color: #5B6776">Content checksum compared. Safe to reuse when equal.</span></span></div>
+<div style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #3F51D8"></span><span style="display: flex; flex-direction: column; gap: 1px"><span style="font-weight: 600">timestamp</span><span style="color: #5B6776">A load or modified time. Reuse if not newer than the last build.</span></span></div>
+<div style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #B7791F"></span><span style="display: flex; flex-direction: column; gap: 1px"><span style="font-weight: 600">inferred</span><span style="color: #5B6776">Indirect signal. Labelled inferred, never shown as fact.</span></span></div>
+<div style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #FFFFFF; border: 2px dashed #6B7684; box-sizing: border-box"></span><span style="display: flex; flex-direction: column; gap: 1px"><span style="font-weight: 600">unknown</span><span style="color: #5B6776">No evidence at all. Readers build.</span></span></div>
+</section>
+<section aria-label="Inputs" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #D8DEE6">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Inputs</h2><span style="font-size: 13px; color: #5B6776">3 seeds · 0 sources</span>
+<button style="margin-left: auto; height: 32px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">Copy as JSON</button>
+</div>
+<div style="display: grid; grid-template-columns: 170px 150px 100px 210px minmax(0, 1fr); font-size: 13px">
+<span style="color: #5B6776; padding: 10px 0; background: #EEF1F5; font-size: 12px; padding-left: 16px">Input</span><span style="color: #5B6776; padding: 10px 0; background: #EEF1F5; font-size: 12px">Evidence</span><span style="color: #5B6776; padding: 10px 0; background: #EEF1F5; font-size: 12px">Grade</span><span style="color: #5B6776; padding: 10px 0; background: #EEF1F5; font-size: 12px">Last recorded</span><span style="color: #5B6776; padding: 10px 0; background: #EEF1F5; font-size: 12px; padding-right: 16px">Would build if it changed</span>
+<sc-for list="{{inputs}}" as="i" hint-placeholder-count="3">
+<span style="padding: 12px 0; border-bottom: 1px solid #EEF1F5; padding-left: 16px; display: flex; flex-direction: column; gap: 2px"><span style="display: flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono',monospace"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7C9A6A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h10l6 6v10H4z"></path><path d="M14 4v6h6M8 14h8M8 17h5"></path></svg>{{i.name}}</span><span style="font-size: 12px; color: #5B6776; padding-left: 22px">seed · {{i.file}}</span></span>
+<span style="padding: 12px 0; border-bottom: 1px solid #EEF1F5; display: flex; flex-direction: column; gap: 2px"><span>file checksum</span><span style="font-size: 12px; color: #5B6776">unchanged since snapshot 1</span></span>
+<span style="padding: 12px 0; border-bottom: 1px solid #EEF1F5"><span style="display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: #1F6B3C"><span style="width: 10px; height: 10px; border-radius: 50%; background: #1F8A4C"></span>exact</span></span>
+<span style="padding: 12px 0; border-bottom: 1px solid #EEF1F5; display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">2026-09-29T00:00:15Z</span><span style="font-size: 12px; color: #5B6776">built · snapshot 1 · run e6f54fe3</span><span style="font-size: 12px; color: #5B6776">checked again · snapshot 3</span></span>
+<span style="padding: 12px 0; border-bottom: 1px solid #EEF1F5; padding-right: 16px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: #5B6776">{{i.count}} models</span><span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px; line-height: 1.6; color: #18202A">{{i.downstream}}</span></span>
+</sc-for>
+</div>
+</section>
+<section aria-label="Sources" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B6776" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"></ellipse><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg>
+<span style="display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600">No sources declared</span><span style="color: #5B6776; font-size: 13px">When a project declares <span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">sources:</span>, each one appears here with its evidence. A source with a <span style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">loaded_at_field</span> gets timestamp evidence; one with none is unknown, and everything reading it builds.</span></span>
+</section>
+</section>
+<aside aria-label="How evidence decides" style="width: 360px; flex-shrink: 0; background: #FFFFFF; border-left: 1px solid #D8DEE6; display: flex; flex-direction: column">
+<div style="padding: 16px; border-bottom: 1px solid #D8DEE6; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 12px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em">Rule</span>
+<h2 style="margin: 0; font-size: 18px; font-weight: 600">Unknown evidence &#8658; build</h2>
+<p style="margin: 0; font-size: 13px; line-height: 1.5; color: #4A5462">ODS reuses a node only when it can show the node's inputs are unchanged. When the evidence is missing, the answer is build, never a silent reuse.</p>
+</div>
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid #EEF1F5; border-radius: 6px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #1F8A4C"></span><span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">exact</span><span style="color: #5B6776">Checksum matches the last successful build.</span></span><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: #D5F0EC; color: #0B6B60">REUSE if equal</span></div>
+<div style="display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid #EEF1F5; border-radius: 6px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #3F51D8"></span><span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">timestamp</span><span style="color: #5B6776">Load time is not newer than the last build.</span></span><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: #D5F0EC; color: #0B6B60">REUSE if older</span></div>
+<div style="display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid #EEF1F5; border-radius: 6px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #B7791F"></span><span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">inferred</span><span style="color: #5B6776">Not enough to prove unchanged. Shown as inferred.</span></span><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: #DCE8FB; color: #1F4FA0">BUILD</span></div>
+<div style="display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid #EEF1F5; border-radius: 6px; font-size: 13px"><span style="margin-top: 4px; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #FFFFFF; border: 2px dashed #6B7684; box-sizing: border-box"></span><span style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">unknown</span><span style="color: #5B6776">Nothing to compare. Readers build too.</span></span><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: #DCE8FB; color: #1F4FA0">BUILD</span></div>
+</div>
+<div style="padding: 0 16px 16px; display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+<span style="font-weight: 600">In this project</span>
+<span style="color: #4A5462">All 3 seeds have exact evidence and matched at snapshots 2 and 3, so the plan reused them. That is why run <a href="Run.dc.html" style="font-family: 'IBM Plex Mono',monospace; font-size: 12px">4c0b5c8f</a> built only 2 nodes.</span>
+</div>
+<div style="margin-top: auto; padding: 12px 16px; border-top: 1px solid #D8DEE6; display: flex; gap: 8px">
+<a href="Plan.dc.html" style="display: flex; align-items: center; height: 36px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; color: #18202A">Open plan</a>
+<a href="Lineage.dc.html" style="display: flex; align-items: center; height: 36px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; color: #18202A">Freshness overlay</a>
+</div>
+</aside>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const after = 'customers · customers_snapshot_view · customer_segments · segment_summary';
+return {
+inputs: [
+{ name: 'raw_customers', file: 'raw_customers.csv', count: '5', downstream: 'stg_customers · ' + after },
+{ name: 'raw_orders', file: 'raw_orders.csv', count: '8', downstream: 'stg_orders · orders · order_events · customer_order_rank · ' + after },
+{ name: 'raw_payments', file: 'raw_payments.csv', count: '8', downstream: 'stg_payments · orders · order_events · customer_order_rank · ' + after }
+]
+};
+}
+}
+</script>
+</body>
+</html>
