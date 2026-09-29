@@ -8,6 +8,8 @@
 //!   that succeeded (AGENTS.md rule 5);
 //! - [`select`] resolves dbt-style `+name+` selectors;
 //! - [`split_retry`] narrows a plan to the nodes a retry of failures builds (#292);
+//! - [`choose_source_versions`] picks where each source's data version comes from:
+//!   a relation's own version, a freshness measurement, or none (ADR-0022);
 //! - [`source_checks`] decides which sources' checks run (their data is new or
 //!   unknown), and [`record_source_checks`] records their results (#232);
 //! - [`choose_pointers`] decides where an exported state's deferred references point:
@@ -24,6 +26,7 @@ mod recorder;
 mod retry;
 mod selection;
 mod sources;
+mod versions;
 
 pub use defer::{
     EXPORT_SCHEMA_VERSION, ExportRecord, Pointer, PointerChoice, PointerReason, UpstreamNode,
@@ -40,9 +43,10 @@ pub use selection::{select, select_sources};
 pub use sources::{
     RecordedSources, SourceCheck, SourceCheckAction, record_source_checks, source_checks,
 };
+pub use versions::{VersionAnswer, VersionReading, choose_source_versions};
 
 use ods_core::FreshnessPolicy;
-use ods_core::state::{DataVersion, Fingerprint, NodeState, Timestamp};
+use ods_core::state::{DataVersion, Evidence, Fingerprint, NodeState, Timestamp};
 
 /// A node ODS plans: a model, seed or snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +168,9 @@ pub struct Source {
     /// The digest of its checks (e.g. dbt source tests) as they are now (#232), as
     /// for [`Node::checks`]. `None` when it has none, or they can't be identified.
     pub checks: Option<String>,
+    /// Where `version` came from, and why better sources of it weren't used, as
+    /// [`choose_source_versions`] recorded it. Plans list it with the version.
+    pub version_evidence: Vec<Evidence>,
 }
 
 impl Source {
@@ -179,6 +186,7 @@ impl Source {
             version,
             observed_at: None,
             checks: None,
+            version_evidence: Vec::new(),
         }
     }
 

@@ -9,6 +9,7 @@ use ods_config::Loaded;
 use ods_core::state::{
     DataVersion, Exactness, ExecutionPlan, PlanAction, SnapshotId, StateSnapshot, Timestamp,
 };
+use ods_core::{Capability, CapabilitySet};
 use ods_provider_dbt::fingerprint::{checks_digest, fingerprint};
 use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{
@@ -16,7 +17,9 @@ use ods_provider_dbt::{
 };
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::state_store::{SnapshotSummary, StateScope, StateStore, StoredSnapshot};
-use ods_state::{Node, Outcome, Project, Recorded, RunResult, Source};
+use ods_state::{
+    Node, Outcome, Project, Recorded, RunResult, Source, VersionAnswer, VersionReading,
+};
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
@@ -184,6 +187,34 @@ pub(super) struct Workspace {
     pub(super) manifest: ods_provider_dbt::Manifest,
 }
 
+/// `sources.json`'s `max_loaded_at` per source, as a `source_freshness` reading, taken
+/// at `taken_at`. A source whose measurement errored is unknown, with dbt's status.
+fn freshness_reading(freshness: &SourceFreshness, taken_at: Option<Timestamp>) -> VersionReading {
+    let versions = freshness.max_loaded_at.iter().map(|(id, at)| {
+        // Normalised, so the same instant written differently compares equal.
+        let value = Timestamp::parse(at).map_or_else(|_| at.clone(), |t| t.to_string());
+        (
+            id.clone(),
+            VersionAnswer::Version(DataVersion::new(
+                value,
+                Exactness::Semantic,
+                "sources.json max_loaded_at",
+            )),
+        )
+    });
+    let errors = freshness.errors.iter().map(|(id, status)| {
+        (
+            id.clone(),
+            VersionAnswer::Unknown(format!("`dbt source freshness` reported {status}")),
+        )
+    });
+    VersionReading::new(
+        CapabilitySet::from([Capability::SourceFreshness]),
+        taken_at,
+        errors.chain(versions).collect(),
+    )
+}
+
 impl Workspace {
     pub(super) fn load(
         args: &ArgMatches,
@@ -231,26 +262,23 @@ impl Workspace {
             .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?;
         let policies = resolve(manifest);
         let nodes = plan_nodes(manifest, &policies);
-        let sources = manifest
+        let mut sources: Vec<Source> = manifest
             .nodes
             .iter()
             .filter(|n| n.resource_type == ResourceType::Source)
             .map(|n| {
-                let version = freshness
-                    .as_ref()
-                    .and_then(|f| f.max_loaded_at.get(&n.unique_id))
-                    .map(|at| {
-                        // Normalised, so the same instant written differently compares equal.
-                        let value =
-                            Timestamp::parse(at).map_or_else(|_| at.clone(), |t| t.to_string());
-                        DataVersion::new(value, Exactness::Semantic, "sources.json max_loaded_at")
-                    });
-                Source::new(n.unique_id.clone(), display_name(&n.unique_id), version)
-                    .observed_at(sources_taken_at)
+                Source::new(n.unique_id.clone(), display_name(&n.unique_id), None)
                     // Its data tests (#232), identified as a node's are.
                     .with_checks(checks_digest(manifest, &n.unique_id))
             })
             .collect();
+        let readings: Vec<VersionReading> = freshness
+            .as_ref()
+            .map(|f| freshness_reading(f, sources_taken_at))
+            .into_iter()
+            .collect();
+        // The planner picks each source's version from what was read (ADR-0022 §2).
+        ods_state::choose_source_versions(&mut sources, &readings);
         Ok(Self {
             state_db: settings.state_db(),
             sources_taken_at,

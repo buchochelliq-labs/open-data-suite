@@ -2892,3 +2892,56 @@ fn a_failing_source_test_keeps_the_nodes_tests_that_passed() {
     let (_, again) = project.test(&[]);
     assert_eq!(again["result"]["requested"], 0, "{again:#}");
 }
+
+/// The value of every `kind` evidence about `source` in `name`'s plan entry, joined.
+fn source_evidence(result: &Value, name: &str, kind: &str, source: &str) -> Option<String> {
+    entry(result, name)["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == kind && e["subject"] == source)
+        .map(|e| e["value"].as_str().unwrap_or_default().to_owned())
+        .reduce(|a, b| format!("{a}; {b}"))
+}
+
+/// ADR-0022 §2 in the plan's JSON: each source input says which strategy gave its
+/// version, where the version came from, and why a strategy that could have applied
+/// didn't. `raw.orders` is measured by `dbt source freshness`; `raw.payments` isn't.
+#[test]
+fn plan_json_says_where_each_source_version_came_from() {
+    let project = Project::new("version-evidence")
+        .with("FAKE_DBT_SOURCES", "1")
+        .with("FAKE_DBT_LOADED_AT", "raw.orders=2026-01-01T00:00:00Z");
+    project.run_ok(&[]);
+    let planned = project.run_ok(&["--dry-run"]);
+    let orders = "source.jaffle_ods.raw.orders";
+    let payments = "source.jaffle_ods.raw.payments";
+    assert_eq!(
+        source_evidence(&planned, "stg_orders", "source_version_strategy", orders).as_deref(),
+        Some("source_freshness"),
+        "{planned:#}"
+    );
+    assert_eq!(
+        source_evidence(&planned, "stg_orders", "source_version_origin", orders).as_deref(),
+        Some("sources.json max_loaded_at")
+    );
+    // Nothing here reads table versions, so that strategy isn't listed as skipped.
+    assert_eq!(
+        source_evidence(&planned, "stg_orders", "source_version_skipped", orders),
+        None
+    );
+    assert_eq!(
+        source_evidence(
+            &planned,
+            "stg_payments",
+            "source_version_strategy",
+            payments
+        )
+        .as_deref(),
+        Some("no_version")
+    );
+    assert_eq!(
+        source_evidence(&planned, "stg_payments", "source_version_skipped", payments).as_deref(),
+        Some("source_freshness: not reported")
+    );
+}

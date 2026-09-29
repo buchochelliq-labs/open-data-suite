@@ -16,7 +16,8 @@
 //! | `FingerprintProvider` | #13 | planned |
 //! | [`Executor`](executor::Executor) | #23, #24 | defined (ADR-0014) |
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
-//! | `ChangeProvider` | #16 | planned |
+//! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
+//! | [`RelationProbe`](probe::RelationProbe) | #17 | defined (ADR-0022) |
 //! | `CloneProvider` | #29 | planned |
 //! | `PolicyProvider` | #9 | planned |
 //! | `EventSink` | #8 | planned |
@@ -25,9 +26,11 @@
 //! | `SecretProvider` | #126 | planned |
 //! | `LlmProvider` | #33 | planned |
 
+pub mod changes;
 pub mod executor;
 pub mod lock;
 pub mod observed_lineage;
+pub mod probe;
 pub mod relations;
 pub mod sql_lineage;
 pub mod state_store;
