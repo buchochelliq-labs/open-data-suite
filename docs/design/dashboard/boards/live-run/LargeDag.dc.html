@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lineage · Live run on a large project</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: #F6F7F9; color: #1B2130; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px">
+
+<header style="height: 56px; flex-shrink: 0; box-sizing: border-box; padding: 0 24px; background: #FFFFFF; border-bottom: 1px solid #E3E6EB; display: flex; align-items: center; gap: 12px">
+<span style="color: #5B6474">warehouse_prod</span>
+<span style="color: #8A94A3">/</span>
+<span style="font-weight: 600">Lineage</span>
+<span style="color: #5B6474">· 1,284 nodes</span>
+<div style="margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; background: #E8EBFB; color: #2B3AA8">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #3F51D8"></span>
+<span>Live · run 3c91e0aa · 212 of 318 finished · 3 running</span>
+</div>
+</header>
+
+<div role="toolbar" aria-label="Graph" style="height: 52px; flex-shrink: 0; box-sizing: border-box; padding: 0 14px; background: #FFFFFF; border-bottom: 1px solid #E3E6EB; display: flex; align-items: center; gap: 8px">
+<button type="button" aria-pressed="true" style="height: 32px; padding: 0 12px; border-radius: 6px; font: inherit; font-weight: 600; display: flex; align-items: center; gap: 6px; background: #3F51D8; color: #FFFFFF; border: 1px solid #3F51D8; cursor: pointer">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><circle cx="12" cy="12" r="2"></circle><path d="M12 1v4M12 19v4M1 12h4M19 12h4"></path></svg>
+<span>Following run</span>
+</button>
+<span style="color: #4A5462">Focus: <span style="font-family: 'IBM Plex Mono', monospace; color: #1B2130">int_sessions</span> · blocks 41 queued nodes</span>
+<span style="margin-left: auto; color: #5B6474; font-size: 12px">Running nodes are too far apart to show at a readable size, so follow keeps one in focus.</span>
+</div>
+
+<div style="position: relative; flex-grow: 1; overflow: hidden; background-color: #F6F7F9; background-image: radial-gradient(#D5DAE1 1px, transparent 1px); background-size: 20px 20px">
+
+<sc-for list="{{edges}}" as="e" hint-placeholder-count="40">
+<div style="position: absolute; height: 1px; transform-origin: 0 0; {{e.css}}"></div>
+</sc-for>
+<sc-for list="{{nodes}}" as="n" hint-placeholder-count="60">
+<div style="position: absolute; width: 176px; height: 58px; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 6px; {{n.css}}">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{n.id}}</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; {{n.pillCss}}">{{n.pill}}</span><span style="font-size: 11px; color: #4A5462">{{n.meta}}</span></span>
+</div>
+</sc-for>
+
+<div style="position: absolute; right: 12px; top: 120px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end">
+<div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">2 RUNNING OFF SCREEN</div>
+<button type="button" aria-label="Show fct_revenue_daily, running 41 seconds, off screen to the right" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #3F51D8; border-radius: 999px; background: #FFFFFF; color: #1B2130; font: inherit; box-shadow: 0 4px 12px rgba(20, 24, 33, 0.12); cursor: pointer"><span style="font-family: 'IBM Plex Mono', monospace">fct_revenue_daily</span><span style="color: #2B3AA8">41s</span><span aria-hidden="true" style="color: #3F51D8">→</span></button>
+<button type="button" aria-label="Show dim_accounts, running 12 seconds, off screen to the right" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 1px solid #3F51D8; border-radius: 999px; background: #FFFFFF; color: #1B2130; font: inherit; box-shadow: 0 4px 12px rgba(20, 24, 33, 0.12); cursor: pointer"><span style="font-family: 'IBM Plex Mono', monospace">dim_accounts</span><span style="color: #2B3AA8">12s</span><span aria-hidden="true" style="color: #3F51D8">→</span></button>
+</div>
+
+<div aria-label="Minimap" style="position: absolute; right: 16px; bottom: 16px; width: 300px; height: 170px; box-sizing: border-box; background: #FFFFFF; border: 1px solid #D3D8E0; border-radius: 8px; box-shadow: 0 4px 14px rgba(20, 24, 33, 0.10); overflow: hidden">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #5B6474">WHOLE RUN</div>
+<sc-for list="{{mini}}" as="m" hint-placeholder-count="200">
+<div style="position: absolute; width: 6px; height: 4px; border-radius: 1px; {{m.css}}"></div>
+</sc-for>
+<div style="position: absolute; left: 14px; top: 64px; width: 96px; height: 70px; border: 2px solid #1B2130; border-radius: 3px"></div>
+</div>
+
+<div style="position: absolute; left: 14px; bottom: 14px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 8px; font-size: 11px; color: #4A5462">
+<span>When the focus node finishes, follow moves to the running node blocking the most queued work, then the nearest one.</span>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+var NAMES = ['stg_events', 'stg_sessions', 'stg_users', 'stg_orders', 'stg_payments', 'stg_refunds', 'stg_products', 'int_sessions', 'int_user_days', 'int_order_items', 'int_payments_net', 'int_attribution', 'int_funnel', 'fct_orders', 'fct_sessions', 'fct_payments', 'dim_users', 'dim_products', 'mart_growth', 'mart_finance'];
+var COLS = 26, ROWS = 12;
+function seeded(i) { var x = Math.sin(i * 12.9898) * 43758.5453; return x - Math.floor(x); }
+class Component extends DCLogic {
+  renderVals() {
+    var nodes = [], edges = [], mini = [];
+    var sx = 230, sy = 88, ox = 60, oy = 40;
+    for (var c = 0; c < 7; c++) {
+      for (var r = 0; r < 9; r++) {
+        var i = c * 9 + r;
+        if (seeded(i) < 0.22) continue;
+        var id = NAMES[i % NAMES.length] + (i > 19 ? '_' + i : '');
+        var st = c < 3 ? 'built' : (c === 3 ? 'queued' : 'queued');
+        if (c === 2 && r === 4) st = 'running';
+        if (c === 1 && r === 6) st = 'kept';
+        if (c === 0 && (r === 2 || r === 7)) st = 'kept';
+        var css = 'left: ' + (ox + c * sx) + 'px; top: ' + (oy + r * sy) + 'px; ';
+        var pill = 'BUILT', pillCss = 'background: #DCE8FB; color: #1F4FA0', meta = (1 + seeded(i + 3) * 9).toFixed(1) + 's · ' + Math.floor(seeded(i + 7) * 90000) + ' rows';
+        if (st === 'running') { id = 'int_sessions'; css += 'border: 2px solid #3F51D8; background: #FFFFFF; box-shadow: 0 0 0 6px rgba(63, 81, 216, 0.2)'; pill = 'RUNNING'; pillCss = 'background: #E8EBFB; color: #2B3AA8'; meta = '1m 04s · thread 3'; }
+        else if (st === 'queued') { css += 'border: 1px dashed #AEB6C2; background: #FFFFFF'; pill = 'QUEUED'; pillCss = 'background: #EEF0F3; color: #4A5462; border: 1px dashed #AEB6C2'; meta = 'waiting on upstream'; }
+        else if (st === 'kept') { css += 'border: 1px solid #E3E6EB; background: #F9FAFB'; pill = 'KEPT'; pillCss = 'background: #D5F0EC; color: #0B6B60'; meta = 'not selected'; }
+        else { css += 'border: 1px solid #9DB8E8; background: #FFFFFF'; }
+        nodes.push({ id: id, css: css, pill: pill, pillCss: pillCss, meta: meta });
+        if (c > 0) {
+          var x1 = ox + (c - 1) * sx + 176, y1 = oy + ((r + 1) % 9) * sy + 29, x2 = ox + c * sx, y2 = oy + r * sy + 29;
+          var dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy), ang = Math.atan2(dy, dx) * 180 / Math.PI;
+          var hot = c === 3 && r === 4;
+          edges.push({ css: 'left: ' + x1 + 'px; top: ' + y1 + 'px; width: ' + len.toFixed(0) + 'px; transform: rotate(' + ang.toFixed(1) + 'deg); background: ' + (hot ? '#3F51D8' : '#C3CAD4') });
+        }
+      }
+    }
+    for (var mc = 0; mc < COLS; mc++) {
+      for (var mr = 0; mr < ROWS; mr++) {
+        var k = mc * ROWS + mr;
+        if (seeded(k + 100) < 0.3) continue;
+        var col = mc < 10 ? '#9DB8E8' : '#C9CFD8';
+        if ((mc === 3 && mr === 5) || (mc === 22 && mr === 2) || (mc === 20 && mr === 9)) col = '#3F51D8';
+        var big = col === '#3F51D8';
+        mini.push({ css: 'left: ' + (12 + mc * 10.8) + 'px; top: ' + (30 + mr * 11) + 'px; background: ' + col + (big ? '; box-shadow: 0 0 0 3px rgba(63, 81, 216, 0.3)' : '') });
+      }
+    }
+    return { nodes: nodes, edges: edges, mini: mini };
+  }
+}
+</script>
+</body>
+</html>

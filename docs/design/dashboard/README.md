@@ -170,6 +170,44 @@ no font files, so it falls back to the system fonts.
   placeholders. Webhooks and audit are designed as event sinks on the event stream the
   CLI already emits, not a second record.
 
+### Live run on the DAG, with follow mode (#322)
+
+The boards are in [`boards/live-run/`](boards/live-run/). `Main.dc.html` there is interactive: it plays a demo run, and the other boards reuse it in fixed states. Screenshots will be added once they are exported from the design canvas.
+
+- **What the page shows:**
+  - A **Live** overlay on Lineage while `ods state run` or `build` is running.
+  - Each node shows one state: queued, running, built, failed, skipped (upstream failed) or kept (not selected in this run).
+  - Nodes show their elapsed time while running, and their time taken and rows once finished.
+  - The side panel shows progress, counts, what is running now, rows affected so far and an event log.
+- **Follow mode:**
+  - It is on by default. The camera frames every running node at once, moves at most about once a second, and never zooms below about 60%.
+  - If the running nodes can't all fit at that size, the camera keeps one **focus** node until it finishes. It then moves to the running node blocking the most queued work (the nearest one on a tie).
+  - Running nodes outside the view show as **edge chips**. A **minimap** shows the whole run.
+  - Any pan, zoom, Fit or node click turns follow off. **Follow run** turns it back on, and so does `F` in the real page.
+- **Follow scopes:**
+  - The node menu (right-click, the menu key or Shift+F10) and the stats card offer "Follow this node and its downstream", plus upstream or just this node.
+  - Nodes outside the scope fade. A toolbar chip clears the scope.
+  - The scope is kept in the URL.
+- **Node stats:**
+  - Status, start and end time, time taken (compile and execute), rows affected, adapter extras, thread, relation, why it ran, and tests.
+  - A stat that isn't reported shows as `—` with the reason, never as `0`. Run totals say "at least N".
+- **Terminal:** the same per-node lines and summary in `ods state run`.
+
+### Failed node: the error explained (#323)
+
+Board: [`boards/live-run/ErrorExplained.dc.html`](boards/live-run/ErrorExplained.dc.html).
+
+- **What a failed node shows:**
+  - a plain-language headline;
+  - a category;
+  - how sure ODS is: **known pattern + evidence**, **known pattern** or **not recognised**;
+  - **why ODS thinks so**, from its own evidence: what changed, column lineage, the manifest, source versions and run history;
+  - **where** (source file and line);
+  - **what to try**, with copyable commands;
+  - the **impact** on downstream nodes.
+- **dbt's own message** stays one click away, with literal values and SQL removed.
+- **An unrecognised error** never gets a guessed cause. The card shows what ODS knows instead.
+
 ## Dark versions
 
 | Home | Lineage |
@@ -200,3 +238,4 @@ no font files, so it falls back to the system fonts.
 - Usage, CI · Impact, Agent and History pages.
 - Empty and error states for a project with no state store.
 - Narrow screens.
+- Live run: dark mode, the Home "run in progress" banner, and several runs at once.
