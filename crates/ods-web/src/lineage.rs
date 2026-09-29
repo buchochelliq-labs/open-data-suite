@@ -568,11 +568,17 @@ pub(crate) fn lineage_page(
     generation: u64,
 ) -> Result<String, serde_json::Error> {
     // The header says which plan the overlay is, as the design does.
-    let status = overlay.based_on.map(|snapshot| {
-        format!(
-            r#"<span class="pill-snap" title="The overlay is the plan against this snapshot"><span class="dot"></span>plan against snapshot {snapshot}</span>"#
-        )
-    });
+    let status = Some(overlay.based_on.map_or_else(
+        || {
+            r#"<span class="pill-snap lin-status" title="Without recorded state there is no plan to compare with"><span class="dot none"></span>no recorded state</span>"#
+                .to_owned()
+        },
+        |snapshot| {
+            format!(
+                r#"<span class="pill-snap lin-status" title="The overlay is the plan against this snapshot"><span class="dot"></span>plan against snapshot {snapshot}</span>"#
+            )
+        },
+    ));
     let graph = embeddable(document)?;
     let overlay = embeddable(overlay)?;
     let selected = embeddable(&node)?;

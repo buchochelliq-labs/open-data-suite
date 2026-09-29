@@ -592,7 +592,8 @@ Click a node (or tab to it and press Enter) for its side panel:
   components compared (changed and unchanged), what changed (the code text isn't
   recorded: `git diff` shows it), for a reused node that its relation wasn't checked,
   then the decision, its reasons and which of its readers build too; with a link to the
-  decision on the State plan page (`/state/plan?node=<id>`);
+  decision on the State plan page (`/state/plan?node=<id>`) when the plan has one
+  (without a state store there is none, so `why_href` is null);
 - **General** and **Columns:** what the explorer showed before, ↑ upstream and
   ↓ downstream; a column traces it through the graph. At an opaque node the trail
   can't be followed: the panel names where it stops, and every node past it is shown as
