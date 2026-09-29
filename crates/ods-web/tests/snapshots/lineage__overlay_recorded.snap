@@ -1,0 +1,98 @@
+---
+source: crates/ods-web/tests/lineage.rs
+expression: pretty(&body)
+---
+{
+  "based_on": 2,
+  "counts": {
+    "build": 3,
+    "reuse": 1
+  },
+  "error": null,
+  "nodes": {
+    "model.shop.customers": {
+      "changed_components": [
+        "sql"
+      ],
+      "decision": "build",
+      "last_built": {
+        "run": "9ea38bd5",
+        "snapshot": 2,
+        "target": null
+      },
+      "model_href": "catalog/model.shop.customers",
+      "opaque": null,
+      "reasons": [
+        {
+          "code": "code_changed",
+          "label": "code changed",
+          "message": "Code changed since run 9ea38bd5: sql"
+        }
+      ],
+      "summary": "code changed",
+      "why_href": "state/plan?node=model.shop.customers"
+    },
+    "model.shop.orders": {
+      "changed_components": [],
+      "decision": "reuse",
+      "last_built": {
+        "run": "9ea38bd5",
+        "snapshot": 2,
+        "target": null
+      },
+      "model_href": "catalog/model.shop.orders",
+      "opaque": null,
+      "reasons": [
+        {
+          "code": "unchanged",
+          "label": "unchanged",
+          "message": "Code and inputs unchanged since run 9ea38bd5"
+        }
+      ],
+      "summary": "unchanged",
+      "why_href": "state/plan?node=model.shop.orders"
+    },
+    "model.shop.segments": {
+      "changed_components": [],
+      "decision": "build",
+      "last_built": {
+        "run": "9ea38bd5",
+        "snapshot": 2,
+        "target": null
+      },
+      "model_href": "catalog/model.shop.segments",
+      "opaque": "Python model: column lineage unknown",
+      "reasons": [
+        {
+          "code": "upstream_code_changed",
+          "label": "upstream code changed",
+          "message": "Upstream code changed: customers will be rebuilt"
+        }
+      ],
+      "summary": "upstream code changed",
+      "why_href": "state/plan?node=model.shop.segments"
+    },
+    "seed.shop.countries": {
+      "changed_components": [],
+      "decision": "build",
+      "last_built": null,
+      "model_href": "catalog/seed.shop.countries",
+      "opaque": null,
+      "reasons": [
+        {
+          "code": "target_changed",
+          "label": "target changed",
+          "message": "Last built in another target (prod)"
+        }
+      ],
+      "summary": "target changed",
+      "why_href": "state/plan?node=seed.shop.countries"
+    }
+  },
+  "planned_at": "2026-09-29T12:00:00Z",
+  "schema_version": 1,
+  "state": "recorded",
+  "warnings": [
+    "no source freshness results"
+  ]
+}

@@ -18,6 +18,7 @@
 pub mod dashboard;
 mod fonts;
 mod home;
+pub mod lineage;
 mod page;
 mod search;
 mod server;

@@ -1,0 +1,166 @@
+/* The Lineage page (#312, docs/design/dashboard: lineage.png). Inside the dashboard it
+   sits under the shell's header; offline (`ods lineage view`) under a small header of
+   its own. Colours are the design's; dark values from its dark board. */
+:root {
+  --pill-build-bg: #DCE8FB; --pill-build-fg: #1F4FA0;
+  --pill-reuse-bg: #D5F0EC; --pill-reuse-fg: #0B6B60;
+  --pill-unknown-border: #6B7684; --pill-unknown-fg: #4A5462;
+  --kind-seed: #7C9A6A; --kind-model: #6B7B93; --kind-source: #A08450; --kind-snapshot: #8570B0;
+  --edge: #A7B0BD; --edge-indirect: #A98BD0; --edge-down: #D9730D; --grid: #D8DEE6;
+  --diff-del: #C8322F; --diff-add: #1F8A4C;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pill-build-bg: #1B2E52; --pill-build-fg: #9CC0FF;
+    --pill-reuse-bg: #10332F; --pill-reuse-fg: #6FE3CF;
+    --pill-unknown-border: #8C98A6; --pill-unknown-fg: #B4BEC9;
+    --kind-seed: #9BB88A; --kind-model: #8E9DB3; --kind-source: #C9AE7C; --kind-snapshot: #B0A0DA;
+    --edge: #4A5563; --edge-indirect: #B59BE0; --edge-down: #FFA34D; --grid: #2A323D;
+    --diff-del: #F2706B; --diff-add: #4CC38A;
+  }
+}
+
+/* ---- layout: the graph and the side panel fill the page below the header */
+.lin { display: flex; flex-grow: 1; min-height: 0; height: calc(100vh - 56px); }
+.lin-main { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
+.lin-bar { height: 56px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 16px;
+  border-bottom: 1px solid var(--border); background: var(--surface); }
+.lin-muted { color: var(--muted); }
+.lin-find { position: relative; flex: 0 1 240px; min-width: 130px; }
+.lin-sel { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono); font-size: 13px; background: var(--surface); }
+.lin-sel:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(63 81 216 / .2); }
+.lin-sel input { border: none; background: transparent; font: inherit; color: var(--fg); flex-grow: 1; outline: none; min-width: 0; }
+.lin-sel input::-webkit-search-cancel-button { display: none; }
+#lin-results { position: absolute; top: 40px; left: 0; width: 360px; max-height: 340px; overflow: auto; z-index: 5;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px; display: none;
+  box-shadow: 0 6px 20px rgb(0 0 0 / .12); font-size: 13px; }
+#lin-results div { padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
+#lin-results div:hover, #lin-results div.active { background: var(--active-bg); }
+#lin-results .kind { color: var(--muted); font-size: 11px; margin-left: 8px; font-family: var(--sans); }
+.lin-bar select { width: 150px; flex-shrink: 0; height: 36px; border: 1px solid var(--border); border-radius: 6px; padding: 0 8px; font: inherit; background: var(--surface); color: var(--fg); }
+.lin-check { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; }
+.lin-check input { margin: 0; accent-color: var(--accent); }
+.lin-bar button, .lin-foot button, .lin-impact button { height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); font: inherit; color: var(--fg); cursor: pointer; white-space: nowrap; }
+.lin-bar button:hover, .lin-foot button:hover, .lin-impact button:hover { background: var(--line); }
+.lin-bar .lin-fit { margin-left: auto; }
+.lin-bar .lin-primary { border-color: var(--accent); background: var(--accent); color: var(--surface); font-weight: 500; }
+.lin-bar .lin-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+.lin-bar .lin-primary:disabled { opacity: .55; cursor: not-allowed; }
+
+/* The design's Lineage header has no search box: the toolbar's is the page's. */
+header.top:has(~ .lin) .search { display: none; }
+header.top:has(~ .lin) .pill-snap { margin-left: auto; }
+
+/* ---- canvas */
+.lin-canvas { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; min-height: 0;
+  background-color: var(--bg); background-image: radial-gradient(var(--grid) 1px, transparent 1px); background-size: 20px 20px; }
+.lin-canvas.dragging { cursor: grabbing; }
+.lin-canvas svg { width: 100%; height: 100%; display: block; }
+.lin-legend { position: absolute; left: 16px; bottom: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; max-width: calc(100% - 32px); cursor: default; }
+.lin-legend > span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.lin-legend .stripe { width: 4px; height: 14px; }
+.lin-legend .line { width: 22px; height: 0; border-top: 2px solid var(--edge); }
+.lin-legend .line.indirect { border-top: 2px dashed var(--edge-indirect); }
+.lin-legend .line.up { border-top-color: var(--build); }
+.lin-legend .line.down { border-top-color: var(--edge-down); }
+.lin-legend .box { width: 14px; height: 10px; border: 1.5px dashed var(--muted); border-radius: 2px; }
+.lin-legend .plan { color: var(--muted); }
+.lin-corner { position: absolute; right: 16px; top: 10px; display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--muted); }
+.lin-corner .lin-check { color: var(--fg); }
+
+/* Decision pills, in the graph's legend and the side panel. */
+.pill { font-size: 12px; font-weight: 600; padding: 0 8px; border-radius: 8px; line-height: 18px; white-space: nowrap; text-transform: uppercase; }
+.pill.build, .pill.never_built { background: var(--pill-build-bg); color: var(--pill-build-fg); }
+.pill.never_built { background: transparent; box-shadow: inset 0 0 0 1px var(--pill-build-fg); }
+.pill.reuse { background: var(--pill-reuse-bg); color: var(--pill-reuse-fg); }
+.pill.unknown { border: 1px dashed var(--pill-unknown-border); color: var(--pill-unknown-fg); line-height: 16px; }
+.pill.plain { font-weight: 400; text-transform: none; border: 1px solid var(--border); color: var(--heading-muted); line-height: 16px; border-radius: 999px; }
+.pill.plain.dashed { border-style: dashed; }
+.lp-pills .pill { border-radius: 999px; padding: 2px 8px; line-height: normal; }
+.lp-pills .pill.decision { text-transform: none; }
+
+/* ---- graph (SVG) */
+.node .nbox { fill: var(--surface); stroke: var(--border); stroke-width: 1; }
+.node.opaque .nbox { stroke-dasharray: 5 3; stroke: var(--muted); }
+.node.sel .nbox { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: none; }
+.node.builds .nbox { stroke: var(--build); stroke-width: 1.5; }
+.node.sel.builds .nbox { stroke: var(--accent); stroke-width: 2.5; }
+.node .stripe.seed { fill: var(--kind-seed); } .node .stripe.model { fill: var(--kind-model); }
+.node .stripe.source { fill: var(--kind-source); } .node .stripe.snapshot { fill: var(--kind-snapshot); }
+.node text { fill: var(--fg); }
+.node .name { font-family: var(--mono); font-size: 12px; }
+.node .kindtag { font-family: var(--sans); font-size: 10px; fill: var(--muted); }
+.node .pill-bg.build { fill: var(--pill-build-bg); }
+.node .pill-bg.never_built { fill: none; stroke: var(--pill-build-fg); stroke-width: 1; }
+.node .pill-bg.reuse { fill: var(--pill-reuse-bg); }
+.node .pill-bg.unknown { fill: none; stroke: var(--pill-unknown-border); stroke-dasharray: 3 2; }
+.node .pill-text { font-family: var(--sans); font-size: 10px; font-weight: 600; }
+.node .pill-text.build, .node .pill-text.never_built { fill: var(--pill-build-fg); }
+.node .pill-text.reuse { fill: var(--pill-reuse-fg); }
+.node .pill-text.unknown { fill: var(--pill-unknown-fg); }
+.node .hit { fill: transparent; cursor: pointer; }
+.node .row rect { fill: transparent; }
+.node .row text { font-family: var(--mono); font-size: 11.5px; cursor: pointer; }
+.node .row:hover rect { fill: var(--line); }
+.node .rule { stroke: var(--line); }
+.row.up rect { fill: color-mix(in srgb, var(--build) 20%, transparent) !important; }
+.row.down rect { fill: color-mix(in srgb, var(--edge-down) 20%, transparent) !important; }
+.row.sel rect { fill: color-mix(in srgb, var(--accent) 26%, transparent) !important; }
+.edge { fill: none; stroke: var(--edge); stroke-width: 1.5; }
+.edge.indirect { stroke: var(--edge-indirect); stroke-dasharray: 4 3; stroke-width: 1.2; }
+.edge.path, .edge.up { stroke: var(--build); stroke-width: 2; }
+.edge.down { stroke: var(--edge-down); stroke-width: 2; stroke-dasharray: none; }
+.dimmed { opacity: .2; }
+
+/* ---- side panel */
+.lin-panel { width: 360px; flex-shrink: 0; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.lp-head { padding: 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.lp-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lp-title .nm { font-family: var(--mono); font-weight: 500; font-size: 16px; overflow-wrap: anywhere; min-width: 0; }
+.lp-title svg { flex-shrink: 0; }
+.lp-title a { margin-left: auto; font-size: 13px; flex-shrink: 0; }
+.lp-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.lp-tabs { display: flex; gap: 4px; padding: 0 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.lp-tabs button { height: 40px; padding: 0 10px; border: none; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: var(--muted); cursor: pointer; }
+.lp-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--fg); font-weight: 500; }
+.lp-body { flex-grow: 1; overflow: auto; padding: 16px; font-size: 13px; line-height: 1.45; min-height: 0; }
+.lp-body ol.why { margin: 0; padding: 0 0 0 24px; display: flex; flex-direction: column; gap: 14px; }
+.lp-body ol.why strong { font-weight: 600; }
+.lp-body .sub { color: var(--muted); overflow-wrap: anywhere; }
+.lp-body h3 { font-size: 12px; font-weight: 500; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.lp-body h3:first-child { margin-top: 0; }
+.lp-body ul { margin: 0; padding-left: 18px; }
+.lp-body li { margin: 2px 0; overflow-wrap: anywhere; }
+.lp-body .link { color: var(--accent); cursor: pointer; font-family: var(--mono); background: none; border: none; padding: 0; font-size: inherit; text-align: left; }
+.lp-body .link:hover { color: var(--accent-strong); text-decoration: underline; }
+.lp-body .note { color: var(--muted); }
+.lp-body .warn { color: var(--warn); }
+.lp-body p { margin: 0 0 10px; }
+.lp-body .more { margin-top: 16px; }
+.lp-body .counts { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.lp-body .counts > span { display: flex; align-items: center; gap: 8px; }
+.lp-body code { font-size: 12px; }
+.lin-impact { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
+.lin-impact button { height: 32px; padding: 0 12px; }
+.lin-foot { margin-top: auto; padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.lin-foot .done { color: var(--muted); font-size: 12px; }
+
+/* ---- offline page (`ods lineage view`): no shell, a small header instead */
+.lin-top { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 24px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.lin-brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px; letter-spacing: .02em; }
+.lin-brand svg { stroke: var(--accent); }
+.lin-note { margin-left: auto; font-size: 12px; color: var(--muted); border: 1px dashed var(--dashed); border-radius: 999px; padding: 4px 10px; }
+body.lin-offline { overflow: hidden; }
+
+@media (max-width: 1100px) {
+  .lin-panel { width: 300px; }
+}
+@media (max-width: 760px) {
+  .lin { flex-direction: column; height: auto; }
+  .lin-main { height: 70vh; }
+  .lin-panel { width: auto; border-left: none; border-top: 1px solid var(--border); }
+  .lin-bar { overflow-x: auto; }
+}

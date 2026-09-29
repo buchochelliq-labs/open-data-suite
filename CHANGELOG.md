@@ -48,6 +48,18 @@ the changelog was introduced.
 - The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
   served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
   `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
+- The dashboard's Lineage page (#312): `ods serve` shows the lineage explorer at
+  `/lineage` inside the dashboard's shell, restyled to the design, with a *State
+  overlay* that colours each node by what the next run does with it: build, reuse,
+  never built, or unknown (the evidence to reuse it is missing, so it builds). The
+  decisions are `ods state plan`'s, made again on every request; without a state store
+  every node shows as never built. Opaque nodes, such as Python models, are drawn
+  dashed. A side panel gives the selected node's decision and reason chain, the
+  readers that build with it, and links to its Model page (`/catalog/<id>`) and to its
+  decision on the State plan page (`/state/plan?node=<id>`); its other tabs keep the
+  explorer's details, columns and impact. `/lineage?node=<id>` selects a node. The
+  overlay can be switched off. A new JSON route, `/api/lineage/overlay`, returns the
+  overlay at `schema_version` 1; beyond loopback it omits error text (ADR-0009).
 - `ods doctor` checks that ODS can work in the current project: configuration (files,
   profile, every effective value and where it came from, credentials only as
   references and connection strings without their user, query or options), the dbt
@@ -146,6 +158,10 @@ the changelog was introduced.
   node that couldn't be ordered (#281).
 - The lineage explorer lays out graphs with dagre, which shortens edges and reduces
   crossings (#282).
+- The offline explorer (`ods lineage view`, and `--site`) has the dashboard's look:
+  nodes coloured by kind, the same toolbar, legend and side panel. It still works
+  offline from one file, with the graph only: the State overlay and impact need
+  `ods serve` (#312).
 
 ### Fixed
 - `ods config explain` no longer shows a one-element array such as `["env:X"]` as the
@@ -167,3 +183,7 @@ the changelog was introduced.
   database connection was still open after the store closed (#279).
 - A lag tolerance longer than the last representable date is now reported as
   "never due", not as a date in the year 9999 (#283).
+- The lineage graph (`ods lineage graph --format json`, `/api/graph`, the explorer)
+  now links a node to every parent it declares, not only to those its SQL reads, so a
+  Python model is no longer drawn apart from what it reads. Impact already counted
+  those parents (#312).

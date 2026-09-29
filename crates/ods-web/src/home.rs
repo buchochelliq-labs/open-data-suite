@@ -89,7 +89,7 @@ fn nav_item(out: &mut String, section: &NavSection) {
 }
 
 /// The whole page: the shell around `body`, titled `title`.
-fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
+pub(crate) fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String {
     let mut out = String::with_capacity(32 * 1024);
     let target = match &shell.target.kind {
         Some(kind) => format!("{} · {}", shell.target.name, kind),

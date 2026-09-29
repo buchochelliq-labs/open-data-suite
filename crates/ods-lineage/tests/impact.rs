@@ -498,3 +498,35 @@ fn review_moved_and_duplicated_columns_are_changes() {
         [Change::Rows { relation: rel("m") }]
     );
 }
+
+#[test]
+fn node_edges_are_the_dag_even_where_the_sql_says_nothing() {
+    // A Python model (no SQL) still reads its declared parents: the exported graph links
+    // them, as impact does (#312).
+    let (project, analyzer) = project_and_analyzer();
+    let mut nodes = project.nodes.clone();
+    nodes.push(
+        LineageNode::new("segments", rel("segments"), NodeKind::Model)
+            .with_depends_on(["customers"]),
+    );
+    let project = LineageProject::new(nodes);
+    let (graph, _) = build(
+        &project,
+        &opaque_reads_orders(analyzer),
+        &MemoryCache::default(),
+    )
+    .unwrap();
+    let document = graph.document(&|id| id.to_owned(), &ods_lineage::GraphFilter::default());
+    let edge = |from: &str, to: &str| {
+        document
+            .node_edges
+            .iter()
+            .any(|e| e.from == from && e.to == to)
+    };
+    assert!(edge("customers", "segments"), "{:?}", document.node_edges);
+    assert!(edge("orders", "legacy_report"));
+    assert!(edge("stg_orders", "orders"));
+    let segments = document.nodes.iter().find(|n| n.id == "segments").unwrap();
+    assert!(segments.opaque);
+    assert_eq!(segments.layer, 3, "laid out after its parent");
+}

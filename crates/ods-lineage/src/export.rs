@@ -125,17 +125,23 @@ impl ColumnGraph {
         let mut column_edges = BTreeSet::new();
         let mut node_edges = BTreeSet::new();
         for node in self.nodes() {
-            let Some(lineage) = &node.lineage else {
-                continue;
-            };
-            for relation in &lineage.relations_read {
-                if let Some(upstream) = self.node_for(relation) {
+            // Node edges are the DAG's: what the SQL reads and what the node declares.
+            // A node whose SQL can't be analyzed (a Python model) or that has none still
+            // reads its declared parents, as impact already assumes.
+            let sql_reads = node.lineage.iter().flat_map(|l| &l.relations_read);
+            for relation in sql_reads.chain(&node.depends_on) {
+                if let Some(upstream) = self.node_for(relation)
+                    && upstream.id != node.id
+                {
                     node_edges.insert(NodeEdge {
                         from: upstream.id.clone(),
                         to: node.id.clone(),
                     });
                 }
             }
+            let Some(lineage) = &node.lineage else {
+                continue;
+            };
             let endpoint = |column: &ColumnRef| {
                 self.node_for(&column.relation).map(|n| Endpoint {
                     node: n.id.clone(),
