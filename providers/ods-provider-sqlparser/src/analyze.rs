@@ -246,7 +246,7 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
     let statements = match dialect.parse(sql) {
         Ok(statements) => statements,
         Err(error) => {
-            return QueryLineage::opaque(BTreeSet::new(), format!("SQL did not parse: {error}"));
+            return QueryLineage::opaque(BTreeSet::new(), did_not_parse(&error.to_string()));
         }
     };
     let query = match statements.as_slice() {
@@ -381,9 +381,9 @@ impl Analyzer<'_> {
                         } else {
                             row_parts.push(order.to_string());
                             out.diagnostics.push(format!(
-                                "ORDER BY `{}` over a set operation or subquery was not resolved; \
-                                 the sort is recorded by text only",
-                                order.expr
+                                "an ORDER BY {} over a set operation or subquery was not \
+                                 resolved; the sort is recorded by text only",
+                                kind_of(&order.expr)
                             ));
                         }
                     }
@@ -492,7 +492,7 @@ impl Analyzer<'_> {
             }
             other => Err(Opaque(format!(
                 "unsupported query body: {}",
-                first_words(&other.to_string())
+                kind_of(other)
             ))),
         }
     }
@@ -952,7 +952,7 @@ impl Analyzer<'_> {
             }
             other => Err(Opaque(format!(
                 "unsupported FROM source: {}",
-                first_words(&other.to_string())
+                kind_of(other)
             ))),
         }
     }
@@ -1306,15 +1306,14 @@ impl Analyzer<'_> {
             match e {
                 Expr::Identifier(ident) => references.push(vec![ident.clone()]),
                 Expr::CompoundIdentifier(parts) => references.push(parts.clone()),
-                Expr::Subquery(_)
-                | Expr::Exists { .. }
-                | Expr::InSubquery { .. }
-                | Expr::Lambda(_)
-                | Expr::Case { .. } => {
-                    unsupported = Some(first_words(&e.to_string()));
-                }
+                // Named, never quoted: the expression can hold compiled-in values.
+                Expr::Subquery(_) => unsupported = Some("a subquery"),
+                Expr::Exists { .. } => unsupported = Some("EXISTS"),
+                Expr::InSubquery { .. } => unsupported = Some("IN (subquery)"),
+                Expr::Lambda(_) => unsupported = Some("a lambda"),
+                Expr::Case { .. } => unsupported = Some("CASE"),
                 Expr::Function(f) if f.over.is_some() => {
-                    unsupported = Some(first_words(&e.to_string()));
+                    unsupported = Some("a window function");
                 }
                 _ => {}
             }
@@ -1322,8 +1321,8 @@ impl Analyzer<'_> {
         });
         if let Some(what) = unsupported {
             return Err(Opaque(format!(
-                "`{what}` inside `{}` is not supported",
-                first_words(&expr.to_string())
+                "{what} inside {} is not supported",
+                kind_of(expr)
             )));
         }
         for parts in references {
@@ -1616,10 +1615,7 @@ fn join_parts(operator: &JoinOperator) -> Result<(&'static str, Option<&JoinCons
         JoinOperator::Anti(c) | JoinOperator::LeftAnti(c) => ("anti", Some(c)),
         JoinOperator::RightAnti(c) => ("right anti", Some(c)),
         other => {
-            return Err(Opaque(format!(
-                "unsupported join: {}",
-                first_words(&format!("{other:?}"))
-            )));
+            return Err(Opaque(format!("unsupported join: {}", kind_of(other))));
         }
     })
 }
@@ -1675,12 +1671,36 @@ fn table_as_query(relation: &RelationName, columns: &[String]) -> QueryOut {
     }
 }
 
-fn first_words(text: &str) -> String {
-    const MAX: usize = 60;
-    let line = text.lines().next().unwrap_or_default();
-    if line.chars().count() > MAX {
-        format!("{}…", line.chars().take(MAX).collect::<String>())
+/// What kind of SQL construct `value` is (its syntax-tree variant, e.g. `Values` or
+/// `TableFunction`), never its text. Diagnostics are shown by `ods serve` and written
+/// into exported pages, and the SQL analyzed is compiled: it can hold values resolved
+/// from `env_var()`, `var()` or macros, credentials included. So a diagnostic names
+/// the construct, and identifiers already in the graph, and never quotes the SQL
+/// (the `SqlLineageAnalyzer` contract: diagnostics never contain data values).
+fn kind_of(value: &impl std::fmt::Debug) -> String {
+    let debug = format!("{value:?}");
+    let name: String = debug
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        "an expression".to_owned()
     } else {
-        line.to_owned()
+        format!("a `{name}`")
+    }
+}
+
+/// A parse error without the text it quotes (the token it found can be a literal
+/// resolved at compile time): only where it happened, when the parser says.
+fn did_not_parse(error: &str) -> String {
+    match error.find("Line: ") {
+        Some(at) => {
+            let position: String = error[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | ',' | ' '))
+                .collect();
+            format!("SQL did not parse (at {})", position.trim().to_lowercase())
+        }
+        None => "SQL did not parse".to_owned(),
     }
 }

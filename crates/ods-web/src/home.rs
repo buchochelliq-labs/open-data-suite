@@ -144,6 +144,9 @@ pub(crate) struct Frame<'a> {
     pub(crate) status: Option<String>,
     /// The current page of the current section, e.g. `runs`, if it has pages.
     pub(crate) sub: Option<&'a str>,
+    /// Whether the header has the search box. A page with its own search (the
+    /// Catalog, #313) leaves it out, so there aren't two that behave differently.
+    pub(crate) search: bool,
     /// The page's own stylesheet and script, after the shell's.
     pub(crate) css: &'a str,
     /// See `css`.
@@ -157,6 +160,7 @@ fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String 
         crumbs: None,
         root: "",
         sub: None,
+        search: true,
         status: None,
         css: "",
         js: "",
@@ -241,7 +245,7 @@ pub(crate) fn framed(shell: &ShellView, frame: &Frame<'_>, body: &str, generatio
 <main>
 <header class="top">
 {crumbs}
-<label class="search" title="Opens the lineage explorer's search; selectors such as +orders are planned">{SEARCH}<input id="search" aria-label="Search models and columns" placeholder="Search models and columns" autocomplete="off"><kbd>/</kbd></label>
+{search}
 {snapshot}
 </header>
 {body}
@@ -252,6 +256,14 @@ pub(crate) fn framed(shell: &ShellView, frame: &Frame<'_>, body: &str, generatio
 </html>
 "#,
         page_js = frame.js,
+        search = if frame.search {
+            format!(
+                r#"<label class="search" title="Opens the lineage explorer's search; selectors such as +orders are planned">{SEARCH}<input id="search" aria-label="Search models and columns" placeholder="Search models and columns" autocomplete="off"><kbd>/</kbd></label>"#
+            )
+        } else {
+            // Keeps the header's right side on the right.
+            r#"<span class="top-gap"></span>"#.to_owned()
+        },
     );
     out
 }

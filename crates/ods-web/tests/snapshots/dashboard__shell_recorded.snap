@@ -16,11 +16,28 @@ expression: pretty(&body)
       "status": "current"
     },
     {
-      "href": null,
+      "href": "catalog",
+      "items": [
+        {
+          "href": "catalog",
+          "key": "models",
+          "label": "Models"
+        },
+        {
+          "href": null,
+          "key": "freshness",
+          "label": "Freshness evidence"
+        },
+        {
+          "href": null,
+          "key": "semantic",
+          "label": "Semantic layer"
+        }
+      ],
       "key": "catalog",
       "label": "Catalog",
       "note": null,
-      "status": "planned"
+      "status": "available"
     },
     {
       "href": "lineage",

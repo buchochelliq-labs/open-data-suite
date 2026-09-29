@@ -401,7 +401,11 @@ fn the_plan_api_and_page_show_every_decision_with_its_reasons() {
     assert!(page.contains("url('../assets/fonts/"));
     assert!(page.contains(r#"<meta name="ods-root" content="../">"#));
     assert!(page.contains(r#"href="../lineage?node=model%2Ecustomers""#));
-    assert!(!page.contains("catalog/"), "no Model pages yet (#313)");
+    // The Why panel links to the node's Model page (#313), from one level down.
+    assert!(
+        page.contains(r#" · <a href="../catalog/model%2Ecustomers">Model page</a>"#),
+        "{page}"
+    );
     assert!(!page.contains("https://"), "no CDN");
 }
 
@@ -690,6 +694,10 @@ fn a_failed_last_run_is_tied_to_the_snapshot_that_records_its_run_id() {
     assert!(page.contains(r#"aria-label="Show run 4c0b5c8f in the side panel, failed (from the last run's record)""#), "{page}");
     let (status, page) = get(addr, &format!("/state/runs/{RUN_3}"));
     assert_eq!(status, 200);
+    assert!(
+        page.contains(r#"href="../../catalog/model%2E"#),
+        "a run's nodes link to their Model pages, from two levels down (#313): {page}"
+    );
     assert!(
         page.contains("The last run&#x27;s record says some nodes failed")
             || page.contains("The last run's record says some nodes failed"),

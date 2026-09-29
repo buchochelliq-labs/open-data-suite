@@ -27,9 +27,9 @@ use crate::server::Shared;
 const CSS: &str = include_str!("../assets/state.css");
 const JS: &str = include_str!("../assets/state.js");
 
-/// Whether node names link to their Model page (`catalog/<id>`). Off until the Catalog
-/// pages exist (#313), which turn it on here, in one place.
-const CATALOG_PAGES: bool = false;
+/// Whether node names link to their Model page (`catalog/<id>`): on since the Catalog
+/// pages exist (#313); kept as one switch for pages that may lack them.
+const CATALOG_PAGES: bool = true;
 
 /// The State pages' routes, prefixed by `at` (the base path).
 pub(crate) fn routes(app: Router<Shared>, at: &dyn Fn(&str) -> String) -> Router<Shared> {
@@ -89,7 +89,7 @@ struct RunQuery {
 }
 
 /// Runs `page` on a blocking thread: building a page may plan, which reads files.
-async fn blocking(page: impl FnOnce() -> Response + Send + 'static) -> Response {
+pub(crate) async fn blocking(page: impl FnOnce() -> Response + Send + 'static) -> Response {
     tokio::task::spawn_blocking(page)
         .await
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
@@ -351,7 +351,7 @@ fn empty_card(b: &mut String, state: StateStatus, empty: &EmptyState) {
 }
 
 /// The breadcrumb: every part but the last links, if it has an href.
-fn crumbs(parts: &[(&str, Option<&str>)], mono_last: bool) -> String {
+pub(crate) fn crumbs(parts: &[(&str, Option<&str>)], mono_last: bool) -> String {
     let mut out = String::new();
     for (i, (label, href)) in parts.iter().enumerate() {
         if i > 0 {
@@ -444,6 +444,7 @@ fn plan_html(shell: &ShellView, view: &PlanView, json: bool, generation: u64) ->
         crumbs: Some(crumbs(&[("State", Some("plan")), (&title, None)], false)),
         root: "../",
         sub: Some("plan"),
+        search: true,
         status: Some(status),
         css: CSS,
         js: JS,
@@ -1134,6 +1135,7 @@ fn runs_frame(shell: &ShellView, view: &RunsView, body: &str, generation: u64) -
         crumbs: Some(crumbs(&[("State", Some("plan")), ("Runs", None)], false)),
         root: "../",
         sub: Some("runs"),
+        search: true,
         status: Some(status),
         css: CSS,
         js: JS,
@@ -1459,6 +1461,7 @@ fn last_run_panels(b: &mut String, last: &LastRunView, snapshot: Option<u64>, ro
 
 // ---------------------------------------------------------------------------- run
 
+#[allow(clippy::too_many_lines, reason = "one page, built top to bottom")]
 fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: u64) -> String {
     let run = &view.run;
     let mut b = String::with_capacity(32 * 1024);
@@ -1556,6 +1559,7 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
         )),
         root: "../../",
         sub: Some("runs"),
+        search: true,
         status: Some(status),
         css: CSS,
         js: JS,
@@ -1794,6 +1798,7 @@ fn missing_run_html(shell: &ShellView, run: &str, generation: u64) -> String {
         )),
         root: "../../",
         sub: Some("runs"),
+        search: true,
         status: None,
         css: CSS,
         js: JS,

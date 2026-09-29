@@ -52,6 +52,8 @@ pub struct Dashboard {
     pub opaque: Vec<OpaqueNode>,
     /// Which modules are set up.
     pub modules: Vec<ModuleStatus>,
+    /// The project's nodes, for the Catalog and the model pages (#313).
+    pub catalog: crate::catalog::CatalogInput,
 }
 
 impl Dashboard {
@@ -70,6 +72,7 @@ impl Dashboard {
             },
             opaque: Vec::new(),
             modules: Vec::new(),
+            catalog: crate::catalog::CatalogInput::default(),
         }
     }
 
@@ -112,6 +115,13 @@ impl Dashboard {
     #[must_use]
     pub fn with_modules(mut self, modules: Vec<ModuleStatus>) -> Self {
         self.modules = modules;
+        self
+    }
+
+    /// Sets the project's nodes, for the Catalog (#313).
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: crate::catalog::CatalogInput) -> Self {
+        self.catalog = catalog;
         self
     }
 }
@@ -520,15 +530,26 @@ type SectionPages = (
 );
 
 /// Each section's pages.
-const SECTION_ITEMS: [SectionPages; 1] = [(
-    "state",
-    &[
-        ("plan", "Plan", Some("state/plan")),
-        ("runs", "Runs", Some("state/runs")),
-        ("history", "History", None),
-        ("policies", "Policies", None),
-    ],
-)];
+const SECTION_ITEMS: [SectionPages; 2] = [
+    (
+        "catalog",
+        &[
+            ("models", "Models", Some("catalog")),
+            // Sources and freshness evidence, and the semantic layer (#309).
+            ("freshness", "Freshness evidence", None),
+            ("semantic", "Semantic layer", None),
+        ],
+    ),
+    (
+        "state",
+        &[
+            ("plan", "Plan", Some("state/plan")),
+            ("runs", "Runs", Some("state/runs")),
+            ("history", "History", None),
+            ("policies", "Policies", None),
+        ],
+    ),
+];
 
 /// A section of the design: key, label, href when built, and a note.
 type Section = (
@@ -542,7 +563,7 @@ type Section = (
 /// of the navigation.
 const SECTIONS: [Section; 9] = [
     ("home", "Home", Some("./"), None),
-    ("catalog", "Catalog", None, None),
+    ("catalog", "Catalog", Some("catalog"), None),
     ("lineage", "Lineage", Some("lineage"), None),
     ("state", "State", Some("state/plan"), None),
     (
@@ -745,7 +766,7 @@ pub struct ReasonCount {
 
 /// `upstream_code_changed` → `upstream code changed`: the planner's stable code, as
 /// words, so new codes read without a table to keep in step.
-fn reason_label(code: ReasonCode) -> String {
+pub(crate) fn reason_label(code: ReasonCode) -> String {
     serde_json::to_value(code)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
@@ -809,12 +830,12 @@ pub struct CoverageRow {
 // ----------------------------------------------------------------------- building
 
 /// `4c0b5c8f-…` → `4c0b5c8f`.
-fn short(run_id: &str) -> String {
+pub(crate) fn short(run_id: &str) -> String {
     run_id.chars().take(8).collect()
 }
 
 /// `code changed` → `Code changed`.
-fn sentence(text: &str) -> String {
+pub(crate) fn sentence(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
