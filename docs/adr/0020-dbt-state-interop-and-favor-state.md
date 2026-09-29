@@ -124,8 +124,9 @@ Rewrite `prod/manifest.json` so built nodes point at this target.
 Write a new state directory that points each node at the right place, and explain
 every choice.
 - Pros: dbt is unchanged, and so is the upstream artifact. The choice uses what ODS
-  already records. It is explainable and conservative per node. A plain `dbt retry`
-  works.
+  already records. It is explainable and conservative per node. dbt reads it with
+  `--defer-state <dir>` on `dbt retry` and later deferred runs; a retry without that
+  flag still defers to the original run's state and reads prod.
 - Cons: one more command in the workflow, and a second copy of the manifest to keep in
   step. The directory is only as current as the last export.
 
