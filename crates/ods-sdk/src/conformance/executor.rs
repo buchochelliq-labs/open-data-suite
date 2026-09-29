@@ -4,9 +4,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use ods_core::Capability;
+
 use super::Report;
 use crate::contracts::executor::{
-    ExecutionMode, ExecutionRequest, ExecutionStatus, Executor, PrepareRequest, RequestedNode,
+    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, PrepareRequest,
+    RequestedNode,
+};
+use crate::contracts::run_events::{
+    CollectedEvents, NodeRunStatus, RunEvent, RunEventKind, RunOutcome,
 };
 
 /// What the suite needs from an executor under test.
@@ -314,6 +320,222 @@ async fn a_failing_source_check_skips_its_readers(
     assert_built(harness, case, &[]).await;
 }
 
+/// The scope the event cases pass; every event must carry it.
+const SCOPE: &str = "conformance/suite";
+
+/// Runs `request` through [`Executor::execute_with_events`] and checks the rules every
+/// event stream follows (ADR-0024), whether the executor reports events live or not.
+async fn events_of(
+    case: &str,
+    executor: &dyn Executor,
+    request: &ExecutionRequest,
+) -> (ExecutionReport, Vec<RunEvent>) {
+    let sink = CollectedEvents::new();
+    let report = executor
+        .execute_with_events(request, &sink)
+        .await
+        .unwrap_or_else(|e| panic!("{case}: {e}"));
+    let events = sink.events();
+    check_events(case, executor, request, &report, &events);
+    (report, events)
+}
+
+fn check_events(
+    case: &str,
+    executor: &dyn Executor,
+    request: &ExecutionRequest,
+    report: &ExecutionReport,
+    events: &[RunEvent],
+) {
+    let live = executor
+        .info()
+        .capabilities
+        .contains(&Capability::RunEvents);
+
+    // Framed by one start and one finish, all about this run and scope, in time order.
+    assert!(
+        matches!(
+            events.first().map(|e| &e.kind),
+            Some(RunEventKind::RunStarted { .. })
+        ),
+        "{case}: the first event starts the run: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last().map(|e| &e.kind),
+            Some(RunEventKind::RunFinished { .. })
+        ),
+        "{case}: the last event finishes the run: {events:?}"
+    );
+    let count = |kind: fn(&RunEventKind) -> bool| events.iter().filter(|e| kind(&e.kind)).count();
+    assert_eq!(
+        (
+            count(|k| matches!(k, RunEventKind::RunStarted { .. })),
+            count(|k| matches!(k, RunEventKind::RunFinished { .. }))
+        ),
+        (1, 1),
+        "{case}: one start and one finish: {events:?}"
+    );
+    for event in events {
+        assert_eq!(event.run_id, report.run_id, "{case}: run id of {event:?}");
+        assert_eq!(
+            event.scope.as_deref(),
+            Some(SCOPE),
+            "{case}: scope of {event:?}"
+        );
+    }
+    assert!(
+        events.windows(2).all(|w| w[0].at <= w[1].at),
+        "{case}: times never go backwards: {events:?}"
+    );
+    if let RunEventKind::RunStarted {
+        nodes,
+        mode,
+        live: said,
+    } = &events[0].kind
+    {
+        let requested: Vec<String> = request.nodes.iter().map(|n| n.id.clone()).collect();
+        assert_eq!(nodes, &requested, "{case}: run_started lists the request");
+        assert_eq!(*mode, request.mode, "{case}: mode");
+        assert_eq!(
+            *said, live,
+            "{case}: live only with the run_events capability"
+        );
+    }
+
+    check_node_events(case, report, events);
+    let outcome = match &events[events.len() - 1].kind {
+        RunEventKind::RunFinished { outcome } => *outcome,
+        _ => unreachable!("checked above"),
+    };
+    if report.succeeded {
+        assert_eq!(outcome, RunOutcome::Succeeded, "{case}: outcome");
+    } else {
+        assert_ne!(outcome, RunOutcome::Succeeded, "{case}: outcome");
+    }
+}
+
+fn check_node_events(case: &str, report: &ExecutionReport, events: &[RunEvent]) {
+    // Every requested node finishes exactly once, as the report says; node events come
+    // in order (queued, started, finished) and only for nodes the run touched.
+    for node in &report.nodes {
+        let of: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.node() == Some(node.node.as_str()))
+            .collect();
+        let finished: Vec<_> = of
+            .iter()
+            .filter_map(|e| match &e.kind {
+                RunEventKind::NodeFinished { stats, .. } => Some(stats),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished.len(),
+            1,
+            "{case}: {} finishes once: {of:?}",
+            node.node
+        );
+        let stats = finished[0];
+        assert_eq!(
+            stats.status,
+            NodeRunStatus::from(node.status),
+            "{case}: {} finishes as the report says",
+            node.node
+        );
+        assert!(
+            matches!(
+                of.last().map(|e| &e.kind),
+                Some(RunEventKind::NodeFinished { .. })
+            ),
+            "{case}: nothing about {} after it finished: {of:?}",
+            node.node
+        );
+        let position = |kind: fn(&RunEventKind) -> bool| of.iter().position(|e| kind(&e.kind));
+        let queued = position(|k| matches!(k, RunEventKind::NodeQueued { .. }));
+        let started = position(|k| matches!(k, RunEventKind::NodeStarted { .. }));
+        if let (Some(q), Some(s)) = (queued, started) {
+            assert!(q < s, "{case}: {} queued before it started", node.node);
+        }
+        if stats.status == NodeRunStatus::Success {
+            assert!(
+                stats.error.is_none(),
+                "{case}: a success has no error: {stats:?}"
+            );
+        }
+        if let (Some(start), Some(end)) = (stats.started_at, stats.finished_at) {
+            assert!(start <= end, "{case}: {} ends after it starts", node.node);
+        }
+        if let Some(error) = &stats.error {
+            assert!(
+                !error.message.contains(['\'', '"', '`']),
+                "{case}: error summaries quote nothing: {error:?}"
+            );
+        }
+    }
+    for event in events {
+        if let Some(node) = event.node() {
+            assert!(
+                report.nodes.iter().any(|n| n.node == node)
+                    || report.unrequested.iter().any(|n| n == node),
+                "{case}: {node} is neither requested nor reported unrequested"
+            );
+        }
+    }
+}
+
+/// Events frame the run and every requested node finishes once, as the report says
+/// (#322).
+async fn events_follow_the_run(harness: &dyn ExecutorHarness) {
+    let case = "events_follow_the_run";
+    let executor = harness.executor().await;
+    let nodes = harness.buildable();
+    let request = ExecutionRequest::new(nodes.clone(), ExecutionMode::Build).with_scope(SCOPE);
+    let (report, _) = events_of(case, executor.as_ref(), &request).await;
+    assert!(report.succeeded, "{case}: {report:?}");
+    assert_built(harness, case, &ids(&nodes)).await;
+}
+
+/// A failed node finishes as an error in the events, and so does the run (#322).
+async fn failed_nodes_finish_as_errors(harness: &dyn ExecutorHarness, failing: RequestedNode) {
+    let case = "failed_nodes_finish_as_errors";
+    let executor = harness.executor().await;
+    let mut nodes = vec![failing.clone()];
+    nodes.push(harness.buildable()[0].clone());
+    let request = ExecutionRequest::new(nodes, ExecutionMode::Run).with_scope(SCOPE);
+    let (report, events) = events_of(case, executor.as_ref(), &request).await;
+    assert!(!report.succeeded, "{case}: {report:?}");
+    let failed = events
+        .iter()
+        .find_map(|e| match &e.kind {
+            RunEventKind::NodeFinished { node, stats } if *node == failing.id => Some(stats),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{case}: {} never finished", failing.id));
+    assert_eq!(failed.status, NodeRunStatus::Error, "{case}: {failed:?}");
+}
+
+/// A node the engine doesn't know never finishes as a success in the events (#322).
+async fn unknown_nodes_never_finish_as_success(harness: &dyn ExecutorHarness) {
+    let case = "unknown_nodes_never_finish_as_success";
+    let executor = harness.executor().await;
+    let unknown = RequestedNode::new("model.suite.no_such_node", "no_such_node");
+    let request = ExecutionRequest::new(vec![unknown], ExecutionMode::Run).with_scope(SCOPE);
+    let sink = CollectedEvents::new();
+    let Ok(report) = executor.execute_with_events(&request, &sink).await else {
+        return;
+    };
+    let events = sink.events();
+    check_events(case, executor.as_ref(), &request, &report, &events);
+    assert!(
+        events.iter().all(|e| !matches!(
+            &e.kind,
+            RunEventKind::NodeFinished { stats, .. } if stats.status == NodeRunStatus::Success
+        )),
+        "{case}: {events:?}"
+    );
+}
+
 /// Runs every case. Panics with the case name on the first failure.
 pub async fn run(harness: &dyn ExecutorHarness) -> Report {
     let mut report = Report::default();
@@ -375,5 +597,19 @@ pub async fn run(harness: &dyn ExecutorHarness) -> Report {
             "the harness can't arrange a source whose check fails".to_owned(),
         )),
     }
+    events_follow_the_run(harness).await;
+    report.passed.push("events_follow_the_run");
+    match harness.failing() {
+        Some(failing) => {
+            failed_nodes_finish_as_errors(harness, failing).await;
+            report.passed.push("failed_nodes_finish_as_errors");
+        }
+        None => report.skipped.push((
+            "failed_nodes_finish_as_errors",
+            "the harness can't arrange a failing node".to_owned(),
+        )),
+    }
+    unknown_nodes_never_finish_as_success(harness).await;
+    report.passed.push("unknown_nodes_never_finish_as_success");
     report
 }

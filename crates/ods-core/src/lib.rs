@@ -10,6 +10,7 @@ pub mod diagnostic;
 pub mod freshness;
 pub mod graph;
 pub mod lineage;
+pub mod redact;
 pub mod state;
 pub mod strategy;
 

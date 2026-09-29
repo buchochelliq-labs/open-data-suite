@@ -106,4 +106,5 @@ nav:
       - adr/0021-databricks-authentication.md
       - adr/0022-delta-table-versions-as-source-evidence.md
       - adr/0023-ods-doctor-diagnostics.md
+      - adr/0024-run-events-node-stats-and-run-journal.md
   - Legal and trademarks: legal.md

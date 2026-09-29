@@ -195,6 +195,13 @@ is what the caller needs to see which nodes failed.
   does (checked against dbt 1.10 with DuckDB in the real-dbt tests). ADR-0013 says
   when ODS asks for them.
 
+### Run events (#322), contract 0.4
+`Executor::execute_with_events` reports a run's progress and per-node stats to a sink
+as it goes; executors with the `run_events` capability report them live, and the
+default rebuilds them from the report. `ExecutionRequest::scope` names the state scope
+the events carry. Three conformance cases cover the events (14 in all). See
+[ADR-0024](0024-run-events-node-stats-and-run-journal.md).
+
 ## Consequences
 - Positive: `ods state run` is the M1 flow end to end. The flow is tested without dbt
   (fake executor, fake dbt script) and against real dbt with DuckDB (`ODS_TEST_DBT`).

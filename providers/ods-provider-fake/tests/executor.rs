@@ -10,6 +10,8 @@ use ods_sdk::contracts::executor::{Executor, RequestedNode};
 #[derive(Default)]
 struct Harness {
     last: Mutex<Option<FakeExecutor>>,
+    /// Without the `run_events` capability: events rebuilt from the report.
+    without_run_events: bool,
 }
 
 #[async_trait]
@@ -29,6 +31,11 @@ impl ExecutorHarness for Harness {
                 ["model.suite.b"],
             )
             .failing_source("source.suite.raw.bad");
+        let executor = if self.without_run_events {
+            executor.without_run_events()
+        } else {
+            executor
+        };
         *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Some(executor.clone());
         Arc::new(executor)
     }
@@ -75,5 +82,18 @@ impl ExecutorHarness for Harness {
 async fn conforms() {
     let report = run(&Harness::default()).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 11, "{report:?}");
+    assert_eq!(report.passed.len(), 14, "{report:?}");
+}
+
+/// Without `run_events`, the events rebuilt from the report follow the same rules
+/// (#322).
+#[tokio::test]
+async fn conforms_without_run_events() {
+    let report = run(&Harness {
+        without_run_events: true,
+        ..Harness::default()
+    })
+    .await;
+    assert!(report.skipped.is_empty(), "{report:?}");
+    assert_eq!(report.passed.len(), 14, "{report:?}");
 }

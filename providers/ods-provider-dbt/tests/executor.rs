@@ -116,7 +116,7 @@ impl ExecutorHarness for Harness {
 async fn conforms() {
     let report = run(&Harness::default()).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 11, "{report:?}");
+    assert_eq!(report.passed.len(), 14, "{report:?}");
 }
 
 /// A source's tests are selected exactly, by `fqn:` and type, alongside the nodes, in

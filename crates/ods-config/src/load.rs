@@ -634,25 +634,9 @@ fn validate(history: &History, live: &BTreeSet<Vec<String>>) -> Result<Config, C
 
 /// Replaces quoted string literals in a deserializer message with `<value>`, so a
 /// schema error never echoes a configured value (`invalid type: string "…"`).
+/// Backticks name fields, not values, so they stay.
 fn redact_literals(message: &str) -> String {
-    let mut out = String::with_capacity(message.len());
-    let mut in_literal = false;
-    let mut escaped = false;
-    for c in message.chars() {
-        if in_literal {
-            match (escaped, c) {
-                (false, '\\') => escaped = true,
-                (false, '"') => in_literal = false,
-                _ => escaped = false,
-            }
-        } else if c == '"' {
-            in_literal = true;
-            out.push_str("<value>");
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    ods_core::redact::quoted(message, &['"'], "<value>")
 }
 
 /// The layer that set `key`: the effective setting of `key`, or of the nearest ancestor

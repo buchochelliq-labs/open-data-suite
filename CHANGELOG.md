@@ -18,6 +18,11 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- The executor contract is now version 0.4: `Executor::execute_with_events` reports a
+  run's events, and `ExecutionRequest` carries the state `scope` they are for. The
+  method has a default, so an executor only changes to report events live.
+  Out-of-process executor plugins must be rebuilt against the current SDK, whose
+  `EXECUTOR` contract is 0.4 (#322, ADR-0024).
 - The executor contract is now version 0.3: an `ExecutionRequest` carries the sources
   whose tests to run, and an `ExecutionReport` returns their outcomes. Out-of-process
   executor plugins must be rebuilt against the current SDK, whose `EXECUTOR` contract
@@ -27,6 +32,16 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- Run events and per-node run stats in the SDK (#322, ADR-0024): an executor reports
+  `run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished` and
+  `run_finished` as a run goes, each with the run id, scope and a millisecond
+  timestamp. A finished node carries its status, start and end, time taken (compile and
+  execute when timed), rows affected, the engine's other reported values, thread, test
+  counts and, when it failed, a one-line error summary with quoted values, numbers and
+  SQL removed. A stat that isn't reported is missing, never zero. Executors with the new
+  `run_events` capability report events live; for others they are rebuilt from the
+  final report, without timing or rows. The fake executor simulates a run on parallel
+  workers, and the executor conformance suite checks the events (14 cases).
 - `ods serve` hosts the first slice of the ODS Dashboard (#310): the shell (navigation
   with every section of the design, planned ones greyed; project and target; search;
   the current snapshot; a *Local · read-only* badge) and Home. Home shows the planned
