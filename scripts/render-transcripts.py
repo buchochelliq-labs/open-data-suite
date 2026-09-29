@@ -11,6 +11,9 @@ the NAMEs given, becomes `OUT_DIR/state-databricks-NAME.png`.
 Needs Node.js with Playwright (`npm install -g playwright`, then
 `npx playwright install chromium`), which screenshots exactly the terminal element.
 
+Databricks workspace hostnames are replaced with `<workspace>`: they identify the
+workspace and add nothing to the docs.
+
 The ANSI handling is a few lines for the SGR codes rs-rich emits (bold, dim,
 underline, the 16 colours). The converters on PyPI are LGPL or pull in more than this
 needs.
@@ -29,6 +32,9 @@ from pathlib import Path
 # GitHub prefixes each log line with an ISO timestamp.
 TIMESTAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
 SGR = re.compile(r"\x1b\[([\d;]*)m")
+WORKSPACE_HOST = re.compile(
+    r"[\w-]+(?=\.(?:cloud\.databricks\.com|azuredatabricks\.net|gcp\.databricks\.com)\b)"
+)
 PALETTE = {
     30: "#45475a", 31: "#f38ba8", 32: "#a6e3a1", 33: "#f9e2af",
     34: "#89b4fa", 35: "#f5c2e7", 36: "#94e2d5", 37: "#bac2de",
@@ -49,7 +55,7 @@ def transcripts(log: str) -> dict[str, list[str]]:
         elif line.startswith("ods-transcript-end "):
             current = None
         elif current is not None:
-            found[current].append(line)
+            found[current].append(WORKSPACE_HOST.sub("<workspace>", line))
     return found
 
 

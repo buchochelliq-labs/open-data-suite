@@ -68,6 +68,7 @@ nav:
   - Getting started: getting-started.md
   - Install: install.md
   - Column-level lineage: lineage.md
+  - State on Databricks: databricks.md
   - More capabilities: capabilities.md
   - CLI reference: cli.md
   - Principles: principles.md
