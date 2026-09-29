@@ -99,10 +99,38 @@ fn without_a_state_store_every_node_shows_as_never_built() {
     let nodes = overlay["nodes"].as_object().unwrap();
     assert_eq!(nodes.len(), 13, "every model and seed: {overlay}");
     assert!(nodes.values().all(|n| n["decision"] == "never_built"));
+    // No plan, so no decision to explain on the State plan page.
+    assert!(nodes.values().all(|n| n["why_href"].is_null()));
     let (status, page) = get(&server, "lineage");
     assert_eq!(status, 200);
     assert!(page.contains(r#"aria-current="page" data-section="lineage""#));
     assert_eq!(request(&server, "POST", "api/lineage/overlay").0, 405);
+    follow_links(&server, &overlay);
+}
+
+/// Every node's Model and Why links, as the side panel gives them, resolve through the
+/// server to a page about that node (#313's `/catalog/<id>`, #311's
+/// `/state/plan?node=`).
+fn follow_links(server: &Server, overlay: &Value) {
+    let nodes = overlay["nodes"].as_object().unwrap();
+    assert!(!nodes.is_empty());
+    for (id, node) in nodes {
+        let name = id.rsplit('.').next().unwrap();
+        for link in ["model_href", "why_href"] {
+            // No plan entry, nothing to explain: no Why link.
+            let Some(href) = node[link].as_str() else {
+                assert_eq!(link, "why_href", "{id}: every node has a Model page");
+                assert!(overlay["based_on"].is_null(), "{id}: planned, but no Why");
+                continue;
+            };
+            let (status, page) = get(server, href);
+            assert_eq!(status, 200, "{id}: {link} {href}");
+            assert!(
+                page.contains(name),
+                "{id}: {link} {href} is about another node"
+            );
+        }
+    }
 }
 
 /// `ods state build` with the fake dbt (a Python script, so Unix only), then a change
@@ -180,6 +208,7 @@ fn the_overlay_is_the_plan_against_the_recorded_state() {
         graph["node_edges"]
     );
 
+    follow_links(&server, &overlay);
     // The deep link selects the node.
     let (status, page) = get(&server, "lineage?node=model.jaffle_ods.customers");
     assert_eq!(status, 200);
@@ -287,4 +316,79 @@ fn a_plan_that_cant_be_made_shows_every_node_as_unknown() {
         "{overlay}"
     );
     assert_eq!(get(&server, "lineage").0, 200);
+}
+
+/// Compiled SQL can hold values resolved from `env_var()`, `var()` or macros,
+/// credentials included. None of it reaches the lineage graph, the Lineage page, its
+/// overlay, Home or the offline export: not even where the analyzer gives up on it.
+#[test]
+fn a_secret_in_compiled_sql_never_reaches_the_lineage_outputs() {
+    const SECRET: &str = "sk_live_ods_TEST_SECRET_42";
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let fixture = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    std::fs::copy(fixture.join("catalog.json"), target.join("catalog.json")).unwrap();
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("manifest.json")).unwrap()).unwrap();
+    // One model the analyzer can't read (it quotes what it can't read), one it can.
+    manifest["nodes"]["model.jaffle_ods.order_events"]["compiled_code"] =
+        Value::String(format!("select * from table(generator('{SECRET}'))"));
+    manifest["nodes"]["model.jaffle_ods.orders"]["compiled_code"] = Value::String(format!(
+        "select id from orders where status = '{SECRET}' '{SECRET}'"
+    ));
+    std::fs::write(
+        target.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let server = serve(&target, None, &[]);
+    for path in [
+        "api/graph",
+        "api/node?id=model.jaffle_ods.order_events",
+        "api/node?id=model.jaffle_ods.orders",
+        "api/lineage/overlay",
+        "lineage",
+        "lineage?node=model.jaffle_ods.order_events",
+        "",
+        "api/home",
+    ] {
+        let (status, body) = get(&server, path);
+        assert_eq!(status, 200, "{path}");
+        assert!(!body.contains(SECRET), "{path} shows the compiled SQL");
+    }
+    let (_, graph) = get(&server, "api/graph");
+    assert!(
+        graph.contains("did not parse") || graph.contains("unsupported"),
+        "the analyzer still says why"
+    );
+
+    for args in [
+        vec!["lineage", "view", "--output-file"],
+        vec!["lineage", "graph", "--format", "json", "--output-file"],
+    ] {
+        let out_file = scratch.path().join("out");
+        let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+            .args(&args)
+            .arg(&out_file)
+            .arg("--target-dir")
+            .arg(&target)
+            .current_dir(scratch.path())
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let written = std::fs::read_to_string(&out_file).unwrap();
+        assert!(
+            !written.contains(SECRET),
+            "{args:?} writes the compiled SQL"
+        );
+        assert!(!String::from_utf8_lossy(&out.stdout).contains(SECRET));
+        assert!(!String::from_utf8_lossy(&out.stderr).contains(SECRET));
+    }
 }

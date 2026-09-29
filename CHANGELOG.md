@@ -205,6 +205,12 @@ the changelog was introduced.
   `ods serve` (#312).
 
 ### Fixed
+- Lineage diagnostics no longer quote the SQL they couldn't analyze. The SQL is dbt's
+  compiled code, which can hold values resolved from `env_var()`, `var()` or macros,
+  credentials included, and the diagnostics reach `ods lineage` output, the offline
+  explorer (`ods lineage view`), and `ods serve`'s `/api/graph`, `/api/node`, Lineage
+  page and Home. A diagnostic now names the construct (e.g. "unsupported FROM source:
+  a `TableFunction`") and, for SQL that doesn't parse, only where it failed (#312).
 - `ods config explain` no longer shows a one-element array such as `["env:X"]` as the
   secret reference `secret(env:X)`. Only the table form `{ secret = "<scheme>:<name>" }`
   is a secret reference, as ADR-0005 says; any other value, in configuration or
