@@ -30,7 +30,8 @@ use percent_encoding::percent_decode_str;
 /// Marks the row as ODS's answer, not something else dbt printed.
 const MARKER: &str = "ods_relation_probe";
 
-/// The query, with `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill in. `execute` is
+/// The query, with `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill in. Relation
+/// quoting is left to the adapter: `rel|string` renders the name by its own rules. `execute` is
 /// false while dbt parses it, when there is no connection to ask.
 const TEMPLATE: &str = "\
 {%- set out = {} -%}{%- set ns = namespace(probed=0) -%}\

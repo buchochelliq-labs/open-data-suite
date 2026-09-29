@@ -479,9 +479,11 @@ pub(super) fn plan_against(
         );
     }
     let mut warnings = Vec::new();
-    if ws.project.sources.iter().any(|s| s.version.is_none())
-        && ws.sources_file.is_none()
-        && ws.readings.is_empty()
+    // Table versions may have been read, but if none was usable either, every reader
+    // still builds.
+    if ws.sources_file.is_none()
+        && !ws.project.sources.is_empty()
+        && ws.project.sources.iter().all(|s| s.version.is_none())
     {
         warnings.push(
             "no source freshness results: every node reading a source is built. Run `dbt source freshness` before planning."
@@ -574,7 +576,8 @@ impl PlanReport {
         };
         // Offline, as the relation check is (ADR-0016): it runs no dbt command.
         if super::state_versions::reads_table_versions(&ws) {
-            notes.push("sources' table versions weren't read: `ods state plan` doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
+            // `ods state explain` plans through here, so it says the same.
+            notes.push("sources' table versions weren't read: this command doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
         }
         let (plan, mut warnings) =
             plan_against(&ws, latest.as_ref(), &select_specs(args), now, options)?;

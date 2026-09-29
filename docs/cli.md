@@ -489,15 +489,18 @@ can't be read (a view, a table that isn't Delta, one dbt's adapter doesn't confi
 Delta, e.g. in `hive_metastore`, or an answer without an id or version) falls back to
 `max_loaded_at`. If the `dbt show` query fails (a permission error, a table that refuses
 `DESCRIBE HISTORY`), every source's table version is unknown and a warning names dbt's
-error. Each plan entry says where its sources' versions came from: evidence
-`source_version_strategy` (`relation_versions`, `source_freshness` or `no_version`) and,
-for each preferred one that wasn't used, `source_version_skipped` with the reason.
+error (the evidence only says the probe failed). Each plan entry says where its
+sources' versions came from: evidence `source_version_strategy` (`relation_versions`,
+`source_freshness` or `no_version`), `source_version_origin` (the version's own
+origin, e.g. `delta_history` or `sources.json max_loaded_at`) and, for each preferred
+strategy that could have applied but wasn't used, `source_version_skipped` with the
+reason.
 
 Versions from different origins never compare equal, so the first run after table
 versions become available (or stop being) builds the readers of those sources once.
 Any commit moves a Delta version, including `OPTIMIZE` and `VACUUM`, so maintenance
-also rebuilds readers. `ods state plan` doesn't run dbt, so it reads no table versions,
-and says so; `ods state build --dry-run` does. Other adapters read none yet.
+also rebuilds readers. `ods state plan` and `ods state explain` don't run dbt, so they
+read no table versions, and say so; `ods state build --dry-run` does. Other adapters read none yet.
 
 ### Source tests
 

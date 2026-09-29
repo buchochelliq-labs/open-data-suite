@@ -3002,6 +3002,16 @@ fn delta_table_versions_decide_reuse_on_databricks() {
             source_evidence(&same, model, "source_version_strategy", source).as_deref(),
             Some("relation_versions")
         );
+        assert_eq!(
+            source_evidence(&same, model, "source_version_origin", source).as_deref(),
+            Some("delta_history")
+        );
+        // Freshness wasn't measured, so it could have applied: it says why not.
+        assert_eq!(
+            source_evidence(&same, model, "source_version_skipped", source),
+            None,
+            "the chosen strategy comes first; nothing before it was skipped"
+        );
     }
 
     // A commit to raw.orders: its readers build, raw.payments' don't.
@@ -3031,14 +3041,19 @@ fn delta_table_versions_decide_reuse_on_databricks() {
     let (code, plan) = project.ods(&["state", "plan"]);
     assert_eq!(code, 0, "{plan:#}");
     assert_eq!(probes(&project), seen);
-    assert!(
-        plan["result"]["warnings"]
+    let says_so = |json: &Value| {
+        json["result"]["warnings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("table versions weren't read")),
-        "{plan:#}"
-    );
+            .any(|w| w.as_str().unwrap().contains("table versions weren't read"))
+    };
+    assert!(says_so(&plan), "{plan:#}");
+    // `ods state explain` plans the same way, and says the same.
+    let (code, explained) = project.ods(&["state", "explain", "stg_orders"]);
+    assert_eq!(code, 0, "{explained:#}");
+    assert!(says_so(&explained), "{explained:#}");
+    assert_eq!(probes(&project), seen);
 
     // The step line says what the dbt call is for.
     let dbt = fixture("fake-dbt/dbt");
@@ -3068,15 +3083,29 @@ fn a_failed_table_version_probe_builds_every_reader_and_warns() {
             ("raw.payments", "delta", "t-payments", "8"),
         ],
     );
-    project.run_ok(&[]);
+    // No `dbt source freshness`, so no sources.json: table versions are all there is.
+    project.run_ok(&["--no-source-freshness"]);
     next_second();
     let project = project.with("FAKE_DBT_PROBE_FAIL", "1");
-    let failed = project.run_ok(&[]);
-    for model in ["stg_orders", "stg_payments"] {
+    let failed = project.run_ok(&["--no-source-freshness"]);
+    for (model, source) in [("stg_orders", ORDERS), ("stg_payments", PAYMENTS)] {
         let entry = entry(&failed, model);
         assert_eq!(entry["action"], "build", "{failed:#}");
         assert_eq!(entry["reasons"][0]["code"], "missing_data_evidence");
+        // dbt's error is in the warning, not in each source's evidence.
+        assert_eq!(
+            source_evidence(&failed, model, "source_version_skipped", source).as_deref(),
+            Some("relation_versions: the table-version probe failed; see the warning")
+        );
     }
+    // Nothing had a usable version, and there is no sources.json: the usual warning.
+    assert!(
+        failed["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("no source freshness results")),
+        "{failed:#}"
+    );
     // Models reading no source are still reused.
     assert_eq!(entry(&failed, "stg_customers")["action"], "reuse");
     let warnings = failed["warnings"].as_array().unwrap();

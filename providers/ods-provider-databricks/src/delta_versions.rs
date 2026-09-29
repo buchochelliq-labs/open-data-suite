@@ -11,6 +11,8 @@
 //! - anything missing, empty or not Delta makes the source unknown, never a partial
 //!   version (AGENTS.md rule 3).
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
@@ -121,21 +123,25 @@ impl<P: RelationProbe> ChangeProvider for DeltaVersions<P> {
     async fn versions(&self, sources: &[RequestedSource]) -> Result<VersionReport, ProviderError> {
         let request =
             request().map_err(|e| ProviderError::Other(format!("the Delta version probe: {e}")))?;
-        let mut report = self.probe.probe(&request, sources).await?;
+        let report = self.probe.probe(&request, sources).await?;
+        let mut answers: BTreeMap<String, Option<ProbeAnswer>> = BTreeMap::new();
+        for (id, answer) in report.sources {
+            // A source answered twice: trust neither answer, as the CLI does.
+            answers
+                .entry(id)
+                .and_modify(|seen| *seen = None)
+                .or_insert(Some(answer));
+        }
         // One answer per requested source, in order, whatever the probe returned.
         Ok(VersionReport::new(
             sources
                 .iter()
                 .map(|s| {
-                    let answer = report
-                        .sources
-                        .iter()
-                        .position(|(id, _)| *id == s.id)
-                        .map(|i| report.sources.remove(i).1);
-                    let version = answer.map_or_else(
-                        || SourceVersion::Unknown("the probe didn't report on it".to_owned()),
-                        version,
-                    );
+                    let version = match answers.get(&s.id) {
+                        Some(Some(answer)) => version(answer.clone()),
+                        Some(None) => SourceVersion::Unknown("the probe answered twice".to_owned()),
+                        None => SourceVersion::Unknown("the probe didn't report on it".to_owned()),
+                    };
                     (s.id.clone(), version)
                 })
                 .collect(),
@@ -205,5 +211,45 @@ mod tests {
         assert_eq!(request.filter().relation_kinds(), ["table"]);
         assert_eq!(request.filter().format(), Some("delta"));
         assert_eq!(request.statements().len(), 2);
+    }
+
+    struct Twice;
+
+    impl Provider for Twice {
+        fn info(&self) -> ProviderInfo {
+            ProviderInfo::new("stub", "stub", "0", CapabilitySet::new())
+        }
+    }
+
+    #[async_trait]
+    impl RelationProbe for Twice {
+        async fn probe(
+            &self,
+            _: &ProbeRequest,
+            sources: &[RequestedSource],
+        ) -> Result<ods_sdk::contracts::probe::ProbeReport, ProviderError> {
+            let good = rows(&[("id", "a"), ("format", "delta")], &[("version", "1")]);
+            Ok(ods_sdk::contracts::probe::ProbeReport::new(
+                sources
+                    .iter()
+                    .flat_map(|s| [(s.id.clone(), good.clone()), (s.id.clone(), good.clone())])
+                    .collect(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_source_answered_twice_is_unknown() {
+        let report = DeltaVersions::new(Twice)
+            .versions(&[RequestedSource::new("a", "a")])
+            .await
+            .unwrap();
+        assert_eq!(
+            report.sources,
+            [(
+                "a".to_owned(),
+                SourceVersion::Unknown("the probe answered twice".to_owned())
+            )]
+        );
     }
 }

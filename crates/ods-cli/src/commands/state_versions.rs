@@ -96,7 +96,8 @@ pub(super) fn versions<C: ChangeProvider + ?Sized>(
             warnings.push(format!(
                 "couldn't read the sources' table versions, so they are unknown and the nodes reading them are built, unless source freshness vouches for them: {e}"
             ));
-            let why = format!("the table version probe failed: {e}");
+            // dbt's error goes in the warning only: evidence stays short and fixed.
+            let why = "the table-version probe failed; see the warning".to_owned();
             answers.extend(
                 sources
                     .iter()
@@ -159,12 +160,10 @@ mod tests {
         let reading = versions(&provider, &sources(&["a", "b"]), &mut warnings).unwrap();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("table versions"), "{warnings:?}");
-        assert!(
-            reading
-                .answers
-                .values()
-                .all(|a| matches!(a, VersionAnswer::Unknown(_)))
-        );
+        assert!(warnings[0].contains("can't be reached"), "{warnings:?}");
+        let fixed =
+            VersionAnswer::Unknown("the table-version probe failed; see the warning".to_owned());
+        assert!(reading.answers.values().all(|a| *a == fixed), "{reading:?}");
         assert_eq!(reading.answers.len(), 2);
     }
 

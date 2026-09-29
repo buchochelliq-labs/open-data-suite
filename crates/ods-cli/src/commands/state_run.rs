@@ -1669,10 +1669,11 @@ impl RunReport {
 
         // 2. Plan, with the sources' table versions where the warehouse has them.
         let mut ws = Workspace::load(args, settings, sources)?;
+        let tested = execution_tested(kind, args);
+        // The store first: a problem with it stops the run before the warehouse is asked.
+        let (store, latest) = open_state(&ws, dry_run)?;
         let table_versions =
             super::state_versions::read_table_versions(&mut ws, &executor, &mut warnings)?;
-        let tested = execution_tested(kind, args);
-        let (store, latest) = open_state(&ws, dry_run)?;
         let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
         // One clock for the check and the plan, so they agree on what is due.
         let now = Timestamp::now();
@@ -2245,6 +2246,89 @@ mod tests {
             relation_facts(&Blind, &requested(&["a"]), CheckFor::Reuse, &mut warnings).unwrap();
         assert_eq!(facts, None);
         assert!(warnings[0].contains("reuse trusts"), "{warnings:?}");
+    }
+
+    mod versions_read_before {
+        use ods_core::state::{DataVersion, Exactness, Timestamp};
+        use ods_core::{Capability, CapabilitySet};
+        use ods_state::{Project, Source, VersionAnswer, VersionReading};
+
+        use super::super::keep_versions_read_before;
+
+        const ID: &str = "source.p.raw.orders";
+
+        fn reading(capability: Capability, at: i64, value: &str, origin: &str) -> VersionReading {
+            VersionReading::new(
+                CapabilitySet::from([capability]),
+                Some(Timestamp::from_unix(at)),
+                [(
+                    ID.to_owned(),
+                    VersionAnswer::Version(DataVersion::new(value, Exactness::Exact, origin)),
+                )]
+                .into(),
+            )
+        }
+
+        fn project(readings: &[VersionReading]) -> Project {
+            let mut sources = vec![Source::new(ID, "raw.orders", None)];
+            ods_state::choose_source_versions(&mut sources, readings);
+            Project::new(Vec::new(), sources)
+        }
+
+        fn table(at: i64) -> VersionReading {
+            reading(Capability::RelationVersions, at, "t/1", "delta_history")
+        }
+
+        #[test]
+        fn only_versions_read_strictly_before_the_start_are_kept() {
+            // Read the second before: kept.
+            let mut before = project(&[table(99)]);
+            assert!(keep_versions_read_before(
+                &mut before,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert!(before.sources[0].version.is_some());
+            // The same second as the start: timestamps are to the second, so it may
+            // have been read after the run started. Dropped.
+            let mut same = project(&[table(100)]);
+            assert!(!keep_versions_read_before(
+                &mut same,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert_eq!(same.sources[0].version, None);
+            assert_eq!(same.sources[0].observed_at, None);
+            // After the start: dropped.
+            let mut after = project(&[table(101)]);
+            assert!(!keep_versions_read_before(
+                &mut after,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert_eq!(after.sources[0].version, None);
+            // No start time: nothing can be shown to predate the run.
+            let mut unknown = project(&[table(99)]);
+            assert!(!keep_versions_read_before(&mut unknown, None));
+            assert_eq!(unknown.sources[0].version, None);
+        }
+
+        #[test]
+        fn a_late_table_version_is_dropped_without_falling_back_to_max_loaded_at() {
+            // The planner chose the table version, read too late; `max_loaded_at` was
+            // read in time. The version the plan used is the one recorded or none: it
+            // isn't swapped for another that the plan didn't rest on. So nothing is
+            // recorded, and the readers build once more next run (conservative).
+            let freshness = reading(
+                Capability::SourceFreshness,
+                50,
+                "2026-01-01T00:00:00Z",
+                "max_loaded_at",
+            );
+            let mut late = project(&[freshness, table(100)]);
+            assert!(!keep_versions_read_before(
+                &mut late,
+                Some(Timestamp::from_unix(100))
+            ));
+            assert_eq!(late.sources[0].version, None);
+        }
     }
 
     #[test]
