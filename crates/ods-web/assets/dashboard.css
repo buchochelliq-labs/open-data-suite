@@ -59,13 +59,13 @@ nav.side { width: 224px; flex-shrink: 0; background: var(--surface); border-righ
   color: var(--muted); background: var(--planned-bg); text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.5; }
 /* Tighter in the 224px navigation, so "CI · Impact" fits beside it. */
 .sections .chip, .bottom .chip { padding: 2px 6px; letter-spacing: 0.02em; }
-/* Sub-pages of the section shown, e.g. Catalog's Models. */
-.sub { display: flex; flex-direction: column; gap: 2px; padding-left: 30px; font-size: 13px; }
-.sections .sub .planned { gap: 5px; font-size: 12px; }
-.sections .sub a, .sections .sub .planned { height: 30px; padding: 0; }
-.sections .sub a:hover { background: none; color: var(--accent-strong); }
-.sections .sub a[aria-current="page"] { background: none; color: var(--accent-strong); font-weight: 500; }
-.sections .sub .chip { font-size: 10px; padding: 0 5px; letter-spacing: 0; text-transform: none; font-weight: 500; }
+/* A section's pages, under it while it is current (#311). */
+.subnav { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
+.sections .subnav a, .sections .subnav .planned { height: 32px; padding: 0 10px 0 38px; font-size: 13px; }
+.sections .subnav a[aria-current="page"] { color: var(--accent-strong); font-weight: 500; background: none; }
+/* A planned page's chip: small and not uppercase, so "Freshness evidence" fits (#313). */
+.sections .subnav .planned { gap: 5px; font-size: 12px; }
+.sections .subnav .chip { font-size: 10px; padding: 0 5px; letter-spacing: 0; text-transform: none; font-weight: 500; }
 .bottom { margin-top: auto; border-top: 1px solid var(--border); padding-top: 12px; }
 .badge-local { font-size: 12px; color: var(--muted); padding: 4px 10px; }
 

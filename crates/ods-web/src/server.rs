@@ -1,9 +1,10 @@
 //! `ods serve`: the explorer over HTTP, with a read-only JSON API and live reload.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, SystemTime};
 
 use axum::Router;
@@ -17,7 +18,7 @@ use ods_lineage::export::GraphNode;
 use ods_lineage::{Change, ColumnChangeKind, ColumnGraph, GraphDocument};
 use serde::{Deserialize, Serialize};
 
-use crate::dashboard::{Dashboard, HomeView, ShellView};
+use crate::dashboard::{Dashboard, ShellView};
 use crate::search::search;
 
 mod catalog_routes;
@@ -35,6 +36,9 @@ pub struct Snapshot {
     /// The project, its state and plan, for the dashboard. Without one, Home says
     /// nothing is known about the project's state.
     pub dashboard: Option<Dashboard>,
+    /// Node ids to names from the graph, built on first use and kept until the next
+    /// reload.
+    names: OnceLock<Arc<BTreeMap<String, String>>>,
 }
 
 impl Snapshot {
@@ -45,6 +49,7 @@ impl Snapshot {
             graph,
             source: source.into(),
             dashboard: None,
+            names: OnceLock::new(),
         }
     }
 
@@ -55,9 +60,22 @@ impl Snapshot {
         self
     }
 
+    /// Node ids to names, from the graph (it names sources too).
+    pub(crate) fn names(&self) -> Arc<BTreeMap<String, String>> {
+        Arc::clone(self.names.get_or_init(|| {
+            Arc::new(
+                self.document
+                    .nodes
+                    .iter()
+                    .map(|n| (n.id.clone(), n.name.clone()))
+                    .collect(),
+            )
+        }))
+    }
+
     /// The dashboard's facts, or, without any, a project named after nothing with no
     /// state store.
-    fn dashboard(&self) -> Dashboard {
+    pub(crate) fn dashboard(&self) -> Dashboard {
         self.dashboard
             .clone()
             .unwrap_or_else(|| Dashboard::new("project", "default"))
@@ -182,17 +200,17 @@ pub enum WebError {
     },
 }
 
-struct AppState {
+pub(crate) struct AppState {
     snapshot: RwLock<Arc<Snapshot>>,
-    generation: AtomicU64,
+    pub(crate) generation: AtomicU64,
     last_error: Mutex<Option<String>>,
     /// Whether `/api/version` may show local paths and error text. Only on loopback:
     /// beyond it, those go to the server log.
-    details: bool,
+    pub(crate) details: bool,
 }
 
 impl AppState {
-    fn current(&self) -> Arc<Snapshot> {
+    pub(crate) fn current(&self) -> Arc<Snapshot> {
         self.snapshot
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -200,7 +218,7 @@ impl AppState {
     }
 }
 
-type Shared = Arc<AppState>;
+pub(crate) type Shared = Arc<AppState>;
 
 /// The router, for embedding or tests. `snapshot` is served until replaced by reloads.
 /// `options` supply the base path and `Host` policy.
@@ -246,6 +264,8 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         })
         .route(&at("/api/catalog"), get(catalog_routes::api))
         .route(&at("/api/catalog/{id}"), get(catalog_routes::model_api));
+    // State pages (#311): the plan and its Why panel, the runs, one run.
+    app = crate::state_pages::routes(app, &at);
     if !base_path.is_empty() {
         let target = at("/");
         app = app.route(
@@ -319,23 +339,33 @@ async fn security_headers(mut response: Response) -> Response {
     response
 }
 
-/// Home: the dashboard's first page.
-async fn home(State(state): State<Shared>) -> Html<String> {
-    let generation = state.generation.load(Ordering::SeqCst);
-    let dashboard = state.current().dashboard();
-    Html(crate::home::home_page(
-        &dashboard.shell("home"),
-        &dashboard.home(state.details),
-        generation,
-    ))
+/// Home: the dashboard's first page. Built on a blocking thread, as it may plan.
+async fn home(State(state): State<Shared>) -> Response {
+    tokio::task::spawn_blocking(move || {
+        let generation = state.generation.load(Ordering::SeqCst);
+        let dashboard = state.current().dashboard();
+        Html(crate::home::home_page(
+            &dashboard.shell("home"),
+            &dashboard.home(state.details),
+            generation,
+        ))
+        .into_response()
+    })
+    .await
+    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 async fn shell(State(state): State<Shared>) -> Json<ShellView> {
     Json(state.current().dashboard().shell("home"))
 }
 
-async fn home_api(State(state): State<Shared>) -> Json<HomeView> {
-    Json(state.current().dashboard().home(state.details))
+async fn home_api(State(state): State<Shared>) -> Response {
+    tokio::task::spawn_blocking(move || Json(state.current().dashboard().home(state.details)))
+        .await
+        .map_or_else(
+            |_| StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            IntoResponse::into_response,
+        )
 }
 
 /// The dashboard's vendored fonts; nothing else is served from disk or memory by name.

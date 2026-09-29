@@ -90,6 +90,54 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
 - **Escaping:** server-rendered text and attributes go through the `html-escape` crate
   (MIT).
 
+*Amended 2026-09-29 (#311, the State pages):* the dashboard gains Plan (with its Why
+panel), Runs and one Run under `<base>/state/`.
+- **Pages below the root:** the shell takes the path back to the root (`../`, `../../`)
+  and prefixes every navigation link, font URL and the script's API calls with it (a
+  `<meta name="ods-root">`), so pages under `state/` work under any base path. The
+  CSP's `base-uri 'none'` rules out a `<base>` element. This one rule serves every page
+  below the root: `state/…` (#311) and `catalog/<id>` (#313). A section may list its
+  pages (`NavSection::items`), shown under it while it is current: State lists Plan and
+  Runs, and History and Policies as planned; Catalog lists Models, and Freshness
+  evidence and Semantic layer as planned (#309). A page with its own search (the
+  Catalog) leaves the header's out (`Frame::search`).
+- **Data:** `Recorded` gains an optional `History`: up to 51 committed snapshots
+  (`StateSnapshot`, newest first; one more than the 50 listed, so the oldest can say
+  what it replaced) and the `LastRun` kept beside the store for `ods state retry`
+  (its redacted command, start time, failed and skipped nodes, scope, run id, and the
+  retry commands). The binary fills both, read-only; `ods-web` stays free of providers
+  and of the store. `ods-web` now depends on `ods-state` (a module, which ADR-0001
+  allows an EDGE crate) for `explain` and `diff_states`, so the Why panel's chain is
+  `ods state explain`'s by construction, and a run's builds are explained as
+  `ods state history <node>` does. `WhyView.explanation` is the `explanation` of
+  `ods state explain --output json`: it tracks that JSON's schema (the `ods_state::
+  Explanation` type), and changes when it does. The watcher also watches
+  `<state-db>.last-run.json`.
+- **The last-run file, version 1.2 (persisted format, additive):** it now also keeps
+  the `scope` the run was for and its `run_id` (the id its snapshot records), written
+  once the run has built. Files at 1.0 and 1.1 still read, without them. The file is
+  kept per state database, which several targets may share, so the pages show the last
+  run only when its scope is the page's; a file without a scope is shown apart, as
+  possibly another target's, and never tied to a run. A run is tied to the snapshot
+  that records its run id; when no listed snapshot does, the page says it *probably*
+  recorded nothing, marked inferred (a clock step or a later `ods state record` could
+  make that wrong).
+- **Secrets (AGENTS rule 9):** the command line reaches `ods-web` redacted by the CLI:
+  option names are kept, and only the values of `--select`, `--exclude`,
+  `--resource-type`, `--exclude-resource-type`, `--target`, `--environment` and
+  `--dbt-output`; every other value (e.g. `--vars`) and everything after `--` reads
+  `<redacted>`. The file itself keeps what was typed, as `ods state retry` needs it,
+  and its `Debug` redacts it the same way.
+- **Planning is shared and bounded:** every page asks `Dashboard::plan_at`, which plans
+  at most once per 30 s time bucket and reload (the memo lives on the reloaded facts,
+  so a reload starts afresh); lag tolerances are whole minutes or more. Pages that may
+  plan are built on a blocking thread. Node names from the graph are built once per
+  reload.
+- **API:** `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs` and
+  `/api/state/runs/<run_id>` return the view models the pages render (`PlanView`,
+  `WhyView`, `RunsView`, `RunPageView`) at `schema_version` 1, `GET` only; beyond
+  loopback without paths, error text or the last run's options.
+
 *Amended 2026-09-29 (#313, the Catalog and model pages):*
 - **Data:** the binary also fills a neutral `ods_web::catalog::CatalogInput` on the
   `Dashboard`: each node's id, name, type, language, layer, materialization, tags,
@@ -98,18 +146,18 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   each node's last successful build from the latest snapshot, with the snapshot that
   recorded it. The binary decides what a layer is (the model's first folder under the
   model paths, from the artifacts) and says so; `ods-web` names no build tool. Decisions
-  come from the same `Planner` as Home, per request; lineage confidence from the graph
+  come from the shared `Dashboard::plan_at` (see *Planning is shared and bounded*
+  above), on a blocking thread as the State pages do; lineage confidence from the graph
   document the server already holds. The binary reads the latest snapshot and history
   once and derives both the planner's input and the last builds from that read, so the
   builds shown and the decisions can't rest on different snapshots.
 - **Offline decisions:** this plan checks no relation, so a reuse is shown as taken on
   trust ("its relation isn't checked by this plan; it is when a run starts"), and the
   view model carries it (`relations_checked: false`, `caveats`).
-- **Pages:** `<base>/catalog` and `<base>/catalog/<id>`. A page one level down emits
-  `<meta name="ods-root" content="../">` and prefixes its links and font URLs, since
-  the CSP's `base-uri 'none'` rules out `<base>`; the shared script reads it to find
-  the API. Filters are a plain `GET` form, so the URL is the state and the page works
-  without script.
+- **Pages:** `<base>/catalog` and `<base>/catalog/<id>`, below the root by the rule
+  above (#311). Filters are a plain `GET` form, so the URL is the state and the page
+  works without script. Model pages link to Why (`state/plan?node=`), and the State
+  pages link node names to their model pages.
 - **Inline scripts:** besides the shared script, these pages add small static inline
   scripts (submit a facet form on change and restore focus; bind `/` to the Catalog's
   search; filter columns; copy the page's link). They embed no data, so the existing
@@ -140,6 +188,7 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   | `/api/impact?node=&column=&kind=` | `Change` plus `Impact`, with reasons and pruned readers |
   | `/healthz` | `ok` |
   | `/api/shell`, `/api/home` | the dashboard's view models (amended 2026-09-29) |
+  | `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs`, `/api/state/runs/<run_id>` | the State pages' view models (amended 2026-09-29, #311) |
 
   Breaking changes bump the API version. Additive fields don't.
 - **Safe by default:**

@@ -1,0 +1,137 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: pretty(&body)
+---
+{
+  "built": [
+    {
+      "changes": [
+        {
+          "added": [],
+          "changed": [
+            "sql"
+          ],
+          "kind": "code",
+          "removed": []
+        }
+      ],
+      "name": "customers",
+      "node": "model.customers",
+      "why": "code: sql changed"
+    },
+    {
+      "changes": [
+        {
+          "after": "4c0b5c8f-0000-4000-8000-000000000003",
+          "before": "9ea38bd5-0000-4000-8000-000000000002",
+          "kind": "upstream",
+          "parent": "model.customers"
+        }
+      ],
+      "name": "customers_view",
+      "node": "model.customers_view",
+      "why": "reads customers, which was rebuilt"
+    }
+  ],
+  "compared_with": {
+    "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+    "short_run_id": "9ea38bd5",
+    "snapshot": 2
+  },
+  "earlier": [
+    {
+      "built": 2,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "from_last_run": false,
+      "kept": 1,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-29T00:01:03Z",
+      "replaces": 1,
+      "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+      "short_run_id": "9ea38bd5",
+      "skipped": null,
+      "snapshot": 2,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    },
+    {
+      "built": 1,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "from_last_run": false,
+      "kept": 0,
+      "outcome": "recorded",
+      "recorded_at": "2026-09-29T00:00:15Z",
+      "replaces": null,
+      "run_id": "e6f54fe3-0000-4000-8000-000000000001",
+      "short_run_id": "e6f54fe3",
+      "skipped": null,
+      "snapshot": 1,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    }
+  ],
+  "last_run": null,
+  "run": {
+    "built": 2,
+    "command": null,
+    "duration": null,
+    "failed": null,
+    "from_last_run": false,
+    "kept": 1,
+    "outcome": "recorded",
+    "recorded_at": "2026-09-29T00:02:37Z",
+    "replaces": 2,
+    "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
+    "short_run_id": "4c0b5c8f",
+    "skipped": null,
+    "snapshot": 3,
+    "target": {
+      "kind": "warehouse",
+      "name": "dev"
+    },
+    "triggered_by": null
+  },
+  "schema_version": 1,
+  "scope": "jaffle_ods/dev",
+  "started_at": null,
+  "state_rule": "Snapshot 3 replaced snapshot 2 with this run's successful builds; every other node keeps its last good build. Whether any node failed isn't stored for this run.",
+  "timeline": [
+    {
+      "built": false,
+      "duration": null,
+      "kept_from": "e6f54fe3-0000-4000-8000-000000000001",
+      "kind": "seed",
+      "lane": 0,
+      "name": "raw_orders",
+      "node": "seed.raw_orders"
+    },
+    {
+      "built": true,
+      "duration": null,
+      "kept_from": null,
+      "kind": "model",
+      "lane": 0,
+      "name": "customers",
+      "node": "model.customers"
+    },
+    {
+      "built": true,
+      "duration": null,
+      "kept_from": null,
+      "kind": "model",
+      "lane": 1,
+      "name": "customers_view",
+      "node": "model.customers_view"
+    }
+  ]
+}

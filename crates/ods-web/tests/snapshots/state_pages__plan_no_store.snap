@@ -1,0 +1,40 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: pretty(&body)
+---
+{
+  "based_on": null,
+  "commands": [],
+  "counts": {
+    "build": 0,
+    "relations_checked": 0,
+    "reuse": 0,
+    "total": 0
+  },
+  "created_at": null,
+  "dry_run": true,
+  "empty": {
+    "commands": [
+      {
+        "command": "ods state build",
+        "does": "plans, builds what changed, and records the run"
+      },
+      {
+        "command": "ods state record",
+        "does": "records a build you ran yourself, from its run results"
+      }
+    ],
+    "message": "ODS keeps the last successful build of every node in a local state store. There isn't one yet, so there are no runs, reuse or plan to show. Record a first run in a terminal; this page updates when it's done.",
+    "title": "No runs recorded yet"
+  },
+  "environment": "dev",
+  "error": null,
+  "filter": "all",
+  "rows": [],
+  "schema_version": 1,
+  "scope": "jaffle_ods/dev",
+  "selected": null,
+  "state": "no_store",
+  "target": "dev",
+  "warnings": []
+}

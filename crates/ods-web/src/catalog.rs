@@ -714,10 +714,8 @@ pub struct CodeView {
 pub struct ModelLinks {
     /// The lineage explorer, focused on it.
     pub lineage: String,
-    /// Why the plan decided what it did.
+    /// Why the plan decided what it did: the Plan page's Why panel.
     pub why: String,
-    /// Whether the `why` page is served yet; until then it is shown as planned.
-    pub why_available: bool,
 }
 
 /// A model page: everything about one node, for every tab.
@@ -1420,7 +1418,6 @@ impl Dashboard {
             links: ModelLinks {
                 lineage: format!("lineage?node={encoded}"),
                 why: format!("state/plan?node={encoded}"),
-                why_available: false,
             },
         })
     }

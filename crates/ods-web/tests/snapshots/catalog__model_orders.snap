@@ -112,8 +112,7 @@ expression: pretty(view)
   "lineage_notes": [],
   "links": {
     "lineage": "lineage?node=model.shop.orders",
-    "why": "state/plan?node=model.shop.orders",
-    "why_available": false
+    "why": "state/plan?node=model.shop.orders"
   },
   "materialization": "view",
   "name": "orders",

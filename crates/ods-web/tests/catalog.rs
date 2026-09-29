@@ -528,10 +528,20 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
         "{page}"
     );
     assert!(
-        page.contains(r#"<a href="catalog" aria-current="page" data-section="models">Models</a>"#)
+        page.contains(r#"<a href="catalog" aria-current="page" data-item="models">Models</a>"#)
     );
-    assert!(page.contains(r#"data-section="freshness"><span class="label">Freshness evidence</span><span class="chip">Planned</span>"#));
-    assert!(page.contains(r#"data-section="semantic"><span class="label">Semantic layer</span>"#));
+    assert!(
+        page.contains(
+            r#"data-item="freshness">Freshness evidence<span class="chip">Planned</span>"#
+        )
+    );
+    assert!(
+        page.contains(r#"data-item="semantic">Semantic layer<span class="chip">Planned</span>"#)
+    );
+    assert!(
+        page.contains(r#"<span class="crumb-here">Models</span>"#),
+        "Catalog / Models, as the design: {page}"
+    );
     assert!(page.contains(r#"<a href="lineage" data-section="lineage">"#));
     // Rows: decision pills, last build, health placeholder, links to model pages.
     assert!(page.contains(
@@ -592,7 +602,11 @@ fn a_model_page_has_a_tab_for_each_part() {
         page.contains(r#"data-tab="relationships">Relationships<span class="chip">Planned</span>"#)
     );
     assert!(page.contains(r#"<span class="pill big build" title="sql changed since run 9ea38bd5">BUILD next run · code changed</span>"#), "{page}");
-    assert!(page.contains(r#"<span class="crumb">shop</span><span class="crumb-sep">/</span><a class="crumb" href="../catalog">Catalog</a><span class="crumb-sep">/</span><span class="crumb-here">orders</span>"#), "{page}");
+    assert!(page.contains(r#"<a class="crumb" href="../catalog">Catalog</a><span class="crumb-sep">/</span><a class="crumb" href="../catalog">Models</a><span class="crumb-sep">/</span><span class="crumb-here mono">orders</span>"#), "{page}");
+    assert!(
+        page.contains(r#"<a href="../catalog" aria-current="page" data-item="models">Models</a>"#),
+        "the nav from one level down"
+    );
     assert!(page.contains("One row per order."));
     assert!(
         page.contains(
@@ -600,10 +614,9 @@ fn a_model_page_has_a_tab_for_each_part() {
         )
     );
     assert!(
-        page.contains(r#"<span class="soon" title="The plan's Why page is planned">Why this decision<span class="chip">Planned</span></span>"#),
-        "Why is planned until its page is served"
+        page.contains(r#"<a href="../state/plan?node=model.shop.orders">Why this decision</a>"#),
+        "Why links to the Plan page's Why panel: {page}"
     );
-    assert!(!page.contains("state/plan"));
     assert!(page.contains("snapshot 2 · run"));
     assert!(
         page.contains(r#"<code class="fg">models/staging/orders.sql</code>"#),

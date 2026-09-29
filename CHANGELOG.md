@@ -48,6 +48,32 @@ the changelog was introduced.
 - The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
   served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
   `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
+- The dashboard's State pages (#311). **Plan** (`/state/plan`) lists every planned node,
+  builds first, with its Build or Reuse pill and reason, filters by action, and opens a
+  **Why** panel for the selected node (`?node=<id>`): its recorded build, which
+  fingerprint parts changed, what it reads (parents' decisions, and each source's
+  version with its strategy and origin, graded exact, semantic, proxy, inferred or
+  unknown), the relation check, the decision and the reason chain, which is exactly
+  `ods state explain`'s. The plan is made offline, so reused relations read *not
+  checked*. **Runs** (`/state/runs`) lists the recorded runs, newest first, with
+  outcome, target and date filters and counts; nodes read *built* or *kept earlier
+  build*. Failures are known only for the last run, from the file `ods state retry`
+  keeps beside the store, and only for the target it ran for: the page shows the nodes
+  that failed or weren't recorded, the skipped ones, the state kept and
+  `ods state retry --failed`. **Run** (`/state/runs/<run_id>`) shows a timeline of built
+  and kept nodes, why each was built from what the snapshots record, and the earlier
+  runs. Durations, start times and users read as placeholders; CI runs are a *Planned*
+  tab. The State section lists its pages in the navigation, and Home's *All runs* and
+  last run link here. JSON routes `/api/state/plan`, `/api/state/plan/<node>`,
+  `/api/state/runs` and `/api/state/runs/<run_id>` return the same view models at
+  `schema_version` 1 (`GET` only; beyond loopback without paths or error text). A
+  command line shown there keeps option names but redacts their values (except the
+  selection and target) and everything after `--`. The plan is made at most every 30
+  seconds per reload, and the server also reloads when the last run's file changes.
+- The last-run file beside the state database (`<state-db>.last-run.json`) is now at
+  version 1.2: it also keeps the state scope the run was for and its run id, so the
+  dashboard shows a run only for its own target and ties it to its snapshot. Older
+  files still read (#311, ADR-0009).
 - The dashboard's Catalog and model pages (#313). `/catalog` lists every model, seed
   and snapshot with facets (resource type, layer from the model's folder, materialization,
   tags, next-run decision from the plan, lineage confidence) whose selections, search and

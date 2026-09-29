@@ -605,6 +605,51 @@ and every route is `GET`. `/api/shell` and `/api/home` return exactly what the p
 shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served by
 `ods serve` itself (no font CDN), with system fonts as the fallback.
 
+### State pages
+
+The State section (#311) shows the plan and the runs the state store recorded. Like
+Home, it only reads, and every action is a command to copy into a terminal.
+
+| Page | Route | Shows |
+|---|---|---|
+| Plan | `/state/plan` | every planned node with its Build or Reuse pill and reason, the counts to build and reuse, and how many reused relations were checked; `?action=build` or `reuse` filters |
+| Why | `/state/plan?node=<id>` | for one node (its percent-encoded unique id, or a name only one node has): its recorded build, which fingerprint parts changed, what it reads (parents' decisions; each source's version, strategy and origin, ADR-0022), the relation check, the decision, and the reason chain; `&view=json` shows its data |
+| Runs | `/state/runs` | every recorded run, newest first (the newest 50; `ods state history` lists all), filtered by `?outcome=`, `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel |
+| Run | `/state/runs/<run_id>` | a timeline of the nodes it built and the ones that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists them. An unambiguous prefix of the id (8 characters or more) works too |
+
+What the pages claim is what ODS records, and no more:
+- **The plan** is the one `ods state plan` makes, offline, made again at most every 30
+  seconds (and after every reload), as lag tolerances expire with time. Builds are
+  listed first.
+  The Why panel's reason chain is exactly `ods state explain <node>`'s (its JSON is in
+  `explanation`). An offline plan doesn't check the warehouse, so reused relations read
+  *not checked*; `ods state build --dry-run` checks them. Evidence below *semantic* is
+  shown as *proxy*, *inferred* or *unknown*, never as fact.
+- **A run** is a committed snapshot: the nodes whose last build is the run's were built
+  by it, and every other node *kept an earlier build*, whether it was reused, left out
+  or failed, as the snapshot can't tell. The outcome reads *recorded*.
+- **Failures** are known only for the last run, from `<state-db>.last-run.json`,
+  which `ods state retry` keeps (since version 1.2 with the run's scope and id). It is
+  shown only when its scope is the page's; a file from an older ODS names none, so it
+  is shown apart, as possibly another target's. The run is tied to the snapshot that
+  records its run id; if no listed snapshot does, the page says it *probably* recorded
+  nothing (marked *inferred*). Nodes it lists as failed read *failed or not recorded*:
+  that includes nodes dbt ran but ODS couldn't record. The page shows them, the skipped
+  ones, the last good snapshot and `ods state retry --failed`. The command line keeps
+  option names, but values other than the selection and target, and everything after
+  `--`, read `<redacted>`: `--vars` may carry secrets. The server reloads when this
+  file changes.
+- **Not recorded yet:** durations (`[duration]`, `[wall clock]`), start times, who ran a
+  run (`[user]`), the command of earlier runs, and run logs. CI runs are a *Planned* tab
+  until server mode.
+
+The same view models are served as JSON at `schema_version` 1, `GET` only:
+`/api/state/plan` (with the same `?node=` and `?action=`), `/api/state/plan/<node>`
+(404 if not planned), `/api/state/runs` (with the same filters) and
+`/api/state/runs/<run_id>` (404 if not listed). Beyond loopback they leave out local
+paths, error text and the last run's options. The Why panel links to the node in
+the lineage explorer (`/lineage?node=<id>`) and to its model page (`/catalog/<id>`).
+
 ### The Catalog and model pages
 
 The **Catalog** (`/catalog`, #313) lists every model, seed and snapshot in the
@@ -645,9 +690,8 @@ Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with
 - **Lineage:** the nodes it reads and that read it (the build graph, not
   relationships), linking to `/lineage?node=<unique_id>`;
 - **State:** the decision with the planner's reasons, the relation check (*not checked
-  by this plan* for a reuse), and the last successful build. *Why this decision* will
-  link to `/state/plan?node=<unique_id>`; until that page is served it is greyed as
-  planned;
+  by this plan* for a reuse), and the last successful build, linking to *Why this decision* on the Plan page
+  (`/state/plan?node=<unique_id>`);
 - **Tests:** the data tests that read the node or are attached to it, and its unit
   tests. Outcomes aren't kept per test: the state records that a build's checks passed
   together, so each test among those checks reads *passed · run …*, and the rest *not

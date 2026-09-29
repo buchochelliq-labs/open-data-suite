@@ -41,9 +41,8 @@ const LATIN1: &str = "U+0000, U+000D, U+0020-007E, U+00A0-00A3, U+00A4-00FF, U+0
     U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+2074, U+20AC, U+2122, U+2212, \
     U+FB01-FB02";
 
-/// `@font-face` rules for the fonts, fetched from `<root>assets/fonts/`, where `root`
-/// leads from the page to the dashboard's root (empty, or e.g. `../`). An installed
-/// copy is used first.
+/// `@font-face` rules for the fonts, fetched from `assets/fonts/` under the dashboard's
+/// root, which is `root` from the page (e.g. `../`). An installed copy is used first.
 pub(crate) fn font_faces(root: &str) -> String {
     FONTS.iter().fold(String::new(), |mut css, f| {
         let _ = writeln!(

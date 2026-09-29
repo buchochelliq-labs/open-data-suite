@@ -17,6 +17,23 @@ expression: pretty(&body)
     },
     {
       "href": "catalog",
+      "items": [
+        {
+          "href": "catalog",
+          "key": "models",
+          "label": "Models"
+        },
+        {
+          "href": null,
+          "key": "freshness",
+          "label": "Freshness evidence"
+        },
+        {
+          "href": null,
+          "key": "semantic",
+          "label": "Semantic layer"
+        }
+      ],
       "key": "catalog",
       "label": "Catalog",
       "note": null,
@@ -30,11 +47,33 @@ expression: pretty(&body)
       "status": "available"
     },
     {
-      "href": null,
+      "href": "state/plan",
+      "items": [
+        {
+          "href": "state/plan",
+          "key": "plan",
+          "label": "Plan"
+        },
+        {
+          "href": "state/runs",
+          "key": "runs",
+          "label": "Runs"
+        },
+        {
+          "href": null,
+          "key": "history",
+          "label": "History"
+        },
+        {
+          "href": null,
+          "key": "policies",
+          "label": "Policies"
+        }
+      ],
       "key": "state",
       "label": "State",
-      "note": "State pages are planned; the State module works from the CLI (ods state …)",
-      "status": "planned"
+      "note": null,
+      "status": "available"
     },
     {
       "href": null,

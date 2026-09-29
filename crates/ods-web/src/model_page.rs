@@ -14,7 +14,8 @@ use crate::catalog::{
 };
 use crate::catalog_page::{CSS, confidence, decision_pill, pill, why};
 use crate::dashboard::ShellView;
-use crate::home::PageFrame;
+use crate::home::{Frame, framed};
+use crate::state_pages::crumbs;
 
 /// The page's links resolve from one level down.
 const ROOT: &str = "../";
@@ -68,14 +69,24 @@ pub(crate) fn model_page(
     b.push_str("</div>");
     b.push_str(SCRIPT);
     let title = format!("{} · Catalog", view.name);
-    let frame = PageFrame {
+    let frame = Frame {
         title: &title,
-        crumbs: &[("Catalog", Some("catalog")), (&view.name, None)],
+        crumbs: Some(crumbs(
+            &[
+                ("Catalog", Some("../catalog")),
+                ("Models", Some("../catalog")),
+                (&view.name, None),
+            ],
+            true,
+        )),
         root: ROOT,
-        css: CSS,
+        status: None,
+        sub: Some("models"),
         search: true,
+        css: CSS,
+        js: "",
     };
-    crate::home::shell_at(shell, &frame, &b, generation)
+    framed(shell, &frame, &b, generation)
 }
 
 /// No such node.
@@ -84,14 +95,20 @@ pub(crate) fn not_found_page(shell: &ShellView, id: &str, generation: u64) -> St
         r#"<div class="content"><section class="card empty" data-state="not_found"><h2>No such node</h2><p>The project has no node <code>{id}</code>. It may have been renamed or removed since the link was made.</p><p><a href="{ROOT}catalog">Back to the Catalog</a></p></section></div>"#,
         id = text(id),
     );
-    let frame = PageFrame {
+    let frame = Frame {
         title: "Not found",
-        crumbs: &[("Catalog", Some("catalog")), ("Not found", None)],
+        crumbs: Some(crumbs(
+            &[("Catalog", Some("../catalog")), ("Not found", None)],
+            false,
+        )),
         root: ROOT,
-        css: CSS,
+        status: None,
+        sub: Some("models"),
         search: true,
+        css: CSS,
+        js: "",
     };
-    crate::home::shell_at(shell, &frame, &body, generation)
+    framed(shell, &frame, &body, generation)
 }
 
 /// `3 h ago`, with the exact time in the tooltip (the script fills in the relative
@@ -103,16 +120,12 @@ fn when(at: &str) -> String {
     )
 }
 
-/// The link to Why, or, until that page is served, its name greyed as planned.
+/// The link to the Plan page's Why panel for this node.
 fn why_link(view: &ModelView) -> String {
-    if view.links.why_available {
-        format!(
-            r#"<a href="{ROOT}{}">Why this decision</a>"#,
-            attr(&view.links.why)
-        )
-    } else {
-        r#"<span class="soon" title="The plan's Why page is planned">Why this decision<span class="chip">Planned</span></span>"#.to_owned()
-    }
+    format!(
+        r#"<a href="{ROOT}{}">Why this decision</a>"#,
+        attr(&view.links.why)
+    )
 }
 
 /// Whether the node's relation was checked, for the decision it has.

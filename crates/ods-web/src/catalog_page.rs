@@ -12,7 +12,8 @@ use crate::catalog::{
     LineageConfidence, REUSE_RELATION,
 };
 use crate::dashboard::{ShellView, StateStatus};
-use crate::home::PageFrame;
+use crate::home::{Frame, framed};
+use crate::state_pages::crumbs;
 
 /// The stylesheet of the Catalog and the model pages.
 pub(crate) const CSS: &str = include_str!("../assets/catalog.css");
@@ -103,15 +104,21 @@ pub(crate) fn catalog_page(shell: &ShellView, view: &CatalogView, generation: u6
     legend(&mut b, view);
     b.push_str("</section></div>");
     b.push_str(SCRIPT);
-    let frame = PageFrame {
+    let frame = Frame {
         title: "Catalog",
-        crumbs: &[("Catalog", None)],
+        crumbs: Some(crumbs(
+            &[("Catalog", Some("catalog")), ("Models", None)],
+            false,
+        )),
         root: "",
-        css: CSS,
+        status: None,
+        sub: Some("models"),
         // The Catalog has its own search; the header's would search elsewhere.
         search: false,
+        css: CSS,
+        js: "",
     };
-    crate::home::shell_at(shell, &frame, &b, generation)
+    framed(shell, &frame, &b, generation)
 }
 
 /// Ticking a box applies it at once, and the focus returns to it after the reload;
