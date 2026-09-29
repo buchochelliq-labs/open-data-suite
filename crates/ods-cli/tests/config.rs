@@ -160,6 +160,47 @@ fn explain_shows_values_sources_and_overrides() {
 }
 
 #[test]
+fn a_credential_given_as_a_one_element_array_is_refused_without_its_value() {
+    let dir = Dir::new();
+    dir.write(
+        "ods.toml",
+        "[providers.wh]\nkind = \"x\"\nsettings = { token = [\"a:b@c\"] }\n",
+    );
+    let out = ods(&dir, dir.path(), &["config", "explain", "-o", "plain"], &[]);
+    assert_eq!(out.status.code(), Some(4));
+    let all = format!("{}{}", stdout(&out), String::from_utf8_lossy(&out.stderr));
+    assert!(all.contains("providers.wh.settings.token"), "{all}");
+    assert!(
+        !all.contains("a:b@c"),
+        "the value must never be shown: {all}"
+    );
+    assert!(!all.contains("secret(a:b@c)"), "{all}");
+}
+
+#[test]
+fn only_the_table_form_is_shown_as_a_secret_reference() {
+    let dir = Dir::new();
+    dir.write(
+        "ods.toml",
+        "[providers.wh]\nkind = \"x\"\n\
+         settings = { hosts = [\"env:HOST\"], token = { secret = \"env:WH_TOKEN\" } }\n",
+    );
+    let out = ods(&dir, dir.path(), &["config", "explain", "-o", "plain"], &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = stdout(&out);
+    assert!(text.contains("secret(env:WH_TOKEN)"), "{text}");
+    assert!(
+        !text.contains("secret(env:HOST)"),
+        "an array is not a reference: {text}"
+    );
+    assert!(text.contains(r#"["env:HOST"]"#), "{text}");
+}
+
+#[test]
 fn explain_filters_by_key_prefix() {
     let dir = Dir::new();
     dir.write(

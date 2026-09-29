@@ -106,6 +106,11 @@ the changelog was introduced.
   crossings (#282).
 
 ### Fixed
+- `ods config explain` no longer shows a one-element array such as `["env:X"]` as the
+  secret reference `secret(env:X)`. Only the table form `{ secret = "<scheme>:<name>" }`
+  is a secret reference, as ADR-0005 says; any other value, in configuration or
+  anywhere else ODS reads a reference, is not taken for one. A credential given as an
+  array is still refused as a plaintext credential, without its value.
 - `ods state run` and `ods state build` no longer say that ODS doesn't check the
   warehouse when they reuse nodes: they do check, and say reuse is taken on trust only
   when the check didn't run. `ods state plan`, which doesn't check, now points to
