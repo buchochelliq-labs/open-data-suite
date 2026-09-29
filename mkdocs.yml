@@ -14,6 +14,7 @@ docs_dir: docs
 # Working notes and competitive research are for contributors, not the public site.
 exclude_docs: |
   research/
+  design/*/boards/
   adr/0000-template.md
 
 theme:
@@ -74,6 +75,10 @@ nav:
   - Principles: principles.md
   - Architecture: architecture.md
   - Testing against Databricks: contributing-databricks.md
+  - UX designs:
+      - design/README.md
+      - Dashboard: design/dashboard/README.md
+      - VS Code: design/vscode-extension/README.md
   - Roadmap:
       - Overview: roadmap.md
       - Full plan: ROADMAP.md

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ODS catalog models</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;background:#F7F8FA;color:#18202A}
+a{color:#3F51D8;text-decoration:none}a:hover{color:#2B3AA8;text-decoration:underline}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #F7F8FA; font-size: 14px">
+<nav aria-label="Main" style="width: 224px; flex-shrink: 0; background: #FFFFFF; border-right: 1px solid #D8DEE6; display: flex; flex-direction: column; padding: 16px 12px; box-sizing: border-box; gap: 16px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3F51D8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>
+<span style="font-weight: 600; font-size: 16px; letter-spacing: 0.02em">OpenDataSuite</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="proj">Project</label>
+<button id="proj" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">jaffle_ods<span style="color: #5B6776">▾</span></button>
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="tgt">Target</label>
+<button id="tgt" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2F6FD6"></span>dev · databricks</span><span style="color: #5B6776">▾</span></button>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>Home</a>
+<a href="Catalog.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; background: #E8EBFB; color: #2B3AA8; font-weight: 500">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3"></path></svg>Catalog</a>
+<div style="display: flex; flex-direction: column; gap: 2px; padding-left: 38px; font-size: 13px">
+<a href="Catalog.dc.html" aria-current="page" style="height: 30px; display: flex; align-items: center; color: #2B3AA8; font-weight: 500">Models</a>
+<a href="Sources.dc.html" style="height: 30px; display: flex; align-items: center; color: #18202A">Freshness evidence</a>
+</div>
+<a href="Lineage.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"></rect><path d="M7 11v4a2 2 0 0 0 2 2h4"></path><rect x="13" y="13" width="8" height="8" rx="2"></rect></svg>Lineage</a>
+<a href="Plan.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></svg>State</a>
+<a href="Erd.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.9 12.1 20 3M17 6l3 3M15 8l2 2"></path></svg>ERD</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>Usage</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><path d="M6 9v12M18 15V9a3 3 0 0 0-3-3h-4M13 3 10 6l3 3"></path></svg>CI · Impact</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4M9 13v2M15 13v2"></path></svg>Agent</a>
+</div>
+<div style="margin-top: auto; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid #D8DEE6; padding-top: 12px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; color: #5B6776">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</a>
+<span style="font-size: 12px; color: #5B6776; padding: 4px 10px">Local · read-only</span>
+</div>
+</nav>
+<main style="flex-grow: 1; display: flex; flex-direction: column; min-width: 0">
+<header style="height: 56px; flex-shrink: 0; background: #FFFFFF; border-bottom: 1px solid #D8DEE6; display: flex; align-items: center; gap: 12px; padding: 0 24px">
+<a href="Catalog.dc.html">Catalog</a><span style="color: #8A94A3">/</span><span style="font-weight: 500">Models</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #5B6776; border: 1px solid #D8DEE6; border-radius: 999px; padding: 4px 10px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #1F8A4C"></span>decisions against snapshot 3</span>
+</header>
+<div style="flex-grow: 1; display: flex; min-height: 0">
+<aside aria-label="Filters" style="width: 248px; flex-shrink: 0; background: #FFFFFF; border-right: 1px solid #D8DEE6; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; overflow: hidden">
+<div style="display: flex; align-items: center; justify-content: space-between"><h2 style="margin: 0; font-size: 15px; font-weight: 600">Filters</h2><button style="border: none; background: transparent; font: inherit; font-size: 13px; color: #3F51D8; cursor: pointer; padding: 0">Clear all</button></div>
+<fieldset style="margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: 2px">
+<legend style="margin: 0; font-size: 11px; font-weight: 600; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 0 6px">Resource type</legend>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>model</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">10</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>seed</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">3</span></label>
+</fieldset>
+<fieldset style="margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: 2px">
+<legend style="margin: 0; font-size: 11px; font-weight: 600; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 0 6px">Layer</legend>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>staging</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">3</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>marts</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">7</span></label>
+</fieldset>
+<fieldset style="margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: 2px">
+<legend style="margin: 0; font-size: 11px; font-weight: 600; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 0 6px">Materialization</legend>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>table</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">6</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>view</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">4</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span>seed</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">3</span></label>
+</fieldset>
+<fieldset style="margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: 2px"><legend style="margin: 0; font-size: 11px; font-weight: 600; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 0 6px">Tags</legend><span style="font-size: 13px; color: #5B6776">No tags in this project</span></fieldset>
+<fieldset style="margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: 2px">
+<legend style="margin: 0; font-size: 11px; font-weight: 600; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 0 6px">State decision</legend>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span style="width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; background: #DCE8FB; "></span><span>Build</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">0</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span style="width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; background: #D5F0EC; "></span><span>Reuse</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">11</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span style="width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; background: #FFFFFF; border: 1px dashed #6B7684; box-sizing: border-box"></span><span>Unknown</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">2</span></label>
+</fieldset>
+<fieldset style="margin: 0; padding: 0; border: none; display: flex; flex-direction: column; gap: 2px">
+<legend style="margin: 0; font-size: 11px; font-weight: 600; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 0 6px">Lineage confidence</legend>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span style="width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #1F8A4C"></span><span>parsed</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">8</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span style="width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #FFFFFF; border: 1.5px dashed #6B7684; box-sizing: border-box"></span><span>inferred</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">1</span></label>
+<label style="display: flex; align-items: center; gap: 8px; height: 26px; font-size: 13px; cursor: pointer"><input type="checkbox" style="margin: 0"><span style="width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #B7791F"></span><span>opaque</span><span style="margin-left: auto; color: #5B6776; font-variant-numeric: tabular-nums; font-size: 12px">1</span></label>
+</fieldset>
+<span style="font-size: 12px; color: #5B6776; margin-top: -8px">Lineage confidence applies to models only.</span>
+</aside>
+<section style="flex-grow: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; min-width: 0">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 10px">
+<label style="display: flex; align-items: center; gap: 8px; width: 540px; height: 36px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; color: #5B6776">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+<input aria-label="Search models or enter a selector" placeholder="Search names, or a selector: +customers, config.materialized:view" style="border: none; background: transparent; font: inherit; color: #18202A; flex-grow: 1; outline: none; min-width: 0">
+<kbd style="font-family: 'IBM Plex Mono',monospace; font-size: 12px; border: 1px solid #D8DEE6; border-radius: 4px; padding: 1px 6px; background: #FFFFFF">/</kbd>
+</label>
+<span style="font-size: 13px; color: #5B6776">13 of 13 nodes</span>
+<button style="margin-left: auto; height: 32px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">Columns</button>
+<button style="height: 32px; padding: 0 12px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">Export CSV</button>
+</div>
+<span style="font-size: 12px; color: #5B6776">Selectors use dbt syntax: <code style="font-family: 'IBM Plex Mono',monospace; color: #18202A">+customers</code> adds its parents, <code style="font-family: 'IBM Plex Mono',monospace; color: #18202A">customers+</code> its children, <code style="font-family: 'IBM Plex Mono',monospace; color: #18202A">state:modified</code> what changed.</span>
+</div>
+<section role="table" aria-label="Models" aria-rowcount="14" style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; overflow: hidden; font-size: 13px">
+<div role="row" style="display: grid; grid-template-columns: 220px 116px 80px 104px 92px 104px 92px minmax(0, 1fr); background: #EEF1F5; align-items: center">
+<span role="columnheader" aria-sort="ascending" style="padding-left: 16px"><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer; color: #18202A; font-weight: 600">Name<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Type<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Layer<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Material.<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Lineage<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Next run<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Health<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+<span role="columnheader" aria-sort="none" style=""><button style="display: flex; align-items: center; gap: 4px; height: 36px; padding: 0; border: none; background: transparent; font: inherit; font-size: 12px; color: #4A5462; cursor: pointer">Last built<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button></span>
+</div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="13">
+<div role="row" style="display: grid; grid-template-columns: 220px 116px 80px 104px 92px 104px 92px minmax(0, 1fr); height: 38px; border-top: 1px solid #EEF1F5; align-items: center">
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0; padding-left: 16px; gap: 8px"><span style="width: 4px; height: 14px; flex-shrink: 0; background: {{r.bar}}"></span><a href="Model.dc.html" style="font-family: 'IBM Plex Mono',monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</a></span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0; color: #4A5462">{{r.type}}</span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0; color: #4A5462">{{r.layer}}</span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0; color: #4A5462">{{r.mat}}</span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0; gap: 6px; color: #4A5462"><span style="width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: {{r.confBg}}; border: {{r.confBorder}}; box-sizing: border-box"></span>{{r.conf}}</span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0"><span style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: {{r.pill}}; color: {{r.pillText}}; border: {{r.pillBorder}}">{{r.state}}</span></span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px 2px 6px; border-radius: 999px; background: {{r.hBg}}; color: {{r.hFg}}; border: {{r.hBorder}}"><span style="width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; box-sizing: border-box; background: {{r.hDot}}; border: {{r.hDotBorder}}"></span>{{r.health}}</span></span>
+<span role="cell" style="padding: 0; display: flex; align-items: center; min-width: 0; font-family: 'IBM Plex Mono',monospace; font-size: 12px; color: {{r.lastColor}}">{{r.last}}</span>
+</div>
+</sc-for>
+</section>
+<div style="display: flex; gap: 16px; font-size: 12px; color: #5B6776">
+<span style="display: flex; align-items: center; gap: 6px"><span style="padding: 0 8px; border-radius: 8px; background: #DCE8FB; color: #1F4FA0; font-weight: 600">BUILD</span>will run</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="padding: 0 8px; border-radius: 8px; background: #D5F0EC; color: #0B6B60; font-weight: 600">REUSE</span>unchanged, relation checked</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="padding: 0 8px; border-radius: 8px; border: 1px dashed #6B7684; color: #4A5462; font-weight: 600">UNKNOWN</span>no recorded build: builds</span>
+<span style="margin-left: auto">Last built: snapshot · run</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; font-size: 12px; color: #5B6776">
+<span style="font-weight: 600; color: #4A5462">Health</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 0 8px 0 6px; border-radius: 999px; background: #E3F3E9; color: #1B6B3C; border: 1px solid #E3F3E9"><span style="width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; background: #1F8A4C"></span>Healthy</span>last run ok, tests pass, inputs fresh</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 0 8px 0 6px; border-radius: 999px; background: #FBF0DC; color: #8A5A12; border: 1px solid #FBF0DC"><span style="width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; background: #B7791F"></span>Warning</span>test warned or evidence stale</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 0 8px 0 6px; border-radius: 999px; background: #FBE4E2; color: #A12A25; border: 1px solid #FBE4E2"><span style="width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; background: #C8322F"></span>Failing</span>last run or a test failed</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 0 8px 0 6px; border-radius: 999px; background: #FFFFFF; color: #4A5462; border: 1px dashed #8A94A3"><span style="width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; background: #FFFFFF; border: 1.5px dashed #8A94A3"></span>Unknown</span>never built: no evidence</span>
+<span style="margin-left: auto">From last run outcome, test results and freshness evidence</span>
+</div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const SEED = '#7C9A6A', MODEL = '#6B7B93';
+const reuse = { state: 'REUSE', pill: '#D5F0EC', pillText: '#0B6B60', pillBorder: '1px solid #D5F0EC' };
+const unknown = { state: 'UNKNOWN', pill: '#FFFFFF', pillText: '#4A5462', pillBorder: '1px dashed #6B7684' };
+const parsed = { conf: 'parsed', confBg: '#1F8A4C', confBorder: 'none' };
+const inferred = { conf: 'inferred', confBg: '#FFFFFF', confBorder: '1.5px dashed #6B7684' };
+const opaque = { conf: 'opaque', confBg: '#B7791F', confBorder: 'none' };
+const noConf = { conf: 'n/a', confBg: '#FFFFFF', confBorder: '1px solid #D8DEE6' };
+const healthy = { health: 'Healthy', hBg: '#E3F3E9', hFg: '#1B6B3C', hBorder: '1px solid #E3F3E9', hDot: '#1F8A4C', hDotBorder: 'none' };
+const noHealth = { health: 'Unknown', hBg: '#FFFFFF', hFg: '#4A5462', hBorder: '1px dashed #8A94A3', hDot: '#FFFFFF', hDotBorder: '1.5px dashed #8A94A3' };
+const row = (name, type, layer, mat, conf, state, last) => Object.assign(
+{ name, type, layer, mat, last, bar: type === 'seed' ? SEED : MODEL, lastColor: last === 'never built' ? '#5B6776' : '#18202A' }, conf, state,
+last === 'never built' ? noHealth : healthy);
+return {
+rows: [
+row('customer_order_rank', 'model', 'marts', 'table', parsed, reuse, '2 · 9ea38bd5'),
+row('customer_segments', 'python model', 'marts', 'table', opaque, unknown, 'never built'),
+row('customers', 'model', 'marts', 'table', parsed, reuse, '3 · 4c0b5c8f'),
+row('customers_snapshot_view', 'model', 'marts', 'view', parsed, reuse, '3 · 4c0b5c8f'),
+row('order_events', 'model', 'marts', 'table', parsed, reuse, '2 · 9ea38bd5'),
+row('orders', 'model', 'marts', 'table', parsed, reuse, '2 · 9ea38bd5'),
+row('raw_customers', 'seed', 'n/a', 'seed', noConf, reuse, '1 · e6f54fe3'),
+row('raw_orders', 'seed', 'n/a', 'seed', noConf, reuse, '1 · e6f54fe3'),
+row('raw_payments', 'seed', 'n/a', 'seed', noConf, reuse, '1 · e6f54fe3'),
+row('segment_summary', 'model', 'marts', 'table', inferred, unknown, 'never built'),
+row('stg_customers', 'model', 'staging', 'view', parsed, reuse, '2 · 9ea38bd5'),
+row('stg_orders', 'model', 'staging', 'view', parsed, reuse, '2 · 9ea38bd5'),
+row('stg_payments', 'model', 'staging', 'view', parsed, reuse, '2 · 9ea38bd5')
+]
+};
+}
+}
+</script>
+</body>
+</html>

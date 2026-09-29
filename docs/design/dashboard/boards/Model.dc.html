@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ODS model page: customers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'IBM Plex Sans',system-ui,sans-serif;background:#F7F8FA;color:#18202A}
+a{color:#3F51D8;text-decoration:none}a:hover{color:#2B3AA8;text-decoration:underline}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; background: #F7F8FA; font-size: 14px">
+<nav aria-label="Main" style="width: 224px; flex-shrink: 0; background: #FFFFFF; border-right: 1px solid #D8DEE6; display: flex; flex-direction: column; padding: 16px 12px; box-sizing: border-box; gap: 16px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3F51D8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>
+<span style="font-weight: 600; font-size: 16px; letter-spacing: 0.02em">OpenDataSuite</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="proj">Project</label>
+<button id="proj" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">jaffle_ods<span style="color: #5B6776">▾</span></button>
+<label style="font-size: 11px; font-weight: 500; color: #5B6776; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 8px" for="tgt">Target</label>
+<button id="tgt" style="display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2F6FD6"></span>dev · databricks</span><span style="color: #5B6776">▾</span></button>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>Home</a>
+<a href="Model.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; background: #E8EBFB; color: #2B3AA8; font-weight: 500">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M21 12h-8M21 6H8M21 18h-8M3 6v4c0 1.1.9 2 2 2h3M3 10v6c0 1.1.9 2 2 2h3"></path></svg>Catalog</a>
+<a href="Lineage.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"></rect><path d="M7 11v4a2 2 0 0 0 2 2h4"></path><rect x="13" y="13" width="8" height="8" rx="2"></rect></svg>Lineage</a>
+<a href="Plan.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></svg>State</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="15" r="4"></circle><path d="M10.9 12.1 20 3M17 6l3 3M15 8l2 2"></path></svg>ERD</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>Usage</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><path d="M6 9v12M18 15V9a3 3 0 0 0-3-3h-4M13 3 10 6l3 3"></path></svg>CI · Impact</a>
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: #18202A">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4M9 13v2M15 13v2"></path></svg>Agent</a>
+</div>
+<div style="margin-top: auto; border-top: 1px solid #D8DEE6; padding-top: 12px"><span style="font-size: 12px; color: #5B6776; padding: 4px 10px">Local · read-only</span></div>
+</nav>
+<main style="flex-grow: 1; display: flex; flex-direction: column; min-width: 0">
+<header style="height: 56px; flex-shrink: 0; background: #FFFFFF; border-bottom: 1px solid #D8DEE6; display: flex; align-items: center; gap: 12px; padding: 0 24px">
+<a href="Model.dc.html">Catalog</a><span style="color: #8A94A3">/</span><a href="Model.dc.html">Models</a><span style="color: #8A94A3">/</span><span style="font-weight: 500">customers</span>
+</header>
+<div style="background: #FFFFFF; border-bottom: 1px solid #D8DEE6; padding: 20px 24px 0; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 12px">
+<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6B7B93" stroke-width="1.75" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5M12 13v8"></path></svg>
+<h1 style="margin: 0; font-family: 'IBM Plex Mono',monospace; font-size: 24px; font-weight: 500">customers</h1>
+<span style="font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: #DCE8FB; color: #1F4FA0">BUILD next run · code changed</span>
+<span style="font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid #D8DEE6; color: #4A5462">table</span>
+<span style="font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid #D8DEE6; color: #4A5462">marts</span>
+<a href="Lineage.dc.html" style="margin-left: auto; display: flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid #D8DEE6; border-radius: 6px; color: #18202A">View lineage</a>
+<button style="height: 36px; padding: 0 14px; border: 1px solid #D8DEE6; border-radius: 6px; background: #FFFFFF; font: inherit; color: #18202A; cursor: pointer">Copy link</button>
+</div>
+<div style="display: flex; gap: 28px; font-size: 13px; color: #5B6776">
+<span>Relation <span style="font-family: 'IBM Plex Mono',monospace; color: #18202A">[catalog].[schema].customers</span></span>
+<span>Last successful build <span style="color: #18202A">snapshot 2 · run 9ea38bd5</span></span>
+<span>Owner <span style="color: #18202A">[owner]</span></span>
+</div>
+<div role="tablist" style="display: flex; gap: 4px">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="8">
+<button role="tab" aria-selected="{{t.selected}}" style="height: 40px; padding: 0 12px; border: none; border-bottom: 2px solid {{t.line}}; background: transparent; font: inherit; font-weight: {{t.weight}}; color: {{t.color}}; cursor: pointer">{{t.label}}</button>
+</sc-for>
+</div>
+</div>
+<div style="padding: 20px 24px; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; overflow: hidden">
+<div style="display: flex; flex-direction: column; gap: 16px">
+<section style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Description</h2>
+<p style="margin: 0; line-height: 1.5">One row per customer with order statistics.</p>
+</section>
+<section style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; align-items: center"><h2 style="margin: 0; font-size: 16px; font-weight: 600">Columns</h2><input aria-label="Filter columns" placeholder="Filter columns" style="height: 32px; width: 200px; padding: 0 10px; border: 1px solid #D8DEE6; border-radius: 6px; font: inherit"></div>
+<div style="display: grid; grid-template-columns: 180px minmax(0, 1fr) 180px; font-size: 13px">
+<span style="color: #5B6776; padding: 8px 0; border-bottom: 1px solid #EEF1F5">Column</span><span style="color: #5B6776; padding: 8px 0; border-bottom: 1px solid #EEF1F5">Description</span><span style="color: #5B6776; padding: 8px 0; border-bottom: 1px solid #EEF1F5">Tests · lineage</span>
+<sc-for list="{{cols}}" as="c" hint-placeholder-count="9">
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; font-family: 'IBM Plex Mono',monospace">{{c.name}}</span>
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; color: #4A5462">{{c.desc}}</span>
+<span style="padding: 9px 0; border-bottom: 1px solid #EEF1F5; color: #4A5462">{{c.meta}}</span>
+</sc-for>
+</div>
+</section>
+</div>
+<div style="display: flex; flex-direction: column; gap: 16px">
+<section style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">State</h2>
+<div style="display: flex; justify-content: space-between"><span style="color: #5B6776">Next run</span><span style="font-weight: 600; color: #1F4FA0">Build</span></div>
+<div style="display: flex; justify-content: space-between"><span style="color: #5B6776">Because</span><span>sql changed since run 9ea38bd5</span></div>
+<div style="display: flex; justify-content: space-between"><span style="color: #5B6776">Relation checked</span><span>yes, before reuse</span></div>
+<a href="Plan.dc.html">Why this decision</a>
+</section>
+<section style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Lineage</h2>
+<div style="display: flex; align-items: center; gap: 8px; font-family: 'IBM Plex Mono',monospace; font-size: 12px">
+<span style="display: flex; flex-direction: column; gap: 6px"><span style="padding: 4px 8px; border: 1px solid #D8DEE6; border-radius: 6px">stg_customers</span><span style="padding: 4px 8px; border: 1px solid #D8DEE6; border-radius: 6px">orders</span></span>
+<span style="color: #8A94A3">→</span>
+<span style="padding: 4px 8px; border: 2px solid #3F51D8; border-radius: 6px">customers</span>
+<span style="color: #8A94A3">→</span>
+<span style="padding: 4px 8px; border: 1px solid #D8DEE6; border-radius: 6px">customers_snapshot_view</span>
+</div>
+<a href="Lineage.dc.html">Expand</a>
+</section>
+<section style="background: #FFFFFF; border: 1px solid #D8DEE6; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Relationships</h2>
+<div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px"><span style="font-family: 'IBM Plex Mono',monospace">orders.customer_id → customer_id</span><span style="font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid #1F8A4C; color: #1F8A4C">tested</span></div>
+<span style="font-size: 12px; color: #5B6776">ERD evidence: a relationships test. Not drawn on the lineage graph.</span>
+</section>
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const names = ['Overview', 'Code', 'Columns', 'Lineage', 'State', 'Tests', 'Relationships', 'Usage'];
+const tabs = names.map((label, i) => ({
+label, selected: i === 0 ? 'true' : 'false', line: i === 0 ? '#3F51D8' : 'transparent',
+weight: i === 0 ? 500 : 400, color: i === 0 ? '#18202A' : '#5B6776'
+}));
+const cols = [
+{ name: 'customer_id', desc: 'Primary key.', meta: 'unique · not_null' },
+{ name: 'first_name', desc: '', meta: '← stg_customers' },
+{ name: 'last_name', desc: '', meta: '← stg_customers' },
+{ name: 'full_name', desc: '', meta: '← first_name, last_name' },
+{ name: 'first_order', desc: '', meta: '← orders.order_date' },
+{ name: 'most_recent_order', desc: '', meta: '← orders.order_date' },
+{ name: 'number_of_orders', desc: '', meta: '← orders.order_id' },
+{ name: 'lifetime_value', desc: 'Sum of non-returned order amounts, in dollars.', meta: '← orders.amount' },
+{ name: 'value_tier', desc: '', meta: '← lifetime_value' }
+];
+return { tabs, cols };
+}
+}
+</script>
+</body>
+</html>
