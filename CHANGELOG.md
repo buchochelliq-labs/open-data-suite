@@ -55,8 +55,12 @@ the changelog was introduced.
   readers that build with it, and links to its Model page (`/catalog/<id>`) and to its
   decision on the State plan page (`/state/plan?node=<id>`); its other tabs keep the
   explorer's details, columns and impact. `/lineage?node=<id>` selects a node. The
-  overlay can be switched off. A new JSON route, `/api/lineage/overlay`, returns the
-  overlay at `schema_version` 1; beyond loopback it omits error text (ADR-0009).
+  overlay can be switched off. The page doesn't check the warehouse, so it says reuse
+  is taken on trust, as `ods state run` does. A column trace that reaches an opaque
+  node names where it stops and shows everything past it as *may change*. Nodes and
+  columns can be reached and selected from the keyboard. A new JSON route,
+  `/api/lineage/overlay`, returns the overlay at `schema_version` 1; beyond loopback it
+  omits error text (ADR-0009).
 - The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
   served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
   `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
@@ -183,7 +187,9 @@ the changelog was introduced.
   database connection was still open after the store closed (#279).
 - A lag tolerance longer than the last representable date is now reported as
   "never due", not as a date in the year 9999 (#283).
-- The lineage graph (`ods lineage graph --format json`, `/api/graph`, the explorer)
-  now links a node to every parent it declares, not only to those its SQL reads, so a
-  Python model is no longer drawn apart from what it reads. Impact already counted
-  those parents (#312).
+- The lineage graph now links a node to every parent it declares, not only to those
+  its SQL reads, so a Python model is no longer drawn apart from what it reads. Impact
+  already counted those parents. This adds edges to `ods lineage graph` in every format
+  (JSON, `/api/graph`, DOT, Mermaid, GraphML) and to the explorers, and
+  `--focus` with `--upstream`/`--downstream` can now keep more nodes. Each JSON
+  `node_edges` entry gains `via`: `sql`, or `declared` when only declared (#312).

@@ -302,6 +302,9 @@ pub struct RunRecord {
     pub kept: usize,
     /// The target it built in, if recorded.
     pub target: Option<Target>,
+    /// For each node the snapshot holds, the names of its recorded fingerprint's
+    /// components, so a page can say which were compared (#312).
+    pub components: BTreeMap<String, Vec<String>>,
 }
 
 impl RunRecord {
@@ -320,6 +323,7 @@ impl RunRecord {
             built,
             kept,
             target: None,
+            components: BTreeMap::new(),
         }
     }
 
@@ -344,6 +348,14 @@ impl RunRecord {
                 .target
                 .as_ref()
                 .map(|t| Target::new(t.name.clone(), t.kind.clone())),
+            components: snapshot
+                .nodes
+                .iter()
+                .map(|(id, node)| {
+                    let names = node.fingerprint.components.keys().cloned().collect();
+                    (id.clone(), names)
+                })
+                .collect(),
         }
     }
 }

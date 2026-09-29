@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, RelationName};
 use ods_lineage::{
-    Change, ColumnChangeKind, ImpactReason, LineageNode, LineageProject, MemoryCache, NodeKind,
-    build, diff,
+    Change, ColumnChangeKind, EdgeSource, ImpactReason, LineageNode, LineageProject, MemoryCache,
+    NodeKind, build, diff,
 };
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
@@ -517,15 +517,32 @@ fn node_edges_are_the_dag_even_where_the_sql_says_nothing() {
     )
     .unwrap();
     let document = graph.document(&|id| id.to_owned(), &ods_lineage::GraphFilter::default());
-    let edge = |from: &str, to: &str| {
+    let via = |from: &str, to: &str| {
         document
             .node_edges
             .iter()
-            .any(|e| e.from == from && e.to == to)
+            .find(|e| e.from == from && e.to == to)
+            .map(|e| e.via)
     };
-    assert!(edge("customers", "segments"), "{:?}", document.node_edges);
-    assert!(edge("orders", "legacy_report"));
-    assert!(edge("stg_orders", "orders"));
+    // Only declared: how the Python model uses `customers` is unknown.
+    assert_eq!(
+        via("customers", "segments"),
+        Some(EdgeSource::Declared),
+        "{:?}",
+        document.node_edges
+    );
+    // Read by its SQL (and declared too): the SQL says how.
+    assert_eq!(via("orders", "legacy_report"), Some(EdgeSource::Sql));
+    assert_eq!(via("stg_orders", "orders"), Some(EdgeSource::Sql));
+    let json = serde_json::to_value(&document).unwrap();
+    assert!(
+        json["node_edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["to"] == "segments" && e["via"] == "declared"),
+        "{json}"
+    );
     let segments = document.nodes.iter().find(|n| n.id == "segments").unwrap();
     assert!(segments.opaque);
     assert_eq!(segments.layer, 3, "laid out after its parent");

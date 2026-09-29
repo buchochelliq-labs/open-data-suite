@@ -11,6 +11,7 @@ expression: pretty(&body)
   "nodes": {
     "model.shop.customers": {
       "changed_components": [],
+      "components": [],
       "decision": "never_built",
       "last_built": null,
       "model_href": "catalog/model.shop.customers",
@@ -22,11 +23,13 @@ expression: pretty(&body)
           "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
         }
       ],
+      "relation": null,
       "summary": "never built",
       "why_href": "state/plan?node=model.shop.customers"
     },
     "model.shop.orders": {
       "changed_components": [],
+      "components": [],
       "decision": "never_built",
       "last_built": null,
       "model_href": "catalog/model.shop.orders",
@@ -38,11 +41,13 @@ expression: pretty(&body)
           "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
         }
       ],
+      "relation": null,
       "summary": "never built",
       "why_href": "state/plan?node=model.shop.orders"
     },
     "model.shop.segments": {
       "changed_components": [],
+      "components": [],
       "decision": "never_built",
       "last_built": null,
       "model_href": "catalog/model.shop.segments",
@@ -54,11 +59,13 @@ expression: pretty(&body)
           "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
         }
       ],
+      "relation": null,
       "summary": "never built",
       "why_href": "state/plan?node=model.shop.segments"
     },
     "seed.shop.countries": {
       "changed_components": [],
+      "components": [],
       "decision": "never_built",
       "last_built": null,
       "model_href": "catalog/seed.shop.countries",
@@ -70,6 +77,7 @@ expression: pretty(&body)
           "message": "No state store yet: no build is recorded, so every node builds. Record a first run with `ods state build`."
         }
       ],
+      "relation": null,
       "summary": "never built",
       "why_href": "state/plan?node=seed.shop.countries"
     }

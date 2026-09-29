@@ -88,7 +88,7 @@ impl ServeOptions {
         }
     }
 
-    /// Serves under a URL prefix such as `/lineage` or `/tools/lineage`.
+    /// Serves under a URL prefix such as `/ods` or `/tools/ods`.
     ///
     /// # Errors
     /// Returns [`WebError::BasePath`] unless every segment is made of letters, digits,
@@ -167,7 +167,7 @@ pub enum WebError {
     Load(String),
     /// The URL prefix isn't a plain path.
     #[error(
-        "invalid base path `{0}`: use segments of letters, digits, `-`, `.`, `_` or `~`, e.g. /lineage"
+        "invalid base path `{0}`: use segments of letters, digits, `-`, `.`, `_` or `~`, e.g. /ods"
     )]
     BasePath(String),
     /// Binding or serving failed.
@@ -358,27 +358,51 @@ async fn explorer(State(state): State<Shared>, Query(query): Query<LineageQuery>
     // after it.
     let generation = state.generation.load(Ordering::SeqCst);
     let snapshot = state.current();
-    let dashboard = snapshot.dashboard();
-    let overlay = dashboard.lineage_overlay(&snapshot.document, state.details);
-    match crate::lineage::lineage_page(
-        &dashboard.shell("lineage"),
-        &snapshot.document,
-        &overlay,
-        query.node.as_deref(),
-        generation,
-    ) {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let page = move |overlay: crate::lineage::LineageOverlay| {
+        let dashboard = snapshot.dashboard();
+        crate::lineage::lineage_page(
+            &dashboard.shell("lineage"),
+            &snapshot.document,
+            &overlay,
+            query.node.as_deref(),
+            generation,
+        )
+    };
+    match lineage_overlay_of(&state).await {
+        Ok(overlay) => match page(overlay) {
+            Ok(html) => Html(html).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(()) => overlay_failed(),
     }
 }
 
 /// `/api/lineage/overlay`: the plan's decision for each node, as the page colours it.
-async fn lineage_overlay(State(state): State<Shared>) -> Json<crate::lineage::LineageOverlay> {
+async fn lineage_overlay(State(state): State<Shared>) -> Response {
+    match lineage_overlay_of(&state).await {
+        Ok(overlay) => Json(overlay).into_response(),
+        Err(()) => overlay_failed(),
+    }
+}
+
+/// The overlay as of now. Planning reads the project and runs the planner, so it runs
+/// on a blocking thread, through the dashboard's `plan_at` like every page's plan.
+async fn lineage_overlay_of(state: &Shared) -> Result<crate::lineage::LineageOverlay, ()> {
     let snapshot = state.current();
-    Json(
+    let details = state.details;
+    tokio::task::spawn_blocking(move || {
         snapshot
             .dashboard()
-            .lineage_overlay(&snapshot.document, state.details),
+            .lineage_overlay(&snapshot.document, details)
+    })
+    .await
+    .map_err(|e| tracing::warn!(error = %e, "the lineage overlay couldn't be made"))
+}
+
+fn overlay_failed() -> Response {
+    error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the overlay couldn't be made; see the server log",
     )
 }
 

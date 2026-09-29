@@ -187,12 +187,19 @@ fn the_overlay_is_the_plan_against_the_recorded_state() {
     drop(server);
     assert_eq!(fs::read(&db).unwrap(), before, "the page only reads");
 
+    assert_agrees_with_plan(&overlay, &target, &db, dir);
+}
+
+/// The overlay says what `ods state plan` says: the same nodes, decisions and main
+/// reasons, and reuse taken on trust.
+#[cfg(unix)]
+fn assert_agrees_with_plan(overlay: &Value, target: &Path, db: &Path, dir: &Path) {
     // The same decisions as `ods state plan`.
     let plan = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(["state", "plan", "--json", "--target-dir"])
-        .arg(&target)
+        .arg(target)
         .arg("--state-db")
-        .arg(&db)
+        .arg(db)
         .current_dir(dir)
         .env_clear()
         .output()
@@ -202,13 +209,82 @@ fn the_overlay_is_the_plan_against_the_recorded_state() {
         .as_array()
         .unwrap_or_else(|| panic!("{plan}"));
     assert_eq!(entries.len(), 13, "{plan}");
+    // The same nodes both ways…
+    let planned: std::collections::BTreeSet<&str> = entries
+        .iter()
+        .map(|e| e["node"].as_str().unwrap())
+        .collect();
+    let shown: std::collections::BTreeSet<&str> = overlay["nodes"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(planned, shown);
+    // …the same decision, and the same main reason.
     for entry in entries {
-        let shown = &overlay["nodes"][entry["node"].as_str().unwrap()]["decision"];
+        let node = &overlay["nodes"][entry["node"].as_str().unwrap()];
         let action = entry["action"].as_str().unwrap();
         assert!(
-            (action == "reuse") == (shown == "reuse"),
-            "{}: plan says {action}, overlay {shown}",
+            (action == "reuse") == (node["decision"] == "reuse"),
+            "{}: plan says {action}, overlay {}",
+            entry["node"],
+            node["decision"]
+        );
+        assert_eq!(
+            node["reasons"][0]["code"], entry["reasons"][0]["code"],
+            "{}",
             entry["node"]
         );
+        if action == "reuse" {
+            assert_eq!(
+                node["relation"],
+                "not checked: this page doesn't query the warehouse; `ods state build --dry-run` checks",
+                "the page's plan doesn't check the warehouse, and says so"
+            );
+        }
     }
+}
+
+/// A state database that can't be read: every node is unknown (it would build), never
+/// reused, and the page still loads.
+#[test]
+fn an_unreadable_store_shows_every_node_as_unknown() {
+    let scratch = tempfile::tempdir().unwrap();
+    let db = scratch.path().join("state.db");
+    std::fs::write(&db, "not a database").unwrap();
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let server = serve(&target, None, &["--state-db", db.to_str().unwrap()]);
+    let overlay = overlay(&server);
+    assert_eq!(overlay["state"], "unreadable", "{overlay}");
+    assert!(overlay["error"].is_string(), "said on loopback: {overlay}");
+    let nodes = overlay["nodes"].as_object().unwrap();
+    assert_eq!(nodes.len(), 13);
+    assert!(
+        nodes.values().all(|n| n["decision"] == "unknown"),
+        "{overlay}"
+    );
+    assert_eq!(get(&server, "lineage").0, 200);
+}
+
+/// The plan can't be made when the project's own inputs are broken (here, the source
+/// freshness results): every node is unknown, not reused.
+#[test]
+fn a_plan_that_cant_be_made_shows_every_node_as_unknown() {
+    let scratch = tempfile::tempdir().unwrap();
+    let sources = scratch.path().join("sources.json");
+    std::fs::write(&sources, "{").unwrap();
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let server = serve(&target, None, &["--sources", sources.to_str().unwrap()]);
+    let overlay = overlay(&server);
+    assert_eq!(overlay["state"], "project_unreadable", "{overlay}");
+    assert!(
+        overlay["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|n| n["decision"] == "unknown"),
+        "{overlay}"
+    );
+    assert_eq!(get(&server, "lineage").0, 200);
 }

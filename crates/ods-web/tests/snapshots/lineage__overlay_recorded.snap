@@ -14,6 +14,20 @@ expression: pretty(&body)
       "changed_components": [
         "sql"
       ],
+      "components": [
+        {
+          "changed": true,
+          "name": "sql"
+        },
+        {
+          "changed": false,
+          "name": "config"
+        },
+        {
+          "changed": false,
+          "name": "upstream"
+        }
+      ],
       "decision": "build",
       "last_built": {
         "run": "9ea38bd5",
@@ -29,11 +43,13 @@ expression: pretty(&body)
           "message": "Code changed since run 9ea38bd5: sql"
         }
       ],
+      "relation": null,
       "summary": "code changed",
       "why_href": "state/plan?node=model.shop.customers"
     },
     "model.shop.orders": {
       "changed_components": [],
+      "components": [],
       "decision": "reuse",
       "last_built": {
         "run": "9ea38bd5",
@@ -49,11 +65,13 @@ expression: pretty(&body)
           "message": "Code and inputs unchanged since run 9ea38bd5"
         }
       ],
+      "relation": "not checked: this page doesn't query the warehouse; `ods state build --dry-run` checks",
       "summary": "unchanged",
       "why_href": "state/plan?node=model.shop.orders"
     },
     "model.shop.segments": {
       "changed_components": [],
+      "components": [],
       "decision": "build",
       "last_built": {
         "run": "9ea38bd5",
@@ -69,11 +87,13 @@ expression: pretty(&body)
           "message": "Upstream code changed: customers will be rebuilt"
         }
       ],
+      "relation": null,
       "summary": "upstream code changed",
       "why_href": "state/plan?node=model.shop.segments"
     },
     "seed.shop.countries": {
       "changed_components": [],
+      "components": [],
       "decision": "build",
       "last_built": null,
       "model_href": "catalog/seed.shop.countries",
@@ -85,6 +105,7 @@ expression: pretty(&body)
           "message": "Last built in another target (prod)"
         }
       ],
+      "relation": null,
       "summary": "target changed",
       "why_href": "state/plan?node=seed.shop.countries"
     }
@@ -93,6 +114,7 @@ expression: pretty(&body)
   "schema_version": 1,
   "state": "recorded",
   "warnings": [
-    "no source freshness results"
+    "no source freshness results",
+    "reuse assumes each relation built earlier still exists: this page didn't check the warehouse (`ods state build --dry-run` does)"
   ]
 }

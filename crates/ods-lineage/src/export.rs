@@ -64,7 +64,8 @@ pub struct GraphNode {
     pub layer: usize,
 }
 
-/// A node-level edge (the node reads the other).
+/// A node-level edge (the node reads the other): an edge of the DAG, never a
+/// relationship between tables.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct NodeEdge {
@@ -72,6 +73,20 @@ pub struct NodeEdge {
     pub from: String,
     /// Downstream node id.
     pub to: String,
+    /// How the edge is known: from the node's SQL, or only from what it declares.
+    pub via: EdgeSource,
+}
+
+/// How a node-level edge is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EdgeSource {
+    /// The node's analyzed SQL reads the upstream relation.
+    Sql,
+    /// The node only declares the upstream (a Python model, SQL that couldn't be
+    /// analyzed, or a `depends_on` hint): how it uses it is unknown.
+    Declared,
 }
 
 /// The whole graph as one JSON document (format version [`GRAPH_SCHEMA_VERSION`]).
@@ -123,20 +138,26 @@ impl ColumnGraph {
     /// The graph as a [`GraphDocument`]. `name` gives each node's display name.
     pub fn document(&self, name: &dyn Fn(&str) -> String, filter: &GraphFilter) -> GraphDocument {
         let mut column_edges = BTreeSet::new();
-        let mut node_edges = BTreeSet::new();
+        let mut edge_sources: BTreeMap<(String, String), EdgeSource> = BTreeMap::new();
         for node in self.nodes() {
             // Node edges are the DAG's: what the SQL reads and what the node declares.
             // A node whose SQL can't be analyzed (a Python model) or that has none still
-            // reads its declared parents, as impact already assumes.
-            let sql_reads = node.lineage.iter().flat_map(|l| &l.relations_read);
-            for relation in sql_reads.chain(&node.depends_on) {
+            // reads its declared parents, as impact already assumes. An edge the SQL
+            // shows is `sql`, even when also declared.
+            let sql_reads = node
+                .lineage
+                .iter()
+                .flat_map(|l| &l.relations_read)
+                .map(|r| (r, EdgeSource::Sql));
+            let declared = node.depends_on.iter().map(|r| (r, EdgeSource::Declared));
+            for (relation, via) in sql_reads.chain(declared) {
                 if let Some(upstream) = self.node_for(relation)
                     && upstream.id != node.id
                 {
-                    node_edges.insert(NodeEdge {
-                        from: upstream.id.clone(),
-                        to: node.id.clone(),
-                    });
+                    edge_sources
+                        .entry((upstream.id.clone(), node.id.clone()))
+                        .and_modify(|known| *known = (*known).min(via))
+                        .or_insert(via);
                 }
             }
             let Some(lineage) = &node.lineage else {
@@ -176,6 +197,10 @@ impl ColumnGraph {
             }
         }
 
+        let node_edges: BTreeSet<NodeEdge> = edge_sources
+            .into_iter()
+            .map(|((from, to), via)| NodeEdge { from, to, via })
+            .collect();
         let keep = if filter.focus.is_empty() {
             None
         } else {

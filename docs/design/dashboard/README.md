@@ -79,6 +79,25 @@ metrics.
 **Needs:** `ods lineage` and the plan. Model-to-model edges come from the DAG. They
 are not relationships; those belong to the ERD (AGENTS rule 6).
 
+**Built (#312) with these tokens** (light / dark), beside the board's:
+
+| Token | Light | Dark | Used for |
+|---|---|---|---|
+| `--kind-seed` | `#7C9A6A` | `#9BB88A` | seed stripe (the board's) |
+| `--kind-model` | `#6B7B93` | `#8E9DB3` | model stripe (the board's) |
+| `--kind-source` | `#A08450` | `#C9AE7C` | source stripe (not on the board) |
+| `--kind-snapshot` | `#8570B0` | `#B0A0DA` | snapshot stripe (not on the board) |
+| `--edge` | `#A7B0BD` | `#4A5563` | DAG edge; dashed when only declared |
+| `--edge-indirect` | `#A98BD0` | `#B59BE0` | row-shaping column edge, dashed |
+| `--edge-up` | `#4A5462` | `#C9D1DB` | ↑ upstream of a traced column |
+| `--edge-down` | `#D9730D` | `#FFA34D` | ↓ downstream of a traced column |
+| `--maybe` | `#8A5A00` | `#E3B341` | past an opaque node: may change (dashed) |
+| `--warn-text` | `#8A5A00` | `#E3B341` | warning text (AA on the panel) |
+
+The model graph's selection path uses the accent. NEVER BUILT is an outlined build
+pill; UNKNOWN keeps the board's dashed pill. The offline page (`ods lineage view`) has
+no font files, so it falls back to the system fonts.
+
 ### Lineage: impact simulator
 
 ![Impact simulator](images/impact.png)

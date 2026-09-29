@@ -53,7 +53,7 @@ impl Module for Serve {
                         .long("base-path")
                         .value_name("PATH")
                         .default_value("")
-                        .help("URL prefix when behind a reverse proxy, e.g. /lineage"),
+                        .help("URL prefix when behind a reverse proxy, e.g. /ods"),
                 )
                 .arg(
                     Arg::new("allow-host")

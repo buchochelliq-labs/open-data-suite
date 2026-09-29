@@ -129,8 +129,8 @@ read-only ODS Dashboard ([design](../design/dashboard/README.md)).
   - no route writes anything;
   - the snapshot holds only lineage metadata: names, columns and edges, no SQL results
     and no credentials.
-- **Reverse proxies:** `--base-path /lineage` serves at `/lineage/`, and `/lineage`
-  redirects there. The page resolves `api/…` and `graph.json` relative to its own URL,
+- **Reverse proxies:** `--base-path /ods` serves at `/ods/` (the explorer at
+  `/ods/lineage`, amended by #310), and `/ods` redirects there. The page resolves `api/…` and `graph.json` relative to its own URL,
   so the same asset works at any prefix.
 - **Live reload:** the server polls each artifact's mtime and length every second (no
   `notify` dependency), and loads a change only once it has held for a whole tick, so a
@@ -167,8 +167,18 @@ into the dashboard's shell, with a State overlay.
   `<base>/lineage?node=<id>` selects a node.
 - **Edges are the DAG's** (AGENTS rule 6): the exported graph now also links a node to
   the parents it declares, so an opaque node (a Python model) is no longer drawn apart;
-  impact already read them. They are drawn and described as "reads", never as
-  relationships.
+  impact already read them. Each `NodeEdge` says how it is known, `via: "sql"` or
+  `"declared"` (additive: the graph stays at `schema_version` 1); declared-only edges
+  are drawn dashed. They are drawn and described as "reads", never as relationships.
+- **Reuse on trust** (rules 3 and 4): the page's plan doesn't query the warehouse, so a
+  reused node's relation is unchecked. Each reused node says so (`relation`), and the
+  overlay carries the same warning as `ods state run`; nothing calls it checked.
+- **Column traces stop visibly:** at an opaque node the explorer can't follow a
+  column, so it names the stop and shows every node past it as *may change*, never as
+  unaffected.
+- **Cost:** planning runs on a blocking thread (`spawn_blocking`) through the
+  dashboard's shared `plan_at`, so it never holds an async worker; memoising it is the
+  State pages' change (#311), shared by every page.
 
 ## Consequences
 - Positive:

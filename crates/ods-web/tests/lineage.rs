@@ -8,14 +8,15 @@ use std::sync::Arc;
 
 use ods_core::FreshnessPolicy;
 use ods_core::state::{
-    ExecutionPlan, PlanAction, PlanEntry, Reason, ReasonCode, SnapshotId, Timestamp,
+    Evidence, Exactness, ExecutionPlan, PlanAction, PlanEntry, Reason, ReasonCode, SnapshotId,
+    Timestamp,
 };
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, RelationName};
 use ods_lineage::{GraphFilter, LineageNode, LineageProject, MemoryCache, NodeKind, build};
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
 use ods_web::dashboard::{OpaqueNode, Planner, Recorded, RunRecord, StateInput, StateStatus};
-use ods_web::lineage::Decision;
+use ods_web::lineage::{Decision, RELATION_NOT_CHECKED, TRUSTED_REUSE};
 use ods_web::{Dashboard, ServeOptions, Snapshot, router, standalone_page};
 
 fn rel(name: &str) -> RelationName {
@@ -121,7 +122,7 @@ fn plan() -> ExecutionPlan {
 }
 
 fn recorded() -> Dashboard {
-    let run = RunRecord::new(
+    let mut run = RunRecord::new(
         2,
         RUN,
         at("2026-09-29T11:00:00Z"),
@@ -132,6 +133,10 @@ fn recorded() -> Dashboard {
         ],
         1,
     );
+    run.components = BTreeMap::from([(
+        "model.shop.customers".to_owned(),
+        vec!["config".to_owned(), "sql".to_owned(), "upstream".to_owned()],
+    )]);
     Dashboard::new("shop", "dev")
         .with_opaque(vec![OpaqueNode::new(
             "model.shop.segments",
@@ -309,7 +314,9 @@ fn the_page_sits_in_the_shell_with_the_overlay_embedded() {
     assert!(page.contains(r#""opaque":"Python model: column lineage unknown""#));
     assert!(page.contains(r#"<script type="application/json" id="ods-selected">null</script>"#));
     // The DAG's edges are between nodes, and never called relationships (rule 6).
-    assert!(page.contains(r#"{"from":"model.shop.customers","to":"model.shop.segments"}"#));
+    assert!(page.contains(
+        r#"{"from":"model.shop.customers","to":"model.shop.segments","via":"declared"}"#
+    ));
     let dagre = include_str!("../assets/vendor/dagre.min.js");
     assert!(
         !page
@@ -526,4 +533,84 @@ fn the_offline_page_has_the_explorer_without_the_shell_or_the_overlay() {
     );
     assert!(!page.contains("assets/fonts/"), "no font files to fetch");
     assert!(!page.contains("__ODS_"), "every placeholder is replaced");
+}
+
+#[test]
+fn reuse_never_claims_a_relation_check_the_page_did_not_make() {
+    let document = lineage().document;
+    let overlay = recorded().lineage_overlay(&document, true);
+    let orders = &overlay.nodes["model.shop.orders"];
+    assert_eq!(orders.decision, Decision::Reuse);
+    assert_eq!(orders.relation.as_deref(), Some(RELATION_NOT_CHECKED));
+    assert!(
+        overlay.warnings.iter().any(|w| w == TRUSTED_REUSE),
+        "{:?}",
+        overlay.warnings
+    );
+    // Nothing the page says about reuse claims the warehouse was checked.
+    let addr = start(lineage().with_dashboard(recorded()));
+    let (_, _, page) = get(addr, "/lineage");
+    let (_, _, api) = get(addr, "/api/lineage/overlay");
+    for text in [page.as_str(), api.as_str()] {
+        assert!(
+            !text.contains("relation checked"),
+            "claims a relation check"
+        );
+        assert!(!text.contains("unchanged, relation"));
+    }
+    assert!(
+        page.contains("relation not checked here"),
+        "the legend says so"
+    );
+
+    // Where the plan did check, it says what it found, and there is no warning.
+    let mut checked = entry(
+        "model.shop.orders",
+        PlanAction::Reuse,
+        ReasonCode::WithinLagTolerance,
+        "new upstream data, within its lag tolerance",
+    );
+    checked.evidence = vec![Evidence::new(
+        "relation_exists",
+        "model.shop.orders",
+        Some("table".into()),
+        Exactness::Exact,
+    )];
+    let dashboard =
+        Dashboard::new("shop", "dev").with_state(StateInput::Recorded(Box::new(Recorded::new(
+            "db",
+            vec![],
+            0,
+            Ok(ExecutionPlan::new(
+                None,
+                at("2026-09-29T12:00:00Z"),
+                vec![checked],
+            )),
+        ))));
+    let overlay = dashboard.lineage_overlay(&document, true);
+    let orders = &overlay.nodes["model.shop.orders"];
+    assert_eq!(
+        orders.relation.as_deref(),
+        Some("checked: in the warehouse (table)")
+    );
+    // Reuse isn't always "unchanged": the summary gives the reason.
+    assert_eq!(orders.summary, "within lag tolerance");
+    assert!(!overlay.warnings.iter().any(|w| w == TRUSTED_REUSE));
+}
+
+#[test]
+fn the_fingerprint_step_lists_changed_and_unchanged_components() {
+    let overlay = recorded().lineage_overlay(&lineage().document, true);
+    let customers = &overlay.nodes["model.shop.customers"];
+    let components: Vec<(&str, bool)> = customers
+        .components
+        .iter()
+        .map(|c| (c.name.as_str(), c.changed))
+        .collect();
+    assert_eq!(
+        components,
+        [("sql", true), ("config", false), ("upstream", false)]
+    );
+    // Nothing recorded to compare with: nothing listed.
+    assert!(overlay.nodes["seed.shop.countries"].components.is_empty());
 }

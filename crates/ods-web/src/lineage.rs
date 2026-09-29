@@ -54,8 +54,10 @@ pub struct LineageOverlay {
 pub enum Decision {
     /// It builds: its code, checks, target or inputs changed.
     Build,
-    /// It keeps its last successful build: nothing changed, and its relation was
-    /// checked (or the check was waived by the policy).
+    /// It keeps its last successful build: its code and inputs are unchanged, or its
+    /// new upstream data is within its lag tolerance (see the summary). Whether its
+    /// relation is still in the warehouse is only known when the plan checked it, which
+    /// this page's plan doesn't: see [`NodeOverlay::relation`].
     Reuse,
     /// It builds: no successful build is recorded.
     NeverBuilt,
@@ -77,6 +79,12 @@ pub struct NodeOverlay {
     pub reasons: Vec<ReasonView>,
     /// Fingerprint components that differ from the last successful build.
     pub changed_components: Vec<String>,
+    /// Every fingerprint component compared, changed or not; empty when there was no
+    /// recorded build to compare with. Changed ones first.
+    pub components: Vec<ComponentView>,
+    /// For a reused node, what is known about its relation (table or view) in the
+    /// warehouse: whether the plan checked it, and what it found. `None` otherwise.
+    pub relation: Option<String>,
     /// The recent run that last built it, if it is one of them.
     pub last_built: Option<LastBuilt>,
     /// Why its column lineage is unknown, if it is opaque.
@@ -100,6 +108,26 @@ pub struct ReasonView {
     /// The planner's explanation, with run ids shortened.
     pub message: String,
 }
+
+/// A fingerprint component, and whether it changed since the last successful build.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ComponentView {
+    /// Its name, e.g. `sql` or `config`.
+    pub name: String,
+    /// Whether it differs.
+    pub changed: bool,
+}
+
+/// What a reused node's relation check says when the plan didn't check the warehouse,
+/// as this page's plan never does. The words of `ods state run`'s notice, for this page.
+pub const RELATION_NOT_CHECKED: &str = "not checked: this page doesn't query the warehouse; \
+    `ods state build --dry-run` checks";
+
+/// The warning the overlay carries whenever it shows reuse it took on trust.
+pub const TRUSTED_REUSE: &str = "reuse assumes each relation built earlier still exists: \
+    this page didn't check the warehouse (`ods state build --dry-run` does)";
 
 /// The recorded run a node's last successful build came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -132,7 +160,9 @@ fn why_href(id: &str) -> String {
     format!("state/plan?node={}", utf8_percent_encode(id, COMPONENT))
 }
 
-/// The decision a plan entry shows as. The first reason is the most important one.
+/// The decision a plan entry shows as. Only the first (most important) reason decides
+/// between BUILD, NEVER BUILT and UNKNOWN: a build whose first reason is missing
+/// evidence is UNKNOWN even if a later reason is, say, a code change.
 fn decision(entry: &PlanEntry) -> Decision {
     match entry.action {
         PlanAction::Reuse => Decision::Reuse,
@@ -163,6 +193,42 @@ fn reason_view(reason: &Reason, runs: &[RunRecord]) -> ReasonView {
         label: reason_label(reason.code),
         message: sentence(&message),
     }
+}
+
+/// What the plan knows of a reused node's relation, from its `relation_exists`
+/// evidence: found (and as what), or not checked.
+fn relation_fact(entry: &PlanEntry) -> Option<String> {
+    if entry.action != PlanAction::Reuse {
+        return None;
+    }
+    let checked = entry
+        .evidence
+        .iter()
+        .find(|e| e.kind == "relation_exists")
+        .and_then(|e| e.value.as_deref());
+    Some(checked.map_or_else(
+        || RELATION_NOT_CHECKED.to_owned(),
+        |found| format!("checked: in the warehouse ({found})"),
+    ))
+}
+
+/// Each component of the recorded fingerprint, changed ones first, then by name.
+fn components(entry: &PlanEntry, recorded: Option<&Vec<String>>) -> Vec<ComponentView> {
+    let Some(recorded) = recorded else {
+        return Vec::new();
+    };
+    let mut names: Vec<&String> = recorded.iter().chain(&entry.changed_components).collect();
+    names.sort();
+    names.dedup();
+    let mut views: Vec<ComponentView> = names
+        .into_iter()
+        .map(|name| ComponentView {
+            name: name.clone(),
+            changed: entry.changed_components.contains(name),
+        })
+        .collect();
+    views.sort_by_key(|c| !c.changed);
+    views
 }
 
 /// What the whole graph shows when there is no plan: the same decision and reason for
@@ -270,11 +336,11 @@ impl Dashboard {
             if node.kind == NodeKind::Source {
                 continue;
             }
-            let (decision, summary, reasons, changed_components) = decided(
-                entries.get(node.id.as_str()).copied(),
-                blanket.as_ref(),
-                runs,
-            );
+            let entry = entries.get(node.id.as_str()).copied();
+            let (decision, summary, reasons, changed_components) =
+                decided(entry, blanket.as_ref(), runs);
+            // The latest run's snapshot holds every node's last good build.
+            let recorded = runs.first().and_then(|run| run.components.get(&node.id));
             let last_built = runs
                 .iter()
                 .find(|run| run.built.iter().any(|b| b == &node.id))
@@ -297,12 +363,22 @@ impl Dashboard {
                     summary,
                     reasons,
                     changed_components,
+                    components: entry.map(|e| components(e, recorded)).unwrap_or_default(),
+                    relation: entry.and_then(relation_fact),
                     last_built,
                     opaque,
                     model_href: model_href(&node.id),
                     why_href: why_href(&node.id),
                 },
             );
+        }
+        // Reuse taken on trust is said so, as `ods state run` says it (rules 3 and 4).
+        if overlay
+            .nodes
+            .values()
+            .any(|n| n.relation.as_deref() == Some(RELATION_NOT_CHECKED))
+        {
+            overlay.warnings.push(TRUSTED_REUSE.to_owned());
         }
         overlay
     }
@@ -420,6 +496,7 @@ pub(crate) fn explorer_markup(served: bool) -> String {
 <option disabled>Resource type (planned)</option>
 <option disabled>Freshness evidence (planned)</option>
 <option disabled>Lineage confidence (planned)</option>
+<option disabled>Latest status (planned)</option>
 </select>"#
     } else {
         ""
@@ -430,23 +507,24 @@ pub(crate) fn explorer_markup(served: bool) -> String {
         ""
     };
     format!(
-        r#"<div class="lin" id="lin">
+        r##"<div class="lin" id="lin">
+<a class="lin-skip" href="#lin-panel">Skip to the selected node's details</a>
 <section class="lin-main" aria-label="Lineage graph">
 <div class="lin-bar">
-<div class="lin-find"><label class="lin-sel" for="lin-search"><span class="lin-muted">search</span><input id="lin-search" type="search" autocomplete="off" spellcheck="false" placeholder="a model or column" aria-label="Search models and columns"></label><div id="lin-results" role="listbox"></div></div>
+<div class="lin-find"><label class="lin-sel" for="lin-search"><span class="lin-muted">search</span><input id="lin-search" type="search" autocomplete="off" spellcheck="false" placeholder="model or column" aria-label="Search model and column names" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="lin-results"></label><div id="lin-results" role="listbox" aria-label="Matching models and columns"></div></div>
 {overlay}
 <label class="lin-check"><input type="checkbox" id="lin-columns">Columns</label>
 <label class="lin-check" title="Column view: also show inputs that shape rows (joins, filters, grouping)"><input type="checkbox" id="lin-indirect" checked>Indirect edges</label>
 <button type="button" id="lin-fit" class="lin-fit">Fit</button>
 {impact}
 </div>
-<div class="lin-canvas" id="lin-canvas"><svg id="lin-svg" role="img" aria-label="Lineage graph: each node reads the nodes to its left"><g id="lin-viewport"><g id="lin-edges"></g><g id="lin-nodes"></g></g></svg>
+<div class="lin-canvas" id="lin-canvas"><svg id="lin-svg" role="group" aria-label="Lineage graph: each node reads the nodes to its left"><g id="lin-viewport"><g id="lin-edges"></g><g id="lin-nodes"></g></g></svg>
 <div class="lin-legend" id="lin-legend"></div>
 <div class="lin-corner"><span id="lin-stats"></span><label class="lin-check" title="Show only the selection and what it connects to"><input type="checkbox" id="lin-focus">Focus on selection</label></div>
 </div>
 </section>
-<aside class="lin-panel" id="lin-panel" aria-label="Selected node"></aside>
-</div>"#
+<aside class="lin-panel" id="lin-panel" aria-label="Selected node" tabindex="-1"></aside>
+</div>"##
     )
 }
 
@@ -542,8 +620,11 @@ mod tests {
     }
 
     #[test]
-    fn the_script_cannot_collide_with_a_placeholder_or_end_its_element() {
-        for asset in [CSS, JS] {
+    fn the_inlined_parts_cannot_collide_with_a_placeholder_or_end_their_element() {
+        let dashboard_css = include_str!("../assets/dashboard.css");
+        let offline = explorer_markup(false);
+        let served = explorer_markup(true);
+        for asset in [CSS, JS, dashboard_css, offline.as_str(), served.as_str()] {
             assert!(!asset.contains("__ODS_"));
             assert!(!asset.to_ascii_lowercase().contains("</script"));
             assert!(!asset.to_ascii_lowercase().contains("</style"));
