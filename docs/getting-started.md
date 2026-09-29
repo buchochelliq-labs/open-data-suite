@@ -7,7 +7,7 @@
 
 ## 1. Install
 
-From the first release (v0.1.0), install next to dbt with pip:
+From the first release (v0.0.1), install next to dbt with pip:
 
 ```sh
 pip install opendatasuite
@@ -15,7 +15,7 @@ ods version
 ```
 
 cargo-binstall and direct downloads with checksums (Homebrew coming soon) are on the
-[Install](install.md) page. Until v0.1.0 is out, build from source with Rust 1.90 or
+[Install](install.md) page. Until v0.0.1 is out, build from source with Rust 1.90 or
 newer ([rustup.rs](https://rustup.rs)):
 
 ```sh

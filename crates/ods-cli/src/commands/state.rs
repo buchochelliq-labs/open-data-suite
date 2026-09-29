@@ -27,7 +27,7 @@ use crate::present::{Level, Present, Span, Tone, ViewNode};
 const PASSTHROUGH: &str = "args";
 
 const ABOUT: &str = "Plan and run only what needs to run, with explanations";
-const MILESTONE: &str = "M1 State MVP (v0.1.0)";
+const MILESTONE: &str = "M1 State MVP (v0.0.1)";
 
 /// `ods state`.
 pub struct State;

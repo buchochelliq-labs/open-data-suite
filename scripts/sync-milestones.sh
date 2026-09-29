@@ -2,7 +2,8 @@
 # Apply .github/labels.json and .github/milestones.json to GitHub.
 #
 # Idempotent: creates missing labels/milestones, updates descriptions/due dates,
-# and sets each listed issue's milestone. Requires an authenticated `gh` and `jq`.
+# renames a milestone found by one of its `renamed_from` titles, and sets each listed
+# issue's milestone. Requires an authenticated `gh` and `jq`.
 #
 # Usage:
 #   scripts/sync-milestones.sh [--repo owner/name] [--dry-run] [--close-duplicates]
@@ -46,6 +47,15 @@ existing=$(gh api "repos/$REPO/milestones?state=all&per_page=100" --paginate)
 jq -c '.milestones[]' "$MILESTONES" | while read -r m; do
   title=$(jq -r .title <<<"$m")
   number=$(jq -r --arg t "$title" '.[] | select(.title == $t) | .number' <<<"$existing")
+  # A renamed milestone is found by an earlier title and renamed in place (the PATCH
+  # below sets the new title), so its issues and history stay on one milestone.
+  if [[ -z $number ]]; then
+    for old in $(jq -r '.renamed_from // [] | .[] | @base64' <<<"$m"); do
+      old=$(base64 -d <<<"$old")
+      number=$(jq -r --arg t "$old" '.[] | select(.title == $t) | .number' <<<"$existing")
+      if [[ -n $number ]]; then echo "    renaming #$number '$old' -> '$title'"; break; fi
+    done
+  fi
   args=(-f "title=$title" -f "description=$(jq -r .description <<<"$m")")
   due=$(jq -r '.due_on // empty' <<<"$m")
   [[ -n $due ]] && args+=(-f "due_on=$due")

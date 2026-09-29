@@ -53,8 +53,8 @@ undocumented formats.
 
 ## Decisions taken
 1. **Move data awareness into M1.** It covers dbt `sources.json` freshness (#16), a
-   minimal #19 and a Delta table-version slice of #17, so v0.1.0 is not behind on the
-   headline feature.
+   minimal #19 and a Delta table-version slice of #17, so the first release (v0.0.1) is
+   not behind on the headline feature.
 2. **Default tolerance is 0.** A 45-minute default lets data go stale silently, which
    contradicts rule 3 (conservative defaults). Tolerance is opt-in per node or group,
    and per profile.
