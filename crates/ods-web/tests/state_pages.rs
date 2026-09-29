@@ -276,9 +276,23 @@ fn failed_last_run(started: &str) -> LastRun {
     )
 }
 
+/// The failed last run, for this page's scope, with a run id.
+fn scoped(last: LastRun, run_id: Option<&str>) -> LastRun {
+    last.with_run(Some("jaffle_ods/dev".into()), run_id.map(str::to_owned))
+}
+
+/// The demo, with `last` as the last run.
+fn with_last(last: LastRun) -> Dashboard {
+    recorded(History::new(snapshots()).with_last_run(Some(last)), plan())
+}
+
 fn start(dashboard: Dashboard) -> SocketAddr {
     let options = ServeOptions::new(([127, 0, 0, 1], 0).into());
-    let app = router(lineage().with_dashboard(dashboard), &options);
+    serve_app(router(lineage().with_dashboard(dashboard), &options))
+}
+
+/// Serves `app` on a loopback port, whatever address its options name.
+fn serve_app(app: axum::Router) -> SocketAddr {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -365,14 +379,29 @@ fn the_plan_api_and_page_show_every_decision_with_its_reasons() {
         page.contains("1 / 2"),
         "only the one with relation evidence"
     );
-    assert!(page.contains("not checked: planned offline"));
+    assert!(page.contains("reused relations found in the warehouse"));
+    // Builds first, then reuses, each in plan order.
+    let customers = page.find(r#"data-node="model.customers""#).unwrap();
+    let seed = page.find(r#"data-node="seed.raw_orders""#).unwrap();
+    assert!(customers < seed, "builds come first");
+    assert!(page.contains(
+        r#"<tr id="r0" class="selected" aria-current="true" data-node="model.customers">"#
+    ));
+    // State's pages in the navigation: Plan and Runs link, the rest are planned.
+    assert!(
+        page.contains(r#"<a href="../state/plan" aria-current="page" data-item="plan">Plan</a>"#)
+    );
+    assert!(page.contains(r#"<a href="../state/runs" data-item="runs">Runs</a>"#));
+    assert!(page.contains(r#"data-item="history">History<span class="chip">Planned</span>"#));
+    assert!(page.contains(r#"<a class="crumb" href="plan">State</a>"#));
+    assert!(page.contains("Plan for dev"), "named after the target");
     // Every link stays below the dashboard's root.
     assert!(page.contains(r#"<a href="../" data-section="home">"#));
     assert!(page.contains(r#"<a href="../state/plan" aria-current="page" data-section="state">"#));
     assert!(page.contains("url('../assets/fonts/"));
     assert!(page.contains(r#"<meta name="ods-root" content="../">"#));
     assert!(page.contains(r#"href="../lineage?node=model%2Ecustomers""#));
-    assert!(page.contains(r#"href="../catalog/model%2Ecustomers""#));
+    assert!(!page.contains("catalog/"), "no Model pages yet (#313)");
     assert!(!page.contains("https://"), "no CDN");
 }
 
@@ -561,9 +590,16 @@ fn without_a_state_store_the_pages_say_how_to_record_a_first_run() {
     for path in ["/state/plan", "/state/runs"] {
         let (status, page) = get(addr, path);
         assert_eq!(status, 200, "{path}");
-        assert!(page.contains("No runs recorded yet"), "{path}");
         assert!(page.contains(r#"data-state="no_store""#), "{path}");
+        assert!(
+            page.contains(r#"data-copy="ods state build""#),
+            "{path}: copyable"
+        );
     }
+    let (_, page) = get(addr, "/state/plan");
+    assert!(page.contains("No plan to show yet"), "its own words");
+    let (_, page) = get(addr, "/state/runs");
+    assert!(page.contains("No runs recorded yet"));
     let (status, _) = get(addr, "/state/runs/e6f54fe3");
     assert_eq!(status, 404);
     let (status, _) = get(addr, "/api/state/runs/e6f54fe3");
@@ -595,14 +631,17 @@ fn runs_list_what_the_store_records_and_nothing_more() {
     assert!(page.contains("ODS doesn't schedule anything."));
     assert!(page.contains("CI runs — coming with server mode"));
     assert!(page.contains(r#"aria-disabled="true""#));
-    assert!(page.contains(">Kept</span>"));
+    assert!(page.contains(">Kept</th>"));
+    assert!(page.contains(r#"<th scope="rowgroup" colspan="12">2026-09-29 · UTC</th>"#));
+    assert!(page.contains(r#"aria-label="not recorded""#));
+    assert!(page.contains("recorded: outcome not stored"));
     assert!(!page.contains(">Reused<"), "kept isn't claimed as reuse");
     assert!(
         !page.contains("✓") && !page.contains("SUCCEEDED"),
         "nor success"
     );
     assert!(page.contains(r#"href="runs/4c0b5c8f%2D0000%2D4000%2D8000%2D000000000003""#));
-    assert!(page.contains("3 runs"));
+    assert!(page.contains("3 runs · 3 recorded a snapshot"), "{page}");
     assert!(page.contains("2026-09-29 · UTC"));
     assert!(page.contains("[duration]") && page.contains("[user]"));
     assert!(page.contains(r#"<a class="crumb" href="plan">State</a>"#));
@@ -623,38 +662,53 @@ fn runs_list_what_the_store_records_and_nothing_more() {
 }
 
 #[test]
-fn a_failed_last_run_shows_the_kept_state_and_the_retry() {
-    // Started before snapshot 3 was recorded, and nothing since: tied to it, inferred.
-    let history =
-        History::new(snapshots()).with_last_run(Some(failed_last_run("2026-09-29T00:02:00Z")));
-    let dashboard = recorded(history, plan());
+fn a_failed_last_run_is_tied_to_the_snapshot_that_records_its_run_id() {
+    // Its run id is snapshot 3's: a partial run, whose successes were recorded.
+    let dashboard = with_last(scoped(failed_last_run("2026-09-29T00:02:00Z"), Some(RUN_3)));
     let addr = start(dashboard.clone());
     let (_, body) = get(addr, "/api/state/runs");
     insta::assert_snapshot!("runs_failed_partial", pretty(&body));
     let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
     let row = &view.runs[0];
     assert_eq!(row.outcome, RunOutcome::Failed);
-    assert!(row.inferred);
+    assert!(row.from_last_run);
     assert_eq!((row.failed, row.skipped), (Some(1), Some(1)));
     assert_eq!(view.failed, 1);
     assert_eq!(view.selected.as_deref(), Some(RUN_3));
     let last = view.last_run.as_ref().unwrap();
     assert_eq!(last.snapshot, Some(3));
-    assert!(!last.recorded_nothing);
+    assert!(!last.recorded_nothing_inferred);
     assert_eq!(last.next[0].command, "ods state retry --failed");
     let (_, page) = get(addr, "/state/runs");
-    assert!(page.contains("Failed node"));
+    assert!(page.contains("Failed or not recorded"));
     assert!(page.contains("ods state retry --failed"));
-    assert!(page.contains("inferred"));
+    assert!(
+        page.contains("from the last run&#x27;s record")
+            || page.contains("from the last run's record")
+    );
     assert!(page.contains("[error excerpt]"));
+    assert!(page.contains(r#"aria-label="Show run 4c0b5c8f in the side panel, failed (from the last run's record)""#), "{page}");
     let (status, page) = get(addr, &format!("/state/runs/{RUN_3}"));
     assert_eq!(status, 200);
-    assert!(page.contains("the nodes that failed keep their last good build"));
+    assert!(
+        page.contains("The last run&#x27;s record says some nodes failed")
+            || page.contains("The last run's record says some nodes failed"),
+        "{page}"
+    );
+    // Nothing else is claimed about other runs.
+    let (_, page) = get(addr, &format!("/state/runs/{RUN_2}"));
+    assert!(
+        page.contains("Whether any node failed isn't stored")
+            || page.contains("Whether any node failed isn&#x27;t stored")
+    );
+}
 
-    // Started after the last snapshot: it recorded nothing, and snapshot 3 was kept.
-    let history =
-        History::new(snapshots()).with_last_run(Some(failed_last_run("2026-09-29T00:04:10Z")));
-    let dashboard = recorded(history, plan());
+#[test]
+fn a_last_run_whose_id_no_snapshot_records_probably_recorded_nothing() {
+    let dashboard = with_last(scoped(
+        failed_last_run("2026-09-29T00:04:10Z"),
+        Some("7d21a0c4-0000-4000-8000-000000000004"),
+    ));
     let view = dashboard.runs_view(false, at(NOW), &RunFilter::default(), &BTreeMap::new());
     assert!(view.last_run_listed);
     assert_eq!(view.failed, 1);
@@ -662,7 +716,8 @@ fn a_failed_last_run_shows_the_kept_state_and_the_retry() {
     assert_eq!(view.selected.as_deref(), Some("last"));
     assert!(view.runs.iter().all(|r| r.outcome == RunOutcome::Recorded));
     let last = view.last_run.as_ref().unwrap();
-    assert!(last.recorded_nothing);
+    assert!(last.recorded_nothing_inferred, "inferred, never fact");
+    assert_eq!(last.snapshot, None);
     assert_eq!(last.last_good, Some(3));
     assert_eq!(
         last.command, "ods state build",
@@ -673,32 +728,135 @@ fn a_failed_last_run_shows_the_kept_state_and_the_retry() {
     let (_, page) = get(addr, "/state/runs");
     assert!(page.contains("kept 3"), "{page}");
     assert!(page.contains("Last good state: snapshot 3"));
-    assert!(page.contains("a failed run never replaces the last good state"));
+    assert!(page.contains(r#"<span class="st-grade inferred""#));
+    assert!(page.contains("recorded nothing (inferred)"));
+    assert!(
+        page.contains("4 runs · 3 recorded a snapshot · 1 failed"),
+        "{page}"
+    );
     let (_, body) = get(addr, "/api/state/runs?outcome=recorded");
     let runs: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(runs["last_run_listed"], false, "filtered out");
+    let (_, page) = get(addr, "/state/runs?outcome=recorded");
+    assert!(page.contains("Showing 3 of 4 runs"), "{page}");
 
-    // Started in the very second snapshot 3 was recorded: before or after it can't be
-    // told, so neither the link nor "recorded nothing" is claimed.
-    let history =
-        History::new(snapshots()).with_last_run(Some(failed_last_run("2026-09-29T00:02:37Z")));
-    let dashboard = recorded(history, plan());
+    // Two snapshots recorded since it started, but neither is its own: still only
+    // inferred that it recorded nothing.
+    let mut later = snapshots();
+    for (id, s) in &mut later {
+        if *id >= 2 {
+            s.created_at = at("2026-09-29T00:05:00Z");
+        }
+    }
+    let dashboard = recorded(
+        History::new(later).with_last_run(Some(scoped(
+            failed_last_run("2026-09-29T00:04:10Z"),
+            Some("7d21a0c4-0000-4000-8000-000000000004"),
+        ))),
+        plan(),
+    );
+    let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
+    let last = view.last_run.as_ref().unwrap();
+    assert!(last.recorded_nothing_inferred && last.snapshot.is_none());
+    assert!(view.runs.iter().all(|r| !r.from_last_run));
+}
+
+#[test]
+fn without_a_run_id_two_snapshots_since_it_started_leave_it_untied() {
+    let mut later = snapshots();
+    for (id, s) in &mut later {
+        if *id >= 2 {
+            s.created_at = at("2026-09-29T00:05:00Z");
+        }
+    }
+    let dashboard = recorded(
+        History::new(later)
+            .with_last_run(Some(scoped(failed_last_run("2026-09-29T00:04:10Z"), None))),
+        plan(),
+    );
     let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
     let last = view.last_run.as_ref().unwrap();
     assert_eq!(last.snapshot, None);
-    assert!(!last.recorded_nothing);
+    assert!(!last.recorded_nothing_inferred);
     assert!(!view.last_run_listed);
     assert!(
         view.runs
             .iter()
-            .all(|r| r.outcome == RunOutcome::Recorded && !r.inferred)
+            .all(|r| r.outcome == RunOutcome::Recorded && !r.from_last_run)
     );
     let addr = start(dashboard);
     let (_, page) = get(addr, "/state/runs");
+    assert!(page.contains(r#"data-state="untied_last_run""#), "{page}");
+}
+
+#[test]
+fn a_last_run_for_another_scope_is_not_shown() {
+    let other = failed_last_run("2026-09-29T00:04:10Z")
+        .with_run(Some("jaffle_ods/prod".into()), Some("x".into()));
+    let dashboard = with_last(other);
+    let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
+    assert!(view.last_run.is_none());
+    assert!(view.unscoped_last_run.is_none());
+    assert!(!view.last_run_listed);
+    assert_eq!(view.failed, 0);
+    let addr = start(dashboard);
+    let (_, page) = get(addr, "/state/runs");
     assert!(
-        page.contains("The last run can't be tied to a run here."),
+        !page.contains("orders_view") && !page.contains("retry --failed"),
         "{page}"
     );
+}
+
+#[test]
+fn a_last_run_from_an_older_file_may_belong_to_another_target() {
+    // An older file names no scope: shown apart, never tied or listed.
+    let dashboard = with_last(failed_last_run("2026-09-29T00:04:10Z"));
+    let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
+    assert!(view.last_run.is_none());
+    assert!(!view.last_run_listed);
+    assert!(view.runs.iter().all(|r| !r.from_last_run));
+    let unscoped = view.unscoped_last_run.as_ref().unwrap();
+    assert_eq!(unscoped.snapshot, None);
+    assert!(!unscoped.recorded_nothing_inferred);
+    let addr = start(dashboard);
+    let (_, page) = get(addr, "/state/runs");
+    assert!(page.contains("may belong to another target"), "{page}");
+}
+
+#[test]
+fn beyond_loopback_the_pages_show_no_paths_options_or_errors() {
+    let options = ServeOptions::new(([0, 0, 0, 0], 0).into());
+    let dashboard = with_last(scoped(
+        failed_last_run("2026-09-29T00:04:10Z"),
+        Some("7d21a0c4-0000-4000-8000-000000000004"),
+    ));
+    let app = router(lineage().with_dashboard(dashboard), &options);
+    let addr = serve_app(app);
+    for path in [
+        "/state/plan",
+        "/state/runs",
+        "/api/state/runs",
+        "/api/state/plan",
+        &format!("/state/runs/{RUN_3}"),
+        &format!("/api/state/runs/{RUN_3}"),
+    ] {
+        let (status, body) = get(addr, path);
+        assert_eq!(status, 200, "{path}");
+        assert!(!body.contains("/home/me"), "{path}: {body}");
+        assert!(!body.contains("+customers_view"), "{path}: options");
+        assert!(!body.contains(".ods/state.db"), "{path}: store path");
+    }
+    let broken =
+        Dashboard::new("p", "dev").with_state(StateInput::Recorded(Box::new(Recorded::new(
+            "/home/me/.ods/state.db",
+            vec![],
+            0,
+            Err("can't read /home/me/x".into()),
+        ))));
+    let addr = serve_app(router(lineage().with_dashboard(broken), &options));
+    let (_, page) = get(addr, "/state/plan");
+    assert!(!page.contains("/home/me"), "{page}");
+    assert!(page.contains("see the server log"));
 }
 
 #[test]
@@ -732,7 +890,7 @@ fn a_run_shows_its_timeline_why_each_node_was_built_and_earlier_runs() {
     assert!(page.contains(r#"<a class="crumb" href="../runs">Runs</a>"#));
     let (_, page) = get(addr, &format!("/state/runs/{RUN_1}?tab=nodes"));
     assert!(page.contains("first recorded build"));
-    assert!(page.contains("<th>Build kept from</th>"));
+    assert!(page.contains(r#"<th scope="col">Build kept from</th>"#));
 }
 
 #[test]
@@ -803,5 +961,83 @@ fn home_links_to_the_runs() {
     assert!(page.contains(r#"href="state/runs/4c0b5c8f%2D0000"#));
     assert!(page.contains(r#"<a href="state/plan" data-section="state">"#));
     let (status, _) = get(addr, "/state");
+    assert_eq!(status, 307, "the State section opens on the plan");
+}
+
+#[test]
+fn the_plan_is_reused_for_a_while_and_made_again_after() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // A lag tolerance that runs out at noon: nothing on disk changes, the plan does.
+    let deadline = at("2026-09-29T12:00:00Z");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let planner: ods_web::dashboard::Planner = Arc::new(move |now| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        let (action, code) = if now < deadline {
+            (PlanAction::Reuse, ReasonCode::WithinLagTolerance)
+        } else {
+            (PlanAction::Build, ReasonCode::NewUpstreamData)
+        };
+        Ok((
+            ExecutionPlan::new(
+                Some(SnapshotId(3)),
+                now,
+                vec![entry("model.orders", action, code, "lag tolerance", 0)],
+            ),
+            Vec::new(),
+        ))
+    });
+    let dashboard = Dashboard::new("p", "dev").with_state(StateInput::Recorded(Box::new(
+        Recorded::new("db", vec![], 3, Err("stale".into()))
+            .with_planner(planner)
+            .with_history(History::new(snapshots())),
+    )));
+    let names = BTreeMap::new();
+    let plan = |t: &str| dashboard.plan_view(true, at(t), None, None, &names);
+    assert_eq!(plan("2026-09-29T11:59:31Z").counts.reuse, 1);
+    assert_eq!(plan("2026-09-29T11:59:45Z").counts.reuse, 1);
+    // Clones share the plan: each request clones the dashboard.
+    assert_eq!(
+        dashboard
+            .clone()
+            .home_at(true, at("2026-09-29T11:59:50Z"))
+            .plan
+            .unwrap()
+            .reuse,
+        1
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "made once for the 30 s");
+    assert_eq!(
+        plan("2026-09-29T12:00:01Z").counts.build,
+        1,
+        "flips after the deadline"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_plan_that_builds_nothing_says_so_and_what_checks_relations() {
+    let mut reused = entry(
+        "model.orders",
+        PlanAction::Reuse,
+        ReasonCode::Unchanged,
+        "unchanged",
+        0,
+    );
+    reused.evidence = vec![Evidence::new(
+        "relation_exists",
+        "model.orders",
+        None,
+        Exactness::None,
+    )];
+    let plan = ExecutionPlan::new(Some(SnapshotId(3)), at(NOW), vec![reused]);
+    let addr = start(recorded(History::new(snapshots()), plan));
+    let (_, page) = get(addr, "/state/plan");
+    assert!(page.contains("Nothing to build:"), "{page}");
+    assert!(page.contains(">not checked</span>"));
+    assert!(page.contains("0 of 1 reused relations · planned offline"));
+    assert!(page.contains("<code>ods state build --dry-run</code> checks them"));
+    let (status, _) = get(addr, "/state/");
     assert_eq!(status, 307, "the State section opens on the plan");
 }

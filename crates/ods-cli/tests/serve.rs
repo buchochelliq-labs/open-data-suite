@@ -326,7 +326,7 @@ fn a_source_freshness_file_written_later_reloads_the_dashboard() {
 
 /// Runs `ods state build` with the fake dbt in `dir`, with `envs` for the fake dbt.
 #[cfg(unix)]
-fn fake_build(dir: &Path, envs: &[(&str, &str)]) -> std::process::Output {
+fn fake_build(dir: &Path, envs: &[(&str, &str)], extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(["state", "build", "--dbt"])
         .arg(fixtures("fake-dbt/dbt"))
@@ -334,6 +334,7 @@ fn fake_build(dir: &Path, envs: &[(&str, &str)]) -> std::process::Output {
         .arg(dir.join("target"))
         .arg("--state-db")
         .arg(dir.join(".ods/state.db"))
+        .args(extra)
         .current_dir(dir)
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -354,7 +355,7 @@ fn build_then_fail_orders(dir: &Path) -> PathBuf {
         &base,
     )
     .unwrap();
-    let out = fake_build(dir, &[]);
+    let out = fake_build(dir, &[], &[]);
     assert!(
         out.status.success(),
         "{}",
@@ -370,7 +371,18 @@ fn build_then_fail_orders(dir: &Path) -> PathBuf {
     // Times are kept to the second: a run started in the second a snapshot was
     // recorded can't be told apart from one before it.
     std::thread::sleep(Duration::from_millis(1100));
-    let out = fake_build(dir, &[("FAKE_DBT_FAIL", "orders")]);
+    // With values that may be secret: the dashboard must never show them (rule 9).
+    let out = fake_build(
+        dir,
+        &[("FAKE_DBT_FAIL", "orders")],
+        &[
+            "--vars",
+            r#"{"password":"hunter2"}"#,
+            "--",
+            "--log-path",
+            "sekrit",
+        ],
+    );
     assert!(!out.status.success(), "the build of orders fails");
     dir.join(".ods/state.db")
 }
@@ -447,7 +459,14 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
         last["failed"][0]["node"], "model.jaffle_ods.orders",
         "{last}"
     );
-    assert_eq!(last["recorded_nothing"], true);
+    assert_eq!(last["recorded_nothing_inferred"], true, "{last}");
+    assert_eq!(last["scope"], "jaffle_ods/default");
+    // Option names stay; their values and dbt's own options don't.
+    assert!(
+        !body.contains("hunter2") && !body.contains("sekrit"),
+        "{body}"
+    );
+    assert!(body.contains("--vars '<redacted>'"), "{body}");
     assert_eq!(last["last_good"], 1);
     assert_eq!(runs["last_run_listed"], true);
     assert_eq!(runs["failed"], 1);
@@ -461,6 +480,10 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     let (_, page) = get(&server, "state/runs");
     assert!(page.contains("kept 1"), "{page}");
     assert!(page.contains("Last good state: snapshot 1"));
+    assert!(
+        !page.contains("hunter2") && !page.contains("sekrit"),
+        "{page}"
+    );
     let run_id = runs["runs"][0]["run_id"].as_str().unwrap();
     let (status, page) = get(&server, &format!("state/runs/{run_id}"));
     assert_eq!(status, 200);

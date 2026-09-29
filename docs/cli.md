@@ -618,7 +618,9 @@ Home, it only reads, and every action is a command to copy into a terminal.
 | Run | `/state/runs/<run_id>` | a timeline of the nodes it built and the ones that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists them. An unambiguous prefix of the id (8 characters or more) works too |
 
 What the pages claim is what ODS records, and no more:
-- **The plan** is the one `ods state plan` makes, offline, made again on every request.
+- **The plan** is the one `ods state plan` makes, offline, made again at most every 30
+  seconds (and after every reload), as lag tolerances expire with time. Builds are
+  listed first.
   The Why panel's reason chain is exactly `ods state explain <node>`'s (its JSON is in
   `explanation`). An offline plan doesn't check the warehouse, so reused relations read
   *not checked*; `ods state build --dry-run` checks them. Evidence below *semantic* is
@@ -626,13 +628,17 @@ What the pages claim is what ODS records, and no more:
 - **A run** is a committed snapshot: the nodes whose last build is the run's were built
   by it, and every other node *kept an earlier build*, whether it was reused, left out
   or failed, as the snapshot can't tell. The outcome reads *recorded*.
-- **Failures** are known only for the last run started from this machine, from
-  `<state-db>.last-run.json`, which `ods state retry` keeps. The Runs page shows its
-  failed and skipped nodes, that the last good snapshot was kept, and
-  `ods state retry --failed`. It names no snapshot, so it is tied to the only snapshot
-  recorded after it started (marked *inferred*), or shown as having recorded nothing
-  when none was; when the times (kept to the second) can't tell, it says so. The server
-  reloads when this file changes.
+- **Failures** are known only for the last run, from `<state-db>.last-run.json`,
+  which `ods state retry` keeps (since version 1.2 with the run's scope and id). It is
+  shown only when its scope is the page's; a file from an older ODS names none, so it
+  is shown apart, as possibly another target's. The run is tied to the snapshot that
+  records its run id; if no listed snapshot does, the page says it *probably* recorded
+  nothing (marked *inferred*). Nodes it lists as failed read *failed or not recorded*:
+  that includes nodes dbt ran but ODS couldn't record. The page shows them, the skipped
+  ones, the last good snapshot and `ods state retry --failed`. The command line keeps
+  option names, but values other than the selection and target, and everything after
+  `--`, read `<redacted>`: `--vars` may carry secrets. The server reloads when this
+  file changes.
 - **Not recorded yet:** durations (`[duration]`, `[wall clock]`), start times, who ran a
   run (`[user]`), the command of earlier runs, and run logs. CI runs are a *Planned* tab
   until server mode.
@@ -641,8 +647,8 @@ The same view models are served as JSON at `schema_version` 1, `GET` only:
 `/api/state/plan` (with the same `?node=` and `?action=`), `/api/state/plan/<node>`
 (404 if not planned), `/api/state/runs` (with the same filters) and
 `/api/state/runs/<run_id>` (404 if not listed). Beyond loopback they leave out local
-paths, error text and the last run's options. Node pages link to the Model page
-(`/catalog/<id>`) and the lineage explorer (`/lineage?node=<id>`).
+paths, error text and the last run's options. The Why panel links to the node in
+the lineage explorer (`/lineage?node=<id>`).
 
 ## dbt State configuration
 

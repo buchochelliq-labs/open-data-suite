@@ -102,6 +102,7 @@ expression: pretty(&body)
     }
   ],
   "failed": 0,
+  "filtered": false,
   "last_run": null,
   "last_run_listed": false,
   "limit": 50,
@@ -110,16 +111,17 @@ expression: pretty(&body)
   "recorded": [
     "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
     "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build.",
-    "Failures are only known for the last run started on this machine, kept beside the store for `ods state retry`; it is tied to a snapshot by time, so that link is inferred.",
+    "Failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the snapshot that records its run id; that it recorded nothing is inferred.",
     "Durations, start times, commands of earlier runs and who ran them aren't recorded yet."
   ],
+  "recorded_snapshots": 3,
   "runs": [
     {
       "built": 2,
       "command": null,
       "duration": null,
       "failed": null,
-      "inferred": false,
+      "from_last_run": false,
       "kept": 1,
       "outcome": "recorded",
       "recorded_at": "2026-09-29T00:02:37Z",
@@ -139,7 +141,7 @@ expression: pretty(&body)
       "command": null,
       "duration": null,
       "failed": null,
-      "inferred": false,
+      "from_last_run": false,
       "kept": 1,
       "outcome": "recorded",
       "recorded_at": "2026-09-29T00:01:03Z",
@@ -159,7 +161,7 @@ expression: pretty(&body)
       "command": null,
       "duration": null,
       "failed": null,
-      "inferred": false,
+      "from_last_run": false,
       "kept": 0,
       "outcome": "recorded",
       "recorded_at": "2026-09-29T00:00:15Z",
@@ -184,5 +186,7 @@ expression: pretty(&body)
     "shown": ".ods/state.db"
   },
   "total": 3,
-  "total_capped": false
+  "total_capped": false,
+  "unfiltered": 3,
+  "unscoped_last_run": null
 }

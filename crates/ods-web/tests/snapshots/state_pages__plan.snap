@@ -7,7 +7,7 @@ expression: pretty(&body)
   "commands": [
     {
       "command": "ods state build",
-      "does": "plans again, builds exactly what builds here, and records the run"
+      "does": "plans again, then builds only what's marked Build, and records the run"
     },
     {
       "command": "ods state build --dry-run",
@@ -28,17 +28,6 @@ expression: pretty(&body)
   "filter": "all",
   "rows": [
     {
-      "action": "reuse",
-      "code": "unchanged",
-      "kind": "seed",
-      "name": "raw_orders",
-      "node": "seed.raw_orders",
-      "reason": "unchanged",
-      "selected": false,
-      "unknown_evidence": false,
-      "why": "code and inputs unchanged since run e6f54fe3"
-    },
-    {
       "action": "build",
       "code": "code_changed",
       "kind": "model",
@@ -50,17 +39,6 @@ expression: pretty(&body)
       "why": "code changed since run 4c0b5c8f: sql"
     },
     {
-      "action": "reuse",
-      "code": "unchanged",
-      "kind": "model",
-      "name": "orders",
-      "node": "model.orders",
-      "reason": "unchanged",
-      "selected": false,
-      "unknown_evidence": false,
-      "why": "code and inputs unchanged since run 9ea38bd5"
-    },
-    {
       "action": "build",
       "code": "upstream_code_changed",
       "kind": "model",
@@ -70,6 +48,28 @@ expression: pretty(&body)
       "selected": false,
       "unknown_evidence": false,
       "why": "upstream code changed: customers will be rebuilt"
+    },
+    {
+      "action": "reuse",
+      "code": "unchanged",
+      "kind": "seed",
+      "name": "raw_orders",
+      "node": "seed.raw_orders",
+      "reason": "unchanged",
+      "selected": false,
+      "unknown_evidence": false,
+      "why": "code and inputs unchanged since run e6f54fe3"
+    },
+    {
+      "action": "reuse",
+      "code": "unchanged",
+      "kind": "model",
+      "name": "orders",
+      "node": "model.orders",
+      "reason": "unchanged",
+      "selected": false,
+      "unknown_evidence": false,
+      "why": "code and inputs unchanged since run 9ea38bd5"
     }
   ],
   "schema_version": 1,
@@ -184,6 +184,7 @@ expression: pretty(&body)
     "kind": "model",
     "last_build": {
       "built_at": "2026-09-29T00:02:37Z",
+      "built_in": 3,
       "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
       "short_run_id": "4c0b5c8f",
       "snapshot": 3,
@@ -224,5 +225,6 @@ expression: pretty(&body)
     "warnings": []
   },
   "state": "recorded",
+  "target": "dev",
   "warnings": []
 }

@@ -95,20 +95,41 @@ panel), Runs and one Run under `<base>/state/`.
 - **Pages below the root:** the shell takes the path back to the root (`../`, `../../`)
   and prefixes every navigation link, font URL and the script's API calls with it (a
   `<meta name="ods-root">`), so pages under `state/` work under any base path. The
-  CSP's `base-uri 'none'` rules out a `<base>` element.
+  CSP's `base-uri 'none'` rules out a `<base>` element. A section may list its pages
+  (`NavSection::items`), shown under it while it is current: State lists Plan and Runs,
+  and History and Policies as planned.
 - **Data:** `Recorded` gains an optional `History`: up to 51 committed snapshots
   (`StateSnapshot`, newest first; one more than the 50 listed, so the oldest can say
   what it replaced) and the `LastRun` kept beside the store for `ods state retry`
-  (command, start time, failed and skipped nodes, and the retry commands). The binary
-  fills both, read-only; `ods-web` stays free of providers and of the store. `ods-web`
-  now depends on `ods-state` (a module, which ADR-0001 allows an EDGE crate) for
-  `explain` and `diff_states`, so the Why panel's chain is `ods state explain`'s by
-  construction, and a run's builds are explained as `ods state history <node>` does.
-  The watcher also watches `<state-db>.last-run.json`.
-- **Inference is marked:** the last run names no snapshot. It is tied to the only
-  snapshot recorded after it started (strictly: times are kept to the second), and that
-  link is marked inferred; with none after, it recorded nothing. A snapshot can't tell
-  reuse from a node left out or failed, so the pages say *kept earlier build*.
+  (its redacted command, start time, failed and skipped nodes, scope, run id, and the
+  retry commands). The binary fills both, read-only; `ods-web` stays free of providers
+  and of the store. `ods-web` now depends on `ods-state` (a module, which ADR-0001
+  allows an EDGE crate) for `explain` and `diff_states`, so the Why panel's chain is
+  `ods state explain`'s by construction, and a run's builds are explained as
+  `ods state history <node>` does. `WhyView.explanation` is the `explanation` of
+  `ods state explain --output json`: it tracks that JSON's schema (the `ods_state::
+  Explanation` type), and changes when it does. The watcher also watches
+  `<state-db>.last-run.json`.
+- **The last-run file, version 1.2 (persisted format, additive):** it now also keeps
+  the `scope` the run was for and its `run_id` (the id its snapshot records), written
+  once the run has built. Files at 1.0 and 1.1 still read, without them. The file is
+  kept per state database, which several targets may share, so the pages show the last
+  run only when its scope is the page's; a file without a scope is shown apart, as
+  possibly another target's, and never tied to a run. A run is tied to the snapshot
+  that records its run id; when no listed snapshot does, the page says it *probably*
+  recorded nothing, marked inferred (a clock step or a later `ods state record` could
+  make that wrong).
+- **Secrets (AGENTS rule 9):** the command line reaches `ods-web` redacted by the CLI:
+  option names are kept, and only the values of `--select`, `--exclude`,
+  `--resource-type`, `--exclude-resource-type`, `--target`, `--environment` and
+  `--dbt-output`; every other value (e.g. `--vars`) and everything after `--` reads
+  `<redacted>`. The file itself keeps what was typed, as `ods state retry` needs it,
+  and its `Debug` redacts it the same way.
+- **Planning is shared and bounded:** every page asks `Dashboard::plan_at`, which plans
+  at most once per 30 s time bucket and reload (the memo lives on the reloaded facts,
+  so a reload starts afresh); lag tolerances are whole minutes or more. Pages that may
+  plan are built on a blocking thread. Node names from the graph are built once per
+  reload.
 - **API:** `/api/state/plan`, `/api/state/plan/<node>`, `/api/state/runs` and
   `/api/state/runs/<run_id>` return the view models the pages render (`PlanView`,
   `WhyView`, `RunsView`, `RunPageView`) at `schema_version` 1, `GET` only; beyond

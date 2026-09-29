@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, StateSnapshot, Timestamp};
 use serde::Serialize;
@@ -233,7 +233,17 @@ pub struct Recorded {
     planner: Option<PlannerFn>,
     /// What the State pages list (#311): more snapshots, and the last run's outcome.
     history: Option<Arc<state::History>>,
+    /// The last plan made, and the time bucket it was made for: shared by every
+    /// clone of this snapshot's facts, so it lasts until the next reload.
+    plan_memo: Arc<Mutex<Option<PlanMemo>>>,
 }
+
+/// A plan made for a time bucket: `(bucket, plan, warnings)`.
+type PlanMemo = (i64, Result<ExecutionPlan, String>, Vec<String>);
+
+/// How long a plan is reused, in seconds. Lag tolerances are whole minutes or more, so a
+/// plan at most this old answers the same (#311 review: not planned on every request).
+pub const PLAN_REUSED_FOR: i64 = 30;
 
 impl Recorded {
     /// A readable store.
@@ -252,6 +262,7 @@ impl Recorded {
             warnings: Vec::new(),
             planner: None,
             history: None,
+            plan_memo: Arc::default(),
         }
     }
 
@@ -484,7 +495,40 @@ pub struct NavSection {
     pub href: Option<&'static str>,
     /// What to know about it, e.g. that its module already works from the CLI.
     pub note: Option<&'static str>,
+    /// Its pages, shown under it while it is the current section.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<NavItem>,
 }
+
+/// A page of a section in the navigation, e.g. State's Runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct NavItem {
+    /// Stable key, e.g. `runs`.
+    pub key: &'static str,
+    /// Its label.
+    pub label: &'static str,
+    /// Where it is, relative to the dashboard's root; `None` when planned.
+    pub href: Option<&'static str>,
+}
+
+/// A section's pages: its key, then each page's key, label, and href when built.
+type SectionPages = (
+    &'static str,
+    &'static [(&'static str, &'static str, Option<&'static str>)],
+);
+
+/// Each section's pages.
+const SECTION_ITEMS: [SectionPages; 1] = [(
+    "state",
+    &[
+        ("plan", "Plan", Some("state/plan")),
+        ("runs", "Runs", Some("state/runs")),
+        ("history", "History", None),
+        ("policies", "Policies", None),
+    ],
+)];
 
 /// A section of the design: key, label, href when built, and a note.
 type Section = (
@@ -829,6 +873,12 @@ impl Dashboard {
                     },
                     href,
                     note,
+                    items: SECTION_ITEMS
+                        .iter()
+                        .filter(|(section, _)| *section == key)
+                        .flat_map(|(_, items)| items.iter())
+                        .map(|&(key, label, href)| NavItem { key, label, href })
+                        .collect(),
                 })
                 .collect(),
             mode: "local",
@@ -841,22 +891,44 @@ impl Dashboard {
         self.home_at(details, Timestamp::now())
     }
 
-    /// Home as of `now`: with a [`Planner`], the plan is made again for `now`.
+    /// The plan as of `now` and what qualifies it, or `None` without a readable store.
+    /// With a [`Planner`], it is planned again once per [`PLAN_REUSED_FOR`] seconds and
+    /// reload, and shared by every page (Home, State, and later ones) until then.
+    pub(crate) fn plan_at(
+        &self,
+        now: Timestamp,
+    ) -> Option<(Result<ExecutionPlan, String>, Vec<String>)> {
+        let recorded = self.recorded()?;
+        let Some(PlannerFn(planner)) = &recorded.planner else {
+            return Some((recorded.plan.clone(), recorded.warnings.clone()));
+        };
+        let bucket = now.unix().div_euclid(PLAN_REUSED_FOR);
+        let mut memo = recorded
+            .plan_memo
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, plan, warnings)) = memo.as_ref()
+            && *at == bucket
+        {
+            return Some((plan.clone(), warnings.clone()));
+        }
+        let (plan, warnings) = match planner(now) {
+            Ok((plan, warnings)) => (Ok(plan), warnings),
+            Err(error) => (Err(error), Vec::new()),
+        };
+        *memo = Some((bucket, plan.clone(), warnings.clone()));
+        Some((plan, warnings))
+    }
+
+    /// Home as of `now`: with a [`Planner`], the plan is made for `now`, at most once
+    /// per [`PLAN_REUSED_FOR`] seconds and reload.
     pub fn home_at(&self, details: bool, now: Timestamp) -> HomeView {
         match &self.state {
             StateInput::Recorded(recorded) if recorded.planner.is_some() => {
                 let mut fresh = (**recorded).clone();
-                if let Some(PlannerFn(planner)) = &recorded.planner {
-                    match planner(now) {
-                        Ok((plan, warnings)) => {
-                            fresh.plan = Ok(plan);
-                            fresh.warnings = warnings;
-                        }
-                        Err(error) => {
-                            fresh.plan = Err(error);
-                            fresh.warnings = Vec::new();
-                        }
-                    }
+                if let Some((plan, warnings)) = self.plan_at(now) {
+                    fresh.plan = plan;
+                    fresh.warnings = warnings;
                 }
                 fresh.planner = None;
                 let mut this = self.clone();

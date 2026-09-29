@@ -60,7 +60,7 @@ fn svg(paths: &str, size: u32) -> String {
 const LOGO: &str = r#"<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="18" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M9 6h6M18 9v6M8.2 8.2l7.6 7.6"></path></svg>"#;
 const SEARCH: &str = r#"<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>"#;
 
-fn nav_item(out: &mut String, section: &NavSection, root: &str) {
+fn nav_item(out: &mut String, section: &NavSection, root: &str, sub: Option<&str>) {
     let icon = svg(icon(section.key), 18);
     let label = format!(r#"<span class="label">{}</span>"#, text(section.label));
     match (section.status, section.href) {
@@ -88,8 +88,47 @@ fn nav_item(out: &mut String, section: &NavSection, root: &str) {
                 }),
                 key = attr(section.key),
             );
+            if status == SectionStatus::Current && !section.items.is_empty() {
+                sub_items(out, section, root, sub);
+            }
         }
     }
+}
+
+/// The current section's pages, under it: built ones link, planned ones are greyed.
+fn sub_items(out: &mut String, section: &NavSection, root: &str, sub: Option<&str>) {
+    let _ = write!(
+        out,
+        r#"<div class="subnav" aria-label="{} pages">"#,
+        attr(section.label)
+    );
+    for item in &section.items {
+        match item.href {
+            Some(href) => {
+                let _ = write!(
+                    out,
+                    r#"<a href="{root}{href}"{current} data-item="{key}">{label}</a>"#,
+                    href = attr(href),
+                    current = if sub == Some(item.key) {
+                        r#" aria-current="page""#
+                    } else {
+                        ""
+                    },
+                    key = attr(item.key),
+                    label = text(item.label),
+                );
+            }
+            None => {
+                let _ = write!(
+                    out,
+                    r#"<span class="planned" title="Planned: not built yet" data-item="{key}">{label}<span class="chip">Planned</span></span>"#,
+                    key = attr(item.key),
+                    label = text(item.label),
+                );
+            }
+        }
+    }
+    out.push_str("</div>");
 }
 
 /// Where a page sits in the shell, and what its header says.
@@ -103,6 +142,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) root: &'a str,
     /// The right of the header, as HTML; `None` for the current snapshot.
     pub(crate) status: Option<String>,
+    /// The current page of the current section, e.g. `runs`, if it has pages.
+    pub(crate) sub: Option<&'a str>,
     /// The page's own stylesheet and script, after the shell's.
     pub(crate) css: &'a str,
     /// See `css`.
@@ -115,6 +156,7 @@ fn shell(shell: &ShellView, title: &str, body: &str, generation: u64) -> String 
         title,
         crumbs: None,
         root: "",
+        sub: None,
         status: None,
         css: "",
         js: "",
@@ -167,11 +209,11 @@ pub(crate) fn framed(shell: &ShellView, frame: &Frame<'_>, body: &str, generatio
     );
     let (bottom, main): (Vec<_>, Vec<_>) = shell.sections.iter().partition(|s| s.key == "settings");
     for section in main {
-        nav_item(&mut out, section, root);
+        nav_item(&mut out, section, root, frame.sub);
     }
     out.push_str("</div>\n<div class=\"bottom\">");
     for section in bottom {
-        nav_item(&mut out, section, root);
+        nav_item(&mut out, section, root, frame.sub);
     }
     let snapshot = match (&frame.status, &shell.snapshot) {
         (Some(status), _) => status.clone(),

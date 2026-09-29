@@ -35,5 +35,6 @@ expression: pretty(&body)
   "scope": "jaffle_ods/dev",
   "selected": null,
   "state": "no_store",
+  "target": "dev",
   "warnings": []
 }

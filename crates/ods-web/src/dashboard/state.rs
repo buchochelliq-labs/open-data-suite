@@ -8,12 +8,14 @@
 //! - a snapshot records which nodes a run built, not which it reused, failed or left
 //!   out, so the rest are *kept earlier build*;
 //! - failures are only known for the last run, from the file `ods state retry` keeps
-//!   beside the store, and that run is tied to a snapshot by time only, so the link is
-//!   marked *inferred*;
+//!   beside the store. It is shown only for the scope it names, and tied to the
+//!   snapshot that records its run id; that it recorded nothing is only ever
+//!   *inferred*;
 //! - durations, start times and who ran a command aren't recorded: they are `None`,
 //!   shown as placeholders.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use ods_core::state::{
     Evidence, Exactness, ExecutionPlan, NodeState, PlanAction, PlanEntry, ReasonCode,
@@ -23,8 +25,8 @@ use ods_state::{Change, Explanation};
 use serde::Serialize;
 
 use super::{
-    CommandHint, DASHBOARD_SCHEMA_VERSION, Dashboard, EmptyState, PlannerFn, StateInput,
-    StateStatus, StoreLocation, Target, hint, plural, reason_label, short,
+    CommandHint, DASHBOARD_SCHEMA_VERSION, Dashboard, EmptyState, StateInput, StateStatus,
+    StoreLocation, Target, hint, plural, reason_label, short,
 };
 
 /// How many runs the Runs page lists, newest first. The binary reads one more
@@ -44,6 +46,8 @@ pub struct History {
     pub snapshots: Vec<(u64, StateSnapshot)>,
     /// The last run started from this machine, if one is kept beside the store.
     pub last_run: Option<LastRun>,
+    /// Their run ids longer than people read, computed once (see `shorten`).
+    long_run_ids: OnceLock<Vec<String>>,
 }
 
 impl History {
@@ -52,6 +56,7 @@ impl History {
         Self {
             snapshots,
             last_run: None,
+            long_run_ids: OnceLock::new(),
         }
     }
 
@@ -84,6 +89,10 @@ pub struct LastRun {
     pub retry: Option<String>,
     /// Where it was read from.
     pub file: StoreLocation,
+    /// The state scope it ran for, e.g. `shop/dev`; `None` in an older file.
+    pub scope: Option<String>,
+    /// The run's id, as the snapshot it commits records it; `None` if unknown.
+    pub run_id: Option<String>,
 }
 
 impl LastRun {
@@ -102,6 +111,8 @@ impl LastRun {
             retry_failed: None,
             retry: None,
             file: file.into(),
+            scope: None,
+            run_id: None,
         }
     }
 
@@ -109,6 +120,14 @@ impl LastRun {
     #[must_use]
     pub fn with_outcome(mut self, outcome: Option<LastOutcome>) -> Self {
         self.outcome = outcome;
+        self
+    }
+
+    /// Sets the scope it ran for and its run id.
+    #[must_use]
+    pub fn with_run(mut self, scope: Option<String>, run_id: Option<String>) -> Self {
+        self.scope = scope;
+        self.run_id = run_id;
         self
     }
 
@@ -176,6 +195,8 @@ pub struct PlanView {
     pub scope: String,
     /// The environment the plan is for, e.g. `dev`.
     pub environment: String,
+    /// The target it is for, as the shell names it: the target, else the environment.
+    pub target: String,
     /// Where the state is.
     pub state: StateStatus,
     /// What to do when there is no plan to show.
@@ -327,8 +348,10 @@ pub struct ChainLine {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct LastBuild {
-    /// The snapshot that records it.
+    /// The snapshot the plan compares with, which still records it.
     pub snapshot: u64,
+    /// The snapshot its run committed, if listed: where it was first recorded.
+    pub built_in: Option<u64>,
     /// The run that built it.
     pub run_id: String,
     /// Its first eight characters.
@@ -485,9 +508,9 @@ pub struct RunRow {
     pub skipped: Option<usize>,
     /// How it ended, as far as ODS knows.
     pub outcome: RunOutcome,
-    /// Whether the outcome and command come from the last run, tied to this snapshot
-    /// by time rather than recorded with it.
-    pub inferred: bool,
+    /// Whether the command and outcome come from the last run, whose run id this
+    /// snapshot records: kept beside the store, not in the snapshot.
+    pub from_last_run: bool,
     /// How long it took; not recorded yet.
     pub duration: Option<String>,
     /// Who ran it; not recorded yet.
@@ -513,12 +536,15 @@ pub struct LastRunView {
     pub skipped: Vec<NodeRef>,
     /// Sources whose tests failed.
     pub failed_source_tests: Vec<NodeRef>,
-    /// The snapshot it recorded: inferred, as the only one recorded since it started.
-    /// `None` when none was, or which one can't be told (several since, or one in the
-    /// very second it started: times are kept to the second).
+    /// The scope it ran for, if the file says (since ODS kept it, #311).
+    pub scope: Option<String>,
+    /// The snapshot it recorded: the one that records its run id. `None` when none
+    /// does, or it can't be told.
     pub snapshot: Option<u64>,
-    /// Whether no snapshot was recorded since it started: it recorded nothing.
-    pub recorded_nothing: bool,
+    /// Whether it probably recorded nothing. Inferred: no listed snapshot records its
+    /// run id or, without one, none was recorded since it started. A clock step or a
+    /// later `ods state record` could make this wrong, so it is never shown as fact.
+    pub recorded_nothing_inferred: bool,
     /// The last good state: the latest snapshot. A failed run never replaces it.
     pub last_good: Option<u64>,
     /// What to run next, if anything failed.
@@ -600,13 +626,22 @@ pub struct RunsView {
     pub runs: Vec<RunRow>,
     /// How many runs are shown, the last run's own row included.
     pub listed: usize,
+    /// How many runs there are to show without filters, the last run's row included.
+    pub unfiltered: usize,
+    /// Whether any filter is applied.
+    pub filtered: bool,
+    /// How many of the shown runs recorded a snapshot.
+    pub recorded_snapshots: usize,
     /// How many of the shown runs are known to have failed.
     pub failed: usize,
-    /// The last run started from this machine, if kept.
+    /// The last run started against this store, if kept and for this scope.
     pub last_run: Option<LastRunView>,
     /// Whether the last run is listed as a row of its own, before the recorded runs:
     /// it recorded no snapshot, its outcome is known, and the filters keep it.
     pub last_run_listed: bool,
+    /// The last run, when it doesn't say which scope it ran for: shown apart, as it
+    /// may belong to another target.
+    pub unscoped_last_run: Option<LastRunView>,
     /// The run in the side panel: the one asked for, else the newest shown.
     pub selected: Option<String>,
     /// What the store does and doesn't record.
@@ -749,18 +784,6 @@ fn unknown_evidence(code: ReasonCode) -> bool {
 }
 
 impl Dashboard {
-    /// The plan as of `now`, made again when there is a planner, and what qualifies it.
-    fn plan_now(&self, now: Timestamp) -> Option<(Result<ExecutionPlan, String>, Vec<String>)> {
-        let recorded = self.recorded()?;
-        Some(match &recorded.planner {
-            Some(PlannerFn(planner)) => match planner(now) {
-                Ok((plan, warnings)) => (Ok(plan), warnings),
-                Err(error) => (Err(error), Vec::new()),
-            },
-            None => (recorded.plan.clone(), recorded.warnings.clone()),
-        })
-    }
-
     fn history(&self) -> Option<&super::state::History> {
         self.recorded().and_then(|r| r.history.as_deref())
     }
@@ -791,6 +814,7 @@ impl Dashboard {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             scope: self.scope.clone(),
             environment: self.environment.clone(),
+            target: self.shell("state").target.name,
             state,
             empty,
             based_on: None,
@@ -809,7 +833,7 @@ impl Dashboard {
             warnings: Vec::new(),
             selected: None,
         };
-        let Some((plan, warnings)) = self.plan_now(now) else {
+        let Some((plan, warnings)) = self.plan_at(now) else {
             return view;
         };
         // With a store but no runs yet, the plan builds everything: still shown.
@@ -844,7 +868,7 @@ impl Dashboard {
         view.commands = vec![
             hint(
                 "ods state build",
-                "plans again, builds exactly what builds here, and records the run",
+                "plans again, then builds only what's marked Build, and records the run",
             ),
             hint(
                 "ods state build --dry-run",
@@ -858,7 +882,7 @@ impl Dashboard {
     /// The Why panel of `node` (an id or a name only one node has) as of `now`, or
     /// `None` if it isn't planned (or there is no plan).
     pub fn why_view(&self, now: Timestamp, node: &str, names: &Names) -> Option<WhyView> {
-        let (plan, warnings) = self.plan_now(now)?;
+        let (plan, warnings) = self.plan_at(now)?;
         let plan = plan.ok()?;
         let id = resolve(&plan, node)?;
         let names = self.all_names(&plan, names);
@@ -876,21 +900,26 @@ impl Dashboard {
         all
     }
 
-    /// Long run ids read better short, as in the runs table.
+    /// Long run ids read better short, as in the runs table. The ids are gathered once
+    /// per reload.
     fn shorten(&self, message: &str) -> String {
-        let runs = self
-            .snapshots()
-            .iter()
-            .map(|(_, s)| s.run_id.as_str())
-            .chain(
-                self.recorded()
-                    .into_iter()
-                    .flat_map(|r| r.runs.iter().map(|run| run.run_id.as_str())),
-            )
-            .filter(|id| id.len() > 8)
-            .collect::<BTreeSet<_>>();
-        runs.into_iter()
-            .fold(message.to_owned(), |m, id| m.replace(id, &short(id)))
+        let Some(history) = self.history() else {
+            return message.to_owned();
+        };
+        let ids = history.long_run_ids.get_or_init(|| {
+            let ids: BTreeSet<&str> = history
+                .snapshots
+                .iter()
+                .map(|(_, s)| s.run_id.as_str())
+                .filter(|id| id.len() > 8)
+                .collect();
+            ids.into_iter().map(str::to_owned).collect()
+        });
+        ids.iter()
+            .filter(|id| message.contains(id.as_str()))
+            .fold(message.to_owned(), |m, id| {
+                m.replace(id.as_str(), &short(id))
+            })
     }
 
     fn why(
@@ -917,6 +946,11 @@ impl Dashboard {
         });
         let last_build = recorded.map(|(snapshot, n)| LastBuild {
             snapshot,
+            built_in: self
+                .snapshots()
+                .iter()
+                .find(|(_, s)| s.run_id == n.run_id)
+                .map(|(id, _)| *id),
             run_id: n.run_id.clone(),
             short_run_id: short(&n.run_id),
             built_at: n.built_at,
@@ -927,17 +961,19 @@ impl Dashboard {
             .iter()
             .map(|e| evidence_view(e, names))
             .collect();
-        let readers = plan
-            .entries
-            .iter()
-            .filter(|e| {
-                e.action == PlanAction::Build && e.depends_on.iter().any(|p| p == node) && builds
-            })
-            .map(|e| NodeRef {
-                node: e.node.clone(),
-                name: e.name.clone(),
-            })
-            .collect();
+        // Readers rebuild with it only if it builds.
+        let readers = if builds {
+            plan.entries
+                .iter()
+                .filter(|e| e.action == PlanAction::Build && e.depends_on.iter().any(|p| p == node))
+                .map(|e| NodeRef {
+                    node: e.node.clone(),
+                    name: e.name.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Some(WhyView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             node: entry.node.clone(),
@@ -1027,7 +1063,8 @@ impl Dashboard {
         filter: &str,
         selected: Option<&str>,
     ) -> Vec<PlanRow> {
-        plan.entries
+        let mut rows = plan
+            .entries
             .iter()
             .filter(|e| match filter {
                 "build" => e.action == PlanAction::Build,
@@ -1054,7 +1091,11 @@ impl Dashboard {
                     selected: selected == Some(e.node.as_str()),
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        // Builds first, as they are the news; plan order (by depth) within each. The
+        // sort is stable.
+        rows.sort_by_key(|r| r.action != PlanAction::Build);
+        rows
     }
 }
 
@@ -1175,13 +1216,27 @@ fn relation_view(entry: &PlanEntry) -> RelationView {
                 status: "missing",
                 value: e.value.clone(),
                 grade: grade(e.exactness),
-                note: "its table isn't in the warehouse: it builds".to_owned(),
+                note: if e.exactness.allows_reuse() {
+                    "its table isn't in the warehouse: it builds".to_owned()
+                } else {
+                    format!(
+                        "its table seems to be gone ({} evidence): it builds",
+                        grade(e.exactness)
+                    )
+                },
             },
             Some(kind) => RelationView {
                 status: "present",
                 value: Some(kind.to_owned()),
                 grade: grade(e.exactness),
-                note: format!("found in the warehouse ({kind})"),
+                note: if e.exactness.allows_reuse() {
+                    format!("found in the warehouse ({kind})")
+                } else {
+                    format!(
+                        "reported in the warehouse ({kind}), on {} evidence only",
+                        grade(e.exactness)
+                    )
+                },
             },
             None => RelationView {
                 status: "not_checked",
@@ -1266,27 +1321,38 @@ fn row(id: u64, snapshot: &StateSnapshot) -> RunRow {
         failed: None,
         skipped: None,
         outcome: RunOutcome::Recorded,
-        inferred: false,
+        from_last_run: false,
         duration: None,
         triggered_by: None,
     }
 }
 
+/// How the last run relates to the listed snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tie {
+    /// A snapshot records the run's id: it committed that snapshot.
+    Snapshot(u64),
+    /// No listed snapshot is its own: it recorded nothing, as far as can be told.
+    NothingInferred,
+    /// It can't be told (no run id, and snapshots were recorded since it started).
+    Unknown,
+}
+
 impl Dashboard {
-    /// Every listed run, newest first, with the last run's outcome on the snapshot it
-    /// is tied to (by time: inferred).
+    /// Every listed run, newest first, with the last run's command and outcome on the
+    /// snapshot that records its run id.
     fn run_rows(&self, details: bool) -> Vec<RunRow> {
-        let snapshots = self.snapshots();
-        let link = self.last_run_link();
-        snapshots
+        let last = self.last_run();
+        let tie = self.last_run_tie();
+        self.snapshots()
             .iter()
             .take(RUNS_LISTED)
             .map(|(id, snapshot)| {
                 let mut row = row(*id, snapshot);
-                if let (Some(last), Some(linked)) = (self.last_run(), link)
-                    && linked == *id
+                if let Some(last) = last
+                    && tie == Tie::Snapshot(*id)
                 {
-                    row.inferred = true;
+                    row.from_last_run = true;
                     row.command = Some(if details {
                         last.command.clone()
                     } else {
@@ -1307,42 +1373,60 @@ impl Dashboard {
             .collect()
     }
 
+    /// The last run, only if it names this page's scope: the file is kept per state
+    /// database, which several targets may share.
     fn last_run(&self) -> Option<&LastRun> {
-        self.history().and_then(|h| h.last_run.as_ref())
+        self.history()
+            .and_then(|h| h.last_run.as_ref())
+            .filter(|l| l.scope.as_deref() == Some(self.scope.as_str()))
     }
 
-    /// Snapshots recorded after the last run started, and in the same second (times
-    /// are kept to the second, so those may be from before it).
-    fn since_last_run(&self) -> Option<(Vec<u64>, usize)> {
-        let last = self.last_run()?;
-        let after = self
-            .snapshots()
-            .iter()
-            .filter(|(_, s)| s.created_at > last.started_at)
-            .map(|(id, _)| *id)
-            .collect();
-        let same = self
-            .snapshots()
-            .iter()
-            .filter(|(_, s)| s.created_at == last.started_at)
-            .count();
-        Some((after, same))
+    /// The last run, when it doesn't say which scope it ran for (an older ODS, or it
+    /// stopped before it built): it may belong to another target.
+    fn unscoped_last_run(&self) -> Option<&LastRun> {
+        self.history()
+            .and_then(|h| h.last_run.as_ref())
+            .filter(|l| l.scope.is_none())
     }
 
-    /// The snapshot the last run recorded: the only one recorded since it started, when
-    /// none was recorded in the second it started. Inferred, from times alone.
-    fn last_run_link(&self) -> Option<u64> {
-        match self.since_last_run()? {
-            (after, 0) if after.len() == 1 => after.first().copied(),
-            _ => None,
+    /// Which snapshot, if any, the last run recorded.
+    fn last_run_tie(&self) -> Tie {
+        let Some(last) = self.last_run() else {
+            return Tie::Unknown;
+        };
+        let snapshots = self.snapshots();
+        if let Some(run_id) = &last.run_id {
+            return snapshots
+                .iter()
+                .find(|(_, s)| &s.run_id == run_id)
+                .map_or(Tie::NothingInferred, |(id, _)| Tie::Snapshot(*id));
+        }
+        // No run id: by time alone, and only when nothing was recorded since it
+        // started (times are kept to the second, so the same second counts as since).
+        if snapshots
+            .iter()
+            .any(|(_, s)| s.created_at >= last.started_at)
+        {
+            Tie::Unknown
+        } else {
+            Tie::NothingInferred
         }
     }
 
     fn last_run_view(&self, details: bool, names: &Names) -> Option<LastRunView> {
         let last = self.last_run()?;
+        Some(self.describe_last_run(last, self.last_run_tie(), details, names))
+    }
+
+    fn describe_last_run(
+        &self,
+        last: &LastRun,
+        tie: Tie,
+        details: bool,
+        names: &Names,
+    ) -> LastRunView {
         let refs = |ids: &[String]| ids.iter().map(|id| node_ref(names, id)).collect::<Vec<_>>();
         let outcome = last.outcome.clone().unwrap_or_default();
-        let (after, same) = self.since_last_run().unwrap_or_default();
         let mut next = Vec::new();
         if !outcome.failed.is_empty() || !outcome.skipped.is_empty() {
             if let Some(command) = &last.retry_failed {
@@ -1358,7 +1442,7 @@ impl Dashboard {
                 ));
             }
         }
-        Some(LastRunView {
+        LastRunView {
             command: if details {
                 last.command.clone()
             } else {
@@ -1366,16 +1450,20 @@ impl Dashboard {
             },
             command_name: last.command_name.clone(),
             started_at: last.started_at,
+            scope: last.scope.clone(),
             outcome_known: last.outcome.is_some(),
             failed: refs(&outcome.failed),
             skipped: refs(&outcome.skipped),
             failed_source_tests: refs(&outcome.failed_source_tests),
-            snapshot: self.last_run_link(),
-            recorded_nothing: after.is_empty() && same == 0,
+            snapshot: match tie {
+                Tie::Snapshot(id) => Some(id),
+                _ => None,
+            },
+            recorded_nothing_inferred: tie == Tie::NothingInferred,
             last_good: self.snapshots().first().map(|(id, _)| *id),
             next,
             file: details.then(|| last.file.clone()),
-        })
+        }
     }
 
     /// The Runs page as of `now` (for the date filter).
@@ -1398,7 +1486,7 @@ impl Dashboard {
         // The last run, when it recorded nothing, is a run too: listed and counted.
         let unrecorded = last_run
             .as_ref()
-            .filter(|l| l.recorded_nothing && l.outcome_known)
+            .filter(|l| l.recorded_nothing_inferred && l.outcome_known)
             .map(|l| {
                 let outcome = if l.failed.is_empty() && l.skipped.is_empty() {
                     "succeeded"
@@ -1427,7 +1515,11 @@ impl Dashboard {
         });
         let last_failed = last_run_listed && unrecorded.is_some_and(|(o, _)| o == "failed");
         let selected = match filter.run.as_deref() {
-            Some("last") if last_run.as_ref().is_some_and(|l| l.recorded_nothing) => {
+            Some("last")
+                if last_run
+                    .as_ref()
+                    .is_some_and(|l| l.recorded_nothing_inferred) =>
+            {
                 Some("last".to_owned())
             }
             Some(want) => find_row(&runs, want).map(|r| r.run_id.clone()),
@@ -1463,9 +1555,15 @@ impl Dashboard {
                 .count()
                 + usize::from(last_failed),
             listed: runs.len() + usize::from(last_run_listed),
+            unfiltered: all.len() + usize::from(unrecorded.is_some()),
+            filtered: filter.outcome.is_some() || filter.target.is_some() || filter.date.is_some(),
+            recorded_snapshots: runs.len(),
             runs,
             last_run,
             last_run_listed,
+            unscoped_last_run: self
+                .unscoped_last_run()
+                .map(|l| self.describe_last_run(l, Tie::Unknown, details, names)),
             selected,
             recorded: RECORDED.iter().map(|&line| line.to_owned()).collect(),
             ci: "CI runs — coming with server mode",
@@ -1536,7 +1634,7 @@ impl Dashboard {
             (a.built, a.lane, at(&a.node), &a.node).cmp(&(b.built, b.lane, at(&b.node), &b.node))
         });
         let built_why = self.built_why(&timeline, snapshot, previous, &names);
-        let last_run = (self.last_run_link() == Some(this.snapshot))
+        let last_run = (self.last_run_tie() == Tie::Snapshot(this.snapshot))
             .then(|| self.last_run_view(details, &names))
             .flatten();
         let state_rule = state_rule(&this);
@@ -1644,20 +1742,28 @@ fn lanes<'a>(snapshot: &'a StateSnapshot, built: &BTreeSet<&'a str>) -> BTreeMap
 }
 
 /// What the state rule (AGENTS rule 5) meant for `run`.
+///
+/// What is always true comes first; what the last run's record adds (which nodes failed,
+/// or that none did) is said to come from it, and only for the run whose id it records.
 fn state_rule(run: &RunRow) -> String {
-    match (run.replaces, run.outcome) {
-        (Some(prev), RunOutcome::Failed) => format!(
-            "Snapshot {} replaced snapshot {prev} with this run's successful builds only; the nodes that failed keep their last good build.",
-            run.snapshot
-        ),
-        (Some(prev), _) => format!(
+    let base = match run.replaces {
+        Some(prev) => format!(
             "Snapshot {} replaced snapshot {prev} with this run's successful builds; every other node keeps its last good build.",
             run.snapshot
         ),
-        (None, _) => format!(
+        None => format!(
             "Snapshot {} is the first: it records this run's successful builds.",
             run.snapshot
         ),
+    };
+    match (run.outcome, run.from_last_run) {
+        (RunOutcome::Failed, true) => format!(
+            "{base} The last run's record says some nodes failed or weren't recorded: they keep their last good build."
+        ),
+        (RunOutcome::Succeeded, true) => {
+            format!("{base} The last run's record says nothing failed.")
+        }
+        _ => format!("{base} Whether any node failed isn't stored for this run."),
     }
 }
 
@@ -1665,7 +1771,7 @@ fn state_rule(run: &RunRow) -> String {
 const RECORDED: [&str; 4] = [
     "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
     "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build.",
-    "Failures are only known for the last run started on this machine, kept beside the store for `ods state retry`; it is tied to a snapshot by time, so that link is inferred.",
+    "Failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the snapshot that records its run id; that it recorded nothing is inferred.",
     "Durations, start times, commands of earlier runs and who ran them aren't recorded yet.",
 ];
 

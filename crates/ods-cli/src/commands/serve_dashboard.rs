@@ -181,20 +181,21 @@ impl DashboardSource {
         };
         let read = block_on(async {
             let db = SqliteStateStore::open_existing(&ws.state_db).await?;
-            // Counted up to a bound: the tile says "at least" beyond it.
-            let history = db.history(&ws.scope, SNAPSHOTS_COUNTED + 1).await?;
-            let mut runs = Vec::new();
-            // The State pages list more runs than Home, and one more snapshot, so the
-            // oldest listed run can say what it replaced (#311).
+            // The State pages list the newest runs, and read one more snapshot, so the
+            // oldest listed run can say what it replaced (#311). The Snapshots tile
+            // counts as far: it says "at least" beyond it.
+            let history = db.history(&ws.scope, SNAPSHOTS_READ).await?;
             let mut snapshots = Vec::new();
-            for summary in history.iter().take(RUNS_LISTED + 1) {
+            for summary in &history {
                 if let Some(stored) = db.get(&ws.scope, summary.id).await? {
-                    if runs.len() < RECENT_RUNS {
-                        runs.push(RunRecord::of(stored.id.0, &stored.snapshot));
-                    }
                     snapshots.push((stored.id.0, stored.snapshot));
                 }
             }
+            let runs: Vec<RunRecord> = snapshots
+                .iter()
+                .take(RECENT_RUNS)
+                .map(|(id, snapshot)| RunRecord::of(*id, snapshot))
+                .collect();
             let latest = db.latest(&ws.scope).await?;
             db.close().await;
             Ok::<_, ods_sdk::ProviderError>((history.len(), runs, snapshots, latest))
@@ -221,8 +222,8 @@ impl DashboardSource {
             Err(error) => (Err(error), Vec::new()),
         };
         StateInput::Recorded(Box::new(
-            Recorded::new(store, runs, counted.min(SNAPSHOTS_COUNTED), plan)
-                .capped(counted > SNAPSHOTS_COUNTED)
+            Recorded::new(store, runs, counted, plan)
+                .capped(counted >= SNAPSHOTS_READ)
                 .with_warnings(warnings)
                 .with_planner(planner)
                 .with_history(History::new(snapshots).with_last_run(last_run)),
@@ -242,13 +243,16 @@ fn last_run(state_db: &Path) -> Option<LastRun> {
         )
     });
     Some(
+        // Redacted here, before it leaves the CLI: option values such as `--vars` and
+        // dbt's own options may carry secrets (AGENTS.md rule 9).
         LastRun::new(
-            last.shown(),
+            last.redacted(),
             format!("ods state {}", last.command),
             last.recorded_at,
             store_location(&path),
         )
         .with_outcome(outcome)
+        .with_run(last.scope.clone(), last.run_id.clone())
         // Both exist in this ODS (`ods state retry`, #276, and `--failed`, #292).
         .with_retry(
             Some("ods state retry".to_owned()),
@@ -257,9 +261,9 @@ fn last_run(state_db: &Path) -> Option<LastRun> {
     )
 }
 
-/// How many snapshots are counted for the Snapshots tile; the store has no count
-/// query, and history rows are small.
-const SNAPSHOTS_COUNTED: usize = 10_000;
+/// How many snapshots are read: the runs the State pages list, and the one before the
+/// oldest. The store has no count query, so the Snapshots tile counts this far.
+const SNAPSHOTS_READ: usize = RUNS_LISTED + 1;
 
 /// The store as people read it: as given when relative, else relative to the working
 /// directory or with `~` for the home directory; and in full.
