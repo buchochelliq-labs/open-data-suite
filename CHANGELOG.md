@@ -21,6 +21,22 @@ State MVP. Entries below record changes since the changelog was introduced.
   is 0.3 (#288, #232).
 
 ### Added
+- `ods doctor` checks that ODS can work in the current project: configuration (files,
+  profile, every effective value and where it came from, credentials only as
+  references), the dbt project and its manifest (found, readable, a supported schema,
+  named, not older than the project's files), dbt and its adapter, the target dbt
+  builds in, the state database (the same check as `ods state doctor`) and what the
+  providers can do, with the consequence of what's missing. Nothing contacts the
+  warehouse unless `--connect` is given, which also runs the relation check and, on
+  Databricks, the table-version probe, through dbt. `--project` and
+  `--provider dbt|databricks|sqlite` narrow it; `--strict` fails on warnings. Each
+  check is `ok`, `warning`, `error`, `unknown` or `skipped`, with a stable code,
+  evidence and a hint, in human, plain and JSON output (`command: "doctor"`). It exits
+  0 when healthy or with warnings only, and 5 (`ODS-E0501`) when a check fails or a
+  required check can't conclude. Invalid configuration is reported as a finding rather
+  than stopping it. The new codes (`ODS-U0001`, `ODS-E0204`–`U0207`,
+  `ODS-E0501`–`E0509`, `ODS-W0601`–`E0604`) are listed in `docs/cli.md` (#181,
+  ADR-0023).
 - On Databricks, `ods state run`, `build`, `seed`, `snapshot` and `compile` (with or
   without `--dry-run`) read each source's Delta table version through dbt's own
   connection, in one `dbt show` query, and reuse the models reading a source only while

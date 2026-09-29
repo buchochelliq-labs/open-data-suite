@@ -13,7 +13,7 @@ use clap::{ArgMatches, Args, Command, FromArgMatches};
 
 use crate::exit::{CliError, ExitStatus};
 use crate::logging::{self, LogArgs};
-use crate::module::{Context, ProgressSettings, Registry};
+use crate::module::{ConfigFailure, Context, ProgressSettings, Registry};
 use crate::output::{ColorChoice, Mode, OutputArgs, OutputSettings};
 use crate::present;
 use ods_config::Inputs;
@@ -117,33 +117,13 @@ where
     };
 
     // Configuration (ADR-0005). Errors are reported using the flags alone.
-    if let Some(var) = io.invalid_env.first() {
-        let settings = globals.output.resolve(io.stdout_is_terminal);
-        let err = CliError::new(
-            ExitStatus::Config,
-            "ODS-E0102",
-            format!("environment variable {var} is not valid UTF-8"),
-        );
-        return report(&err, name, &settings, io.out, io.err);
-    }
-    let mut inputs = match &io.cwd {
-        Some(cwd) => Inputs::discover(cwd, &io.env),
-        None => Inputs {
-            env: io.env.clone(),
-            ..Inputs::default()
-        },
-    };
-    inputs.profile_flag.clone_from(&globals.profile);
-    inputs.flags = globals.output.flag_values();
-    let loaded = match ods_config::load(&inputs).and_then(|loaded| {
-        crate::commands::validate_provider_settings(&loaded)?;
-        Ok(loaded)
-    }) {
+    let diagnoses_config = registry
+        .get(name)
+        .is_some_and(crate::module::Module::diagnoses_config);
+    let (loaded, config_failure) = match load_config(&globals, io, diagnoses_config) {
         Ok(loaded) => loaded,
         Err(err) => {
             let settings = globals.output.resolve(io.stdout_is_terminal);
-            let err = CliError::new(ExitStatus::Config, err.code(), err.to_string())
-                .with_hint("fix the value named above; see docs/cli.md#configuration");
             return report(&err, name, &settings, io.out, io.err);
         }
     };
@@ -178,7 +158,9 @@ where
         enabled: level >= LevelFilter::WARN,
         ansi: log_ansi,
     };
-    let mut ctx = Context::new(settings, &loaded, io.out, &root).with_progress(progress);
+    let mut ctx = Context::new(settings, &loaded, io.out, &root)
+        .with_progress(progress)
+        .with_config_failure(config_failure);
     let result = module.run(sub_matches, &mut ctx).and_then(|()| {
         io.out.flush()?;
         Ok(())
@@ -187,6 +169,60 @@ where
         Ok(()) => ExitStatus::Success,
         Err(err) if err.is_broken_pipe() => ExitStatus::Success,
         Err(err) => report(&err, name, &settings, io.out, io.err),
+    }
+}
+
+/// Loads configuration (ADR-0005). A module that diagnoses configuration itself
+/// (`ods doctor`) gets configuration from the flags alone when it is invalid, and what
+/// was wrong; any other gets the error, to exit with.
+fn load_config(
+    globals: &GlobalArgs,
+    io: &Io<'_>,
+    diagnoses_config: bool,
+) -> Result<(ods_config::Loaded, Option<ConfigFailure>), CliError> {
+    let mut failure = None;
+    if let Some(var) = io.invalid_env.first() {
+        let err = CliError::new(
+            ExitStatus::Config,
+            "ODS-E0102",
+            format!("environment variable {var} is not valid UTF-8"),
+        );
+        if !diagnoses_config {
+            return Err(err);
+        }
+        failure = Some(ConfigFailure::new(err.code, err.message));
+    }
+    let mut inputs = match &io.cwd {
+        Some(cwd) => Inputs::discover(cwd, &io.env),
+        None => Inputs {
+            env: io.env.clone(),
+            ..Inputs::default()
+        },
+    };
+    inputs.profile_flag.clone_from(&globals.profile);
+    inputs.flags = globals.output.flag_values();
+    let loaded = ods_config::load(&inputs).and_then(|loaded| {
+        crate::commands::validate_provider_settings(&loaded)?;
+        Ok(loaded)
+    });
+    match loaded {
+        Ok(loaded) => Ok((loaded, failure)),
+        Err(err) if diagnoses_config => {
+            let flags_only = Inputs {
+                flags: inputs.flags,
+                ..Inputs::default()
+            };
+            let loaded = ods_config::load(&flags_only)
+                .map_err(|e| CliError::new(ExitStatus::Config, e.code(), e.to_string()))?;
+            Ok((
+                loaded,
+                Some(ConfigFailure::new(err.code(), err.to_string())),
+            ))
+        }
+        Err(err) => Err(
+            CliError::new(ExitStatus::Config, err.code(), err.to_string())
+                .with_hint("fix the value named above; see docs/cli.md#configuration"),
+        ),
     }
 }
 

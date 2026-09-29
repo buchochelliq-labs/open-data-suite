@@ -26,6 +26,7 @@ codes).
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the lineage explorer and its JSON API, see [below](#hosting-the-explorer) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
+| `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
 | `ods completions <shell>` | available |
@@ -125,6 +126,7 @@ meanings get new numbers.
 | `ODS-E0405` | The state database is damaged: it can't be read, or holds a record that can't be decoded. Nothing was changed; `ods state doctor` says what is wrong. |
 | `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
 | `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
+| `ODS-E0501` | `ods doctor` found checks that fail (exit status 5). Each finding has its own code: see [`ods doctor`](#ods-doctor). |
 
 ## Environment variables
 
@@ -232,6 +234,156 @@ providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file .
 ```
 
 Configuration errors exit with status 4.
+
+## `ods doctor`
+
+`ods doctor` checks that ODS can work in the current project and environment, and says
+what to do about anything that stops it ([ADR-0023](adr/0023-ods-doctor-diagnostics.md),
+#181). It changes nothing, and by default nothing contacts the warehouse.
+
+```sh
+ods doctor                        # every offline check
+ods doctor --project              # only the dbt project and its artifacts
+ods doctor --provider databricks  # only the checks about one provider: dbt, databricks or sqlite
+ods doctor --connect              # also the live checks, through dbt's own connection
+ods doctor --strict --json        # for CI: warnings fail too; one JSON document
+```
+
+It takes the options `ods state` commands take to find things (`--project-dir`,
+`--target-dir`, `--dbt`, `--profiles-dir`, `--dbt-profile`, `--target`, `--state-db`,
+`--environment`), with the same [precedence](#state-settings-in-odstoml), and the
+[global flags](#global-flags) (`-o human|plain|json`, `--json`, `--profile`).
+
+### Checks
+
+| Check | Question | Required |
+|---|---|---|
+| `config.load` | Do the configuration files load? Which were found, and which profile is active? | yes |
+| `config.values` | What is every effective value, and where did it come from? Credentials appear only as references, e.g. `secret(env:WH_TOKEN)` | |
+| `config.resolution` | Where do dbt, the project, the target directory, the state database and the environment come from: a flag, a `DBT_*` variable, a configuration file or profile, or a default? | yes |
+| `project.dbt_project` | Is there a `dbt_project.yml` in the project directory? | yes |
+| `project.manifest` | Can `manifest.json` (or dbt's Information Schema) be read, at a supported schema version (v11, v12)? | yes |
+| `project.name` | Does the manifest name its project? | |
+| `project.freshness` | Is the manifest newer than every project file (`.sql`, `.yml`, `.yaml`, `.csv`, `.py`, outside `target/`, `dbt_packages/`, `logs/` and hidden directories)? | |
+| `tools.dbt` | Does dbt run, and is it a supported version (1.7 or later; 2.x is untested)? | yes |
+| `tools.adapter` | Is the adapter the manifest was written with (`metadata.adapter_type`) installed in dbt? | |
+| `target.identity` | Which target does dbt build in? dbt renders the profile (`dbt compile --inline`), which reads `profiles.yml` but connects to nothing | yes |
+| `state_store.database` | Is the state database sound, and at a schema this ODS can read and write? The same check as `ods state doctor` | yes |
+| `capabilities.relation_existence` | Can a build's relation be checked before it is reused (#230)? | |
+| `capabilities.relation_versions` | Where do sources' data versions come from: the warehouse's table versions (Databricks), `loaded_at_field` through `dbt source freshness`, or nowhere? | |
+| `connectivity.relations` | With `--connect`: does the relation check (`dbt show`) run? | |
+| `connectivity.table_versions` | With `--connect`, on Databricks: does the table-version probe run? | |
+
+Each check ends `ok`, `warning`, `error`, `unknown` (it couldn't conclude, e.g. a check
+it depends on failed) or `skipped` (not run by choice, e.g. a live check without
+`--connect`). An unknown check is never shown as passed. Every finding carries a code,
+its evidence (each value with where it came from) and a hint.
+
+### Exit status
+
+| Outcome | Exit |
+|---|---|
+| every check `ok` or `skipped` | 0 |
+| warnings, or `unknown` on checks that aren't required | 0; with `--strict`, 5 |
+| an `error`, or `unknown` on a required check | 5, `ODS-E0501` |
+
+The output mode never changes it. Invalid configuration doesn't stop `ods doctor` as it
+stops other commands (status 4): it is reported as `config.load`, and the checks that
+depend on settings are `unknown`. With `--json`, a failed run still carries the whole
+report in `result`, and `ODS-E0501` in `diagnostics`.
+
+### Codes
+
+| Code | Finding | Hint |
+|---|---|---|
+| `ODS-U0001` | Not checked: a check it depends on failed (evidence `depends_on`). | Fix that check first. |
+| `ODS-E0101` | A configuration file can't be read or isn't valid TOML. | Fix the file named in the message. |
+| `ODS-E0102` | Configuration schema violation, a variable that isn't UTF-8, or more than one dbt provider. | Fix the key named in the message; keep one `kind = "dbt"` provider. |
+| `ODS-E0103` | A credential is written as plaintext. The value is never shown. | Use a reference, e.g. `{ secret = "env:VAR" }`. |
+| `ODS-E0104` | The selected profile is not defined. | Define it, or select another with `--profile` or `ODS_PROFILE`. |
+| `ODS-E0201` | The manifest is missing, unreadable or an unsupported schema version. | `dbt parse` (or `ods state compile`); for an old schema, upgrade dbt to 1.7 or later. |
+| `ODS-E0204` | No `dbt_project.yml` in the project directory. | Run ODS in the project, or name it with `--project-dir`, `DBT_PROJECT_DIR` or `project_dir`. |
+| `ODS-W0205` | The manifest names no project. | Write it again with dbt 1.7 or later: `dbt parse`. |
+| `ODS-W0206` | The manifest is older than a project file: plans would describe code that isn't what runs. | `dbt parse`, or any `ods state` command that compiles. |
+| `ODS-U0207` | How old the artifacts are can't be told (dbt's Information Schema, or no file times). | |
+| `ODS-E0401` | The state database can't be opened, or a newer ODS wrote it. | Check the path and permissions; for a newer schema, upgrade ODS. |
+| `ODS-E0405` | The state database is damaged. | `ods state doctor`, then [recover](#recovering-state). |
+| `ODS-E0501` | `ods doctor` found checks that fail. | Each failing check says what to do. |
+| `ODS-E0502` | dbt can't be run. | Install `dbt-core` with your adapter, or name it with `--dbt` or `program`. |
+| `ODS-E0503` | dbt is older than 1.7, whose manifests ODS reads. | Upgrade dbt. |
+| `ODS-W0504` | dbt's major version (2.x) is one ODS isn't tested with. | If a command fails, try dbt 1.x, and report it. |
+| `ODS-U0505` | `dbt --version` printed no version ODS can read. | Check that `--dbt` names dbt itself. |
+| `ODS-E0506` | The manifest's adapter isn't installed in dbt. | `pip install dbt-<adapter>` next to dbt. |
+| `ODS-U0507` | The manifest names no adapter. | `dbt parse` with dbt 1.7 or later. |
+| `ODS-U0508` | dbt lists no adapters, so whether the manifest's is installed can't be told. | |
+| `ODS-E0509` | dbt can't render the profile, so it can't say which target it builds in. | Check `profiles.yml`, `--profiles-dir`, `--target` and the variables it reads; `dbt debug` says more. |
+| `ODS-W0601` | No data versions for some sources: the adapter has no table versions, and they have no `loaded_at_field`, so the models reading them build on every run. | Give them a `loaded_at_field` (or `loaded_at_query`); see [where source versions come from](#where-source-versions-come-from). |
+| `ODS-W0602` | Relations can't be checked before reuse: a dropped table is rebuilt only when something else changes. | |
+| `ODS-E0603` | The live relation check failed. | Check that the warehouse is reachable with the profile's credentials: `dbt debug`. |
+| `ODS-E0604` | The live table-version probe failed. | Check that the profile's user may read table history (`DESCRIBE HISTORY`). |
+
+### Common failures
+
+**Not in a dbt project**, or never parsed:
+
+```text
+$ ods doctor --project -o plain
+...
+Project
+  [error ODS-E0204] project.dbt_project (required): no dbt project in `.`: `dbt_project.yml` isn't there
+    project_dir: . (default)
+    hint: run ODS in your dbt project, or name it with --project-dir, DBT_PROJECT_DIR or the dbt provider's `project_dir` setting
+  [error ODS-E0201] project.manifest (required): cannot read `target/info_schema/v1/dbt.models.parquet`: no manifest.json and no dbt Information Schema
+    target_dir: target (default)
+    hint: dbt writes it when it parses the project: run `dbt parse`, or `ods state compile`
+  [unknown ODS-U0001] project.name: not checked: `project.manifest` failed
+    depends_on: project.manifest
+    hint: fix `project.manifest` first
+```
+
+**Stale artifacts** (a model edited since dbt last parsed the project): a warning, so
+`ods doctor` exits 0, and 5 with `--strict`:
+
+```text
+  [warning ODS-W0206] project.freshness: the manifest is older than `./models/orders.sql`: plans would describe code that isn't what runs
+    manifest: target/manifest.json
+    manifest_modified: 2026-01-01T01:00:00Z
+    newest_project_file: ./models/orders.sql
+    newest_project_file_modified: 2026-01-01T02:00:00Z
+    hint: parse the project again: `dbt parse`, or any `ods state` command that compiles (not with --no-compile)
+```
+
+**Broken `ods.toml`**: reported, not fatal; what depends on settings is unknown:
+
+```text
+Configuration
+  [error ODS-E0101] config.load (required): /path/to/project/ods.toml is not valid TOML: …
+    hint: fix the value named above; see docs/cli.md#configuration
+  [unknown ODS-U0001] config.values: not checked: `config.load` failed
+```
+
+**dbt not installed**, or not on `PATH`: the target can't be checked, and since it is
+required, the run fails even if nothing else did:
+
+```text
+Tools
+  [error ODS-E0502] tools.dbt (required): dbt can't be run: couldn't start `dbt`: No such file or directory (os error 2)
+    program: dbt (default)
+    hint: install dbt-core with your adapter (`pip install dbt-core dbt-<adapter>`), or point ODS at it with --dbt or the dbt provider's `program` setting
+
+Target
+  [unknown ODS-U0001] target.identity (required): not checked: `tools.dbt` failed
+```
+
+**No data versions for sources** (a DuckDB or Postgres project whose sources have no
+`loaded_at_field`):
+
+```text
+  [warning ODS-W0601] capabilities.relation_versions: no table versions for the `duckdb` adapter, and 2 of 2 sources have no `loaded_at_field`: they count as changed on every run, so the models reading them always build
+    adapter: duckdb (manifest)
+    missing_capability: relation_versions
+    sources_without_loaded_at_field: raw.orders, raw.payments
+```
 
 ## Column-level lineage
 

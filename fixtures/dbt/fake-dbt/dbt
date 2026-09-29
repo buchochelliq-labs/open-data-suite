@@ -27,7 +27,9 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
                     `raw.payments` (read by stg_payments), each with a not_null source
                     test (`source_not_null_raw_<table>_id`), to the manifest (#232); `3`
                     also adds `raw.customers` (read by stg_customers)
-  FAKE_DBT_ADAPTER  the manifest's `metadata.adapter_type` [default: the base manifest's]
+  FAKE_DBT_ADAPTER  the manifest's `metadata.adapter_type` [default: the base manifest's];
+                    also the plugin `--version` lists [default: duckdb]
+  FAKE_DBT_VERSION  the version `--version` reports [default: 1.10.23]
   FAKE_DBT_PROBE  JSON file standing in for the warehouse, for ODS's relation probe
                   (`show --inline` of an `ods_relation_probe` query): source name (e.g.
                   `raw.orders`) -> {"type": "table", "formats": ["delta"], "rows":
@@ -283,7 +285,9 @@ def main():
         with open(os.environ["FAKE_DBT_CALLS"], "a") as f:
             f.write(" ".join(words) + "\n")
     if "version" in options:
-        print("Core:\n  - installed: 1.10.23 (fake)")
+        adapter = os.environ.get("FAKE_DBT_ADAPTER", "duckdb")
+        print(f"Core:\n  - installed: {os.environ.get('FAKE_DBT_VERSION', '1.10.23')} (fake)\n\n"
+              f"Plugins:\n  - {adapter}: 1.10.0 (fake)")
         return 0
     if os.environ.get("FAKE_DBT_EXIT"):
         print("fake dbt: failing before writing anything", file=sys.stderr)
