@@ -6,8 +6,8 @@
 - **Deciders:** @n1ckyb
 
 ## Context
-v0.1.0 (M1) is the State MVP: ODS decides *what* runs, dbt decides *how*. The first slice
-is `ods state plan`. It must say, for every node, whether it can be reused or must be
+v0.0.1 (M1), the first release, is the State MVP: ODS decides *what* runs, dbt decides
+*how*. The first slice is `ods state plan`. It must say, for every node, whether it can be reused or must be
 built, and why. That needs:
 - a record of what was last built successfully (#11);
 - fingerprints of each node's code (#13) and evidence of its upstream data (#16);

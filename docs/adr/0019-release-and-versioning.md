@@ -1,8 +1,9 @@
 # ADR-0019: Release and versioning strategy
 
 - **Status:** Proposed
-- **Date:** 2026-09-27
-- **Issues:** #101, #212
+- **Date:** 2026-09-27 (amended 2026-09-29: first release is 0.0.1; 0.1.0 means the
+  dashboard design is complete)
+- **Issues:** #101, #212, #309
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -13,8 +14,8 @@ ERD, lineage, web, MCP). #101 asks how they are versioned and released:
 - changelog and release-note conventions;
 - a deprecation policy.
 
-#212, distribution for v0.1.0, needs the changelog format to exist first, and AGENTS.md
-defers CHANGELOG entries "until #101 defines the format".
+#212, distribution for the first release (v0.0.1), needs the changelog format to exist
+first, and AGENTS.md defers CHANGELOG entries "until #101 defines the format".
 
 Several things are already versioned, each by its own ADR, and a policy has to leave
 them intact:
@@ -90,6 +91,19 @@ for at least one minor release before it is removed.**
   - A patch never breaks and never migrates the state store.
 - **From 1.0:** breaking needs a major. Minors add; patches fix.
 
+### 1a. Release milestones: 0.0.x until the dashboard is complete
+- **The first public release is 0.0.1** (the State MVP, M1, plus the first dashboard
+  screens, #310–#313).
+- **Releases stay 0.0.x until every screen in the dashboard design
+  (`docs/design/dashboard/`) is built.** **0.1.0 means the dashboard design is
+  complete** (UX1, #309); it is not tagged before that, however much else has shipped.
+  Work from later milestones that lands before then ships in a 0.0.x release.
+- The milestones after it keep their order and numbers (M2 → 0.2.0, M3 → 0.3.0, …),
+  each after 0.1.0.
+- **In the 0.0.x series every release is treated like a pre-1.0 minor:** it may add
+  features, break (listed under **Breaking**, with what to do) and migrate the state
+  store. The §1 patch rule ("never breaks, never migrates") applies from 0.1.0 on.
+
 ### 2. Compatibility matrix
 | Surface | Versioned by | Compatible when | Bumped |
 |---|---|---|---|
@@ -129,11 +143,11 @@ formats) is covered by the rows above.
   - Deprecated behaviour keeps working and prints a warning on stderr, where ADR-0003
     sends warnings, so JSON on stdout stays parseable.
   - It is listed under **Deprecated** in the changelog, naming the replacement.
-- **Before 1.0:** removal is allowed in the next minor at the earliest. The warning must
-  have shipped in at least one release.
+- **Before 1.0:** removal is allowed in the next minor at the earliest (in the 0.0.x
+  series, the next release). The warning must have shipped in at least one release.
 - **From 1.0:** removal is allowed in the next major only.
 - **Persisted formats are never deprecated away.** State written by any `ods` since
-  0.1.0 stays readable by every later `ods`, whatever the version:
+  0.0.1, the first release, stays readable by every later `ods`, whatever the version:
   - every earlier store schema keeps its migration;
   - every earlier document major keeps a reader that upgrades it to the current one.
 
@@ -161,7 +175,7 @@ formats) is covered by the rows above.
   - Every user-visible PR needs a changelog entry, which is a small tax on each PR.
 - Follow-up issues:
   - #212: the release workflow uses the `vX.Y.Z` tag, attaches the changelog section,
-    and bumps `workspace.package.version` for 0.1.0.
+    and bumps `workspace.package.version` for 0.0.1.
   - A CI check that a PR touching `crates/ods-cli/src/commands/`, persisted types or
     `docs/cli.md` also touches `CHANGELOG.md`, with a `no-changelog` label to opt out.
   - Report the store schema version in `ods version`, alongside SDK and output schema.

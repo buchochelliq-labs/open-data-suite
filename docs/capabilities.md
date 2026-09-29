@@ -130,7 +130,7 @@ Details: [CLI reference](cli.md#state-run),
 `ods state policies` reads dbt's State configuration (`lag_tolerance`,
 `require_fresh_data_from`, `build_after`) as you already write it, and shows each
 model's effective freshness policy. It is the first piece of ODS State, the
-incremental "what needs to run" planner planned for v0.1.0.
+incremental "what needs to run" planner planned for v0.0.1, the first release.
 
 Details: [CLI reference](cli.md#dbt-state-configuration),
 [ADR-0011](adr/0011-dbt-state-config-compatibility.md).

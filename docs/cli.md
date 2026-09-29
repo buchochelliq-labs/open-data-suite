@@ -65,14 +65,14 @@ literally.
 {
   "schema_version": {"major": 0, "minor": 1},
   "command": "state",
-  "ods_version": "0.1.0",
+  "ods_version": "0.0.1",
   "result": null,
   "diagnostics": [
     {
       "level": "error",
       "code": "ODS-E0003",
       "message": "`ods state` is not implemented yet",
-      "hint": "planned for M1 State MVP (v0.1.0); see docs/ROADMAP.md"
+      "hint": "planned for M1 State MVP (v0.0.1); see docs/ROADMAP.md"
     }
   ]
 }

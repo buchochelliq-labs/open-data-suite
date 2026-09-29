@@ -1,8 +1,8 @@
 # Install
 
 !!! warning "From the first release"
-    Prebuilt binaries start with **v0.1.0**, which isn't released yet. Until then, build
-    from source (below). The commands on this page use `0.1.0` as the example version.
+    Prebuilt binaries start with **v0.0.1**, which isn't released yet. Until then, build
+    from source (below). The commands on this page use `0.0.1` as the example version.
 
 `ods` is a single binary with no runtime dependencies. Every channel below installs the
 same build, for:
@@ -59,7 +59,7 @@ the licences of the open-source software built into `ods`.
 === "Linux"
 
     ```sh
-    version=0.1.0 target=x86_64-unknown-linux-musl
+    version=0.0.1 target=x86_64-unknown-linux-musl
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     sha256sum --check --ignore-missing SHA256SUMS
@@ -70,7 +70,7 @@ the licences of the open-source software built into `ods`.
 === "macOS"
 
     ```sh
-    version=0.1.0 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
+    version=0.0.1 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     shasum -a 256 --check --ignore-missing SHA256SUMS
@@ -81,7 +81,7 @@ the licences of the open-source software built into `ods`.
 === "Windows (PowerShell)"
 
     ```powershell
-    $version = "0.1.0"; $name = "ods-v$version-x86_64-pc-windows-msvc"
+    $version = "0.0.1"; $name = "ods-v$version-x86_64-pc-windows-msvc"
     $base = "https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version"
     Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
@@ -101,7 +101,7 @@ a signed statement that the release workflow built it from the tagged commit. Wi
 [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify ods-v0.1.0-x86_64-unknown-linux-musl.tar.gz \
+gh attestation verify ods-v0.0.1-x86_64-unknown-linux-musl.tar.gz \
   --repo buchochelliq-labs/open-data-suite
 ```
 
@@ -117,7 +117,9 @@ cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suit
 
 `ods version` prints the ODS version and the versions of the interfaces other tools rely
 on (the plugin SDK and the JSON output). Before 1.0, a minor release may include breaking
-changes; each one is listed under **Breaking** in the
+changes. **While versions are 0.0.x, every release may**, even though 0.0.1 → 0.0.2
+looks like a patch: it may change interfaces or migrate the state store, so read the
+changelog before upgrading. Each break is listed under **Breaking** in the
 [changelog](https://github.com/buchochelliq-labs/open-data-suite/blob/main/CHANGELOG.md),
 with what to do. The release notes of each version are its changelog section.
 [ADR-0019](adr/0019-release-and-versioning.md) has the full policy.
