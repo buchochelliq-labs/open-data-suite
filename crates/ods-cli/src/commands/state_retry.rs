@@ -24,8 +24,26 @@ use super::state_settings::{DEFAULT_STORE, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 
 /// The version of the last-run file this build writes and reads. 1.1 added the
-/// optional `outcome` (#292); a 1.0 file still reads, without one.
-const LAST_RUN_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
+/// optional `outcome` (#292); 1.2 the optional `scope` and `run_id` (#311), so the
+/// dashboard can show the run only for its own state and tie it to its snapshot. Older
+/// files still read, without them.
+const LAST_RUN_VERSION: SchemaVersion = SchemaVersion::new(1, 2);
+
+/// Options whose values are shown by the dashboard: they select what runs and where,
+/// and carry nothing secret. Every other option's value (e.g. `--vars`, which may hold
+/// credentials) and everything after `--` is redacted (AGENTS.md rule 9).
+const SHOWN_VALUES: [&str; 7] = [
+    "select",
+    "exclude",
+    "resource-type",
+    "exclude-resource-type",
+    "target",
+    "environment",
+    "dbt-output",
+];
+
+/// What a redacted value reads as.
+const REDACTED: &str = "<redacted>";
 
 /// `ods state retry`'s arguments.
 pub(super) fn retry_command() -> Command {
@@ -52,8 +70,9 @@ pub(super) fn retry_command() -> Command {
         )
 }
 
-/// The last run, as kept beside the state database.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The last run, as kept beside the state database. Its `Debug` redacts the options,
+/// as [`LastRun::redacted`] does.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) struct LastRun {
     schema_version: SchemaVersion,
@@ -67,6 +86,28 @@ pub(super) struct LastRun {
     /// older ODS, or when the run stopped before dbt finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) outcome: Option<LastOutcome>,
+    /// The state scope it ran for, e.g. `shop/dev`, once it built (#311, since 1.2):
+    /// the file is kept per database, not per scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) scope: Option<String>,
+    /// The run's id, as a snapshot it commits records it, once it built (#311, since
+    /// 1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) run_id: Option<String>,
+}
+
+impl std::fmt::Debug for LastRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LastRun")
+            .field("schema_version", &self.schema_version)
+            .field("command", &self.command)
+            .field("args", &redact(&self.args))
+            .field("recorded_at", &self.recorded_at)
+            .field("outcome", &self.outcome)
+            .field("scope", &self.scope)
+            .field("run_id", &self.run_id)
+            .finish()
+    }
 }
 
 /// What failed in the last run (#292): what `retry --failed` builds again. Sorted, so
@@ -171,6 +212,42 @@ pub(super) fn peek(state_db: &Path) -> Option<(PathBuf, LastRun)> {
     }
 }
 
+impl LastRun {
+    /// The command line to show outside the terminal (the dashboard): option names,
+    /// and only the values of [`SHOWN_VALUES`]; every other value and everything after
+    /// `--` reads `<redacted>`, as they may carry secrets (`--vars`, AGENTS.md rule 9).
+    pub(super) fn redacted(&self) -> String {
+        let words: Vec<String> = ["ods".to_owned(), "state".to_owned(), self.command.clone()]
+            .into_iter()
+            .chain(redact(&self.args))
+            .collect();
+        shlex::try_join(words.iter().map(String::as_str)).unwrap_or_else(|_| words.join(" "))
+    }
+}
+
+/// `args` with option names kept, the values of [`SHOWN_VALUES`] kept, and every other
+/// value and everything after `--` replaced by `<redacted>`.
+fn redact(args: &[String]) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut option = "";
+    for arg in args {
+        if arg == "--" {
+            words.push("--".to_owned());
+            words.push(REDACTED.to_owned());
+            break;
+        }
+        if let Some(name) = arg.strip_prefix("--") {
+            option = name;
+            words.push(arg.clone());
+        } else if SHOWN_VALUES.contains(&option) {
+            words.push(arg.clone());
+        } else {
+            words.push(REDACTED.to_owned());
+        }
+    }
+    words
+}
+
 /// Where the last run beside `state_db` is kept.
 fn path_for(state_db: &Path) -> PathBuf {
     let mut name = state_db.as_os_str().to_owned();
@@ -237,6 +314,8 @@ pub(super) fn remember(
             args: typed(command, args),
             recorded_at: Timestamp::now(),
             outcome: None,
+            scope: None,
+            run_id: None,
         },
     };
     remembered.keep();
@@ -251,9 +330,12 @@ pub(super) struct Remembered {
 }
 
 impl Remembered {
-    /// Keeps how the run ended beside its command line (#292).
-    pub(super) fn finish(mut self, outcome: LastOutcome) {
+    /// Keeps how the run ended beside its command line (#292), with the scope it ran
+    /// for and its id, if it got one (#311).
+    pub(super) fn finish(mut self, outcome: LastOutcome, scope: String, run_id: Option<String>) {
         self.last.outcome = Some(outcome);
+        self.last.scope = Some(scope);
+        self.last.run_id = run_id;
         self.keep();
     }
 
@@ -453,6 +535,68 @@ mod tests {
         assert!(typed(&command(), &matches).is_empty());
     }
 
+    #[test]
+    fn the_dashboard_sees_no_option_values_but_the_selection() {
+        let last = LastRun {
+            schema_version: LAST_RUN_VERSION,
+            command: "build".into(),
+            args: [
+                "--select",
+                "+orders",
+                "--vars",
+                r#"{"password":"x"}"#,
+                "--full-refresh",
+                "--",
+                "--some-dbt-flag",
+                "secret",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            recorded_at: Timestamp::parse("2026-09-29T00:00:00Z").unwrap(),
+            outcome: None,
+            scope: None,
+            run_id: None,
+        };
+        let shown = last.redacted();
+        assert_eq!(
+            shown,
+            "ods state build --select +orders --vars '<redacted>' --full-refresh -- '<redacted>'"
+        );
+        for text in [shown, format!("{last:?}")] {
+            assert!(
+                !text.contains("password") && !text.contains("secret"),
+                "{text}"
+            );
+            assert!(!text.contains("some-dbt-flag"), "{text}");
+        }
+    }
+
+    #[test]
+    fn peek_reads_only_a_readable_file_it_understands() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        assert!(peek(&db).is_none(), "missing");
+        let path = path_for(&db);
+        std::fs::write(&path, "{").unwrap();
+        assert!(peek(&db).is_none(), "malformed");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":{"major":2,"minor":0},"command":"build","args":[],"recorded_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(peek(&db).is_none(), "written by a newer ODS");
+        // 1.1, before the scope and run id: still read, without them.
+        std::fs::write(
+            &path,
+            r#"{"schema_version":{"major":1,"minor":1},"command":"build","args":[],"recorded_at":"2026-01-01T00:00:00Z","outcome":{"failed":["model.a"]}}"#,
+        )
+        .unwrap();
+        let (_, last) = peek(&db).unwrap();
+        assert_eq!(last.scope, None);
+        assert_eq!(last.run_id, None);
+        assert_eq!(last.outcome.unwrap().failed.len(), 1);
+    }
+
     /// ADR-0019 §2: a file written at 1.0, before the outcome, still reads (#292).
     #[test]
     fn reads_a_last_run_without_an_outcome() {
@@ -493,6 +637,8 @@ mod tests {
             args: vec!["--vars".into(), "{a: 1}".into(), "-s".into(), "x".into()],
             recorded_at: Timestamp::from_unix(0),
             outcome: None,
+            scope: None,
+            run_id: None,
         };
         assert_eq!(last.shown(), "ods state build --vars '{a: 1}' -s x");
         let odd = LastRun {
