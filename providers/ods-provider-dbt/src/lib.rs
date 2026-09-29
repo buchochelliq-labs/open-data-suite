@@ -36,3 +36,4 @@ pub use artifacts::{
     DbtMacro, DbtTest, DbtUnitTest, Manifest, ManifestNode, ResourceType,
 };
 pub use runs::{NodeResult, RunResults, RunStatus, SourceFreshness};
+pub use target::strip_credentials;

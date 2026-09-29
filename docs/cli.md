@@ -239,7 +239,16 @@ Configuration errors exit with status 4.
 
 `ods doctor` checks that ODS can work in the current project and environment, and says
 what to do about anything that stops it ([ADR-0023](adr/0023-ods-doctor-diagnostics.md),
-#181). It changes nothing, and by default nothing contacts the warehouse.
+#181).
+
+By default ODS runs no warehouse query. It runs `dbt --version`, and has dbt render the
+profile with `dbt compile --inline … --no-populate-cache --no-introspect`, which reads
+`profiles.yml` but doesn't connect to the warehouse. dbt itself may still use the
+network: its version check looks up the latest release, and it may send usage
+statistics unless they are turned off (`DBT_SEND_ANONYMOUS_USAGE_STATS=false`). ODS
+writes nothing; dbt writes the target check's artifacts under
+`<target-dir>/ods-target-check`, as `ods state run` does, and its own log. Only
+`--connect` queries the warehouse, through dbt's own connection.
 
 ```sh
 ods doctor                        # every offline check
@@ -274,6 +283,11 @@ It takes the options `ods state` commands take to find things (`--project-dir`,
 | `connectivity.relations` | With `--connect`: does the relation check (`dbt show`) run? | |
 | `connectivity.table_versions` | With `--connect`, on Databricks: does the table-version probe run? | |
 
+The checks about sources' data versions (`capabilities.relation_versions`,
+`connectivity.table_versions`) concern `databricks` when the manifest's adapter is
+Databricks, whose table versions ODS reads, and `dbt` otherwise; `--provider` picks
+them accordingly.
+
 Each check ends `ok`, `warning`, `error`, `unknown` (it couldn't conclude, e.g. a check
 it depends on failed) or `skipped` (not run by choice, e.g. a live check without
 `--connect`). An unknown check is never shown as passed. Every finding carries a code,
@@ -305,14 +319,14 @@ report in `result`, and `ODS-E0501` in `diagnostics`.
 | `ODS-E0204` | No `dbt_project.yml` in the project directory. | Run ODS in the project, or name it with `--project-dir`, `DBT_PROJECT_DIR` or `project_dir`. |
 | `ODS-W0205` | The manifest names no project. | Write it again with dbt 1.7 or later: `dbt parse`. |
 | `ODS-W0206` | The manifest is older than a project file: plans would describe code that isn't what runs. | `dbt parse`, or any `ods state` command that compiles. |
-| `ODS-U0207` | How old the artifacts are can't be told (dbt's Information Schema, or no file times). | |
+| `ODS-U0207` | How old the artifacts are can't be told: dbt's Information Schema (no `manifest.json`), a file or directory of the project that can't be read, or a file without a modification time. | `dbt parse` writes `manifest.json`; check the project's permissions. |
 | `ODS-E0401` | The state database can't be opened, or a newer ODS wrote it. | Check the path and permissions; for a newer schema, upgrade ODS. |
 | `ODS-E0405` | The state database is damaged. | `ods state doctor`, then [recover](#recovering-state). |
 | `ODS-E0501` | `ods doctor` found checks that fail. | Each failing check says what to do. |
 | `ODS-E0502` | dbt can't be run. | Install `dbt-core` with your adapter, or name it with `--dbt` or `program`. |
 | `ODS-E0503` | dbt is older than 1.7, whose manifests ODS reads. | Upgrade dbt. |
 | `ODS-W0504` | dbt's major version (2.x) is one ODS isn't tested with. | If a command fails, try dbt 1.x, and report it. |
-| `ODS-U0505` | `dbt --version` printed no version ODS can read. | Check that `--dbt` names dbt itself. |
+| `ODS-U0505` | `dbt --version` printed no dbt Core `installed:` line with a version ODS can read (other programs that call themselves dbt aren't recognised). | Check that `--dbt` names dbt itself. |
 | `ODS-E0506` | The manifest's adapter isn't installed in dbt. | `pip install dbt-<adapter>` next to dbt. |
 | `ODS-U0507` | The manifest names no adapter. | `dbt parse` with dbt 1.7 or later. |
 | `ODS-U0508` | dbt lists no adapters, so whether the manifest's is installed can't be told. | |
@@ -321,6 +335,9 @@ report in `result`, and `ODS-E0501` in `diagnostics`.
 | `ODS-W0602` | Relations can't be checked before reuse: a dropped table is rebuilt only when something else changes. | |
 | `ODS-E0603` | The live relation check failed. | Check that the warehouse is reachable with the profile's credentials: `dbt debug`. |
 | `ODS-E0604` | The live table-version probe failed. | Check that the profile's user may read table history (`DESCRIBE HISTORY`). |
+| `ODS-U0605` | The live relation check ran, but couldn't tell whether some relations exist. Those nodes are built rather than reused. | `dbt debug`, and the adapter's permissions on those schemas. |
+| `ODS-W0606` | The live table-version probe ran, but some sources have no table version (evidence `without_version`, with why, e.g. a view). They fall back to `max_loaded_at`, or count as changed. | Give them a `loaded_at_field` if they have new data ODS should notice. |
+| `ODS-U0607` | The live table-version probe ran, but no source has a table version. | As `ODS-W0606`; check that the sources are Delta tables. |
 
 ### Common failures
 

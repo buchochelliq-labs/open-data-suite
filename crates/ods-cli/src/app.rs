@@ -214,15 +214,25 @@ fn load_config(
             };
             let loaded = ods_config::load(&flags_only)
                 .map_err(|e| CliError::new(ExitStatus::Config, e.code(), e.to_string()))?;
-            Ok((
-                loaded,
-                Some(ConfigFailure::new(err.code(), err.to_string())),
-            ))
+            let next = ConfigFailure::new(err.code(), err.to_string());
+            Ok((loaded, Some(also(failure, next))))
         }
         Err(err) => Err(
             CliError::new(ExitStatus::Config, err.code(), err.to_string())
                 .with_hint("fix the value named above; see docs/cli.md#configuration"),
         ),
+    }
+}
+
+/// `next`, or, after a `first` failure, both: the first keeps its code, and the second
+/// is named in the message, so neither finding is lost.
+fn also(first: Option<ConfigFailure>, next: ConfigFailure) -> ConfigFailure {
+    match first {
+        Some(first) => ConfigFailure::new(
+            first.code,
+            format!("{}; also {}: {}", first.message, next.code, next.message),
+        ),
+        None => next,
     }
 }
 
@@ -403,6 +413,22 @@ fn report(
 mod tests {
     use super::*;
     use crate::commands::default_registry;
+
+    #[test]
+    fn a_second_config_failure_is_kept_with_the_first() {
+        let env = ConfigFailure::new(
+            "ODS-E0102",
+            "environment variable ODS__X is not valid UTF-8",
+        );
+        let file = ConfigFailure::new("ODS-E0101", "ods.toml is not valid TOML");
+        let both = also(Some(env.clone()), file.clone());
+        assert_eq!(both.code, "ODS-E0102");
+        assert_eq!(
+            both.message,
+            "environment variable ODS__X is not valid UTF-8; also ODS-E0101: ods.toml is not valid TOML"
+        );
+        assert_eq!(also(None, file.clone()), file);
+    }
 
     struct Outcome {
         status: ExitStatus,

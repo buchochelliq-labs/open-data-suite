@@ -92,7 +92,7 @@ Each check yields a `CheckResult`:
 
 A `HealthReport` holds the checks (grouped by category, in a fixed order), a `summary`
 of counts per status, `strict`, and the `verdict`: `healthy`, `warnings` or `failed`.
-All types are `Serialize`, `snake_case` and `#[non_exhaustive]`. Nothing in them names a
+All types are `Serialize` and `Deserialize` (so a consumer can read a report back), `snake_case` and `#[non_exhaustive]`. Nothing in them names a
 provider; the CLI supplies ids and provider names as data.
 
 - `unknown` means the check couldn't conclude: a check it depends on failed (code
@@ -114,7 +114,7 @@ identifies the finding.
 - New: `ODS-U0001` (depends on a failed check), `ODS-E0204`, `W0205`, `W0206`, `U0207`
   (project), `ODS-E0501` (the doctor's verdict), `E0502`, `E0503`, `W0504`, `U0505`,
   `E0506`, `U0507`, `U0508` (dbt and its adapter), `E0509` (target), `W0601`, `W0602`,
-  `E0603`, `E0604` (capabilities, live checks).
+  `E0603`, `E0604`, `U0605`, `W0606`, `U0607` (capabilities, live checks).
 
 `docs/cli.md` lists every code with its hint; a test fails if one is missing there.
 
@@ -143,12 +143,16 @@ The verdict decides, the output mode never does:
   output is still 1.
 
 ### 4. Checks, offline by default
-Offline means **nothing contacts the warehouse**. The default set:
+Offline means **ODS runs no warehouse query**: it runs `dbt --version`, and dbt renders
+the profile without connecting. dbt itself may use the network for its own version
+check and usage statistics. ODS writes nothing; dbt writes the target check's artifacts
+and its log. An integration test asserts which dbt commands a default run makes. The
+default set:
 
 | Check | What | Provider |
 |---|---|---|
 | `config.load` | files considered, profile; a load error is its code | |
-| `config.values` | every effective value and its source; credentials only as references | |
+| `config.values` | every effective value and its source; credentials only as references, and connection strings without user, query, fragment or options | |
 | `config.resolution` | where `ods state` finds dbt, the project, target dir, state db and environment, and from what (flag, `DBT_*` variable, config file, profile, default) | |
 | `project.dbt_project` | `dbt_project.yml` in the project directory | dbt |
 | `project.manifest` | the manifest (or dbt's Information Schema) reads, at a supported schema | dbt |
@@ -159,7 +163,7 @@ Offline means **nothing contacts the warehouse**. The default set:
 | `target.identity` | dbt renders the target (ADR-0017) | dbt |
 | `state_store.database` | `ods state doctor`'s check, shared, not re-implemented | sqlite |
 | `capabilities.relation_existence` | a provider can check relations before reuse (#230) | dbt |
-| `capabilities.relation_versions` | sources get data versions: table versions for the adapter, else `loaded_at_field`; what's missing and its consequence | databricks |
+| `capabilities.relation_versions` | sources get data versions: table versions for the adapter, else `loaded_at_field`; what's missing and its consequence | by adapter* |
 
 - **`target.identity` is in the default set.** It needs dbt to render the profile
   (`dbt compile --inline` with `--no-populate-cache --no-introspect`), which reads
@@ -168,10 +172,22 @@ Offline means **nothing contacts the warehouse**. The default set:
   dbt can't be run, the target is `unknown`, which fails the run, since it is required.
   dbt writes its artifacts for this check under `target/ods-target-check`, as
   `ods state run` does; the doctor writes nothing else.
+- \* The source-version checks concern `databricks` when the manifest's adapter is
+  Databricks (whose table versions ODS reads) and `dbt` otherwise, so `--provider`
+  selects them by the project's adapter. If the manifest can't be read, they are shown
+  under the provider asked for, so the failure isn't hidden.
 - `dbt --version` may look up dbt's latest release itself; ODS doesn't, and dbt reads no
   profile to answer.
-- dbt's versions are PEP 440 (`1.9.0b1`), which semantic-version crates reject; only
-  major and minor decide support, so they are read by hand.
+- Only dbt Core's `- installed:` line is read (`installed version:` before dbt 1.0);
+  anything else, including other programs that call themselves dbt, is an unknown
+  version (`ODS-U0505`), never a number picked from elsewhere in the output. dbt's
+  versions are PEP 440 (`1.9.0b1`), which semantic-version crates reject. They are
+  parsed with `pep440_rs` (Apache-2.0 OR BSD-2-Clause, about 3,500 lines, used by uv);
+  without default features it adds only `unicode-width` and `unscanny` (both MIT OR
+  Apache-2.0), plus `once_cell` and `serde`, already in the tree. Only major and minor
+  decide support.
+- A freshness scan that can't read a directory or file, or a modification time that
+  isn't a date, makes `project.freshness` `unknown` (`ODS-U0207`), never `ok`.
 
 **`--connect`** adds the live checks that already exist in M1, through dbt's own
 connection (no credential in ODS):
@@ -179,9 +195,12 @@ connection (no credential in ODS):
 | Check | What | Provider |
 |---|---|---|
 | `connectivity.relations` | the relation check (`dbt show`, ADR-0016) over every model, seed and snapshot | dbt |
-| `connectivity.table_versions` | the table-version probe (ADR-0022) over every source; `skipped` for adapters without table versions | databricks |
+| `connectivity.table_versions` | the table-version probe (ADR-0022) over every source; `skipped` for adapters without table versions, `unknown` (`ODS-U0507`) when the manifest names no adapter | by adapter* |
 
-A failure there is an error (`ODS-E0603`, `ODS-E0604`) with a hint. Without
+A failure there is an error (`ODS-E0603`, `ODS-E0604`) with a hint. A check that ran
+but couldn't conclude isn't a pass: a relation check that couldn't tell about some
+relations is `unknown` (`ODS-U0605`); a probe that found no table version for some
+sources warns (`ODS-W0606`), and for none is `unknown` (`ODS-U0607`). Without
 `--connect` both are `skipped`, so it is visible that they didn't run.
 
 **Filters.** `--project` keeps the project checks; `--provider dbt|databricks|sqlite`
@@ -207,7 +226,7 @@ JSON is the ADR-0003 envelope, `command: "doctor"`.
   - The default run starts dbt twice (`--version`, the target check), which takes a
     few seconds on a large project. `--project` and `--provider sqlite` avoid it.
   - `ODS-E0101`–`E0104` exit 4 from other commands and 5 from the doctor.
-  - One new direct dependency, `walkdir` (Unlicense OR MIT, already in the tree
+  - Two new direct dependencies: `pep440_rs` (see §4) and `walkdir` (Unlicense OR MIT, already in the tree
     through other crates), for the freshness check's directory walk.
 - **Follow-up work:**
   - M2 (#15, #126): a Databricks SQL connectivity check and secret resolution checks

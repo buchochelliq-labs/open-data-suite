@@ -17,7 +17,9 @@ use ods_core::state::{TargetIdentity, Timestamp};
 use ods_core::{Capability, CheckCategory, CheckResult, Evidence};
 use ods_provider_dbt::executor::{DbtExecutor, DbtOutput};
 use ods_provider_dbt::version::{DbtVersion, MIN_SUPPORTED, Support};
-use ods_provider_dbt::{ArtifactSource, Artifacts, DbtError, Manifest, ResourceType};
+use ods_provider_dbt::{
+    ArtifactSource, Artifacts, DbtError, Manifest, ResourceType, strip_credentials,
+};
 use ods_sdk::Provider;
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource};
 use ods_sdk::contracts::executor::RequestedNode;
@@ -27,7 +29,7 @@ use ods_sdk::contracts::state_store::ProblemKind;
 use super::state_doctor::{DoctorReport as StoreReport, problem_label};
 use super::state_plan::{block_on, display_name};
 use super::state_settings::{Setting, StateSettings};
-use super::state_versions::{change_provider, versions};
+use super::state_versions::{change_provider, has_change_provider, versions};
 use crate::exit::CliError;
 use crate::module::ConfigFailure;
 
@@ -71,10 +73,16 @@ pub(super) mod codes {
     pub const RELATION_CHECK_FAILED: &str = "ODS-E0603";
     /// The live table-version probe failed.
     pub const VERSION_PROBE_FAILED: &str = "ODS-E0604";
+    /// The live relation check couldn't tell whether some relations exist.
+    pub const RELATIONS_UNKNOWN: &str = "ODS-U0605";
+    /// The live table-version probe ran, but some sources have no table version.
+    pub const SOME_TABLE_VERSIONS: &str = "ODS-W0606";
+    /// The live table-version probe ran, but no source has a table version.
+    pub const NO_TABLE_VERSIONS: &str = "ODS-U0607";
 
     /// Every code `ods doctor` reports, reused ones included, for the docs test.
     #[cfg(test)]
-    pub const ALL: [&str; 25] = [
+    pub const ALL: [&str; 28] = [
         BLOCKED,
         "ODS-E0101",
         "ODS-E0102",
@@ -100,6 +108,9 @@ pub(super) mod codes {
         NO_RELATION_CHECK,
         RELATION_CHECK_FAILED,
         VERSION_PROBE_FAILED,
+        RELATIONS_UNKNOWN,
+        SOME_TABLE_VERSIONS,
+        NO_TABLE_VERSIONS,
     ];
 }
 
@@ -119,12 +130,14 @@ pub(super) struct Options {
     pub strict: bool,
 }
 
-/// A check's identity. Its outcome carries the same id, category and provider.
+/// A check's identity. Its outcome carries the same id and category.
 #[derive(Debug, Clone, Copy)]
 struct Spec {
     id: &'static str,
     category: CheckCategory,
-    provider: Option<&'static str>,
+    /// The providers the check may concern. With more than one, the project's adapter
+    /// decides which ([`Checks::adapter_provider`]).
+    providers: &'static [&'static str],
     /// ODS can't work without it: an unknown outcome fails the run.
     required: bool,
 }
@@ -132,54 +145,56 @@ struct Spec {
 const fn spec(
     id: &'static str,
     category: CheckCategory,
-    provider: Option<&'static str>,
+    providers: &'static [&'static str],
     required: bool,
 ) -> Spec {
     Spec {
         id,
         category,
-        provider,
+        providers,
         required,
     }
 }
 
 use CheckCategory as C;
 
+const NONE: &[&str] = &[];
+const DBT: &[&str] = &["dbt"];
+const SQLITE: &[&str] = &["sqlite"];
+/// Checks about sources' data versions: they concern the provider that reads them for
+/// the project's adapter (`databricks`), else dbt's `source freshness` (`dbt`).
+const BY_ADAPTER: &[&str] = &["dbt", "databricks"];
+
 /// Every check, in display order within its category.
 const SPECS: [Spec; 15] = [
-    spec("config.load", C::Config, None, true),
-    spec("config.values", C::Config, None, false),
-    spec("config.resolution", C::Config, None, true),
-    spec("project.dbt_project", C::Project, Some("dbt"), true),
-    spec("project.manifest", C::Project, Some("dbt"), true),
-    spec("project.name", C::Project, Some("dbt"), false),
-    spec("project.freshness", C::Project, Some("dbt"), false),
-    spec("tools.dbt", C::Tools, Some("dbt"), true),
-    spec("tools.adapter", C::Tools, Some("dbt"), false),
-    spec("target.identity", C::Target, Some("dbt"), true),
-    spec("state_store.database", C::StateStore, Some("sqlite"), true),
+    spec("config.load", C::Config, NONE, true),
+    spec("config.values", C::Config, NONE, false),
+    spec("config.resolution", C::Config, NONE, true),
+    spec("project.dbt_project", C::Project, DBT, true),
+    spec("project.manifest", C::Project, DBT, true),
+    spec("project.name", C::Project, DBT, false),
+    spec("project.freshness", C::Project, DBT, false),
+    spec("tools.dbt", C::Tools, DBT, true),
+    spec("tools.adapter", C::Tools, DBT, false),
+    spec("target.identity", C::Target, DBT, true),
+    spec("state_store.database", C::StateStore, SQLITE, true),
     spec(
         "capabilities.relation_existence",
         C::Capabilities,
-        Some("dbt"),
+        DBT,
         false,
     ),
     spec(
         "capabilities.relation_versions",
         C::Capabilities,
-        Some("databricks"),
+        BY_ADAPTER,
         false,
     ),
-    spec(
-        "connectivity.relations",
-        C::Connectivity,
-        Some("dbt"),
-        false,
-    ),
+    spec("connectivity.relations", C::Connectivity, DBT, false),
     spec(
         "connectivity.table_versions",
         C::Connectivity,
-        Some("databricks"),
+        BY_ADAPTER,
         false,
     ),
 ];
@@ -228,23 +243,44 @@ impl<'a> Checks<'a> {
 
     /// Runs the checks `options` selects, in display order.
     pub(super) fn run(&self, options: &Options) -> Vec<CheckResult> {
+        let wanted = options.provider.as_deref();
         SPECS
             .iter()
             .filter(|s| !options.project_only || s.category == C::Project)
-            .filter(|s| {
-                options
-                    .provider
-                    .as_deref()
-                    .is_none_or(|p| s.provider == Some(p))
-            })
-            .map(|s| {
+            .filter(|s| wanted.is_none_or(|p| s.providers.contains(&p)))
+            .filter_map(|s| {
+                let provider = match s.providers {
+                    [] => None,
+                    [one] => Some(*one),
+                    // The adapter decides; if it can't be read, the check is shown
+                    // under the provider asked for, so its failure isn't hidden.
+                    many => Some(
+                        self.adapter_provider()
+                            .or_else(|| wanted.and_then(|p| many.iter().copied().find(|m| *m == p)))
+                            .unwrap_or(many[0]),
+                    ),
+                };
+                if wanted.is_some_and(|p| provider != Some(p)) {
+                    return None;
+                }
                 let result = self.check(*s).required(s.required);
-                match s.provider {
+                Some(match provider {
                     Some(provider) => result.provider(provider),
                     None => result,
-                }
+                })
             })
             .collect()
+    }
+
+    /// The provider that reads sources' data versions for the project's adapter,
+    /// from the manifest (offline); `None` if the manifest can't be read.
+    fn adapter_provider(&self) -> Option<&'static str> {
+        let (_, manifest) = self.manifest_ready().ok()?;
+        Some(if has_change_provider(manifest.adapter_type.as_deref()) {
+            "databricks"
+        } else {
+            "dbt"
+        })
     }
 
     fn check(&self, s: Spec) -> CheckResult {
@@ -264,12 +300,9 @@ impl<'a> Checks<'a> {
             "capabilities.relation_versions" => self.relation_versions(s),
             "connectivity.relations" => self.live_relations(s),
             "connectivity.table_versions" => self.live_versions(s),
-            other => Ok(CheckResult::unknown(
-                other,
-                s.category,
-                codes::BLOCKED,
-                "no such check",
-            )),
+            other => unreachable!(
+                "`{other}` has no check: every id in SPECS has one (tests run them all)"
+            ),
         };
         result.unwrap_or_else(|Blocked(dependency)| blocked(s, dependency))
     }
@@ -390,13 +423,28 @@ impl<'a> Checks<'a> {
         for (key, setting) in self.config.effective_settings() {
             // Credentials are references by construction (ods-config rejects plaintext);
             // they are shown as references, never resolved (AGENTS.md rule 9).
-            let value = match setting.value.clone().try_into::<SecretRef>() {
-                Ok(secret) => {
+            // Only a table is a reference: serde would also read `["x"]` as one.
+            let secret = match &setting.value {
+                toml::Value::Table(_) => setting.value.clone().try_into::<SecretRef>().ok(),
+                _ => None,
+            };
+            let value = match secret {
+                Some(secret) => {
                     secrets += 1;
                     secret.to_string()
                 }
-                Err(_) if key.last().is_some_and(|k| is_secret_key(k)) => "(not shown)".to_owned(),
-                Err(_) => setting.value.to_string(),
+                None if key.last().is_some_and(|k| is_secret_key(k)) => "(not shown)".to_owned(),
+                None => {
+                    // A value that isn't a credential may still carry one, e.g. a
+                    // connection string `postgres://user:pw@host/db`: shown without
+                    // its user part, query, fragment and options, as the target is.
+                    let (shown, stripped) = without_credentials(&setting.value);
+                    if stripped {
+                        format!("{shown} (credentials, query and options not shown)")
+                    } else {
+                        shown.to_string()
+                    }
+                }
             };
             evidence.push(
                 Evidence::new(display_key(key), value).from_source(setting.source.to_string()),
@@ -526,23 +574,54 @@ impl<'a> Checks<'a> {
     fn freshness(&self, s: Spec) -> Result<CheckResult, Blocked> {
         let (settings, _) = self.manifest_ready()?;
         let manifest = settings.target_dir().join("manifest.json");
-        let Some(written) = std::fs::metadata(&manifest).and_then(|m| m.modified()).ok() else {
-            return Ok(CheckResult::unknown(
-                s.id,
-                s.category,
-                codes::ARTIFACT_AGE_UNKNOWN,
-                format!("can't tell when `{}` was written", manifest.display()),
-            )
-            .hint("dbt's Information Schema, or a file system without modification times, can't be compared with the project's files"));
+        let age_unknown = |why: String| {
+            CheckResult::unknown(s.id, s.category, codes::ARTIFACT_AGE_UNKNOWN, why)
+                .fact("manifest", manifest.display().to_string())
+                .hint("the manifest's age can't be compared with the project's files: dbt's Information Schema has no manifest.json, and some file systems keep no modification times; `dbt parse` writes it again")
+        };
+        let written = match std::fs::metadata(&manifest).and_then(|m| m.modified()) {
+            Ok(written) => written,
+            Err(e) => {
+                return Ok(age_unknown(format!(
+                    "can't tell when `{}` was written: {e}",
+                    manifest.display()
+                )));
+            }
+        };
+        let Some(written_at) = time(written) else {
+            return Ok(age_unknown(format!(
+                "`{}`'s modification time can't be read as a date",
+                manifest.display()
+            )));
         };
         let dir = project_dir(settings);
-        let newest = newest_project_file(&dir, &settings.target_dir());
+        let newest = match newest_project_file(&dir, &settings.target_dir()) {
+            Ok(newest) => newest,
+            Err(why) => {
+                return Ok(age_unknown(format!(
+                    "can't tell whether a project file is newer than the manifest: {why}"
+                )));
+            }
+        };
         let result = |r: CheckResult| {
             r.fact("manifest", manifest.display().to_string())
-                .fact("manifest_modified", time(written))
+                .fact("manifest_modified", &written_at)
         };
-        Ok(match newest {
-            Some((modified, file)) if modified > written => result(CheckResult::warning(
+        let Some((modified, file)) = newest else {
+            return Ok(result(CheckResult::ok(
+                s.id,
+                s.category,
+                "no project file is newer than the manifest",
+            )));
+        };
+        let Some(modified_at) = time(modified) else {
+            return Ok(age_unknown(format!(
+                "`{}`'s modification time can't be read as a date",
+                file.display()
+            )));
+        };
+        let checked = if modified > written {
+            CheckResult::warning(
                 s.id,
                 s.category,
                 codes::STALE_ARTIFACTS,
@@ -550,23 +629,18 @@ impl<'a> Checks<'a> {
                     "the manifest is older than `{}`: plans would describe code that isn't what runs",
                     file.display()
                 ),
-            ))
-            .fact("newest_project_file", file.display().to_string())
-            .fact("newest_project_file_modified", time(modified))
-            .hint("parse the project again: `dbt parse`, or any `ods state` command that compiles (not with --no-compile)"),
-            Some((modified, file)) => result(CheckResult::ok(
+            )
+            .hint("parse the project again: `dbt parse`, or any `ods state` command that compiles (not with --no-compile)")
+        } else {
+            CheckResult::ok(
                 s.id,
                 s.category,
                 "the manifest is newer than every project file",
-            ))
+            )
+        };
+        Ok(result(checked)
             .fact("newest_project_file", file.display().to_string())
-            .fact("newest_project_file_modified", time(modified)),
-            None => result(CheckResult::ok(
-                s.id,
-                s.category,
-                "no project file is newer than the manifest",
-            )),
-        })
+            .fact("newest_project_file_modified", modified_at))
     }
 
     // -------------------------------------------------------------------------- tools
@@ -686,8 +760,7 @@ impl<'a> Checks<'a> {
                     format!("dbt builds in target `{}`", t.name),
                 )
                 .evidence(match &settings.target {
-                    Some(setting) => setting_evidence("target", setting)
-                        .from_source(setting.origin.label()),
+                    Some(setting) => setting_evidence("target", setting),
                     None => Evidence::new("target", &t.name).from_source("profile's default"),
                 });
                 for (key, value) in [
@@ -882,16 +955,15 @@ impl<'a> Checks<'a> {
             return Ok(not_connected(s));
         }
         let (settings, manifest) = self.manifest_ready()?;
-        let adapter = manifest.adapter_type.as_deref();
+        let Some(adapter) = manifest.adapter_type.as_deref() else {
+            return Ok(unknown_adapter(s));
+        };
         let executor = Self::executor(settings);
-        let Some(provider) = change_provider(adapter, &executor) else {
+        let Some(provider) = change_provider(Some(adapter), &executor) else {
             return Ok(CheckResult::skipped(
                 s.id,
                 s.category,
-                format!(
-                    "the `{}` adapter has no table versions to read",
-                    adapter.unwrap_or("unknown")
-                ),
+                format!("the `{adapter}` adapter has no table versions to read"),
             ));
         };
         let sources: Vec<RequestedSource> = manifest
@@ -951,15 +1023,21 @@ fn inspect_relations<I: RelationInspector + ?Sized>(
     }
     // Anything asked about and not answered is unknown.
     unknown += requested.len().saturating_sub(report.nodes.len());
-    CheckResult::ok(
-        s.id,
-        s.category,
-        format!("the relation check ran: {present} present, {missing} missing (they build on the next run), {unknown} unknown"),
-    )
-    .fact("requested", requested.len().to_string())
-    .fact("present", present.to_string())
-    .fact("missing", missing.to_string())
-    .fact("unknown", unknown.to_string())
+    let message = format!(
+        "the relation check ran: {present} present, {missing} missing (they build on the next run), {unknown} unknown"
+    );
+    let result = if unknown == 0 {
+        CheckResult::ok(s.id, s.category, message)
+    } else {
+        // It ran, but couldn't tell for some: that isn't a pass (AGENTS.md rule 3).
+        CheckResult::unknown(s.id, s.category, codes::RELATIONS_UNKNOWN, message)
+            .hint("the nodes it couldn't tell about are built rather than reused; `dbt debug` and the adapter's permissions say why")
+    };
+    result
+        .fact("requested", requested.len().to_string())
+        .fact("present", present.to_string())
+        .fact("missing", missing.to_string())
+        .fact("unknown", unknown.to_string())
 }
 
 fn relation_failure(s: Spec, why: &str) -> CheckResult {
@@ -984,25 +1062,46 @@ fn probe_versions<P: ChangeProvider + ?Sized>(
         Ok(_) => return probe_failure(s, &warnings.join("; ")),
         Err(e) => return probe_failure(s, &e.message),
     };
-    let known = reading
+    let total = sources.len();
+    let names: std::collections::BTreeMap<&str, &str> = sources
+        .iter()
+        .map(|r| (r.id.as_str(), r.name.as_str()))
+        .collect();
+    let without: Vec<String> = reading
         .answers
-        .values()
-        .filter(|a| matches!(a, ods_state::VersionAnswer::Version(_)))
-        .count();
-    CheckResult::ok(
-        s.id,
-        s.category,
-        format!(
-            "the table-version probe ran: {known} of {} sources have a version",
-            sources.len()
-        ),
-    )
-    .fact("sources", sources.len().to_string())
-    .fact("with_version", known.to_string())
-    .fact(
-        "unknown",
-        (sources.len() - known.min(sources.len())).to_string(),
-    )
+        .iter()
+        .filter_map(|(id, answer)| match answer {
+            ods_state::VersionAnswer::Version(_) => None,
+            ods_state::VersionAnswer::Unknown(why) => Some(format!(
+                "{} ({why})",
+                names.get(id.as_str()).copied().unwrap_or(id)
+            )),
+            _ => Some(format!(
+                "{} (an answer ODS doesn't understand)",
+                names.get(id.as_str()).copied().unwrap_or(id)
+            )),
+        })
+        .collect();
+    let known = total.saturating_sub(without.len());
+    let message = format!("the table-version probe ran: {known} of {total} sources have a version");
+    // It ran, but a source without a version gets its data version elsewhere, or none:
+    // not a pass (AGENTS.md rule 3).
+    let result = if without.is_empty() {
+        CheckResult::ok(s.id, s.category, message)
+    } else if known == 0 {
+        CheckResult::unknown(s.id, s.category, codes::NO_TABLE_VERSIONS, message)
+    } else {
+        CheckResult::warning(s.id, s.category, codes::SOME_TABLE_VERSIONS, message)
+    };
+    let result = result
+        .fact("sources", total.to_string())
+        .fact("with_version", known.to_string());
+    if without.is_empty() {
+        return result;
+    }
+    result
+        .fact("without_version", without.join(", "))
+        .hint("those sources fall back to `max_loaded_at` from `dbt source freshness`, or count as changed; a view or a table that isn't Delta has no table version")
 }
 
 fn probe_failure(s: Spec, why: &str) -> CheckResult {
@@ -1034,6 +1133,43 @@ fn unknown_adapter(s: Spec) -> CheckResult {
         "the manifest doesn't name its adapter (`metadata.adapter_type`)",
     )
     .hint("write it again with dbt 1.7 or later: `dbt parse`")
+}
+
+/// `value` with every string in it cleaned by [`strip_credentials`], and whether that
+/// changed anything.
+fn without_credentials(value: &toml::Value) -> (toml::Value, bool) {
+    match value {
+        toml::Value::String(text) => {
+            let shown = strip_credentials(text);
+            let stripped = shown != *text;
+            (toml::Value::String(shown), stripped)
+        }
+        toml::Value::Array(items) => {
+            let mut stripped = false;
+            let items = items
+                .iter()
+                .map(|item| {
+                    let (item, s) = without_credentials(item);
+                    stripped |= s;
+                    item
+                })
+                .collect();
+            (toml::Value::Array(items), stripped)
+        }
+        toml::Value::Table(table) => {
+            let mut stripped = false;
+            let table = table
+                .iter()
+                .map(|(k, v)| {
+                    let (v, s) = without_credentials(v);
+                    stripped |= s;
+                    (k.clone(), v)
+                })
+                .collect();
+            (toml::Value::Table(table), stripped)
+        }
+        other => (other.clone(), false),
+    }
 }
 
 fn setting_evidence(key: &str, setting: &Setting) -> Evidence {
@@ -1068,11 +1204,10 @@ fn capability_list<'c>(capabilities: impl Iterator<Item = &'c Capability>) -> St
     }
 }
 
-fn time(at: SystemTime) -> String {
-    let seconds = at
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-    Timestamp::from_unix(seconds).to_string()
+/// `at` as a UTC timestamp; `None` before 1970 or beyond what a timestamp holds.
+fn time(at: SystemTime) -> Option<String> {
+    let seconds = at.duration_since(SystemTime::UNIX_EPOCH).ok()?.as_secs();
+    Some(Timestamp::from_unix(i64::try_from(seconds).ok()?).to_string())
 }
 
 /// Directories that hold no project code: dbt's own output and installed packages,
@@ -1092,9 +1227,16 @@ const CODE: [&str; 5] = ["sql", "yml", "yaml", "csv", "py"];
 
 /// The most recently modified project file under `dir` (ties: the greatest path),
 /// leaving out `target_dir` and directories that hold no project code.
-fn newest_project_file(dir: &Path, target_dir: &Path) -> Option<(SystemTime, PathBuf)> {
+///
+/// # Errors
+/// Any directory or file that can't be read, or has no modification time: the
+/// answer would be a guess, so there is none (AGENTS.md rule 3).
+fn newest_project_file(
+    dir: &Path,
+    target_dir: &Path,
+) -> Result<Option<(SystemTime, PathBuf)>, String> {
     let target_dir = std::path::absolute(target_dir).ok();
-    walkdir::WalkDir::new(dir)
+    let walk = walkdir::WalkDir::new(dir)
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
@@ -1105,16 +1247,26 @@ fn newest_project_file(dir: &Path, target_dir: &Path) -> Option<(SystemTime, Pat
             let is_target =
                 target_dir.is_some() && std::path::absolute(entry.path()).ok() == target_dir;
             !(name.starts_with('.') || NOT_CODE.contains(&name.as_ref()) || is_target)
-        })
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            e.path()
+        });
+    let mut newest = None;
+    for entry in walk {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let is_code = entry.file_type().is_file()
+            && entry
+                .path()
                 .extension()
-                .is_some_and(|x| CODE.contains(&x.to_string_lossy().as_ref()))
-        })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.into_path())))
-        .max()
+                .is_some_and(|x| CODE.contains(&x.to_string_lossy().as_ref()));
+        if !is_code {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .modified()
+            .map_err(|e| format!("`{}`: {e}", entry.path().display()))?;
+        newest = newest.max(Some((modified, entry.into_path())));
+    }
+    Ok(newest)
 }
 
 #[cfg(test)]
@@ -1171,15 +1323,37 @@ mod tests {
             self.dir.path()
         }
 
+        /// The checks with `args` alone (no `--project-dir`).
+        fn run_in(args: &[&str], options: &Options) -> Vec<CheckResult> {
+            let config = empty_config();
+            let mut line = vec!["doctor"];
+            line.extend(args);
+            Checks::new(&matches(line), &config, None, options.connect).run(options)
+        }
+
         /// The checks, with `--project-dir` pointing here and extra `args`.
         fn run(&self, args: &[&str], options: &Options) -> Vec<CheckResult> {
             let config = empty_config();
             let dir = self.path().display().to_string();
             let mut line = vec!["doctor", "--project-dir", dir.as_str()];
             line.extend(args);
-            let matches = command().get_matches_from(line);
+            let matches = matches(line);
             Checks::new(&matches, &config, None, options.connect).run(options)
         }
+    }
+
+    /// A dbt that can't exist: no test ever runs the host's dbt, which could read
+    /// `~/.dbt/profiles.yml` or reach the network. Tests that need dbt use fakes.
+    const NO_DBT: &str = "/nonexistent/ods-doctor-test/dbt";
+
+    /// `line` parsed as `ods doctor`'s arguments, with `--dbt` [`NO_DBT`] unless it
+    /// names one.
+    fn matches<'a>(line: impl IntoIterator<Item = &'a str>) -> ArgMatches {
+        let mut line: Vec<&str> = line.into_iter().collect();
+        if !line.contains(&"--dbt") {
+            line.extend(["--dbt", NO_DBT]);
+        }
+        command().get_matches_from(line)
     }
 
     fn empty_config() -> Loaded {
@@ -1320,7 +1494,7 @@ mod tests {
         let project = Project::new();
         let config = empty_config();
         let dir = project.path().display().to_string();
-        let matches = command().get_matches_from(["doctor", "--project-dir", dir.as_str()]);
+        let matches = matches(["doctor", "--project-dir", dir.as_str()]);
         let failure = ConfigFailure::new("ODS-E0101", "ods.toml is not valid TOML: boom");
         let checks = Checks::new(&matches, &config, Some(failure), false).run(&Options::default());
         let load = only("config.load", &checks);
@@ -1351,7 +1525,7 @@ mod tests {
             ..ods_config::Inputs::default()
         })
         .unwrap();
-        let matches = command().get_matches_from(["doctor"]);
+        let matches = matches(["doctor"]);
         let checks = Checks::new(&matches, &config, None, false).run(&Options::default());
         let values = only("config.values", &checks);
         assert_eq!(values.status, CheckStatus::Ok);
@@ -1385,7 +1559,7 @@ mod tests {
             ..ods_config::Inputs::default()
         })
         .unwrap();
-        let matches = command().get_matches_from(["doctor"]);
+        let matches = matches(["doctor"]);
         let checks = Checks::new(&matches, &config, None, false).run(&Options::default());
         let resolution = only("config.resolution", &checks);
         assert_eq!(resolution.status, CheckStatus::Error);
@@ -1412,7 +1586,8 @@ mod tests {
         assert_eq!(find("target").value, "prod");
         assert_eq!(find("target").source.as_deref(), Some("flag"));
         assert_eq!(find("environment").source.as_deref(), Some("target"));
-        assert_eq!(find("program").source.as_deref(), Some("default"));
+        assert_eq!(find("program").value, NO_DBT);
+        assert_eq!(find("program").source.as_deref(), Some("flag"));
         assert_eq!(find("profile").value, "unset");
     }
 
@@ -1549,9 +1724,14 @@ mod tests {
             RequestedNode::new("model.b", "b"),
             RequestedNode::new("model.c", "c"),
         ];
-        let check = inspect_relations(SPEC_RELATIONS, &executor, &requested);
-        assert_eq!(check.status, CheckStatus::Ok);
+        let check = inspect_relations(SPEC_RELATIONS, &executor, &requested[..2]);
+        assert_eq!(check.status, CheckStatus::Ok, "{check:?}");
         assert!(check.message.contains("1 present, 1 missing"), "{check:?}");
+
+        // A relation it couldn't tell about: not a pass.
+        let check = inspect_relations(SPEC_RELATIONS, &executor, &requested);
+        assert_eq!(check.status, CheckStatus::Unknown);
+        assert_eq!(check.code.as_deref(), Some(codes::RELATIONS_UNKNOWN));
         assert!(check.message.contains("1 unknown"), "{check:?}");
 
         let failing = executor.failing_inspection();
@@ -1567,14 +1747,33 @@ mod tests {
             RequestedSource::new("a", "a"),
             RequestedSource::new("b", "b"),
         ];
-        let provider = FakeChangeProvider::new()
+        let all = FakeChangeProvider::new().with_source("a").with_source("b");
+        let check = probe_versions(SPEC_VERSIONS, &all, &sources);
+        assert_eq!(check.status, CheckStatus::Ok, "{check:?}");
+        assert!(check.message.contains("2 of 2"), "{check:?}");
+
+        // Some without a version: a warning naming them and why.
+        let some = FakeChangeProvider::new()
             .with_source("a")
             .unreadable("b", "a view");
-        let check = probe_versions(SPEC_VERSIONS, &provider, &sources);
-        assert_eq!(check.status, CheckStatus::Ok);
+        let check = probe_versions(SPEC_VERSIONS, &some, &sources);
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.code.as_deref(), Some(codes::SOME_TABLE_VERSIONS));
         assert!(check.message.contains("1 of 2"), "{check:?}");
+        assert!(
+            check.evidence.iter().any(|e| e.value == "b (a view)"),
+            "{check:?}"
+        );
 
-        let check = probe_versions(SPEC_VERSIONS, &provider.failing(), &sources);
+        // None with a version: the probe ran but concluded nothing.
+        let none = FakeChangeProvider::new()
+            .unreadable("a", "a view")
+            .unreadable("b", "not Delta");
+        let check = probe_versions(SPEC_VERSIONS, &none, &sources);
+        assert_eq!(check.status, CheckStatus::Unknown);
+        assert_eq!(check.code.as_deref(), Some(codes::NO_TABLE_VERSIONS));
+
+        let check = probe_versions(SPEC_VERSIONS, &some.failing(), &sources);
         assert_eq!(check.status, CheckStatus::Error);
         assert_eq!(check.code.as_deref(), Some(codes::VERSION_PROBE_FAILED));
     }
@@ -1582,6 +1781,26 @@ mod tests {
     #[test]
     fn filters_pick_checks_by_category_and_provider() {
         let project = Project::new();
+        let checks = project.run(
+            &[],
+            &Options {
+                provider: Some("databricks".to_owned()),
+                ..Options::default()
+            },
+        );
+        // The fixture is DuckDB: the source-version checks concern dbt, not Databricks.
+        assert!(checks.is_empty(), "{checks:?}");
+        let dbt = project.run(
+            &[],
+            &Options {
+                provider: Some("dbt".to_owned()),
+                ..Options::default()
+            },
+        );
+        let versions = only("capabilities.relation_versions", &dbt);
+        assert_eq!(versions.provider.as_deref(), Some("dbt"));
+
+        set_adapter(&project, "databricks");
         let checks = project.run(
             &[],
             &Options {
@@ -1597,6 +1816,11 @@ mod tests {
                 "connectivity.table_versions"
             ]
         );
+        assert!(
+            checks
+                .iter()
+                .all(|c| c.provider.as_deref() == Some("databricks"))
+        );
         let both = project.run(
             &[],
             &Options {
@@ -1606,6 +1830,106 @@ mod tests {
             },
         );
         assert!(both.is_empty());
+    }
+
+    /// Sets the manifest's adapter, keeping its time.
+    fn set_adapter(project: &Project, adapter: &str) {
+        let path = project.path().join("target/manifest.json");
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["metadata"]["adapter_type"] = adapter.into();
+        std::fs::write(&path, json.to_string()).unwrap();
+        touch(&path, 3_000);
+    }
+
+    #[test]
+    fn a_manifest_without_an_adapter_leaves_the_live_probe_unknown() {
+        let project = Project::new();
+        let path = project.path().join("target/manifest.json");
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["metadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("adapter_type");
+        std::fs::write(&path, json.to_string()).unwrap();
+        touch(&path, 3_000);
+        let checks = project.run(
+            &[],
+            &Options {
+                connect: true,
+                ..Options::default()
+            },
+        );
+        let versions = only("connectivity.table_versions", &checks);
+        assert_eq!(versions.status, CheckStatus::Unknown, "{versions:?}");
+        assert_eq!(versions.code.as_deref(), Some(codes::ADAPTER_UNKNOWN));
+    }
+
+    #[test]
+    fn a_project_that_cant_be_walked_leaves_freshness_unknown() {
+        let project = Project::new();
+        let target = project.path().join("target").display().to_string();
+        let missing = project.path().join("gone").display().to_string();
+        let checks = Project::run_in(
+            &[
+                "--project-dir",
+                missing.as_str(),
+                "--target-dir",
+                target.as_str(),
+            ],
+            &project_options(),
+        );
+        let freshness = only("project.freshness", &checks);
+        assert_eq!(freshness.status, CheckStatus::Unknown, "{freshness:?}");
+        assert_eq!(freshness.code.as_deref(), Some(codes::ARTIFACT_AGE_UNKNOWN));
+        assert!(freshness.message.contains("gone"), "{freshness:?}");
+        assert!(newest_project_file(Path::new("/nonexistent/ods"), Path::new("target")).is_err());
+    }
+
+    #[test]
+    fn a_time_before_1970_is_no_time() {
+        assert_eq!(time(at(0)).as_deref(), Some("1970-01-01T00:00:00Z"));
+        if let Some(before) = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(1)) {
+            assert_eq!(time(before), None);
+        }
+    }
+
+    #[test]
+    fn connection_strings_in_config_values_show_no_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ods.toml");
+        std::fs::write(
+            &file,
+            "[providers.wh]\nkind = \"x\"\nsettings = { url = \"postgres://u:pw@h/db?sslpassword=x\", hosts = [\"a:b@c\"], name = \"plain\" }\n",
+        )
+        .unwrap();
+        let config = ods_config::load(&ods_config::Inputs {
+            project_file: Some(file),
+            ..ods_config::Inputs::default()
+        })
+        .unwrap();
+        let checks = Checks::new(&matches(["doctor"]), &config, None, false).run(&Options {
+            provider: None,
+            ..Options::default()
+        });
+        let values = only("config.values", &checks);
+        let value = |key: &str| {
+            values
+                .evidence
+                .iter()
+                .find(|e| e.key == key)
+                .unwrap()
+                .value
+                .clone()
+        };
+        let url = value("providers.wh.settings.url");
+        assert_eq!(url, "\"h/db\" (credentials, query and options not shown)");
+        let hosts = value("providers.wh.settings.hosts");
+        assert!(!hosts.contains("a:b"), "{hosts}");
+        assert_eq!(value("providers.wh.settings.name"), "\"plain\"");
+        let all = format!("{values:?}");
+        assert!(!all.contains("pw") && !all.contains("sslpassword"), "{all}");
     }
 
     #[test]
@@ -1632,7 +1956,7 @@ mod tests {
         let mut ids: Vec<&str> = SPECS.iter().map(|s| s.id).collect();
         for s in SPECS {
             assert!(s.id.starts_with(s.category.name()), "{}", s.id);
-            assert!(s.provider.is_none_or(|p| PROVIDERS.contains(&p)));
+            assert!(s.providers.iter().all(|p| PROVIDERS.contains(p)));
         }
         ids.sort_unstable();
         ids.dedup();

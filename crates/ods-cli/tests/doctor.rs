@@ -263,10 +263,58 @@ fn plaintext_credentials_are_refused_and_never_shown() {
         "[providers.wh]\nkind = \"x\"\nsettings = { token = \"s3cr3t-value\" }\n",
     )
     .unwrap();
-    let (code, stdout, stderr) = project.doctor(&["--json"]);
-    assert_eq!(code, 5);
-    assert!(stdout.contains("ODS-E0103"), "{stdout}");
-    assert!(!stdout.contains("s3cr3t-value") && !stderr.contains("s3cr3t-value"));
+    for mode in [
+        &["--json"][..],
+        &["-o", "plain"][..],
+        &["-o", "human", "--color", "always"][..],
+    ] {
+        let (code, stdout, stderr) = project.doctor(mode);
+        assert_eq!(code, 5, "{mode:?}");
+        assert!(stdout.contains("ODS-E0103"), "{mode:?}: {stdout}");
+        assert!(
+            !stdout.contains("s3cr3t") && !stderr.contains("s3cr3t"),
+            "{mode:?}: {stdout}\n{stderr}"
+        );
+    }
+}
+
+/// Every dbt command a default `ods doctor` makes: `--version`, and the target check,
+/// which renders the profile without connecting. Never `show` (the relation check and
+/// table-version probe, which query the warehouse), and never a build.
+#[test]
+fn a_default_run_queries_no_warehouse() {
+    let project = Project::new();
+    let seen = project.dir().join("seen.jsonl");
+    let calls = project.dir().join("calls.txt");
+    let project = project
+        .with("FAKE_DBT_SEEN", seen.to_str().unwrap())
+        .with("FAKE_DBT_CALLS", calls.to_str().unwrap());
+    let (code, json) = project.json(&[]);
+    assert_eq!(code, 0, "{json:#}");
+    let argvs: Vec<Vec<String>> = std::fs::read_to_string(&seen)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let seen: Value = serde_json::from_str(line).unwrap();
+            serde_json::from_value(seen["argv"].clone()).unwrap()
+        })
+        .collect();
+    assert_eq!(argvs.len(), 2, "{argvs:?}");
+    assert_eq!(argvs[0], ["--version"]);
+    let target = &argvs[1];
+    assert_eq!(target[0], "compile", "{target:?}");
+    for flag in ["--inline", "--no-populate-cache", "--no-introspect"] {
+        assert!(
+            target.iter().any(|a| a == flag),
+            "{flag} missing: {target:?}"
+        );
+    }
+    let inline = target.iter().position(|a| a == "--inline").unwrap();
+    assert!(target[inline + 1].contains("ods_target"), "{target:?}");
+    // The commands dbt was asked to run, by name: only the target check's compile.
+    let words = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(words, "compile\n");
+    assert!(!words.contains("show"));
 }
 
 #[test]
@@ -344,8 +392,20 @@ fn table_versions_are_probed_on_databricks() {
         .unwrap();
     assert!(out.status.success());
     touch(&project.dir().join("target/manifest.json"), 1_767_229_200);
+    // The fake workspace (ADR-0022): source name -> its Delta table's answers.
     let probe = project.dir().join("probe.json");
-    std::fs::write(&probe, "{}").unwrap();
+    let table = |id: &str| {
+        serde_json::json!({
+            "type": "table",
+            "formats": ["delta"],
+            "rows": {
+                "DESCRIBE DETAIL {relation}": {"id": id, "format": "delta"},
+                "DESCRIBE HISTORY {relation} LIMIT 1": {"version": "7", "timestamp": "2026-09-29 10:00:00"},
+            },
+        })
+    };
+    let write = |doc: Value| std::fs::write(&probe, doc.to_string()).unwrap();
+    write(serde_json::json!({"raw.orders": table("t1"), "raw.payments": table("t2")}));
     let project = project.with("FAKE_DBT_PROBE", probe.to_str().unwrap());
     let (code, json) = project.json(&["--connect", "--provider", "databricks"]);
     assert_eq!(code, 0, "{json:#}");
@@ -355,6 +415,20 @@ fn table_versions_are_probed_on_databricks() {
     );
     let versions = check(&json, "connectivity.table_versions");
     assert_eq!(versions["status"], "ok", "{versions:#}");
+    assert_eq!(versions["provider"], "databricks");
+
+    // One source isn't a table the probe can read: a warning naming it.
+    write(serde_json::json!({"raw.orders": table("t1")}));
+    let (code, json) = project.json(&["--connect", "--provider", "databricks"]);
+    assert_eq!(code, 0, "{json:#}");
+    let versions = check(&json, "connectivity.table_versions");
+    assert_eq!(versions["code"], "ODS-W0606", "{versions:#}");
+    // None is: the probe ran, but concluded nothing.
+    write(serde_json::json!({}));
+    let (_, json) = project.json(&["--connect", "--provider", "databricks"]);
+    let versions = check(&json, "connectivity.table_versions");
+    assert_eq!(versions["status"], "unknown", "{versions:#}");
+    assert_eq!(versions["code"], "ODS-U0607");
 
     let failing = project.with("FAKE_DBT_PROBE_FAIL", "1");
     let (code, json) = failing.json(&["--connect", "--provider", "databricks"]);

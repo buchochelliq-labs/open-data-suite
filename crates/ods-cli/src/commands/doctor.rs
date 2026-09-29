@@ -22,7 +22,8 @@ impl Module for Doctor {
     fn command(&self) -> Command {
         let command = Command::new("doctor")
             .about("Check that ODS can work here: configuration, dbt project, tools, target, state store and provider capabilities")
-            .long_about("Check that ODS can work here: configuration, dbt project and artifacts, dbt and its adapter, the target, the state store and what the providers can do. Offline by default: nothing contacts the warehouse unless --connect is given. Exits 0 when healthy or with warnings only (unless --strict), 5 when a check fails; see docs/cli.md#ods-doctor")
+            .long_about("Check that ODS can work here: configuration, dbt project and artifacts, dbt and its adapter, the target, the state store and what the providers can do. By default ODS runs no warehouse query: it runs `dbt --version` and has dbt render the profile (`dbt compile --inline --no-populate-cache --no-introspect`), which doesn't connect. dbt's own version check and usage statistics may still use the network. ODS itself writes nothing; dbt writes that check's artifacts under <target-dir>/ods-target-check, and its own log. --connect adds the live checks, which query the warehouse through dbt. Exits 0 when healthy or with warnings only (unless --strict), 5 when a check fails; see docs/cli.md#ods-doctor")
+
             .arg(
                 Arg::new("project")
                     .long("project")

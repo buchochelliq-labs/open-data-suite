@@ -307,7 +307,7 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
       {
         "id": "capabilities.relation_versions",
         "category": "capabilities",
-        "provider": "databricks",
+        "provider": "dbt",
         "status": "ok",
         "required": false,
         "message": "no table versions, and none needed: the project has no sources",
@@ -335,7 +335,7 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
       {
         "id": "connectivity.table_versions",
         "category": "connectivity",
-        "provider": "databricks",
+        "provider": "dbt",
         "status": "skipped",
         "required": false,
         "message": "a live check: pass --connect to run it",
