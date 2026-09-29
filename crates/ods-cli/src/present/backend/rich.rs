@@ -116,15 +116,14 @@ fn render_node(console: &Console, node: &ViewNode) {
             columns,
             rows,
         } => {
-            // Printed as a line of its own: rs-rich parses `Table::title` as markup,
-            // and building `Text` directly avoids escaping user data altogether.
-            if let Some(title) = title {
-                console.print(&Text::styled(sanitize(title), theme_key(Tone::Emphasis)));
-            }
-            // Headers, cells and tree labels are passed as `Text`, never as strings:
-            // since rs-rich 0.0.7 a plain string there is parsed as markup, which would
-            // let data such as `[bold]` or `[/]` in a node name be interpreted.
+            // The title, headers, cells and tree labels are all passed as `Text`, never
+            // as strings: rs-rich parses a plain string there (and `Table::title`) as
+            // markup, which would let data such as `[bold]` or `[/]` in a node name be
+            // interpreted. `title_text` takes the title literally, so no escaping.
             let mut table = Table::new();
+            if let Some(title) = title {
+                table = table.title_text(Text::styled(sanitize(title), theme_key(Tone::Emphasis)));
+            }
             for column in columns {
                 table.add_column_text(Text::new(sanitize(column)), Justify::Default);
             }
@@ -226,6 +225,35 @@ mod tests {
         assert!(out.contains("[h]"), "{out}");
         assert!(out.contains("[bold]x[/]"), "{out}");
         assert!(!out.contains('\\'), "no escape characters may leak: {out}");
+    }
+
+    #[test]
+    fn model_names_render_literally_everywhere() {
+        // A model name that is markup (`[bold]x`) or ends in a backslash (`a\`, which
+        // `markup::escape` does not round-trip, ADR-0003 §6) must reach the terminal as
+        // is, as a table title, header, cell and tree label.
+        let renderer = RichRenderer::with_environment(ColorChoice::Never, Some(60), false);
+        for name in ["[bold]x", "a\\"] {
+            let table = renderer.render(&ViewNode::Table {
+                title: Some(format!("title {name}")),
+                columns: vec![format!("head {name}")],
+                rows: vec![vec![vec![Span::plain(format!("cell {name}"))]]],
+            });
+            let tree = renderer.render(&ViewNode::Tree(TreeItem {
+                label: vec![Span::plain(format!("root {name}"))],
+                children: vec![TreeItem::leaf(vec![Span::plain(format!("leaf {name}"))])],
+            }));
+            for expected in ["title", "head", "cell"] {
+                assert!(table.contains(&format!("{expected} {name}")), "{table}");
+            }
+            for expected in ["root", "leaf"] {
+                assert!(tree.contains(&format!("{expected} {name}")), "{tree}");
+            }
+            assert!(
+                !table.contains("\\\\") && !tree.contains("\\\\"),
+                "{table}{tree}"
+            );
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # ADR-0003: CLI presentation boundary and rs-rich-cli
 
 - **Status:** Proposed
-- **Date:** 2026-09-24
+- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9)
 - **Issues:** #108 (also #6, #21, #22, #85, #107)
 - **Deciders:** @n1ckyb
 
@@ -21,12 +21,12 @@ must be explainable in both human and JSON form. Issue #108 asks us to standardi
 rather than build our own terminal renderer. It also asks us to use ODS as a real consumer
 of rs-rich-cli ("dogfood" it) and to report the primitives it is missing.
 
-### What rs-rich-cli offers (surveyed 2026-09-24, updated for the 0.0.11 release)
+### What rs-rich-cli offers (surveyed 2026-09-24, updated for the 0.0.13 release)
 - A Rust port of Python `rich`. The library is the `rs-rich` package, imported as `rich`;
   its extensions are `rs-rich-ext`. It is MIT-licensed.
 - It is published on crates.io. The survey started on `rs-rich` 0.0.6. The proof of
-  concept moved to **0.0.7**, the core library of the 0.0.11 release cohort, once it was
-  published. Pre-1.0 `0.0.x` versions may break the API in every release, and Cargo's
+  concept moved to 0.0.7, the core library of the 0.0.11 release cohort, once it was
+  published. ODS now uses **0.0.9**, the library of the 0.0.13 release. Pre-1.0 `0.0.x` versions may break the API in every release, and Cargo's
   `^0.0.x` requirement pins the exact patch version.
 - It has `Console` with a builder that sets `width`, `force_terminal`, `color_system`
   and `no_color`. It honours `NO_COLOR` and detects whether output goes to a terminal.
@@ -40,9 +40,13 @@ of rs-rich-cli ("dogfood" it) and to report the primitives it is missing.
   exercised manually. macOS is untested, and the legacy Windows `cmd.exe` console is not
   supported.
 - It has 6 direct dependencies (`syntect`, `fancy-regex`, `pulldown-cmark`, `serde_json`,
-  `terminal_size`, `anstyle-query`), and none of them is optional. 0.0.6 pulled in 60
-  unique crates in total; 0.0.7 loads only syntect's bundled dumps, which removes 11 of
-  them (49 remain), including `yaml-rust` and `plist`.
+  `terminal_size`, `anstyle-query`). 0.0.6 pulled in 60 unique crates in total; 0.0.7
+  loads only syntect's bundled dumps, which removes 11 of them (49 remain), including
+  `yaml-rust` and `plist`. From 0.0.9, `syntect` (`Syntax`) and `pulldown-cmark`
+  (`Markdown`) sit behind the default-on `syntax` and `markdown` features. ODS uses
+  neither, so it depends on `rs-rich` with `default-features = false` and no features;
+  that drops `syntect`, `pulldown-cmark`, `bincode` 1.x, `fancy-regex` 0.16 and six
+  smaller crates (10 in all) from `Cargo.lock`.
 
 ### Spike (scratch crate, not committed)
 A release binary that renders one `Table` through `export_text` with `no_color`
@@ -55,6 +59,18 @@ produced output that is correct and can be pinned exactly (fixed width).
 | Plus `rs-rich` 0.0.7, one table | 4.30 MB | 3.45 MB |
 
 Most of the growth comes from `syntect` and its bundled syntax and theme definitions.
+
+Measured on the real `ods` binary (`cargo build --release -p ods-cli`, Linux x86_64,
+stripped with `strip`) when moving to 0.0.9:
+
+| `ods` | Release | Stripped |
+|---|---|---|
+| `rs-rich` 0.0.7 (default features) | 39.15 MB | 29.18 MB |
+| `rs-rich` 0.0.9, `default-features = false` | 38.98 MB | 29.04 MB |
+
+The saving is only about 0.14 MB, not the 3 MB the spike suggested. ODS never renders
+`Syntax` or `Markdown`, so the linker had already discarded syntect's code and data from
+`ods`. The feature change mainly shortens the build and the dependency tree.
 `cargo deny check licenses` with ODS's `deny.toml` accepted every crate in the
 dependency tree.
 
@@ -183,9 +199,13 @@ Every `--json` response is a single envelope object:
 - `scripts/check-layering.py` gains a check that no crate other than `ods-cli` depends on
   `rs-rich*`.
 - **Data never reaches rs-rich as a string.** From 0.0.7, a plain string passed as a table
-  header, cell or tree label is parsed as markup. The rich backend therefore passes
-  `Text` values everywhere and prints table titles as their own line. A regression test
-  pins this behaviour.
+  header, cell or tree label is parsed as markup, as is `Table::title`. The rich backend
+  therefore passes `Text` values everywhere, including the table title
+  (`Table::title_text`, from 0.0.8). Regression tests pin this behaviour, including
+  names such as `[bold]x` and `a\`.
+- **Features.** `rs-rich` is built with `default-features = false`. A feature is enabled
+  only when the backend first renders something that needs it (for example `syntax` for
+  `Syntax`).
 
 ### 5. Testing
 - `insta` snapshots for every command in **`json` and `plain`** modes, which are the
@@ -200,36 +220,51 @@ Every `--json` response is a single envelope object:
   platforms its own CI does not test.
 
 ### 6. Missing features and issues to report to rs-rich-cli
-To be filed as issues in `buchochelliq-labs/rs-rich-cli`. Status is as of `rs-rich` 0.0.7.
+To be filed as issues in `buchochelliq-labs/rs-rich-cli`. Status is as of `rs-rich` 0.0.9.
+Items keep their numbers when they are resolved.
 
 **Open**
-1. **Optional heavy dependencies.** Put `syntect` (`Syntax`) and `pulldown-cmark`
-   (`Markdown`) behind default-on cargo features. That would cut roughly 3 MB from
-   consumers that don't need them. It would also remove `bincode` 1.x
-   (RUSTSEC-2025-0141, flagged as unmaintained, no known vulnerability), which `syntect`
-   still pulls in. ODS ignores exactly that advisory ID in `deny.toml` and will remove
-   the ignore when this is fixed. The same change would drop a duplicate `fancy-regex`:
-   `rs-rich` uses 0.19 while `syntect` brings 0.16, so two regex engines are compiled in.
-2. **A lower MSRV, or a documented MSRV policy** for the library crate, separate from the
-   CLI's image and network features. The 1.90 floor is driven by the CLI tree.
-3. **macOS in CI**, so downstream consumers get a support guarantee on that platform.
-4. **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
-5. **The strings-as-markup change in 0.0.7 compiles silently.** Plain strings passed as
-   table headers, cells or tree labels changed from literal text to markup, but code
-   written for 0.0.6 still compiles. Any caller passing data is now open to markup
-   injection, and only a behavioural test catches it (ODS's did). Suggest making the
-   change visible at compile time, for example by removing the implicit
-   `From<&str>/From<String> for Cell` conversions or adding explicit
-   `Cell::markup`/`Cell::plain` constructors, or at least flagging it as a security note
-   in the migration guide. (Found while reviewing the 0.0.11 release.)
-6. **`markup::escape` is not round-trip safe for a trailing backslash.** Escaping `a\`
-   and then parsing it renders `a\\`. The 0.0.11 migration note recommends `escape` for
-   literal data, so either this should be fixed or the note should recommend `Text`.
-   It may be deliberate parity with Python `rich`; not yet checked. (Found while
-   reviewing the 0.0.11 release.)
-7. **No literal-text table title.** `Table::title` takes only a markup string, so a title
-   built from data needs escaping, which runs into item 6. ODS prints the title as its
-   own line instead. (Found while reviewing the 0.0.11 release.)
+- (2) **A lower MSRV, or a documented MSRV policy** for the library crate, separate from the
+  CLI's image and network features. The 1.90 floor is driven by the CLI tree.
+- (3) **macOS in CI**, so downstream consumers get a support guarantee on that platform.
+- (4) **A 0.1 / API-stability roadmap**, so ODS can move off exact patch pins.
+
+Still open in 0.0.9: the crate's `rust-version` is 1.90 and its README states no MSRV
+policy, macOS CI or 0.1 roadmap.
+
+**Partly addressed**
+- (5) **The strings-as-markup change in 0.0.7 compiles silently.** Plain strings passed as
+  table headers, cells or tree labels changed from literal text to markup, but code
+  written for 0.0.6 still compiles. Any caller passing data is now open to markup
+  injection, and only a behavioural test catches it (ODS's did). Suggest making the
+  change visible at compile time, for example by removing the implicit
+  `From<&str>/From<String> for Cell` conversions or adding explicit
+  `Cell::markup`/`Cell::plain` constructors, or at least flagging it as a security note
+  in the migration guide. (Found while reviewing the 0.0.11 release.)
+  *In 0.0.9:* the conversions still exist and still parse markup, but they are now
+  documented as markup, and the docs recommend passing `Text` for data. A compile-time
+  check exists only through the separate `rs-rich-macros` crate (markup checked at
+  compile time), which does not stop a runtime string from reaching a cell. ODS keeps
+  passing `Text` and relies on its regression tests.
+- (6) **`markup::escape` is not round-trip safe for a trailing backslash.** Escaping `a\`
+  and then parsing it renders `a\\`. (Found while reviewing the 0.0.11 release.)
+  *In 0.0.9:* `escape` was rewritten to handle runs of backslashes, and a backslash
+  before a tag (`a\[b]`) round-trips. A trailing backslash still does not:
+  escaping `a\` gives `a\\`, which still renders `a\\` (checked against 0.0.9 with
+  `markup::render`). This is documented, deliberate parity with Python `rich`, which
+  doubles a lone trailing backslash so it cannot escape appended markup; it also means
+  `escape` cannot be undone for such input. ODS does not use `escape`: data reaches
+  rs-rich as `Text`.
+
+**Resolved in 0.0.9** (ODS moved from 0.0.7)
+- (1) *Optional heavy dependencies:* `syntect` (`Syntax`) and `pulldown-cmark`
+  (`Markdown`) are behind the default-on `syntax` and `markdown` features. With
+  `default-features = false`, `bincode` 1.x (RUSTSEC-2025-0141) and the duplicate
+  `fancy-regex` 0.16 are gone, and the advisory ignore was removed from `deny.toml`.
+- (7) *No literal-text table title* (resolved in 0.0.8): `Table::title_text(Text)` takes
+  the title literally. The rich backend now uses it instead of printing the title as a
+  line of its own, so a title is centred over its table. Plain and JSON output are
+  unchanged.
 
 **Resolved in 0.0.7**
 - *Styled table cells and tree labels* (reported during the proof of concept):
@@ -253,8 +288,9 @@ styles.
   - Plain output is stable, which suits CI logs.
 - **Negative / trade-offs:**
   - The MSRV rises to 1.90.
-  - The `ods` binary grows by about 3 MB (acceptable for a developer tool; point 6.1
-    above would recover it).
+  - The `ods` binary grows by the rendering code (the spike measured about 3 MB with
+    `syntect`; point 6.1, resolved in 0.0.9, removed `syntect` from the tree, though in
+    `ods` the linker had already dropped most of it).
   - Each command needs a presentation mapping.
   - Two sets of snapshots have to be maintained.
 - **Follow-up work:**
