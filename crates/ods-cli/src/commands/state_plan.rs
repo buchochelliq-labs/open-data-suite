@@ -180,6 +180,8 @@ pub(super) struct Workspace {
     pub(super) invocation_id: Option<String>,
     /// Sources `dbt source freshness` couldn't measure.
     pub(super) source_errors: Vec<String>,
+    /// The manifest the project was read from.
+    pub(super) manifest: ods_provider_dbt::Manifest,
 }
 
 impl Workspace {
@@ -260,6 +262,7 @@ impl Workspace {
             target_dir,
             project: Project::new(nodes, sources),
             scope,
+            manifest: artifacts.manifest,
         })
     }
 

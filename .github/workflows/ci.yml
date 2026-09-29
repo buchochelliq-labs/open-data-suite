@@ -91,14 +91,15 @@ jobs:
         run: |
           cargo test -p ods-cli --test state_run real_dbt 2>&1 | tee real-dbt.log
           grep -q '^test real_dbt \.\.\. ok' real-dbt.log
-      # dbt's own --defer --favor-state and retry behaviour, which ADR-0020 relies on
-      # (#296). All three must run: a skipped test also passes, so --nocapture shows
-      # the skip message and the job fails on it.
+      # dbt's own --defer --favor-state and retry behaviour, which ADR-0020 relies on,
+      # and the fix: `ods state export`, then `dbt retry --defer-state` (#296). All four
+      # must run: a skipped test also passes, so --nocapture shows the skip message and
+      # the job fails on it.
       - name: dbt favor-state and retry behaviour (#296)
         shell: bash
         run: |
           cargo test -p ods-cli --test dbt_favor_state -- --nocapture 2>&1 | tee favor-state.log
-          grep -q 'test result: ok. 3 passed' favor-state.log
+          grep -q 'test result: ok. 4 passed' favor-state.log
           ! grep -q 'skipped: set ODS_TEST_DBT' favor-state.log
       - name: dbt's settings are all classified (#227)
         shell: bash

@@ -53,7 +53,7 @@ use crate::present::{Level, Present, Span, Tone, ViewNode};
 
 /// Options shared by the commands that run dbt (`run`, `test`).
 pub(super) fn dbt_options(command: Command) -> Command {
-    command
+    let command = command
         .arg(
             Arg::new("select")
                 .long("select")
@@ -74,7 +74,20 @@ pub(super) fn dbt_options(command: Command) -> Command {
                 .long("no-compile")
                 .action(ArgAction::SetTrue)
                 .help("Use the artifacts already in the target directory instead of running `dbt compile` first. Sources aren't measured either: only --sources is read"),
-        )
+        );
+    dbt_invocation_options(command).arg(
+        Arg::new("dbt-args")
+            .value_name("DBT_ARGS")
+            .num_args(0..)
+            .last(true)
+            .help("After `--`: options passed to dbt as they are, e.g. `-- --threads 8`. Selection and artifact options are refused"),
+    )
+}
+
+/// How to invoke dbt: the program, its profile, vars and where its output goes. Every
+/// command that calls dbt takes these.
+pub(super) fn dbt_invocation_options(command: Command) -> Command {
+    command
         .arg(
             Arg::new("dbt")
                 .long("dbt")
@@ -112,13 +125,6 @@ pub(super) fn dbt_options(command: Command) -> Command {
                 .value_parser(["stderr", "capture"])
                 .default_value("stderr")
                 .help("Where dbt's own output goes: shown on stderr, or captured and shown only on failure"),
-        )
-        .arg(
-            Arg::new("dbt-args")
-                .value_name("DBT_ARGS")
-                .num_args(0..)
-                .last(true)
-                .help("After `--`: options passed to dbt as they are, e.g. `-- --threads 8`. Selection and artifact options are refused"),
         )
 }
 
@@ -820,20 +826,51 @@ fn step_count(args: &ArgMatches, settings: &StateSettings, builds: bool) -> usiz
         .sum::<usize>()
 }
 
-/// Checks that the nodes the plan would reuse are still in the warehouse, and records
-/// the answers on them, so the plan builds the ones that aren't (#230). One query for
-/// all of them; none when there is nothing to reuse. If the check fails, they are all
-/// built: missing evidence never means reuse (AGENTS.md rule 3). Returns `options`
-/// for the plan, saying whether relations were checked, so it builds any node that
-/// wasn't.
-fn check_relations<I: RelationInspector + ?Sized>(
-    project: &mut ods_state::Project,
-    latest: Option<&StoredSnapshot>,
+/// What a relation check is for, so its warnings say what the answer changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CheckFor {
+    /// Reusing nodes (#230): unchecked nodes are built.
+    Reuse,
+    /// Pointing deferred references at this target (#296): unchecked nodes point
+    /// upstream.
+    Export,
+}
+
+impl CheckFor {
+    fn unsupported(self) -> &'static str {
+        match self {
+            CheckFor::Reuse => {
+                "the executor can't check that reused tables are still in the warehouse: reuse trusts the last recorded build"
+            }
+            CheckFor::Export => {
+                "the executor can't check that tables built here are still in the warehouse: every node points upstream (relation_unverified)"
+            }
+        }
+    }
+
+    fn failed(self, error: &ProviderError) -> String {
+        match self {
+            CheckFor::Reuse => format!(
+                "couldn't check that the tables of the nodes ODS would reuse are still in the warehouse, so they are built: {error}"
+            ),
+            CheckFor::Export => format!(
+                "couldn't check that the tables built here are still in the warehouse, so they point upstream: {error}"
+            ),
+        }
+    }
+}
+
+/// Asks `inspector` whether the relations of `requested` exist, in one query, and
+/// returns what it found per node. `None` when it can't check at all (it lacks the
+/// `relation_existence` capability): the caller must then treat every relation as
+/// unchecked. A failed check, or a node it didn't answer for, is `Unverified`, never
+/// present (AGENTS.md rule 3). Nothing is asked when nothing is requested.
+pub(super) fn relation_facts<I: RelationInspector + ?Sized>(
     inspector: &I,
-    now: Timestamp,
-    options: ods_state::PlanOptions,
+    requested: &[RequestedNode],
+    purpose: CheckFor,
     warnings: &mut Vec<String>,
-) -> Result<ods_state::PlanOptions, CliError> {
+) -> Result<Option<BTreeMap<String, RelationFact>>, CliError> {
     let strategies = [
         Strategy::new("warehouse_check", [Capability::RelationExistence], true),
         Strategy::fallback("trust_recorded_build", false),
@@ -841,30 +878,14 @@ fn check_relations<I: RelationInspector + ?Sized>(
     let choice = choose(&inspector.info().capabilities, &strategies)
         .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
     if !choice.chosen.value {
-        // Reuse then says in its evidence that nothing checked the relation.
-        warnings.push(
-            "the executor can't check that reused tables are still in the warehouse: reuse trusts the last recorded build"
-                .to_owned(),
-        );
-        return Ok(options);
+        warnings.push(purpose.unsupported().to_owned());
+        return Ok(None);
     }
-    let candidates =
-        ods_state::reuse_candidates(project, latest.map(|s| (s.id, &s.snapshot)), now, options)
-            .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
-    if candidates.is_empty() {
-        return Ok(options);
-    }
-    let names: BTreeMap<&str, &str> = project
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), n.name.as_str()))
-        .collect();
-    let requested: Vec<RequestedNode> = candidates
-        .iter()
-        .map(|id| RequestedNode::new(id.clone(), names.get(id.as_str()).copied().unwrap_or(id)))
-        .collect();
     let mut facts: BTreeMap<String, RelationFact> = BTreeMap::new();
-    match block_on(inspector.inspect(&requested))? {
+    if requested.is_empty() {
+        return Ok(Some(facts));
+    }
+    match block_on(inspector.inspect(requested))? {
         Ok(report) => {
             for (id, presence) in report.nodes {
                 let fact = match presence {
@@ -882,12 +903,56 @@ fn check_relations<I: RelationInspector + ?Sized>(
                 }
             }
         }
-        Err(e) => {
-            warnings.push(format!(
-                "couldn't check that the tables of the nodes ODS would reuse are still in the warehouse, so they are built: {e}"
-            ));
-        }
+        Err(e) => warnings.push(purpose.failed(&e)),
     }
+    for node in requested {
+        facts.entry(node.id.clone()).or_insert_with(|| {
+            RelationFact::Unverified("the relation check didn't report on it".to_owned())
+        });
+    }
+    // Only what was asked about.
+    let asked: BTreeSet<&str> = requested.iter().map(|n| n.id.as_str()).collect();
+    facts.retain(|id, _| asked.contains(id.as_str()));
+    Ok(Some(facts))
+}
+
+/// Checks that the nodes the plan would reuse are still in the warehouse, and records
+/// the answers on them, so the plan builds the ones that aren't (#230). One query for
+/// all of them; none when there is nothing to reuse. If the check fails, they are all
+/// built: missing evidence never means reuse (AGENTS.md rule 3). Returns `options`
+/// for the plan, saying whether relations were checked, so it builds any node that
+/// wasn't.
+fn check_relations<I: RelationInspector + ?Sized>(
+    project: &mut ods_state::Project,
+    latest: Option<&StoredSnapshot>,
+    inspector: &I,
+    now: Timestamp,
+    options: ods_state::PlanOptions,
+    warnings: &mut Vec<String>,
+) -> Result<ods_state::PlanOptions, CliError> {
+    // Asking about nothing makes no query: it only says whether a check is possible.
+    // If it isn't, reuse says in its evidence that nothing checked the relation.
+    if relation_facts(inspector, &[], CheckFor::Reuse, warnings)?.is_none() {
+        return Ok(options);
+    }
+    let candidates =
+        ods_state::reuse_candidates(project, latest.map(|s| (s.id, &s.snapshot)), now, options)
+            .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
+    if candidates.is_empty() {
+        return Ok(options);
+    }
+    let names: BTreeMap<&str, &str> = project
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.name.as_str()))
+        .collect();
+    let requested: Vec<RequestedNode> = candidates
+        .iter()
+        .map(|id| RequestedNode::new(id.clone(), names.get(id.as_str()).copied().unwrap_or(id)))
+        .collect();
+    let Some(mut facts) = relation_facts(inspector, &requested, CheckFor::Reuse, warnings)? else {
+        return Ok(options);
+    };
     let candidates: BTreeSet<String> = candidates.into_iter().collect();
     for node in &mut project.nodes {
         if candidates.contains(&node.id) {
@@ -2081,6 +2146,82 @@ impl Present for RunReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ods_provider_fake::{FakeClock, FakeExecutor};
+    use ods_sdk::contracts::relations::RelationReport;
+    use ods_sdk::{Provider, ProviderInfo};
+
+    fn requested(ids: &[&str]) -> Vec<RequestedNode> {
+        ids.iter().map(|id| RequestedNode::new(*id, *id)).collect()
+    }
+
+    /// An inspector that can't check relations at all.
+    struct Blind;
+
+    impl Provider for Blind {
+        fn info(&self) -> ProviderInfo {
+            ProviderInfo::new("blind", "blind", "0", ods_core::CapabilitySet::new())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RelationInspector for Blind {
+        async fn inspect(&self, _: &[RequestedNode]) -> Result<RelationReport, ProviderError> {
+            panic!("never asked: it can't check");
+        }
+    }
+
+    #[test]
+    fn relation_facts_maps_each_answer() {
+        let executor = FakeExecutor::new(FakeClock::default(), ["a", "b"]);
+        executor.drop_relation("b");
+        let mut warnings = Vec::new();
+        let facts = relation_facts(
+            &executor,
+            &requested(&["a", "b", "c"]),
+            CheckFor::Export,
+            &mut warnings,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(facts["a"], RelationFact::Present(Some("table".into())));
+        assert_eq!(facts["b"], RelationFact::Missing);
+        assert_eq!(facts["c"], RelationFact::Unverified("unknown node".into()));
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_failed_check_leaves_every_node_unverified() {
+        let executor = FakeExecutor::new(FakeClock::default(), ["a"]).failing_inspection();
+        let mut warnings = Vec::new();
+        let facts = relation_facts(
+            &executor,
+            &requested(&["a"]),
+            CheckFor::Export,
+            &mut warnings,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(facts["a"], RelationFact::Unverified(_)),
+            "{facts:?}"
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("point upstream"), "{warnings:?}");
+        // Asking about nothing asks nothing: no failure to report.
+        let mut warnings = Vec::new();
+        let facts = relation_facts(&executor, &[], CheckFor::Reuse, &mut warnings).unwrap();
+        assert_eq!(facts, Some(BTreeMap::new()));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn without_the_capability_nothing_is_checked() {
+        let mut warnings = Vec::new();
+        let facts =
+            relation_facts(&Blind, &requested(&["a"]), CheckFor::Reuse, &mut warnings).unwrap();
+        assert_eq!(facts, None);
+        assert!(warnings[0].contains("reuse trusts"), "{warnings:?}");
+    }
 
     #[test]
     fn only_reuse_on_trust_gets_a_notice() {

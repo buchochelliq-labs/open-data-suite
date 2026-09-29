@@ -1,0 +1,30 @@
+---
+source: crates/ods-cli/tests/state_export.rs
+expression: "redact(&project.export_plain(), &result)"
+---
+State export for dbt
+
+written: export
+upstream: prod
+scope: jaffle_ods/default
+target: dev (jaffle_ods, fake, fake-host, jaffle_ods)
+recorded state: snapshot 1
+relations: checked in the warehouse
+
+Pointers
+points at	reason	nodes
+unchanged	not_deferrable	12
+upstream	not_built_here	6
+this target	built_here	7
+
+Pointing at this target
+node	built by run	at
+model.jaffle_ods.order_events	<run-id>	<built-at>
+model.jaffle_ods.stg_customers	<run-id>	<built-at>
+model.jaffle_ods.stg_orders	<run-id>	<built-at>
+model.jaffle_ods.stg_payments	<run-id>	<built-at>
+seed.jaffle_ods.raw_customers	<run-id>	<built-at>
+seed.jaffle_ods.raw_orders	<run-id>	<built-at>
+seed.jaffle_ods.raw_payments	<run-id>	<built-at>
+
+Use it with dbt retry --defer-state export, or add --defer-state export to a deferred run. `--output json` explains every node.

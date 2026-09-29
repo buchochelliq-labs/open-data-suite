@@ -1297,6 +1297,7 @@ dependencies = [
 name = "ods-cli"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "clap",
  "clap_complete",
  "insta",
@@ -1307,6 +1308,7 @@ dependencies = [
  "ods-mcp",
  "ods-provider-databricks",
  "ods-provider-dbt",
+ "ods-provider-fake",
  "ods-provider-sqlparser",
  "ods-sdk",
  "ods-state",

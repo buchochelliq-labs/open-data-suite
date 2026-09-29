@@ -15,7 +15,10 @@ use ods_provider_dbt::state_config::resolve;
 use ods_provider_dbt::{ArtifactPreference, Artifacts};
 use serde::Serialize;
 
-use super::{Planned, state_doctor, state_explain, state_plan, state_retry, state_run, state_test};
+use super::{
+    Planned, state_doctor, state_explain, state_export, state_plan, state_retry, state_run,
+    state_test,
+};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
@@ -33,7 +36,7 @@ impl Module for State {
     fn command(&self) -> Command {
         Command::new("state")
             .about(format!(
-                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`, `doctor`, `retry`, `explain`, `diff`, `graph`; more in {MILESTONE}]"
+                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`, `doctor`, `retry`, `explain`, `diff`, `graph`, `export`; more in {MILESTONE}]"
             ))
             .args_conflicts_with_subcommands(true)
             .subcommand(
@@ -82,6 +85,7 @@ impl Module for State {
             .subcommand(state_doctor::doctor_command())
             .subcommand(state_doctor::backup_command())
             .subcommand(state_doctor::reset_command())
+            .subcommand(state_export::export_command())
             .arg(
                 Arg::new(PASSTHROUGH)
                     .num_args(0..)
@@ -174,6 +178,7 @@ impl Module for State {
                 ctx.emit(&state_doctor::BackupReport::build(args, ctx.config)?)
             }
             Some(("reset", args)) => ctx.emit(&state_doctor::ResetReport::build(args, ctx.config)?),
+            Some(("export", args)) => state_export::ExportReport::run(args, ctx),
             _ => Planned::new("state", ABOUT, MILESTONE).run(matches, ctx),
         }
     }

@@ -79,6 +79,8 @@ struct RawMetadata {
     #[serde(default)]
     project_name: Option<String>,
     #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
     adapter_type: Option<String>,
     #[serde(default)]
     dbt_version: Option<String>,
@@ -205,6 +207,12 @@ struct RawNode {
     version: Option<serde_json::Value>,
     resource_type: ResourceType,
     #[serde(default)]
+    database: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
     relation_name: Option<String>,
     #[serde(default)]
     compiled_code: Option<String>,
@@ -262,6 +270,12 @@ pub struct ManifestNode {
     pub unique_id: String,
     /// What it is.
     pub resource_type: ResourceType,
+    /// The database (or catalog) of the relation it builds, as compiled for the target.
+    pub database: Option<String>,
+    /// The schema of the relation it builds, as compiled for the target.
+    pub schema: Option<String>,
+    /// The name of the relation it builds, as compiled for the target.
+    pub alias: Option<String>,
     /// The fully qualified relation as dbt renders it, e.g. `"db"."main"."orders"`.
     pub relation_name: Option<String>,
     /// Rendered SQL, present after `dbt compile`/`run`/`build` for SQL models.
@@ -449,6 +463,8 @@ pub struct Manifest {
     pub adapter_type: Option<String>,
     /// The dbt project's name.
     pub project_name: Option<String>,
+    /// dbt's id of the project (a hash of its name), when the artifacts record one.
+    pub project_id: Option<String>,
     /// The dbt invocation that wrote it.
     pub invocation_id: Option<String>,
     /// Macros, by id: their source and the macros they call.
@@ -714,6 +730,7 @@ impl Manifest {
             dbt_version: raw.metadata.dbt_version,
             adapter_type: raw.metadata.adapter_type,
             project_name: raw.metadata.project_name,
+            project_id: raw.metadata.project_id,
             invocation_id: raw.metadata.invocation_id,
             macros: raw
                 .macros
@@ -791,6 +808,9 @@ fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
     ManifestNode {
         unique_id: n.unique_id,
         resource_type: n.resource_type,
+        database: n.database,
+        schema: n.schema,
+        alias: n.alias,
         relation_name: n.relation_name,
         compiled_code: n.compiled_code,
         raw_code: n.raw_code,

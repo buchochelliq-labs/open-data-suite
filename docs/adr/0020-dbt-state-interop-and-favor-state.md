@@ -194,7 +194,7 @@ outcome has a reason code.
 | 5 | The recorded fingerprint's `relation` component differs from the relation this target's manifest names | upstream | `relation_changed` |
 | 6 | Any other fingerprint component differs: the build is of other code | upstream | `code_changed_since_build` |
 | 7 | The relation check (ADR-0016) says it's missing | upstream | `relation_missing` |
-| 8 | The check couldn't tell, or wasn't run (`--no-check-relations`) | upstream | `relation_unverified` |
+| 8 | The check couldn't tell, wasn't run (`--no-check-relations`), or checked another relation than the manifest names | upstream | `relation_unverified` |
 | 9 | Otherwise | this target | `built_here` (run id, build time) |
 
 - "This target" means the `database`, `schema`, `alias` and `relation_name` of the node

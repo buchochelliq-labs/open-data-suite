@@ -349,6 +349,33 @@ impl DbtExecutor {
     fn artifact(&self, name: &str) -> PathBuf {
         self.target_path().join(name)
     }
+
+    /// Where each node builds as the last [relation check](RelationInspector::inspect)
+    /// saw the project, from the manifest dbt parsed for it. Profile or project
+    /// settings changed since `manifest.json` was written show up here and not there,
+    /// so a caller about to use a checked relation compares the two.
+    ///
+    /// # Errors
+    /// When no check has left a readable manifest.
+    pub fn checked_relations(
+        &self,
+    ) -> Result<BTreeMap<String, crate::export::RelationFields>, ProviderError> {
+        let path = self
+            .target_path()
+            .join(RELATION_CHECK_DIR)
+            .join("manifest.json");
+        let manifest = crate::Manifest::read(&path).map_err(|e| {
+            ProviderError::Other(format!(
+                "the relation check's manifest `{}` can't be read: {e}",
+                path.display()
+            ))
+        })?;
+        Ok(manifest
+            .nodes
+            .iter()
+            .filter_map(|n| crate::export::RelationFields::of(n).map(|r| (n.unique_id.clone(), r)))
+            .collect())
+    }
 }
 
 fn invocation_of(path: &Path) -> Option<String> {

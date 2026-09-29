@@ -285,7 +285,10 @@ pub fn fingerprint(manifest: &Manifest, node: &ManifestNode) -> Result<Fingerpri
         ("config", config_content(node)?),
         ("macros", macros_content(manifest, node)?),
         ("contract", contract_content(node)),
-        ("relation", node.relation_name.clone().unwrap_or_default()),
+        (
+            Fingerprint::RELATION,
+            node.relation_name.clone().unwrap_or_default(),
+        ),
         (
             "engine",
             format!(
