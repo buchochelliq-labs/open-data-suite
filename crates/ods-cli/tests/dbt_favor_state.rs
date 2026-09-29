@@ -2,9 +2,10 @@
 //! against real dbt and `DuckDB`. Set `ODS_TEST_DBT` to a dbt executable with
 //! `dbt-duckdb` installed; without it the tests skip.
 //!
-//! These tests run dbt only, not ODS. They pin what dbt does today, so that a dbt
+//! The first three run dbt only, not ODS. They pin what dbt does today, so that a dbt
 //! release that changes it is noticed, and they settle what ADR-0020 was unsure of:
-//! which retry command reads a state directory that points refs at this target.
+//! which retry command reads a state directory that points refs at this target. The
+//! last runs the fix: `ods state export --dbt-state`, then `dbt retry --defer-state`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -62,6 +63,38 @@ impl Deferred {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// `ods <args> --json` in the project, with this dbt; `b_fails` makes model `b` fail.
+    fn ods(&self, args: &[&str], b_fails: bool) -> (i32, Value) {
+        let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+            .args(args)
+            .args([
+                "--dbt",
+                &self.dbt,
+                "--profiles-dir",
+                ".",
+                "--project-dir",
+                ".",
+                "--dbt-output",
+                "capture",
+                "--json",
+            ])
+            .current_dir(&self.dir)
+            // No user configuration.
+            .env("XDG_CONFIG_HOME", &self.dir)
+            .env("DBT_SEND_ANONYMOUS_USAGE_STATS", "false")
+            .env("B_FAILS", if b_fails { "1" } else { "0" })
+            .output()
+            .unwrap();
+        let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "ods {args:?}: {e}: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code().unwrap(), json)
     }
 
     /// The developer's run: `a` builds in dev, `b` fails.
@@ -226,4 +259,54 @@ fn real_dbt_retry_with_state_still_defers_to_the_saved_state() {
     .unwrap();
     project.ok(&["retry", "--state", "export"], false);
     assert_eq!(project.b_compiled_against(), "prod");
+}
+
+/// The fix (ADR-0020 §7.2): ODS records the dev build in which `a` succeeded and `b`
+/// failed, and exports a state directory in which `a` points at dev. The retry, given
+/// it with `--defer-state`, builds `b` on dev's `a`.
+#[test]
+fn real_dbt_export_then_retry_reads_this_target() {
+    let Some(dbt) = real_dbt() else { return };
+    let project = Deferred::new(dbt);
+    let (code, built) = project.ods(&["state", "build", "--target", "dev"], true);
+    assert_eq!(code, 1, "b was meant to fail: {built:#}");
+    let advanced = built["result"]["record"]["advanced"].to_string();
+    assert!(advanced.contains("model.favor_state.a"), "{built:#}");
+    assert!(!advanced.contains("model.favor_state.b"), "{built:#}");
+
+    // The same failure in the developer's own deferred run, which `dbt retry` retries.
+    project.failing_dev_build();
+
+    let (code, exported) = project.ods(
+        &[
+            "state",
+            "export",
+            "--dbt-state",
+            "export",
+            "--upstream",
+            "prod",
+            "--target",
+            "dev",
+        ],
+        false,
+    );
+    assert_eq!(code, 0, "{exported:#}");
+    let record: Value =
+        serde_json::from_slice(&std::fs::read(project.dir.join("export/ods-export.json")).unwrap())
+            .unwrap();
+    let reason = |id: &str| {
+        record["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node"] == id)
+            .map(|n| n["reason"].as_str().unwrap().to_owned())
+            .unwrap()
+    };
+    assert_eq!(reason("model.favor_state.a"), "built_here", "{record:#}");
+    assert_ne!(reason("model.favor_state.b"), "built_here", "{record:#}");
+
+    project.ok(&["retry", "--defer-state", "export"], false);
+    assert_eq!(project.b_compiled_against(), "dev");
+    assert_eq!(project.b_read(), "dev");
 }
