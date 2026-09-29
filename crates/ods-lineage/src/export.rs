@@ -383,8 +383,24 @@ impl GraphDocument {
             .collect()
     }
 
+    /// Node edges known only from a declaration (`via: declared`, e.g. a Python
+    /// model's parents) that no column edge covers. Column-level exports draw these
+    /// between the nodes, so such a node isn't shown apart from what it reads.
+    pub fn declared_only(&self) -> impl Iterator<Item = &NodeEdge> {
+        let covered: BTreeSet<(&str, &str)> = self
+            .column_edges
+            .iter()
+            .map(|e| (e.from.node.as_str(), e.to.node.as_str()))
+            .collect();
+        self.node_edges.iter().filter(move |e| {
+            e.via == EdgeSource::Declared && !covered.contains(&(e.from.as_str(), e.to.as_str()))
+        })
+    }
+
     /// Graphviz DOT. With `columns`, each node is a table of its columns and edges run
-    /// between columns (indirect edges dashed); otherwise, a model-level graph.
+    /// between columns (indirect edges dashed), plus a dashed node-to-node edge for each
+    /// declared-only parent no column edge covers; otherwise, a model-level graph whose
+    /// declared-only edges are dashed.
     pub fn to_dot(&self, columns: bool) -> String {
         let mut out = String::from(
             "digraph lineage {\n  rankdir=LR;\n  node [shape=plaintext, fontname=\"Helvetica\"];\n  edge [color=\"#607080\"];\n",
@@ -439,9 +455,24 @@ impl GraphDocument {
                     edge_label(edge.kind)
                 );
             }
+            for edge in self.declared_only() {
+                let _ = writeln!(
+                    out,
+                    "  \"{}\" -> \"{}\" [style=dashed, tooltip=\"declared: how it is used is unknown\"];",
+                    edge.from, edge.to
+                );
+            }
         } else {
             for edge in &self.node_edges {
-                let _ = writeln!(out, "  \"{}\" -> \"{}\";", edge.from, edge.to);
+                if edge.via == EdgeSource::Declared {
+                    let _ = writeln!(
+                        out,
+                        "  \"{}\" -> \"{}\" [style=dashed, tooltip=\"declared: how it is used is unknown\"];",
+                        edge.from, edge.to
+                    );
+                } else {
+                    let _ = writeln!(out, "  \"{}\" -> \"{}\";", edge.from, edge.to);
+                }
             }
         }
         out.push_str("}\n");
@@ -467,9 +498,15 @@ impl GraphDocument {
             let _ = writeln!(out, "  {}{shape}", ids[node.id.as_str()]);
         }
         for edge in &self.node_edges {
+            // A declared-only edge is dotted: how the node uses its parent is unknown.
+            let arrow = if edge.via == EdgeSource::Declared {
+                "-.->"
+            } else {
+                "-->"
+            };
             let _ = writeln!(
                 out,
-                "  {} --> {}",
+                "  {} {arrow} {}",
                 ids[edge.from.as_str()],
                 ids[edge.to.as_str()]
             );
@@ -488,7 +525,9 @@ impl GraphDocument {
     }
 
     /// `GraphML` with one vertex per node and per column, `contains` edges from nodes to
-    /// their columns, and `lineage` edges between columns.
+    /// their columns, lineage edges between columns (kind `direct` or `indirect`), and a
+    /// node-to-node edge of kind `declared` for each declared-only parent no column edge
+    /// covers.
     pub fn to_graphml(&self) -> String {
         let esc = |t: &str| {
             t.replace('&', "&amp;")
@@ -555,6 +594,15 @@ impl GraphDocument {
                 vertex(&edge.from),
                 vertex(&edge.to),
                 edge_label(edge.kind)
+            );
+            edge_id += 1;
+        }
+        for edge in self.declared_only() {
+            let _ = writeln!(
+                out,
+                "    <edge id=\"e{edge_id}\" source=\"{}\" target=\"{}\"><data key=\"edge\">declared</data><data key=\"subtype\">declared only: how it is used is unknown</data></edge>",
+                esc(&edge.from),
+                esc(&edge.to)
             );
             edge_id += 1;
         }

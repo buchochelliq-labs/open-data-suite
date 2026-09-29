@@ -235,6 +235,8 @@ the changelog was introduced.
 - The lineage graph now links a node to every parent it declares, not only to those
   its SQL reads, so a Python model is no longer drawn apart from what it reads. Impact
   already counted those parents. This adds edges to `ods lineage graph` in every format
-  (JSON, `/api/graph`, DOT, Mermaid, GraphML) and to the explorers, and
-  `--focus` with `--upstream`/`--downstream` can now keep more nodes. Each JSON
-  `node_edges` entry gains `via`: `sql`, or `declared` when only declared (#312).
+  and to the explorers, and `--focus` with `--upstream`/`--downstream` can now keep
+  more nodes. Each JSON `node_edges` entry (and `/api/graph`) gains `via`: `sql`, or
+  `declared` when only declared. A declared-only edge is dashed in DOT (`dot` and
+  `dot-columns`, where it runs node to node since no column edge covers it) and
+  dotted in Mermaid; GraphML gives it an edge of kind `declared` (#312).

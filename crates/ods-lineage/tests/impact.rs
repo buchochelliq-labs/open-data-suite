@@ -543,6 +543,43 @@ fn node_edges_are_the_dag_even_where_the_sql_says_nothing() {
             .any(|e| e["to"] == "segments" && e["via"] == "declared"),
         "{json}"
     );
+    // Every format links the Python model to its declared parent, marked as declared,
+    // even the column-level ones where no column edge reaches it (#312).
+    assert_eq!(
+        document
+            .declared_only()
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect::<Vec<_>>(),
+        [("customers", "segments")]
+    );
+    let declared_dot = "\"customers\" -> \"segments\" [style=dashed";
+    let columns_dot = document.to_dot(true);
+    assert!(columns_dot.contains(declared_dot), "{columns_dot}");
+    assert_eq!(
+        columns_dot.matches(" -> \"segments\"").count(),
+        1,
+        "drawn once"
+    );
+    let model_dot = document.to_dot(false);
+    assert!(model_dot.contains(declared_dot), "{model_dot}");
+    assert!(
+        model_dot.contains("\"stg_orders\" -> \"orders\";"),
+        "an edge the SQL shows stays solid: {model_dot}"
+    );
+    let graphml = document.to_graphml();
+    assert!(
+        graphml.contains(
+            "source=\"customers\" target=\"segments\"><data key=\"edge\">declared</data>"
+        ),
+        "{graphml}"
+    );
+    assert!(
+        !graphml.contains("source=\"stg_orders\" target=\"orders\">"),
+        "SQL edges stay column edges"
+    );
+    let mermaid = document.to_mermaid();
+    assert_eq!(mermaid.matches("-.->").count(), 1, "{mermaid}");
+
     let segments = document.nodes.iter().find(|n| n.id == "segments").unwrap();
     assert!(segments.opaque);
     assert_eq!(segments.layer, 3, "laid out after its parent");
