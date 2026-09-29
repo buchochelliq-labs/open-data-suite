@@ -22,7 +22,8 @@
 //!   returned as null, is absent, and a statement that returned no rows gives an empty
 //!   row.
 //! - A source the implementation didn't recognise, or couldn't probe, is
-//!   [`ProbeAnswer::Unknown`], never `Rows`.
+//!   [`ProbeAnswer::Unknown`] with a reason, never `Rows` or `Skipped`: `Skipped` is only
+//!   for a relation it recognised that doesn't match the filter.
 //! - `Err` means nothing was read: callers treat every requested source as unknown.
 //!   An implementation that can't isolate one relation's failure (e.g. one query for
 //!   all of them) fails the whole call.

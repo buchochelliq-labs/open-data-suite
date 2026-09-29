@@ -2945,8 +2945,8 @@ fn next_second() {
     ));
 }
 
-/// The value of `kind` evidence about `source` in `name`'s plan entry.
-fn evidence(result: &Value, name: &str, kind: &str, source: &str) -> Option<String> {
+/// The value of every `kind` evidence about `source` in `name`'s plan entry, joined.
+fn source_evidence(result: &Value, name: &str, kind: &str, source: &str) -> Option<String> {
     entry(result, name)["evidence"]
         .as_array()
         .unwrap()
@@ -2995,11 +2995,11 @@ fn delta_table_versions_decide_reuse_on_databricks() {
     ] {
         assert_eq!(entry(&same, model)["action"], "reuse", "{same:#}");
         assert_eq!(
-            evidence(&same, model, "source_data_version", source).as_deref(),
+            source_evidence(&same, model, "source_data_version", source).as_deref(),
             Some(version)
         );
         assert_eq!(
-            evidence(&same, model, "source_version_strategy", source).as_deref(),
+            source_evidence(&same, model, "source_version_strategy", source).as_deref(),
             Some("relation_versions")
         );
     }
@@ -3114,17 +3114,18 @@ fn a_source_that_isnt_a_delta_table_falls_back_to_max_loaded_at() {
         "{again:#}"
     );
     assert_eq!(
-        evidence(&again, "stg_payments", "source_version_strategy", PAYMENTS).as_deref(),
+        source_evidence(&again, "stg_payments", "source_version_strategy", PAYMENTS).as_deref(),
         Some("source_freshness")
     );
-    let skipped = evidence(&again, "stg_payments", "source_version_skipped", PAYMENTS).unwrap();
+    let skipped =
+        source_evidence(&again, "stg_payments", "source_version_skipped", PAYMENTS).unwrap();
     assert!(
         skipped.starts_with("relation_versions: not a Delta table"),
         "{skipped}"
     );
     // The Delta table's version wins over its load time.
     assert_eq!(
-        evidence(&again, "stg_orders", "source_version_strategy", ORDERS).as_deref(),
+        source_evidence(&again, "stg_orders", "source_version_strategy", ORDERS).as_deref(),
         Some("relation_versions")
     );
 }
@@ -3142,4 +3143,45 @@ fn other_adapters_read_no_table_versions() {
     next_second();
     project.run_ok(&[]);
     assert_eq!(probes(&project), 0);
+}
+/// ADR-0022 §2 in the plan's JSON: each source input says which strategy gave its
+/// version, where the version came from, and why a strategy that could have applied
+/// didn't. `raw.orders` is measured by `dbt source freshness`; `raw.payments` isn't.
+#[test]
+fn plan_json_says_where_each_source_version_came_from() {
+    let project = Project::new("version-evidence")
+        .with("FAKE_DBT_SOURCES", "1")
+        .with("FAKE_DBT_LOADED_AT", "raw.orders=2026-01-01T00:00:00Z");
+    project.run_ok(&[]);
+    let planned = project.run_ok(&["--dry-run"]);
+    let orders = "source.jaffle_ods.raw.orders";
+    let payments = "source.jaffle_ods.raw.payments";
+    assert_eq!(
+        source_evidence(&planned, "stg_orders", "source_version_strategy", orders).as_deref(),
+        Some("source_freshness"),
+        "{planned:#}"
+    );
+    assert_eq!(
+        source_evidence(&planned, "stg_orders", "source_version_origin", orders).as_deref(),
+        Some("sources.json max_loaded_at")
+    );
+    // Nothing here reads table versions, so that strategy isn't listed as skipped.
+    assert_eq!(
+        source_evidence(&planned, "stg_orders", "source_version_skipped", orders),
+        None
+    );
+    assert_eq!(
+        source_evidence(
+            &planned,
+            "stg_payments",
+            "source_version_strategy",
+            payments
+        )
+        .as_deref(),
+        Some("no_version")
+    );
+    assert_eq!(
+        source_evidence(&planned, "stg_payments", "source_version_skipped", payments).as_deref(),
+        Some("source_freshness: not reported")
+    );
 }

@@ -38,8 +38,9 @@ State MVP. Entries below record changes since the changelog was introduced.
   (#17, #16, ADR-0022).
 - `ods state explain` and plan JSON say where each source's data version came from:
   `source_version_strategy` names the strategy chosen (`relation_versions`,
-  `source_freshness` or `no_version`), and `source_version_skipped` says why a
-  preferred one wasn't used (#17, ADR-0022).
+  `source_freshness` or `no_version`), `source_version_origin` the version's own origin
+  (e.g. `sources.json max_loaded_at`), and `source_version_skipped` says why a
+  preferred strategy that could have applied wasn't used (#307, #17, ADR-0022).
 - `ods state export --dbt-state <dir> --upstream <state dir>` writes a dbt state
   directory for `dbt retry --defer-state <dir>` and other runs with
   `--defer --favor-state`: the upstream `manifest.json` (e.g. prod's), in which the

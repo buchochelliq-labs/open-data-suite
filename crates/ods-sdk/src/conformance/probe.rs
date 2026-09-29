@@ -107,8 +107,9 @@ async fn unknown_sources_are_never_probed(harness: &dyn ProbeHarness) {
         std::slice::from_ref(&unknown.id),
         "{case}: listed"
     );
+    // Skipped is for relations it recognised that don't match the filter.
     assert!(
-        !matches!(answer(&report, &unknown.id), ProbeAnswer::Rows(_)),
+        matches!(answer(&report, &unknown.id), ProbeAnswer::Unknown(why) if !why.is_empty()),
         "{case}: {report:?}"
     );
 }
