@@ -5,6 +5,7 @@
 //! modules use them in tests instead of real warehouses (AGENTS.md: no network in
 //! tests). Capabilities can be switched off to test planners' fallbacks.
 
+mod changes;
 mod clock;
 mod executor;
 mod lock;
@@ -12,6 +13,7 @@ mod observed_lineage;
 mod sql_lineage;
 mod state_store;
 
+pub use changes::{FakeChangeProvider, FakeRelationProbe};
 pub use clock::FakeClock;
 pub use executor::FakeExecutor;
 pub use lock::{FakeLockFactory, FakeLockProvider};

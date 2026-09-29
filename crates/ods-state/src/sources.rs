@@ -106,6 +106,7 @@ fn decide(
         now.map(|v| v.value.clone()),
         now.map_or(Exactness::None, |v| v.exactness),
     ));
+    evidence.extend(source.version_evidence.iter().cloned());
     let checks = source.checks.as_deref().unwrap_or_default();
     evidence.push(Evidence::new(
         "checks",

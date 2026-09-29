@@ -154,6 +154,7 @@ impl Context<'_> {
             now.map(|v| v.value.clone()),
             now.map_or(Exactness::None, |v| v.exactness),
         ));
+        evidence.extend(source.version_evidence.iter().cloned());
         let then = before.inputs.get(&source.id).and_then(Option::as_ref);
         // A version observed before the node's last build can't show data that arrived
         // after it.
