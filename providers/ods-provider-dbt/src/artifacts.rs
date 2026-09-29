@@ -84,6 +84,8 @@ struct RawMetadata {
     adapter_type: Option<String>,
     #[serde(default)]
     dbt_version: Option<String>,
+    #[serde(default)]
+    generated_at: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -495,6 +497,9 @@ pub struct Catalog {
     pub columns: BTreeMap<String, Vec<String>>,
     /// Warehouse data types by `unique_id`, then column name.
     pub types: BTreeMap<String, BTreeMap<String, String>>,
+    /// When dbt wrote it (`metadata.generated_at`), as written: the columns and types
+    /// are the warehouse's as of then.
+    pub generated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -882,6 +887,10 @@ impl Catalog {
             }
             columns.insert(id, ordered.into_iter().map(|c| c.name).collect());
         }
-        Ok(Self { columns, types })
+        Ok(Self {
+            columns,
+            types,
+            generated_at: raw.metadata.generated_at,
+        })
     }
 }

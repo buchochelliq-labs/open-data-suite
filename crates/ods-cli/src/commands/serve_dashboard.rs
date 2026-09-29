@@ -14,6 +14,8 @@ use ods_core::state::Timestamp;
 use ods_lineage::GraphFilter;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
+use ods_web::catalog::LastBuild;
+use ods_web::dashboard::state::{History, LastOutcome, LastRun, RUNS_LISTED};
 use ods_web::dashboard::{
     ModuleState, ModuleStatus, OpaqueNode, Planner, RECENT_RUNS, Recorded, RunRecord, StateInput,
     StoreLocation, Target,
@@ -70,7 +72,8 @@ impl DashboardSource {
     }
 
     /// Files whose change means new state or a new plan: the database and its
-    /// write-ahead log, where a commit lands first, and the source freshness results
+    /// write-ahead log, where a commit lands first, the last run beside it, and the
+    /// source freshness results
     /// the plan reads (`--sources`, else `<target-dir>/sources.json`). A file that
     /// doesn't exist yet is watched too: creating it is a change.
     pub(super) fn watched(&self) -> Vec<PathBuf> {
@@ -81,7 +84,11 @@ impl DashboardSource {
             || self.settings.target_dir().join("sources.json"),
             PathBuf::from,
         );
-        vec![db, PathBuf::from(wal), sources]
+        // A run that records nothing (everything failed) only changes the last run
+        // kept for `ods state retry`, which the Runs page shows (#311).
+        let mut last_run = db.clone().into_os_string();
+        last_run.push(".last-run.json");
+        vec![db, PathBuf::from(wal), sources, PathBuf::from(last_run)]
     }
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
@@ -144,7 +151,10 @@ impl DashboardSource {
                 OpaqueNode::new(id, name, why)
             })
             .collect();
-        let state = self.state(Arc::clone(&ws));
+        let (state, last_builds) = self.state(Arc::clone(&ws));
+        // The Catalog (#313): the project's nodes, and their last builds from the
+        // snapshot the plan is made against.
+        let catalog = super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         let target = self
             .settings
@@ -158,13 +168,16 @@ impl DashboardSource {
             .with_opaque(opaque)
             .with_state(state)
             .with_modules(modules(recorded))
+            .with_catalog(catalog)
     }
 
-    fn state(&self, ws: Arc<Workspace>) -> StateInput {
+    /// What the store holds, and each node's last build (#313), from one read, so
+    /// the plan and the builds shown with it rest on the same snapshot.
+    fn state(&self, ws: Arc<Workspace>) -> (StateInput, BTreeMap<String, LastBuild>) {
         let store = store_location(&ws.state_db);
         // Never created here: the dashboard only reads (AGENTS rule 5, #310).
         if !ws.state_db.is_file() {
-            return StateInput::NoStore { store };
+            return (StateInput::NoStore { store }, BTreeMap::new());
         }
         let unreadable = |error: String| {
             tracing::warn!(%error, "dashboard: the state store can't be read");
@@ -175,23 +188,37 @@ impl DashboardSource {
         };
         let read = block_on(async {
             let db = SqliteStateStore::open_existing(&ws.state_db).await?;
-            // Counted up to a bound: the tile says "at least" beyond it.
-            let history = db.history(&ws.scope, SNAPSHOTS_COUNTED + 1).await?;
-            let mut runs = Vec::new();
-            for summary in history.iter().take(RECENT_RUNS) {
+            // The State pages list the newest runs, and read one more snapshot, so the
+            // oldest listed run can say what it replaced (#311). The Snapshots tile
+            // counts as far: it says "at least" beyond it.
+            let history = db.history(&ws.scope, SNAPSHOTS_READ).await?;
+            let mut snapshots = Vec::new();
+            for summary in &history {
                 if let Some(stored) = db.get(&ws.scope, summary.id).await? {
-                    runs.push(RunRecord::of(stored.id.0, &stored.snapshot));
+                    snapshots.push((stored.id.0, stored.snapshot));
                 }
             }
+            let runs: Vec<RunRecord> = snapshots
+                .iter()
+                .take(RECENT_RUNS)
+                .map(|(id, snapshot)| RunRecord::of(*id, snapshot))
+                .collect();
+            // Which snapshot recorded each run, further back than the runs listed, so
+            // the Catalog can say which snapshot a node's last build came from (#313).
+            let runs_index = db.history(&ws.scope, RUNS_INDEXED).await?;
             let latest = db.latest(&ws.scope).await?;
             db.close().await;
-            Ok::<_, ods_sdk::ProviderError>((history.len(), runs, latest))
+            Ok::<_, ods_sdk::ProviderError>((history.len(), runs, snapshots, runs_index, latest))
         });
-        let (counted, runs, latest) = match read {
+        let (counted, runs, snapshots, runs_index, latest) = match read {
             Ok(Ok(read)) => read,
-            Ok(Err(e)) => return unreadable(e.to_string()),
-            Err(e) => return unreadable(e.message),
+            Ok(Err(e)) => return (unreadable(e.to_string()), BTreeMap::new()),
+            Err(e) => return (unreadable(e.message), BTreeMap::new()),
         };
+        let last_run = last_run(&ws.state_db);
+        // The Catalog's last builds (#313), from the snapshot the plan is made against.
+        let last_builds =
+            super::serve_catalog::last_builds(latest.as_ref(), &runs_index, &ws.manifest);
         // Plans depend on time (lag tolerances expire), so Home plans again on every
         // request, as of then; this first plan is the fallback.
         let settings = self.settings.clone();
@@ -207,18 +234,55 @@ impl DashboardSource {
             Ok((plan, warnings)) => (Ok(plan), warnings),
             Err(error) => (Err(error), Vec::new()),
         };
-        StateInput::Recorded(Box::new(
-            Recorded::new(store, runs, counted.min(SNAPSHOTS_COUNTED), plan)
-                .capped(counted > SNAPSHOTS_COUNTED)
+        let state = StateInput::Recorded(Box::new(
+            Recorded::new(store, runs, counted, plan)
+                .capped(counted >= SNAPSHOTS_READ)
                 .with_warnings(warnings)
-                .with_planner(planner),
-        ))
+                .with_planner(planner)
+                .with_history(History::new(snapshots).with_last_run(last_run)),
+        ));
+        (state, last_builds)
     }
 }
 
-/// How many snapshots are counted for the Snapshots tile; the store has no count
-/// query, and history rows are small.
-const SNAPSHOTS_COUNTED: usize = 10_000;
+/// The last run kept beside the store for `ods state retry`, if any: the only record
+/// of which nodes failed (#292), for the State pages (#311).
+fn last_run(state_db: &Path) -> Option<LastRun> {
+    let (path, last) = super::state_retry::peek(state_db)?;
+    let outcome = last.outcome.as_ref().map(|o| {
+        LastOutcome::new(
+            o.failed.iter().cloned().collect(),
+            o.skipped.iter().cloned().collect(),
+            o.failed_source_tests.iter().cloned().collect(),
+        )
+    });
+    Some(
+        // Redacted here, before it leaves the CLI: option values such as `--vars` and
+        // dbt's own options may carry secrets (AGENTS.md rule 9).
+        LastRun::new(
+            last.redacted(),
+            format!("ods state {}", last.command),
+            last.recorded_at,
+            store_location(&path),
+        )
+        .with_outcome(outcome)
+        .with_run(last.scope.clone(), last.run_id.clone())
+        // Both exist in this ODS (`ods state retry`, #276, and `--failed`, #292);
+        // `--failed` refuses a run that only tested, so it isn't offered then.
+        .with_retry(
+            Some("ods state retry".to_owned()),
+            (last.command != "test").then(|| "ods state retry --failed".to_owned()),
+        ),
+    )
+}
+
+/// How many snapshots are read: the runs the State pages list, and the one before the
+/// oldest. The store has no count query, so the Snapshots tile counts this far.
+const SNAPSHOTS_READ: usize = RUNS_LISTED + 1;
+
+/// How many history lines (summaries only) are read to tell which snapshot recorded a
+/// node's last build (#313); older ones show the run without a snapshot.
+const RUNS_INDEXED: usize = 10_000;
 
 /// The store as people read it: as given when relative, else relative to the working
 /// directory or with `~` for the home directory; and in full.

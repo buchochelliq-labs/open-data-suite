@@ -394,7 +394,7 @@ fn plan_nodes(
 }
 
 /// A node's name as dbt selects it: `orders`, or `orders.v2` for a model version.
-fn node_name(n: &ods_provider_dbt::ManifestNode) -> String {
+pub(super) fn node_name(n: &ods_provider_dbt::ManifestNode) -> String {
     let name = n.name.clone().unwrap_or_else(|| display_name(&n.unique_id));
     match &n.version {
         Some(v) => format!("{name}.v{v}"),

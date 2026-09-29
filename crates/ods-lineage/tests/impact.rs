@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, RelationName};
 use ods_lineage::{
-    Change, ColumnChangeKind, ImpactReason, LineageNode, LineageProject, MemoryCache, NodeKind,
-    build, diff,
+    Change, ColumnChangeKind, EdgeSource, ImpactReason, LineageNode, LineageProject, MemoryCache,
+    NodeKind, build, diff,
 };
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
@@ -497,4 +497,90 @@ fn review_moved_and_duplicated_columns_are_changes() {
         diff(&rel("m"), Some(&before), &duplicated),
         [Change::Rows { relation: rel("m") }]
     );
+}
+
+#[test]
+fn node_edges_are_the_dag_even_where_the_sql_says_nothing() {
+    // A Python model (no SQL) still reads its declared parents: the exported graph links
+    // them, as impact does (#312).
+    let (project, analyzer) = project_and_analyzer();
+    let mut nodes = project.nodes.clone();
+    nodes.push(
+        LineageNode::new("segments", rel("segments"), NodeKind::Model)
+            .with_depends_on(["customers"]),
+    );
+    let project = LineageProject::new(nodes);
+    let (graph, _) = build(
+        &project,
+        &opaque_reads_orders(analyzer),
+        &MemoryCache::default(),
+    )
+    .unwrap();
+    let document = graph.document(&|id| id.to_owned(), &ods_lineage::GraphFilter::default());
+    let via = |from: &str, to: &str| {
+        document
+            .node_edges
+            .iter()
+            .find(|e| e.from == from && e.to == to)
+            .map(|e| e.via)
+    };
+    // Only declared: how the Python model uses `customers` is unknown.
+    assert_eq!(
+        via("customers", "segments"),
+        Some(EdgeSource::Declared),
+        "{:?}",
+        document.node_edges
+    );
+    // Read by its SQL (and declared too): the SQL says how.
+    assert_eq!(via("orders", "legacy_report"), Some(EdgeSource::Sql));
+    assert_eq!(via("stg_orders", "orders"), Some(EdgeSource::Sql));
+    let json = serde_json::to_value(&document).unwrap();
+    assert!(
+        json["node_edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["to"] == "segments" && e["via"] == "declared"),
+        "{json}"
+    );
+    // Every format links the Python model to its declared parent, marked as declared,
+    // even the column-level ones where no column edge reaches it (#312).
+    assert_eq!(
+        document
+            .declared_only()
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect::<Vec<_>>(),
+        [("customers", "segments")]
+    );
+    let declared_dot = "\"customers\" -> \"segments\" [style=dashed";
+    let columns_dot = document.to_dot(true);
+    assert!(columns_dot.contains(declared_dot), "{columns_dot}");
+    assert_eq!(
+        columns_dot.matches(" -> \"segments\"").count(),
+        1,
+        "drawn once"
+    );
+    let model_dot = document.to_dot(false);
+    assert!(model_dot.contains(declared_dot), "{model_dot}");
+    assert!(
+        model_dot.contains("\"stg_orders\" -> \"orders\";"),
+        "an edge the SQL shows stays solid: {model_dot}"
+    );
+    let graphml = document.to_graphml();
+    assert!(
+        graphml.contains(
+            "source=\"customers\" target=\"segments\"><data key=\"edge\">declared</data>"
+        ),
+        "{graphml}"
+    );
+    assert!(
+        !graphml.contains("source=\"stg_orders\" target=\"orders\">"),
+        "SQL edges stay column edges"
+    );
+    let mermaid = document.to_mermaid();
+    assert_eq!(mermaid.matches("-.->").count(), 1, "{mermaid}");
+
+    let segments = document.nodes.iter().find(|n| n.id == "segments").unwrap();
+    assert!(segments.opaque);
+    assert_eq!(segments.layer, 3, "laid out after its parent");
 }

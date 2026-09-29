@@ -1595,7 +1595,11 @@ impl RunReport {
         };
         let (report, record_error) = Self::build(kind, args, &settings, ctx.progress, retry)?;
         if let Some(remembered) = remembered {
-            remembered.finish(report.last_outcome());
+            remembered.finish(
+                report.last_outcome(),
+                report.scope.clone(),
+                report.execution.as_ref().map(|e| e.run_id.clone()),
+            );
         }
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);

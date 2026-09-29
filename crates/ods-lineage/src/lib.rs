@@ -31,7 +31,7 @@ mod project;
 pub use build::{BuildError, BuildStats, build};
 pub use cache::{LineageCache, MemoryCache, cache_key};
 pub use diff::{Change, ColumnChangeKind, diff};
-pub use export::{GraphDocument, GraphFilter};
+pub use export::{EdgeSource, GraphDocument, GraphFilter};
 pub use graph::{ColumnGraph, ColumnUse, NodeLineage};
 pub use impact::{Impact, ImpactReason, NodeImpact, Pruned};
 pub use observed::{Agreement, Comparison, EdgeDiff, ModelComparison, Stitched};

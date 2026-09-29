@@ -299,9 +299,10 @@ fn home_is_served_with_the_shell_and_every_panel() {
     }
     assert!(page.contains(r#"<a href="./" aria-current="page" data-section="home">"#));
     assert!(page.contains(r#"<a href="lineage" data-section="lineage">"#));
+    assert!(page.contains(r#"<a href="catalog" data-section="catalog">"#));
     assert!(
         page.contains(
-            r#"<span class="planned" title="Planned: not built yet" data-section="catalog">"#
+            r#"<span class="planned" title="Planned: not built yet" data-section="usage">"#
         ),
         "planned sections link nowhere"
     );
@@ -312,7 +313,8 @@ fn home_is_served_with_the_shell_and_every_panel() {
     assert!(page.contains("Local · read-only"));
     assert!(page.contains("'IBM Plex Sans'"));
     assert!(page.contains("url('assets/fonts/IBMPlexSans-Regular-Latin1.woff2')"));
-    assert!(page.contains("the State module works from the CLI"));
+    assert!(page.contains("the ERD module works from the CLI"));
+    assert!(page.contains(r#"<a href="state/plan" data-section="state">"#));
     assert!(page.contains("<table class=\"runs\">"));
     assert!(page.contains(r#"<meta name="ods-generation" content="1">"#));
     // Home.

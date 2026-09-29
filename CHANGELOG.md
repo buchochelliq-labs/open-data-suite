@@ -45,9 +45,64 @@ the changelog was introduced.
 - Two JSON routes return the dashboard's view models at `schema_version` 1:
   `/api/shell` and `/api/home`. Beyond loopback, `/api/home` omits the store's path and
   error text (#310, ADR-0009).
+- The dashboard's Lineage page (#312): `ods serve` shows the lineage explorer at
+  `/lineage` inside the dashboard's shell, restyled to the design, with a *State
+  overlay* that colours each node by what the next run does with it: build, reuse,
+  never built, or unknown (the evidence to reuse it is missing, so it builds). The
+  decisions are `ods state plan`'s, made again on every request; without a state store
+  every node shows as never built. Opaque nodes, such as Python models, are drawn
+  dashed. A side panel gives the selected node's decision and reason chain, the
+  readers that build with it, and links to its Model page (`/catalog/<id>`) and to its
+  decision on the State plan page (`/state/plan?node=<id>`); its other tabs keep the
+  explorer's details, columns and impact. `/lineage?node=<id>` selects a node. The
+  overlay can be switched off. The page doesn't check the warehouse, so it says reuse
+  is taken on trust, as `ods state run` does. A column trace that reaches an opaque
+  node names where it stops and shows everything past it as *may change*. Nodes and
+  columns can be reached and selected from the keyboard. A new JSON route,
+  `/api/lineage/overlay`, returns the overlay at `schema_version` 1; beyond loopback it
+  omits error text (ADR-0009).
 - The dashboard uses IBM Plex Sans and Mono (SIL Open Font License 1.1), vendored and
   served by `ods serve` from `/assets/fonts/`; the Content-Security-Policy adds only
   `font-src 'self'`, so no font CDN is contacted (#310, ADR-0009).
+- The dashboard's State pages (#311). **Plan** (`/state/plan`) lists every planned node,
+  builds first, with its Build or Reuse pill and reason, filters by action, and opens a
+  **Why** panel for the selected node (`?node=<id>`): its recorded build, which
+  fingerprint parts changed, what it reads (parents' decisions, and each source's
+  version with its strategy and origin, graded exact, semantic, proxy, inferred or
+  unknown), the relation check, the decision and the reason chain, which is exactly
+  `ods state explain`'s. The plan is made offline, so reused relations read *not
+  checked*. **Runs** (`/state/runs`) lists the recorded runs, newest first, with
+  outcome, target and date filters and counts; nodes read *built* or *kept earlier
+  build*. Failures are known only for the last run, from the file `ods state retry`
+  keeps beside the store, and only for the target it ran for: the page shows the nodes
+  that failed or weren't recorded, the skipped ones, the state kept and
+  `ods state retry --failed`. **Run** (`/state/runs/<run_id>`) shows a timeline of built
+  and kept nodes, why each was built from what the snapshots record, and the earlier
+  runs. Durations, start times and users read as placeholders; CI runs are a *Planned*
+  tab. The State section lists its pages in the navigation, and Home's *All runs* and
+  last run link here. JSON routes `/api/state/plan`, `/api/state/plan/<node>`,
+  `/api/state/runs` and `/api/state/runs/<run_id>` return the same view models at
+  `schema_version` 1 (`GET` only; beyond loopback without paths or error text). A
+  command line shown there keeps option names but redacts their values (except the
+  selection and target) and everything after `--`. The plan is made at most every 30
+  seconds per reload, and the server also reloads when the last run's file changes.
+- The last-run file beside the state database (`<state-db>.last-run.json`) is now at
+  version 1.2: it also keeps the state scope the run was for and its run id, so the
+  dashboard shows a run only for its own target and ties it to its snapshot.
+  `ods state test` now keeps how its run ended too, as `run` and `build` do. Older
+  files still read (#311, ADR-0009).
+- The dashboard's Catalog and model pages (#313). `/catalog` lists every model, seed
+  and snapshot with facets (resource type, layer from the model's folder, materialization,
+  tags, next-run decision from the plan, lineage confidence) whose selections, search and
+  sort are kept in the URL, each node's next-run pill and last successful build, and a
+  `[n]` health placeholder (#117). `/catalog/<unique_id>` has Overview, Code, Columns,
+  Lineage, State and Tests tabs; column types are shown only when the artifacts record
+  them (warehouse types as of the catalog's date), inferred layers and column lineage
+  are marked, and a test reads *passed* only while the checks that passed are still the
+  node's checks. Compiled SQL is never served, as it can contain resolved secrets: the
+  Code tab shows the code as written. A *Reuse* says its relation isn't checked by the
+  offline plan. Without a state store every node reads *never built*. `/api/catalog` and `/api/catalog/<unique_id>` return the same view
+  models at `schema_version` 1 (ADR-0009).
 - `ods doctor` checks that ODS can work in the current project: configuration (files,
   profile, every effective value and where it came from, credentials only as
   references and connection strings without their user, query or options), the dbt
@@ -146,8 +201,18 @@ the changelog was introduced.
   node that couldn't be ordered (#281).
 - The lineage explorer lays out graphs with dagre, which shortens edges and reduces
   crossings (#282).
+- The offline explorer (`ods lineage view`, and `--site`) has the dashboard's look:
+  nodes coloured by kind, the same toolbar, legend and side panel. It still works
+  offline from one file, with the graph only: the State overlay and impact need
+  `ods serve` (#312).
 
 ### Fixed
+- Lineage diagnostics no longer quote the SQL they couldn't analyze. The SQL is dbt's
+  compiled code, which can hold values resolved from `env_var()`, `var()` or macros,
+  credentials included, and the diagnostics reach `ods lineage` output, the offline
+  explorer (`ods lineage view`), and `ods serve`'s `/api/graph`, `/api/node`, Lineage
+  page and Home. A diagnostic now names the construct (e.g. "unsupported FROM source:
+  a `TableFunction`") and, for SQL that doesn't parse, only where it failed (#312).
 - `ods config explain` no longer shows a one-element array such as `["env:X"]` as the
   secret reference `secret(env:X)`. Only the table form `{ secret = "<scheme>:<name>" }`
   is a secret reference, as ADR-0005 says; any other value, in configuration or
@@ -167,3 +232,11 @@ the changelog was introduced.
   database connection was still open after the store closed (#279).
 - A lag tolerance longer than the last representable date is now reported as
   "never due", not as a date in the year 9999 (#283).
+- The lineage graph now links a node to every parent it declares, not only to those
+  its SQL reads, so a Python model is no longer drawn apart from what it reads. Impact
+  already counted those parents. This adds edges to `ods lineage graph` in every format
+  and to the explorers, and `--focus` with `--upstream`/`--downstream` can now keep
+  more nodes. Each JSON `node_edges` entry (and `/api/graph`) gains `via`: `sql`, or
+  `declared` when only declared. A declared-only edge is dashed in DOT (`dot` and
+  `dot-columns`, where it runs node to node since no column edge covers it) and
+  dotted in Mermaid; GraphML gives it an edge of kind `declared` (#312).

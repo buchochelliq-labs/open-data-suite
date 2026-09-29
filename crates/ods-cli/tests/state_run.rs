@@ -2223,9 +2223,12 @@ fn retry_failed_builds_only_what_failed() {
     let kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         kept["schema_version"],
-        serde_json::json!({"major": 1, "minor": 1}),
+        serde_json::json!({"major": 1, "minor": 2}),
         "{kept:#}"
     );
+    // Since 1.2 (#311): the scope it ran for, and its run id.
+    assert_eq!(kept["scope"], "jaffle_ods/default", "{kept:#}");
+    assert!(kept["run_id"].is_string(), "{kept:#}");
     assert_eq!(
         kept["outcome"]["failed"],
         serde_json::json!(["model.jaffle_ods.customer_segments"]),
