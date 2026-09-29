@@ -142,7 +142,7 @@ panel), Runs and one Run under `<base>/state/`.
 - **Data:** the binary also fills a neutral `ods_web::catalog::CatalogInput` on the
   `Dashboard`: each node's id, name, type, language, layer, materialization, tags,
   description, relation, file, parents, columns (type only when recorded, and whether
-  it came from the warehouse or was declared), code and compiled code, and tests; plus
+  it came from the warehouse or was declared), code as written, and tests; plus
   each node's last successful build from the latest snapshot, with the snapshot that
   recorded it. The binary decides what a layer is (the model's first folder under the
   model paths, from the artifacts) and says so; `ods-web` names no build tool. Decisions
@@ -151,6 +151,14 @@ panel), Runs and one Run under `<base>/state/`.
   document the server already holds. The binary reads the latest snapshot and history
   once and derives both the planner's input and the last builds from that read, so the
   builds shown and the decisions can't rest on different snapshots.
+- **No compiled code (AGENTS rule 9):** compiled SQL can contain values resolved from
+  `env_var()`, `var()` or macros, including credentials, so the binary never puts it in
+  `CatalogInput` and no view model has it; only the raw code, with its templating
+  unresolved, is served. The Code tab points to `target/compiled/` instead.
+- **Tests vouched for only while unchanged:** a build's test record keeps the digest of
+  the checks that passed. The binary compares it with the node's checks now, using the
+  planner's `checks_digest` and `NodeState::is_tested_with`, and passes the result
+  (`LastBuild::checks_current`), so a test added or edited since never reads as passed.
 - **Offline decisions:** this plan checks no relation, so a reuse is shown as taken on
   trust ("its relation isn't checked by this plan; it is when a run starts"), and the
   view model carries it (`relations_checked: false`, `caveats`).

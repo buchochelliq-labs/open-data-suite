@@ -9,7 +9,6 @@ expression: pretty(view)
     "run_id": "9ea38bd5-0000-4000-8000-000000000002"
   },
   "code": {
-    "compiled": "select id from db.raw_orders",
     "language": "sql",
     "raw": "select id from {{ ref('raw_orders') }}"
   },

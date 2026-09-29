@@ -448,16 +448,10 @@ fn code(b: &mut String, view: &ModelView) {
         }
         None => b.push_str(r#"<section class="card" aria-label="Code"><h2>Code</h2><p class="muted">The artifacts carry no code for this node (a seed is loaded from its file).</p></section>"#),
     }
-    match &view.code.compiled {
-        Some(compiled) => {
-            let _ = write!(
-                b,
-                r#"<section class="card" aria-label="Compiled code"><div class="card-head"><h2>Compiled</h2><span class="muted">as compiled for the target</span></div><pre class="code"><code>{}</code></pre></section>"#,
-                text(compiled),
-            );
-        }
-        None if view.code.raw.is_some() => b.push_str(r#"<section class="card" aria-label="Compiled code"><h2>Compiled</h2><p class="muted">Not in the artifacts: they were written before the code was compiled.</p></section>"#),
-        None => {}
+    if view.code.raw.is_some() {
+        // Compiled code is never served: it can hold values resolved from the
+        // environment or variables, such as credentials (AGENTS rule 9).
+        b.push_str(r#"<section class="card" aria-label="Compiled code"><h2>Compiled</h2><p class="muted">Not shown: compiled code can contain resolved secrets (from environment variables, variables or macros). It is in the project's <code>target/compiled/</code> folder on the machine that compiled it.</p></section>"#);
     }
     b.push_str("</div>");
 }
@@ -564,6 +558,12 @@ fn tests(b: &mut String, view: &ModelView) {
         r#"<div class="stack"><section class="card" aria-label="Tests"><h2>Tests <span class="muted count">{}</span></h2>"#,
         view.tests.len()
     );
+    // The checks changed since they last passed: nothing vouches for any test now.
+    let changed = view
+        .checks_passed
+        .as_ref()
+        .filter(|p| p.checks_changed_since)
+        .map(|p| p.run_id.chars().take(8).collect::<String>());
     match &view.checks_passed {
         Some(passed) => {
             let _ = write!(
@@ -598,7 +598,13 @@ fn tests(b: &mut String, view: &ModelView) {
                     _ => "data",
                 },
                 outcome = test.last_outcome.as_ref().map_or_else(
-                    || r#"<span class="muted" title="Not among the checks a recorded build passed">not recorded</span>"#.to_owned(),
+                    || match &changed {
+                        Some(run) => format!(
+                            r#"<span class="muted" title="A test was added, removed or edited since the checks last passed">checks changed since run <span class="mono">{}</span>: not recorded</span>"#,
+                            text(run)
+                        ),
+                        None => r#"<span class="muted" title="Not among the checks a recorded build passed">not recorded</span>"#.to_owned(),
+                    },
                     |o| format!(
                         r#"<span class="passed" title="Passed with the node's other checks, {at}">{outcome} · run <span class="mono">{short}</span></span>"#,
                         at = attr(&o.at.to_string()),

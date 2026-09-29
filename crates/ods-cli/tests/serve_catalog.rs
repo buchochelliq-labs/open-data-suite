@@ -277,3 +277,44 @@ fn the_catalog_shows_the_plan_and_the_builds_the_state_store_recorded() {
         "the Catalog only reads"
     );
 }
+
+/// Compiled code can hold values resolved from `env_var()` or `var()`, such as
+/// credentials: it never reaches the pages or the API, even on loopback (AGENTS rule 9).
+#[test]
+fn compiled_code_and_its_secrets_are_never_served() {
+    const SECRET: &str = "sk_live_0123456789abcdefSECRET";
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let source = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let mut manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(source.join("manifest.json")).unwrap())
+            .unwrap();
+    let customers = &mut manifest["nodes"]["model.jaffle_ods.customers"];
+    customers["compiled_code"] =
+        Value::String(format!("select * from orders where api_key = '{SECRET}'"));
+    customers["raw_code"] = Value::String(
+        "select * from {{ ref('orders') }} where api_key = '{{ env_var(\"API_KEY\") }}'".into(),
+    );
+    std::fs::write(target.join("manifest.json"), manifest.to_string()).unwrap();
+    std::fs::copy(source.join("catalog.json"), target.join("catalog.json")).unwrap();
+
+    let server = serve(&target, &[]);
+    let (status, body) = get(&server, "api/catalog/model.jaffle_ods.customers");
+    assert_eq!(status, 200, "{body}");
+    assert!(!body.contains(SECRET), "{body}");
+    assert!(
+        body.contains("env_var"),
+        "the raw code, unresolved, is shown: {body}"
+    );
+    for tab in ["overview", "code", "columns", "lineage", "state", "tests"] {
+        let (status, page) = get(
+            &server,
+            &format!("catalog/model.jaffle_ods.customers?tab={tab}"),
+        );
+        assert_eq!(status, 200);
+        assert!(!page.contains(SECRET), "{tab}: {page}");
+    }
+    let (_, body) = get(&server, "api/catalog");
+    assert!(!body.contains(SECRET));
+}

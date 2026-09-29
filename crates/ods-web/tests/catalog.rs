@@ -107,7 +107,6 @@ fn nodes() -> Vec<CatalogNode> {
         "source.shop.app.events".into(),
     ];
     orders.code = Some("select id from {{ ref('raw_orders') }}".into());
-    orders.compiled_code = Some("select id from db.raw_orders".into());
     let mut id = CatalogColumn::new("id");
     id.data_type = Some(("BIGINT".into(), TypeSource::Warehouse));
     id.description = Some("The order.".into());
@@ -216,8 +215,12 @@ fn catalog_input() -> CatalogInput {
             ),
             (
                 "model.shop.orders".to_owned(),
-                LastBuild::new(Some(2), RUN_2, at("2026-09-28T09:00:00Z"))
-                    .with_tested(RUN_2, at("2026-09-28T09:05:00Z")),
+                LastBuild::new(Some(2), RUN_2, at("2026-09-28T09:00:00Z")).with_tested(
+                    RUN_2,
+                    at("2026-09-28T09:05:00Z"),
+                    Some("digest".into()),
+                    true,
+                ),
             ),
         ]))
 }
@@ -634,9 +637,12 @@ fn a_model_page_has_a_tab_for_each_part() {
         "{page}"
     );
     assert!(
-        page.contains("select id from db.raw_orders"),
-        "compiled when present"
+        page.contains("Not shown: compiled code can contain resolved secrets")
+            && page.contains("<code>target/compiled/</code>"),
+        "compiled code is never served (AGENTS rule 9): {page}"
     );
+    let model = json(addr, "/api/catalog/model.shop.orders");
+    assert!(model["code"].get("compiled").is_none(), "{model}");
 
     let (_, _, page) = get(addr, &format!("{path}?tab=lineage"));
     assert!(page.contains(r#"<a class="mono" href="../catalog/seed.shop.raw_orders" title="seed.shop.raw_orders">raw_orders</a>"#), "{page}");
@@ -958,4 +964,54 @@ fn the_tests_tab_shows_only_recorded_outcomes() {
     assert_eq!(model["tests"][0]["last_outcome"]["outcome"], "passed");
     assert_eq!(model["tests"][0]["last_outcome"]["run_id"], RUN_2);
     assert!(model["tests"][2]["last_outcome"].is_null());
+}
+
+/// A test added or edited since the checks last passed hasn't run: the record no
+/// longer vouches for any test, and none reads as passed.
+#[test]
+fn changed_checks_vouch_for_no_test() {
+    let mut input = catalog_input();
+    let build = input.last_builds.get_mut("model.shop.orders").unwrap();
+    *build = LastBuild::new(Some(2), RUN_2, at("2026-09-28T09:00:00Z")).with_tested(
+        RUN_2,
+        at("2026-09-28T09:05:00Z"),
+        Some("old digest".into()),
+        false,
+    );
+    let addr = start(recorded().with_catalog(input));
+    let model = json(addr, "/api/catalog/model.shop.orders");
+    assert_eq!(
+        model["checks_passed"]["checks_changed_since"], true,
+        "{model}"
+    );
+    for test in model["tests"].as_array().unwrap() {
+        assert!(test["last_outcome"].is_null(), "{test}");
+    }
+    let (_, _, page) = get(addr, "/catalog/model.shop.orders?tab=tests");
+    assert!(!page.contains(r#"<span class="passed""#), "{page}");
+    assert!(
+        page.contains(
+            "checks changed since run <span class=\"mono\">9ea38bd5</span>: not recorded"
+        ),
+        "{page}"
+    );
+}
+
+/// A warehouse catalog may fold a column's case; its lineage is still found.
+#[test]
+fn column_lineage_matches_whatever_the_case() {
+    let mut input = catalog_input();
+    let orders = input
+        .nodes
+        .iter_mut()
+        .find(|n| n.id == "model.shop.orders")
+        .unwrap();
+    orders.columns[0].name = "ID".into();
+    let addr = start(recorded().with_catalog(input));
+    let model = json(addr, "/api/catalog/model.shop.orders");
+    assert_eq!(model["columns"][0]["name"], "ID");
+    assert_eq!(
+        model["columns"][0]["upstream"][0], "raw_orders.id",
+        "{model}"
+    );
 }
