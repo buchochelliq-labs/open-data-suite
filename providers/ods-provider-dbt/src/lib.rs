@@ -17,6 +17,7 @@
 
 mod artifacts;
 pub mod executor;
+pub mod export;
 pub mod fingerprint;
 mod info_schema;
 pub mod normalize;
