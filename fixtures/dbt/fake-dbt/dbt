@@ -16,6 +16,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_DROPPED  file of node ids whose relations are gone, one per line; building a
                     node brings it back [default: every relation exists]
   FAKE_DBT_SHOW_FAIL  the relation check fails, as when the warehouse can't be reached
+  FAKE_DBT_SHOW_MOVED  comma-separated node ids the relation check finds in schema `moved`,
+                    as when the profile changed since manifest.json was written
   FAKE_DBT_CALLS  file to append each command to, one per line
   FAKE_DBT_TARGET_HOST  where the target is, for ODS's target check [default: fake-host]
   FAKE_DBT_TARGET_FAIL  the target check fails, as when the profile can't be rendered
@@ -199,6 +201,10 @@ def show(options, manifest, target):
     if os.environ.get("FAKE_DBT_SHOW_FAIL"):
         print(json.dumps({"data": {"exc": "can't connect"}, "info": {"name": "MainEncounteredError"}}))
         return 2
+    for node_id in filter(None, os.environ.get("FAKE_DBT_SHOW_MOVED", "").split(",")):
+        node = manifest["nodes"][node_id]
+        node["schema"] = "moved"
+        node["relation_name"] = f'"{node["database"]}"."moved"."{node["alias"]}"'
     # Like dbt, it writes the manifest of the project it parsed.
     write(os.path.join(target, "manifest.json"), manifest)
     checked = [i for i, n in manifest["nodes"].items()

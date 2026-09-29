@@ -997,7 +997,7 @@ rule that fails is the node's reason:
 | `relation_changed` | It now builds into another table or view than the recorded build did. |
 | `code_changed_since_build` | Its code (SQL, config, macros, …) differs from the recorded build's, or can't be fingerprinted. |
 | `relation_missing` | Its table or view isn't in this target's warehouse any more. |
-| `relation_unverified` | Nothing showed that its table or view is still there: the check failed, or `--no-check-relations`. |
+| `relation_unverified` | Nothing showed that its table or view is still there: the check failed, `--no-check-relations`, or the check found it somewhere other than `manifest.json` says (recompile, then export again). |
 | `built_here` | Built here by a recorded run, still there: it points at this target. |
 
 - **Options:** the usual scope (`--target`, `--environment`, `--project-dir`,

@@ -315,17 +315,36 @@ fn check_relations(
         .iter()
         .map(|id| RequestedNode::new((*id).clone(), display_name(id)))
         .collect();
-    Ok(
-        relation_facts(executor, &requested, CheckFor::Export, warnings)?.map(|mut facts| {
-            for id in unnamed {
-                facts.insert(
-                    id.clone(),
-                    RelationFact::Unverified("the manifest names no relation".to_owned()),
-                );
-            }
-            facts
-        }),
-    )
+    let Some(mut facts) = relation_facts(executor, &requested, CheckFor::Export, warnings)? else {
+        return Ok(None);
+    };
+    for id in unnamed {
+        facts.insert(
+            id.clone(),
+            RelationFact::Unverified("the manifest names no relation".to_owned()),
+        );
+    }
+    // The check parses the project afresh, so it may have found a relation other than
+    // the one `manifest.json` names and the export would write. Only that one counts.
+    let present: Vec<String> = facts
+        .iter()
+        .filter(|(_, fact)| matches!(fact, RelationFact::Present(_)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    if !present.is_empty() {
+        let checked = executor.checked_relations();
+        for id in present {
+            let why = match &checked {
+                Err(e) => e.to_string(),
+                Ok(checked) if checked.get(&id) == relation(&id).as_ref() => continue,
+                Ok(_) => "it builds into another relation than manifest.json names: \
+                          recompile, then export again"
+                    .to_owned(),
+            };
+            facts.insert(id, RelationFact::Unverified(why));
+        }
+    }
+    Ok(Some(facts))
 }
 
 /// The relation fields of each node pointing at this target.

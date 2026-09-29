@@ -343,6 +343,22 @@ fn unchecked_or_missing_relations_point_upstream() {
         "built_here"
     );
 
+    // A relation the check found somewhere other than manifest.json says can't be
+    // the one the export writes.
+    let project = project.with("FAKE_DBT_SHOW_MOVED", "model.jaffle_ods.stg_orders");
+    let result = project.export_ok(&[]);
+    let why = result["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node"] == "model.jaffle_ods.stg_orders")
+        .unwrap();
+    assert_eq!(why["reason"], "relation_unverified", "{result:#}");
+    assert!(
+        why["message"].as_str().unwrap().contains("recompile"),
+        "{why:#}"
+    );
+
     // A check that fails leaves them all pointing upstream, and says so.
     let failing = project.with("FAKE_DBT_SHOW_FAIL", "1");
     let result = failing.export_ok(&[]);
