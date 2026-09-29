@@ -166,6 +166,11 @@ impl LastOutcome {
         }
     }
 
+    /// Failures counted in a run's Failed column: nodes, and sources whose tests failed.
+    fn failures(&self) -> usize {
+        self.failed.len() + self.failed_source_tests.len()
+    }
+
     fn is_clean(&self) -> bool {
         self.failed.is_empty() && self.skipped.is_empty() && self.failed_source_tests.is_empty()
     }
@@ -551,6 +556,18 @@ pub struct LastRunView {
     pub next: Vec<CommandHint>,
     /// Where it was read from; only on loopback.
     pub file: Option<StoreLocation>,
+}
+
+impl LastRunView {
+    /// Whether anything failed: nodes, skipped nodes, or sources' tests.
+    pub fn has_failures(&self) -> bool {
+        !self.failed.is_empty() || !self.skipped.is_empty() || !self.failed_source_tests.is_empty()
+    }
+
+    /// What its Failed column counts: failed nodes and sources whose tests failed.
+    pub fn failures(&self) -> usize {
+        self.failed.len() + self.failed_source_tests.len()
+    }
 }
 
 /// A filter's choice, with how many runs it keeps.
@@ -1359,7 +1376,7 @@ impl Dashboard {
                         last.command_name.clone()
                     });
                     if let Some(outcome) = &last.outcome {
-                        row.failed = Some(outcome.failed.len());
+                        row.failed = Some(outcome.failures());
                         row.skipped = Some(outcome.skipped.len());
                         row.outcome = if outcome.is_clean() {
                             RunOutcome::Succeeded
@@ -1428,7 +1445,9 @@ impl Dashboard {
         let refs = |ids: &[String]| ids.iter().map(|id| node_ref(names, id)).collect::<Vec<_>>();
         let outcome = last.outcome.clone().unwrap_or_default();
         let mut next = Vec::new();
-        if !outcome.failed.is_empty() || !outcome.skipped.is_empty() {
+        // `retry --failed` retries failed and skipped nodes and failed source tests,
+        // and only after a build: it refuses a test run, so it isn't suggested then.
+        if !outcome.is_clean() {
             if let Some(command) = &last.retry_failed {
                 next.push(hint(
                     command,
@@ -1488,10 +1507,10 @@ impl Dashboard {
             .as_ref()
             .filter(|l| l.recorded_nothing_inferred && l.outcome_known)
             .map(|l| {
-                let outcome = if l.failed.is_empty() && l.skipped.is_empty() {
-                    "succeeded"
-                } else {
+                let outcome = if l.has_failures() {
                     "failed"
+                } else {
+                    "succeeded"
                 };
                 let date = filter
                     .date

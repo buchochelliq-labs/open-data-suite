@@ -72,7 +72,8 @@ the changelog was introduced.
   seconds per reload, and the server also reloads when the last run's file changes.
 - The last-run file beside the state database (`<state-db>.last-run.json`) is now at
   version 1.2: it also keeps the state scope the run was for and its run id, so the
-  dashboard shows a run only for its own target and ties it to its snapshot. Older
+  dashboard shows a run only for its own target and ties it to its snapshot.
+  `ods state test` now keeps how its run ended too, as `run` and `build` do. Older
   files still read (#311, ADR-0009).
 - The dashboard's Catalog and model pages (#313). `/catalog` lists every model, seed
   and snapshot with facets (resource type, layer from the model's folder, materialization,
