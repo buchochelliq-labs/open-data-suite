@@ -6,13 +6,16 @@ All notable, user-visible changes to ODS. The format follows
 defines what counts as breaking, the compatibility rules for each interface, and the
 deprecation policy.
 
-Before 1.0, a minor release may break. Every break is listed under **Breaking**, with
-what to do.
+Before 1.0, a minor release may break. **While versions are 0.0.x, every release may
+break**, even though 0.0.1 → 0.0.2 looks like a patch: it may change interfaces or
+migrate the state store. Every break is listed under **Breaking**, with what to do.
 
 ## [Unreleased]
 
-Everything so far is pre-release. The first public release, 0.1.0, will summarise the
-State MVP. Entries below record changes since the changelog was introduced.
+Everything so far is pre-release. The first public release, 0.0.1, will summarise the
+State MVP and the first dashboard screens. Releases stay 0.0.x until the whole dashboard
+design is built; 0.1.0 marks the complete dashboard. Entries below record changes since
+the changelog was introduced.
 
 ### Breaking
 - The executor contract is now version 0.3: an `ExecutionRequest` carries the sources
@@ -105,6 +108,9 @@ State MVP. Entries below record changes since the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- The release plan: the first public release is 0.0.1 (the State MVP and the first
+  dashboard screens), and 0.1.0 ships once every dashboard screen is built. `ods state`
+  help and "not implemented yet" hints now name "M1 State MVP (v0.0.1)" (#309).
 - The last-run file beside the state database (`<state-db>.last-run.json`) is now
   format 1.1: it also keeps which nodes failed or were skipped, and which sources'
   tests failed. Files written at 1.0 still read; an older ODS refuses a 1.1 file, as
