@@ -427,13 +427,13 @@ pub(super) fn project_dir(settings: &super::state_settings::StateSettings) -> Pa
         .map_or_else(|| PathBuf::from("."), |s| PathBuf::from(&s.value))
 }
 
-#[cfg(test)]
+// Symlinks are how the case arises (macOS's `/var`), and they need unix to make.
+#[cfg(all(test, unix))]
 mod tests {
     use super::ProjectFiles;
 
     /// The project reached through a symlink and its target directory through the real
     /// path (macOS's `/var` is `/private/var`) still gives the name the project uses.
-    #[cfg(unix)]
     #[test]
     fn the_target_is_named_relative_to_the_project_through_a_symlink() {
         let dir = tempfile::tempdir().expect("a temporary directory");
