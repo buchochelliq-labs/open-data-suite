@@ -3699,6 +3699,31 @@ fn a_compile_failure_is_explained_before_anything_runs() {
     insta::assert_snapshot!("compile_failure_plain", plain.trim_end());
 }
 
+/// #323 review: an error once dbt started building is never "failed before any node
+/// ran"; its journal is named instead. And `ods state test` failing before it ran
+/// reports as `state.test`.
+#[test]
+fn only_a_failure_before_running_is_reported_as_one() {
+    let crash = "Runtime Error\n  Compilation Error in model stg_payments (models/staging/stg_payments.sql)\n    'cent_to_dollars' is undefined. This can happen when calling a macro that does not exist.";
+    let project = Project::new("crash-mid-run").with("FAKE_DBT_BUILD_CRASH", crash);
+    let (code, json) = project.run(&[]);
+    assert_ne!(code, 0, "{json:#}");
+    assert!(
+        json["result"].is_null(),
+        "no before-running report: {json:#}"
+    );
+    let hint = json["diagnostics"][0]["hint"].as_str().unwrap_or_default();
+    assert!(hint.contains("ods state history --run"), "{json:#}");
+
+    let built = Project::new("test-compile-failure");
+    built.run_ok(&[]);
+    let built = built.with("FAKE_DBT_COMPILE_ERROR", crash);
+    let (code, json) = built.command("test", &[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["command"], "state.test", "{json:#}");
+    assert_eq!(json["result"]["outcome"], "failed_before_running");
+}
+
 /// #323 against real dbt and `DuckDB` (`ODS_TEST_DBT`): a column renamed upstream is
 /// explained with column lineage, and a call to an undefined macro with the manifest.
 #[test]
@@ -3749,17 +3774,22 @@ fn real_dbt_explains_a_missing_column_and_an_unknown_macro() {
         "{failure:#}"
     );
     // The command it suggests works on the project as it is now.
-    let (code, impact, _) = project.ods_in(
-        &project.dir,
-        &[
-            "lineage",
-            "impact",
-            "--column",
-            "stg_customers.first_name=removed",
-            "--target-dir",
-            "target",
-        ],
+    let command = failure["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["commands"].as_array().into_iter().flatten())
+        .map(|c| c.as_str().unwrap())
+        .find(|c| c.starts_with("ods lineage impact"))
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        command,
+        "ods lineage impact --column model.jaffle_ods.stg_customers.first_name=removed"
     );
+    let mut args: Vec<&str> = command.split(' ').skip(1).collect();
+    args.extend(["--target-dir", "target"]);
+    let (code, impact, _) = project.ods_in(&project.dir, &args);
     assert_eq!(code, 0, "{impact:#}");
 
     std::fs::write(&staging, sql).unwrap();

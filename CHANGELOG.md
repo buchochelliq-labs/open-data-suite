@@ -45,8 +45,8 @@ the changelog was introduced.
 
 ### Added
 - A failed node is explained (#323, ADR-0025): `ods state run`, `seed`, `snapshot`,
-  `build`, `test` and `ods state history --run` end with **Why it failed**, and `--json`
-  with `failures`. Each explanation has a plain-language headline, a category (e.g.
+  `build`, `test` and `ods state history --run` end with **Why it failed**, and
+  `--output json` with `failures`. Each explanation has a plain-language headline, a category (e.g.
   `database error · missing column`), how sure ODS is (`known pattern + evidence`,
   `known pattern` or `not recognised`), why ODS thinks so, from its own evidence (column
   lineage showing the column an upstream no longer produces and what it was renamed to,

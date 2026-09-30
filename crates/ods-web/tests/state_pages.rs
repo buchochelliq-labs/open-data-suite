@@ -1693,7 +1693,19 @@ mod journals {
                     RUN_7,
                     SCOPE,
                     "2026-09-29T00:08:00.000Z",
-                    &["model.customers", "model.orders", "model.customers_view"],
+                    &[
+                        "seed.raw_orders",
+                        "model.customers",
+                        "model.orders",
+                        "model.customers_view",
+                    ],
+                ),
+                // The upstream lineage reads was rebuilt in this run.
+                finished(
+                    RUN_7,
+                    "2026-09-29T00:08:00.900Z",
+                    "seed.raw_orders",
+                    success("2026-09-29T00:08:00.900Z"),
                 ),
                 node_started(
                     RUN_7,
@@ -1727,6 +1739,7 @@ mod journals {
         let explainer = Explainer::new(std::sync::Arc::new(
             ods_provider_fake::FakeErrorCatalogue::new(),
         ))
+        .with_artifacts_from(Some(RUN_7.to_owned()))
         .with_missing_columns(BTreeMap::from([(
             "model.customers".to_owned(),
             vec![MissingColumn::new(
@@ -1783,7 +1796,7 @@ mod journals {
         assert!(page.contains("now outputs <code>given_name</code>, not <code>first_name</code>"));
         assert!(
             page.contains(
-                r#"data-copy="ods lineage impact --column raw_orders.first_name=removed""#
+                r#"data-copy="ods lineage impact --column seed.raw_orders.first_name=removed""#
             )
         );
         assert!(page.contains("What the fake engine said"));

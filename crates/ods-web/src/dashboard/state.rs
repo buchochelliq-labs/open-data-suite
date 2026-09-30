@@ -1585,7 +1585,7 @@ impl Dashboard {
             &journal.summary,
             (before, after),
             &self.runs_before(&journal.summary),
-            last.then_some(ods_state::RETRY_FAILED),
+            last,
         );
         for node in nodes {
             node.explanation = by_node.get(&node.node).cloned();

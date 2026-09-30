@@ -22,7 +22,19 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
     {
       "source": "column_lineage",
       "text": "Column lineage: `raw_orders` now outputs `given_name`, not `first_name`, from the same input column.",
-      "confirms": true
+      "confirms": true,
+      "data": {
+        "kind": "missing_columns",
+        "columns": [
+          {
+            "upstream": "seed.raw_orders",
+            "column": "first_name",
+            "renamed_to": [
+              "given_name"
+            ]
+          }
+        ]
+      }
     },
     {
       "source": "run_history",
@@ -40,9 +52,9 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
       "text": "Use `given_name` in `customers`, or restore `first_name` in `raw_orders`."
     },
     {
-      "text": "Check what else reads it:",
+      "text": "See what else reads `raw_orders.first_name`:",
       "commands": [
-        "ods lineage impact --column raw_orders.first_name=removed"
+        "ods lineage impact --column seed.raw_orders.first_name=removed"
       ]
     }
   ],

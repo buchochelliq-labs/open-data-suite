@@ -194,61 +194,61 @@ const PATTERNS: &[Pattern] = &[
     p(
         "postgres-column-missing",
         Symptom::MissingColumn,
-        None,
+        Some("database error"),
         &["column ", "does not exist"],
     ),
     p(
         "postgres-relation-missing",
         Symptom::MissingRelation,
-        None,
+        Some("database error"),
         &["relation ", "does not exist"],
     ),
     p(
         "postgres-permission-denied",
         Symptom::PermissionDenied,
-        None,
+        Some("database error"),
         &["permission denied for"],
     ),
     p(
         "postgres-statement-timeout",
         Symptom::QueryTimeout,
-        None,
+        Some("database error"),
         &["canceling statement due to statement timeout"],
     ),
     p(
         "postgres-invalid-input",
         Symptom::TypeMismatch,
-        None,
+        Some("database error"),
         &["invalid input syntax for type"],
     ),
     p(
         "postgres-dependent-objects",
         Symptom::DependentObjects,
-        None,
+        Some("database error"),
         &["because other objects depend on it"],
     ),
     p(
         "postgres-password",
         Symptom::CredentialsMissing,
-        None,
+        Some("database error"),
         &["password authentication failed"],
     ),
     p(
         "postgres-unique",
         Symptom::ConstraintViolation,
-        None,
+        Some("database error"),
         &["violates unique constraint"],
     ),
     p(
         "postgres-not-null",
         Symptom::ConstraintViolation,
-        None,
+        Some("database error"),
         &["violates not-null constraint"],
     ),
     p(
         "postgres-connect",
         Symptom::WarehouseUnavailable,
-        None,
+        Some("database error"),
         &["could not connect to server"],
     ),
     // Apache Spark's error conditions and Delta Lake's error classes (Databricks).
@@ -339,18 +339,63 @@ fn category_of(kind: Option<&str>, message: &str) -> ErrorCategory {
 fn steps(found: PatternMatch) -> PatternMatch {
     match found.symptom {
         Symptom::UnknownMacro | Symptom::PackagesMissing => found.suggest(
-            Suggestion::new(Text::new().plain("Install the project's packages, then retry:"))
-                .with_command("dbt deps"),
+            Suggestion::new(Text::new().plain("Install the project's packages:"))
+                .with_command("dbt deps", &[]),
         ),
         Symptom::TemplateSyntax => found.suggest(Suggestion::new(Text::new().plain(
             "Check the Jinja around the reported line: an unclosed bracket, quote or tag.",
         ))),
         Symptom::ProfileNotFound | Symptom::CredentialsMissing => found.suggest(
             Suggestion::new(Text::new().plain("Check that dbt can connect with this profile:"))
-                .with_command("dbt debug"),
+                .with_command("dbt debug", &[]),
         ),
         _ => found,
     }
+}
+
+/// Python's built-in exceptions, the only ones an explanation names: any other name
+/// (a project's own exception class) could be made of a value (#323 review).
+const PYTHON_BUILTIN_EXCEPTIONS: &[&str] = &[
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BufferError",
+    "ConnectionError",
+    "EOFError",
+    "Exception",
+    "FileExistsError",
+    "FileNotFoundError",
+    "FloatingPointError",
+    "ImportError",
+    "IndexError",
+    "KeyError",
+    "LookupError",
+    "MemoryError",
+    "ModuleNotFoundError",
+    "NameError",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PermissionError",
+    "RecursionError",
+    "ReferenceError",
+    "RuntimeError",
+    "SyntaxError",
+    "SystemError",
+    "TimeoutError",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "ValueError",
+    "ZeroDivisionError",
+];
+
+/// The exception to name: a built-in one only.
+fn named_exception(name: Option<&str>) -> Option<String> {
+    name.filter(|n| PYTHON_BUILTIN_EXCEPTIONS.contains(n))
+        .map(str::to_owned)
 }
 
 /// Whether `kind` names a Python exception: one CamelCase word ending in `Error` or
@@ -367,7 +412,7 @@ fn is_python_exception(kind: &str) -> bool {
 fn python_exception(message: &str) -> Option<String> {
     let rest = message.strip_prefix("Python model failed: ")?;
     let name = rest.split(':').next()?.trim();
-    is_code(name).then(|| name.to_owned())
+    is_python_exception(name).then(|| name.to_owned())
 }
 
 impl ErrorCatalogue for DbtErrorCatalogue {
@@ -388,12 +433,14 @@ impl ErrorCatalogue for DbtErrorCatalogue {
         match found {
             None if python.is_some() => Classification::Recognised(steps(
                 PatternMatch::new("python-exception", Symptom::PythonException)
-                    .about(python.map(str::to_owned)),
+                    .about(named_exception(python)),
             )),
             Some(pattern) => {
                 let mut found = PatternMatch::new(pattern.id, pattern.symptom);
                 if pattern.symptom == Symptom::PythonException {
-                    found = found.about(python_exception(error.message()));
+                    found = found.about(named_exception(
+                        python_exception(error.message()).as_deref(),
+                    ));
                 }
                 Classification::Recognised(steps(found))
             }
@@ -404,7 +451,9 @@ impl ErrorCatalogue for DbtErrorCatalogue {
     }
 }
 
-/// Names a model's code may call that are not macros: Jinja's and dbt's context.
+/// Names a model's code may call that are not macros: Jinja's builtins and dbt's Jinja
+/// context, from dbt's public reference ("dbt Jinja functions") and Jinja's
+/// documentation. Sorted.
 const CONTEXT: &[&str] = &[
     "adapter",
     "api",
@@ -415,14 +464,20 @@ const CONTEXT: &[&str] = &[
     "builtins",
     "caller",
     "config",
+    "context",
     "cycler",
+    "database",
+    "database_schemas",
     "dbt",
     "dbt_version",
+    "debug",
     "dict",
     "diff_of_two_dicts",
+    "dispatch",
     "doc",
     "env_var",
     "exceptions",
+    "execute",
     "flags",
     "fromjson",
     "fromyaml",
@@ -433,6 +488,7 @@ const CONTEXT: &[&str] = &[
     "joiner",
     "lipsum",
     "list",
+    "load_relation",
     "load_result",
     "local_md5",
     "log",
@@ -446,12 +502,16 @@ const CONTEXT: &[&str] = &[
     "range",
     "ref",
     "render",
+    "results",
     "return",
     "run_query",
     "run_started_at",
     "schema",
+    "schemas",
     "selected_resources",
+    "set",
     "set_sql_header",
+    "set_strict",
     "should_full_refresh",
     "source",
     "statement",
@@ -460,12 +520,14 @@ const CONTEXT: &[&str] = &[
     "super",
     "target",
     "this",
+    "thread_id",
     "tojson",
     "toyaml",
     "try_or_compiler_error",
     "var",
     "write",
     "zip",
+    "zip_strict",
 ];
 
 /// A macro's name from its id, `macro.<package>.<name>`.
@@ -517,6 +579,9 @@ fn block_calls(body: &str) -> Vec<String> {
     let mut calls = Vec::new();
     let mut i = 0;
     let mut previous = ' ';
+    // The word before, when the character before is a space: `macro name(` defines,
+    // and `is name(` tests; neither calls a macro.
+    let mut word = String::new();
     while i < chars.len() {
         let c = chars[i];
         if c == '\'' || c == '"' {
@@ -542,10 +607,12 @@ fn block_calls(body: &str) -> Vec<String> {
                 j += 1;
             }
             let called = chars.get(j) == Some(&'(');
-            if called && previous != '.' && previous != '|' {
-                calls.push(name);
+            let keyword = previous == 'a' && matches!(word.as_str(), "macro" | "is" | "call");
+            if called && previous != '.' && previous != '|' && !keyword {
+                calls.push(name.clone());
             }
             previous = 'a';
+            word = name;
             continue;
         }
         if !c.is_whitespace() {
@@ -557,16 +624,22 @@ fn block_calls(body: &str) -> Vec<String> {
 }
 
 /// Whether `name` (possibly dotted) is defined as a macro or is in dbt's context.
+/// A dotted call (`cols.append(`, `dbt_utils.star(`) counts only when its namespace is
+/// a package that defines macros: anything else is a method on a value, which says
+/// nothing about macros.
 fn defined(
     name: &str,
     macros: &ProjectIndex,
     packaged: &std::collections::BTreeSet<String>,
+    namespaces: &std::collections::BTreeSet<&str>,
 ) -> bool {
     match name.split_once('.') {
         Some((namespace, local)) => {
-            CONTEXT.contains(&namespace) || packaged.contains(&format!("{namespace}.{local}"))
+            !namespaces.contains(namespace)
+                || local.contains('.')
+                || packaged.contains(&format!("{namespace}.{local}"))
         }
-        None => CONTEXT.contains(&name) || macros.macros.contains(name),
+        None => CONTEXT.binary_search(&name).is_ok() || macros.macros.contains(name),
     }
 }
 
@@ -583,6 +656,11 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
         .keys()
         .filter_map(|id| id.strip_prefix("macro."))
         .map(str::to_owned)
+        .collect();
+    let namespaces: std::collections::BTreeSet<&str> = manifest
+        .macros
+        .keys()
+        .filter_map(|id| id.strip_prefix("macro.")?.split('.').next())
         .collect();
     let mut index = ProjectIndex::new(names);
     for node in &manifest.nodes {
@@ -607,12 +685,13 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
             .map(calls)
             .unwrap_or_default()
             .into_iter()
-            .filter(|c| is_code(&c.name) && !defined(&c.name, &index, &packaged))
+            .filter(|c| is_code(&c.name) && !defined(&c.name, &index, &packaged, &namespaces))
             .collect();
         index = index.with_node(
             node.unique_id.clone(),
             IndexedNode::new(name)
                 .in_file(file, compiled.as_deref())
+                .in_language(node.language.as_deref())
                 .calling_undefined(undefined),
         );
     }
@@ -852,6 +931,33 @@ mod tests {
         // An adapter's kind has a space: not a Python exception.
         assert!(!is_python_exception("Binder Error"));
         assert!(!is_python_exception("Error"));
+    }
+
+    #[test]
+    fn only_macro_calls_count_not_methods_or_context() {
+        // The review's scenario: a method on a list (line 3) and a real undefined
+        // macro (line 5); and dbt context functions that aren't macros.
+        let code = "{% set cols = [] %}\n{% for c in ['a'] %}\n{% do cols.append(c) %}\n{% endfor %}\nselect {{ cent_to_dollars('x') }}, {{ s.split(',') }}\n{% set x = set_strict([1]) %}{{ zip_strict(a, b) }}{{ load_relation(this) }}\n{% macro local_one(a) %}{% endmacro %}{% if x is divisibleby(3) %}{% endif %}";
+        let mut manifest = crate::Manifest::read(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10/manifest.json"
+        )))
+        .unwrap();
+        let node = manifest
+            .nodes
+            .iter_mut()
+            .find(|n| n.unique_id == "model.jaffle_ods.stg_payments")
+            .unwrap();
+        node.raw_code = Some(code.to_owned());
+        let index = project_index(&manifest, None);
+        assert_eq!(
+            index.nodes["model.jaffle_ods.stg_payments"].undefined_calls,
+            vec![NameAt::new("cent_to_dollars", Some(5))]
+        );
+        assert!(
+            CONTEXT.windows(2).all(|w| w[0] < w[1]),
+            "sorted for binary_search"
+        );
     }
 
     #[test]

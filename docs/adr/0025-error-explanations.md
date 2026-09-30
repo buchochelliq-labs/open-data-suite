@@ -80,15 +80,24 @@ explanation, and it computes the confidence from whether a pattern matched and w
 an evidence item *confirms*. An unrecognised error gets no symptom, no confirming
 evidence and its category's neutral headline ("The warehouse rejected the query"),
 whatever the caller passes: what ODS knows is shown as context ("What ODS knows"), never
-as a cause.
+as a cause. Its detail and suggestions are the caller's (the joins below only add the
+fixed "ODS doesn't recognise this error…" sentence and generic steps for it). An
+explanation read back from JSON has its confidence derived again, so edited JSON
+can't claim more.
 
-**Text is safe by construction.** Explanation text is fixed wording, numbers and
-*code spans* (backticks in JSON) that only hold identifier-shaped text: letters,
-digits and `_ . - / $ @ : + =`, at most 200 characters; anything else reads
-`[name hidden]`. Commands hold the same characters in words separated by single spaces
-(and `&&`); any other command is dropped. The names come from ODS's own evidence (the
+**Text is narrow.** Explanation text is fixed wording, numbers and *code spans*
+(backticks in JSON) that only hold ASCII letters, digits and `_ . - /`, at most 200
+characters; anything else (so `:`, `@`, `=`, `+`, `$`: URLs with passwords,
+`key=value`) reads `[name hidden]`. A command is a fixed template of the caller's own
+(which may hold `--flag`, `=` and `&&`, never `$`) whose placeholders take arguments
+of the same narrow characters; any other command is dropped. The node id and the
+engine's name are checked the same way. The names come from ODS's own evidence (the
 project's node, column and macro names, run ids, paths), never from the engine's
-message, whose only trace is its redacted summary.
+message, whose only trace is its redacted summary. This narrows what can get in; it
+isn't a proof: a long token made only of those characters could still pass as a name,
+which is why names never come from an engine's text. Evidence items may also carry
+their facts as data (`data`: the missing columns, or the undefined macros) for machines
+(rule 4).
 
 ### The provider contract (`ods_sdk::contracts::error_catalogue`, 0.1)
 A provider with the new **`error_explain` capability** implements `ErrorCatalogue`:
@@ -104,8 +113,13 @@ pure and deterministic. The catalogue's **version** changes with any pattern, an
 explanation names the catalogue and version that made it.
 
 A provider also describes the project for explanations as a `ProjectIndex`: each node's
-source and compiled files, the macros its code calls that the project and its packages
-don't define (with their lines), and every macro the project defines.
+source and compiled files, its language, the macros its code calls that the project and
+its packages don't define (with their lines), and every macro the project defines. The
+dbt provider counts a call only when it is a plain name that isn't a macro or part of
+dbt's documented Jinja context (`ref`, `set`, `zip_strict`, `load_relation`, …), or a
+dotted name whose namespace is a package that defines macros; a method on a value
+(`cols.append(…)`) says nothing about macros. A Python exception is named only when it
+is one of Python's built-in exceptions.
 
 `ErrorSummary` gains one optional field, `line`: the line the engine reported in the
 code it ran (e.g. DuckDB's `LINE 25:`). A line number isn't a value; the SQL echo line
@@ -149,10 +163,16 @@ pattern only when it shows the same thing independently:
   produces, and the upstream's column copied from an input of that name (the rename:
   "`stg_customers` now outputs `given_name`, not `first_name`"). `ods-lineage` answers
   this (`ColumnGraph::missing_columns`); the SQL analyzer now names the columns it
-  couldn't resolve against a known table (`QueryLineage::unresolved`) instead of only
-  giving up. It never guesses: an upstream whose columns aren't known says nothing;
-- **undefined macro** ← the manifest: the macro the node calls isn't among the
-  project's macros; did-you-mean from macros within two edits;
+  couldn't resolve against a known table (`QueryLineage::unresolved`, never a column
+  alias of the select list) instead of only giving up. It never guesses: an upstream
+  whose columns aren't known says nothing. It confirms only with **exactly one**
+  candidate whose upstream was rebuilt successfully in this run, or whose committed
+  build is the code there is now; several candidates, or one from a stale upstream,
+  are listed as context;
+- **undefined macro** ← the project index: **exactly one** call in the node's code
+  isn't among the project's macros; with several, they are listed as context and
+  none is named in the headline. Did-you-mean from macros within two edits, and then
+  first, before installing packages;
 - **missing relation** ← state and run: an upstream that has never been built and
   didn't build in this run.
 
@@ -165,10 +185,12 @@ blocked, or skipped nodes it said nothing about that the plan puts downstream; a
 of them keep their last good build (rule 5).
 
 **Suggestions** are real commands only: the ones in ODS's CLI reference
-(`ods lineage impact --column MODEL.COLUMN=removed`, `ods state retry --failed`,
-`ods doctor`) and the engine's own from the provider (`dbt deps`, `dbt debug`).
-`ods lineage impact --column …=removed` now accepts a column that is already gone when
-some node still reads it, so the suggestion works after the failure.
+(`ods lineage impact --column <upstream unique id>.<column>=removed`, which resolves
+whatever the names; `ods state retry --failed`, with `--state-db` when the run used a
+state database from a flag or the environment, and only for the last run, which is
+what it retries; `ods doctor`) and the engine's own from the provider (`dbt deps`,
+`dbt debug`). `ods lineage impact --column …=removed` now accepts a column that is
+already gone when some node still reads it, so the suggestion works after the failure.
 
 ### Computed on read, never stored
 Explanations are computed when shown, from what ODS keeps anyway (the journal, the
@@ -176,9 +198,14 @@ state, the manifest, lineage), never written into the journal or the state. Olde
 are explained with the current catalogue, and a better catalogue explains them better.
 Right after a run, the plan it used is known; for `ods state history --run`, a plan is
 rebuilt from the states before and after the run (what the run changed), and the
-project as it is now provides the manifest and lineage. A command that fails before
+project as it is now provides the manifest and lineage. That evidence confirms only
+when the manifest was written by that run (dbt's invocation id is the run id); for any
+other run it is context, worded "as the project is now", since the code may have
+changed since. A command that fails before
 any node runs (e.g. `dbt compile` in the prepare step) is explained from the error dbt
-printed, found by its header, with the manifest that command wrote.
+printed, found by its header, with the manifest that command wrote. Only errors from
+that step are: once dbt started building, an error isn't shown as "nothing was built",
+and its hint names the run's journal instead.
 
 ### Surfaces
 - **Terminal:** `ods state run`, `build` and `test` show "Why it failed" for each failed

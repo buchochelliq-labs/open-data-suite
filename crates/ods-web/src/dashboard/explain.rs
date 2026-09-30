@@ -25,6 +25,11 @@ pub struct Explainer {
     index: Option<Arc<ProjectIndex>>,
     missing: Arc<BTreeMap<String, Vec<MissingColumn>>>,
     parents: Arc<BTreeMap<String, Vec<String>>>,
+    /// The engine invocation that wrote the project's artifacts: a run with that id is
+    /// the one they describe.
+    invocation: Option<String>,
+    /// The state database a retry names, when it isn't the default.
+    state_db: Option<String>,
 }
 
 impl std::fmt::Debug for Explainer {
@@ -45,6 +50,8 @@ impl Explainer {
             index: None,
             missing: Arc::default(),
             parents: Arc::default(),
+            invocation: None,
+            state_db: None,
         }
     }
 
@@ -70,15 +77,30 @@ impl Explainer {
         self
     }
 
+    /// Says which engine invocation wrote the project's artifacts (for dbt, the
+    /// manifest's): only that run's explanations are confirmed by them (#323 review).
+    #[must_use]
+    pub fn with_artifacts_from(mut self, invocation: Option<String>) -> Self {
+        self.invocation = invocation;
+        self
+    }
+
+    /// Names the state database in retry commands, when it isn't the default.
+    #[must_use]
+    pub fn with_retry_state_db(mut self, state_db: Option<String>) -> Self {
+        self.state_db = state_db;
+        self
+    }
+
     /// Explains each failed node of `run`, by node id. `before` and `after` are the
-    /// states around it, `earlier` the runs before it (newest first), and `retry` the
-    /// command that retries it, when it is the last run.
+    /// states around it, `earlier` the runs before it (newest first), and `last` whether
+    /// it is the last run, the one a retry retries.
     pub(crate) fn explain(
         &self,
         run: &RunSummary,
         (before, after): (Option<&StateSnapshot>, Option<&StateSnapshot>),
         earlier: &[RunSummary],
-        retry: Option<&str>,
+        last: bool,
     ) -> BTreeMap<String, ErrorExplanation> {
         let failed: Vec<&str> = run
             .nodes
@@ -112,7 +134,9 @@ impl Explainer {
             facts.history = earlier;
             facts.index = self.index.as_deref();
             facts.missing_columns = self.missing.get(node).map_or(&[], Vec::as_slice);
-            facts.retry = retry;
+            facts.retry = last.then(|| ods_state::Retry::new(self.state_db.as_deref()));
+            facts.project_is_run =
+                self.invocation.is_some() && self.invocation.as_deref() == run.run_id.as_deref();
             explained.insert(node.to_owned(), explain_failure(&facts));
         }
         explained
