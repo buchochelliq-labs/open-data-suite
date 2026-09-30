@@ -16,6 +16,7 @@
 //! the same [`Manifest`].
 
 mod artifacts;
+pub mod error_catalogue;
 pub mod events;
 pub mod executor;
 pub mod export;

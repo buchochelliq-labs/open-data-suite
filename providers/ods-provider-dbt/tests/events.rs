@@ -341,3 +341,62 @@ fn a_log_without_node_events_is_not_live() {
     assert!(!summary.live);
     assert_eq!(summary.run_id.as_deref(), Some(report.run_id.as_str()));
 }
+
+/// #323: real dbt 1.10 + `DuckDB` logs of two broken builds
+/// (`fixtures/dbt/jaffle-ods/capture-errors.sh`): the failed node's summary keeps the
+/// line `DuckDB` reported and is recognised; a compile that stopped the project is found
+/// in what dbt printed.
+#[test]
+fn real_failures_are_summarised_and_recognised() {
+    use ods_core::failure::Symptom;
+    use ods_provider_dbt::error_catalogue::DbtErrorCatalogue;
+    use ods_provider_dbt::events::project_failure;
+    use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue};
+
+    let log = std::fs::read_to_string(fixture("dbt-1.10-errors/missing-column.jsonl")).unwrap();
+    let nodes: Vec<RequestedNode> = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|l| l["info"]["name"] == "NodeFinished")
+        .filter_map(|l| {
+            l["data"]["node_info"]["unique_id"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .filter(|id| !is_check(id))
+        .map(|id| RequestedNode::new(id.clone(), id))
+        .collect();
+    let request = ExecutionRequest::new(nodes, ExecutionMode::Build);
+    let sink = CollectedEvents::new();
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
+    for line in log.lines() {
+        bridge.line(line);
+    }
+    let run = RunSummary::from_events(&sink.events());
+    let customers = run.get("model.jaffle_ods.customers").unwrap();
+    assert_eq!(customers.stats.status, NodeRunStatus::Error);
+    let error = customers.stats.error.as_ref().unwrap();
+    assert_eq!(error.kind(), Some("Binder Error"));
+    assert_eq!(error.line(), Some(25));
+    assert!(!error.message().contains("first_name"), "{error:?}");
+    assert!(matches!(
+        DbtErrorCatalogue.classify(error),
+        Classification::Recognised(m) if m.symptom == Symptom::MissingColumn
+    ));
+
+    // `dbt compile` stopped at the undefined macro: what people were shown holds it.
+    let log = std::fs::read_to_string(fixture("dbt-1.10-errors/unknown-macro.jsonl")).unwrap();
+    let request = ExecutionRequest::new(Vec::new(), ExecutionMode::Build);
+    let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
+    let shown: Vec<String> = log
+        .lines()
+        .filter_map(|l| bridge.line(l))
+        .map(|l| l.text)
+        .collect();
+    let failure = project_failure(&shown.join("\n")).unwrap();
+    assert_eq!(failure.node_name.as_deref(), Some("stg_payments"));
+    assert!(matches!(
+        DbtErrorCatalogue.classify(&failure.summary),
+        Classification::Recognised(m) if m.symptom == Symptom::UnknownMacro
+    ));
+}

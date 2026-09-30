@@ -288,6 +288,10 @@ pub struct ErrorSummary {
     /// Where the full message is, for people (e.g. a log file), if the executor knows.
     #[serde(default)]
     details_at: Option<String>,
+    /// The line of the code the engine ran that it reported the error at, if it did
+    /// (#323). A line number is not a value, so it is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<u32>,
 }
 
 impl ErrorSummary {
@@ -307,6 +311,7 @@ impl ErrorSummary {
             kind,
             message,
             details_at: None,
+            line: None,
         })
     }
 
@@ -323,6 +328,18 @@ impl ErrorSummary {
     pub fn with_details_at(mut self, at: &str) -> Self {
         self.details_at = redact::value_line(at, MAX_EXTRA_CHARS);
         self
+    }
+
+    /// Says which line of the code the engine ran it reported the error at.
+    #[must_use]
+    pub fn with_line(mut self, line: Option<u32>) -> Self {
+        self.line = line.filter(|l| *l > 0);
+        self
+    }
+
+    /// The line of the code the engine ran that it reported the error at, if known.
+    pub fn line(&self) -> Option<u32> {
+        self.line
     }
 
     /// The error's kind, if known.
@@ -351,6 +368,7 @@ impl ErrorSummary {
             details_at: self
                 .details_at
                 .and_then(|d| redact::value_line(&d, MAX_EXTRA_CHARS)),
+            line: self.line,
         }
     }
 }

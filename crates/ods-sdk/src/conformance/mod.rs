@@ -15,6 +15,7 @@
 //! A failing case panics with the case name.
 
 pub mod changes;
+pub mod error_catalogue;
 pub mod executor;
 pub mod lock;
 pub mod probe;

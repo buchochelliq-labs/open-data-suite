@@ -15,12 +15,15 @@
 //! - [`choose_pointers`] decides where an exported state's deferred references point:
 //!   this target's build, or the upstream's (#296, ADR-0020);
 //! - [`explain`], [`node_history`], [`diff_states`] and [`diff_project`] explain
-//!   decisions, past builds and differences (#21).
+//!   decisions, past builds and differences (#21);
+//! - [`explain_failure`] explains a failed node from a provider's classification of
+//!   its error and ODS's own evidence (#323, ADR-0025).
 //!
 //! Missing or uncertain evidence always means BUILD (AGENTS.md rule 3).
 
 mod defer;
 mod explain;
+mod failure;
 mod planner;
 mod recorder;
 mod retry;
@@ -36,6 +39,7 @@ pub use explain::{
     Change, Explanation, NodeDiff, NodeEvent, StateDiff, changes, diff_project, diff_states,
     explain, node_history,
 };
+pub use failure::{FailureFacts, FailureStage, HISTORY_RUNS, RETRY_FAILED, explain_failure};
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use retry::{HeldBack, RetrySplit, split_retry};

@@ -26,4 +26,22 @@ customer_order_rank	built	250ms	—	Thread-1 (worker)
 customers	failed	250ms	—	Thread-1 (worker)	Conversion Error: Could not convert string [value removed] to INT32
 customer_segments	skipped	—	—	Thread-1 (worker)	
 customers_snapshot_view	skipped	—	—	Thread-1 (worker)	
-segment_summary	skipped	—	—	Thread-1 (worker)
+segment_summary	skipped	—	—	Thread-1 (worker)	
+
+Why it failed
+
+failed: customers
+what: A value's type doesn't fit where it is used
+kind: database error · type mismatch
+confidence: known pattern
+
+why ODS thinks so
+  It failed after 250ms, during execution (compile succeeded).  [run stats]
+
+where: models/marts/customers.sql  reported at line 3 of the code it ran · compiled: target/compiled/jaffle_ods/models/marts/customers.sql
+impact: blocks 3 downstream nodes (customer_segments, customers_snapshot_view, segment_summary were skipped).
+
+what to try
+  1. Check the casts and comparisons near the reported line: a value doesn't have the type the query expects there.
+
+dbt said: Conversion Error: Could not convert string [value removed] to INT32  (values and SQL removed; full text: dbt's log file (logs/dbt.log in the project, unless --log-path))

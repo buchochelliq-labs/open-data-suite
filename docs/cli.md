@@ -444,7 +444,7 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 | `--target-dir DIR`, `--project-dir DIR` | where the dbt artifacts are, found as `ods state` finds them: `--target-dir`, else `DBT_TARGET_PATH`, else the configured `target_dir`, else the project's `target` (`--project-dir`, else `DBT_PROJECT_DIR`, else the configured `project_dir`, else `.`); see [State settings](#state-settings-in-odstoml). The same for `erd`, `serve` and `mcp` |
 | `--artifacts FORMAT` | `auto` (default: `manifest.json` if present, else the Information Schema), `json`, or `info-schema` (dbt v2's Parquet `target/info_schema/v1/`) |
 | `--dialect NAME` | `databricks`, `spark`, `duckdb`, `snowflake`, `bigquery`, `postgres`, `redshift` or `generic`; default: the manifest's adapter type |
-| `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable |
+| `--column MODEL.COLUMN[=KIND]` | (`impact`) a changed column; `KIND` is `modified` (default), `added` or `removed`; repeatable. A modified or removed column must exist, unless it is already removed and some model still reads it (what `ods state run` suggests after such a failure, #323) |
 | `--base DIR` | (`impact`) another build to compare with; every difference in compiled SQL becomes column changes |
 | `--run-events` | (`export`) write `COMPLETE` RunEvents instead of JobEvents, for sinks that only accept runs |
 | `--indirect-in-fields` | (`export`) also copy row-shaping inputs into every field, for consumers that ignore the facet's `dataset` array |
@@ -1141,7 +1141,8 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   error if dbt fails.
 - **Each node's result**, as it finishes, is a step line too: `ods ▸ orders built in
   4.2s, 99 rows`, `ods ▸ customers failed in 3.6s (KeyError: [value removed])`,
-  `ods ▸ segment_summary skipped`.
+  `ods ▸ segment_summary skipped`. The report explains each failure (see
+  [Why a node failed](#why-a-node-failed)).
 - **`--vars` values** never appear in what ODS prints, logs or reports: the command
   lines it logs (`-v`), the report's `dbt` and `ran` lines, and `execution.command` in
   `--json` show `--vars '[value removed]'`. dbt still gets them.
@@ -1200,6 +1201,81 @@ journal, and nothing ODS decides reads it. It holds no SQL, no `--vars` values a
 secrets: no options at all, and errors only as the redacted summary above. The 50 most
 recent journals are kept; older ones are deleted when a run starts. `ods state history
 --run <run_id>` shows a run from its journal.
+
+### Why a node failed
+
+When a node fails, the report ends with **Why it failed**: each failed node explained
+in plain language (#323, [ADR-0025](adr/0025-error-explanations.md)). `ods state run`,
+`seed`, `snapshot`, `build` and `test` show it, and so does `ods state history --run
+<run_id>` for any run whose journal is kept.
+
+```text
+failed: customers
+what: A column this model reads no longer exists upstream
+kind: database error · missing column
+confidence: known pattern + evidence
+
+customers reads first_name from stg_customers, but that model no longer produces it.
+
+why ODS thinks so
+  Column lineage: stg_customers now outputs given_name, not first_name, from the same input column.  [column lineage]
+  stg_customers changed in this run (sql) and was rebuilt first.  [fingerprints]
+  customers last built fine in run 92204c6b, before that change.  [run history]
+  It failed after 62ms, during execution (compile succeeded).  [run stats]
+
+where: models/marts/customers.sql  reported at line 25 of the code it ran · compiled: target/compiled/jaffle_ods/models/marts/customers.sql
+impact: blocks 3 downstream nodes (customer_segments, customers_snapshot_view, segment_summary were skipped). Their last good builds are kept.
+
+what to try
+  1. Use given_name in customers, or restore first_name in stg_customers.
+  2. Check what else reads it:
+    $ ods lineage impact --column stg_customers.first_name=removed
+  3. Then retry what failed:
+    $ ods state retry --failed
+
+dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  (values and SQL removed; full text: dbt's log file (logs/dbt.log in the project, unless --log-path))
+```
+
+- **What and kind:** a headline, and the category (`compilation error`, `dependency or
+  ref`, `database error`, `permission`, `timeout or lock`, `python model`, `test
+  failure`, `configuration or profile`, `internal error`), with what ODS recognised
+  (e.g. `missing column`, `unknown macro`, `missing ref`, `type mismatch`).
+- **Confidence:** `known pattern + evidence` when a pattern recognised dbt's error and
+  ODS's own evidence confirms it (column lineage for a missing column, the manifest for
+  an undefined macro); `known pattern` when nothing confirms it; `not recognised` when
+  no pattern does. An unrecognised error never gets a guessed cause: the headline only
+  says what happened ("The warehouse rejected the query"), and **what ODS knows** lists
+  facts: how long it ran and in which phase, whether its code changed since its last
+  successful build, new upstream data (with the versions), and how it did in its last
+  runs ("It failed the same way in 2 of its last 5 runs").
+- **Where:** the model's file (with the line of an undefined macro's call), and the line
+  dbt's adapter reported in the code it ran, which adapters wrap: it isn't a line of
+  the source file.
+- **What to try:** steps and commands to copy, only real ones: `ods lineage impact
+  --column MODEL.COLUMN=removed`, `ods state retry --failed`, `ods doctor`, and dbt's
+  own (`dbt deps`, `dbt debug`); "did you mean" for a macro with a close name.
+- **Impact:** the nodes it blocked, and whether their last good builds are kept.
+- **dbt said:** dbt's message, only as the redacted summary kept in the journal.
+  Nothing else in an explanation comes from dbt's text: the names in it come from
+  ODS's own evidence.
+
+When dbt fails before any node runs (e.g. `dbt compile` can't compile a model that
+calls an undefined macro), the report says `failed before any node ran: nothing was
+built or recorded` (`outcome: failed_before_running` in JSON) and explains dbt's error
+the same way.
+
+`--json` includes the explanations as `failures` (in `ods state history --run`, too):
+each has `schema_version`, `node`, `category`, `symptom` (when recognised),
+`confidence` (`known_pattern_with_evidence`, `known_pattern`, `not_recognised`),
+`pattern` (`catalogue`, `version` and `id` of the pattern that matched), `headline`,
+`detail`, `evidence` (each with `source`: `plan`, `fingerprint`, `column_lineage`,
+`manifest`, `source_versions`, `run_history` or `run_stats`; its `text`; and whether it
+`confirms` the pattern), `location` (`file`, `line`, `compiled_file`,
+`reported_line`), `suggestions` (`text`, `commands`), `impact` (`blocked`, `kept`) and
+`engine_message` (`engine`, `kind`, `message`, `details_at`). Text marks names as code
+with backticks. Explanations are computed when shown, never stored, so an older run is
+explained with the patterns ODS has now. The error summary in `run_stats` and the
+journal gains `line`, the line dbt's adapter reported.
 
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.

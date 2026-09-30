@@ -86,7 +86,8 @@ then have to break.
     `relation_existence` ([ADR-0016](0016-relation-existence-before-reuse.md)), `zero_copy_clone`,
     `atomic_replace`, `change_tracking`, `query_history`, `source_freshness`,
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry`,
-    `fencing_tokens` and `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md)).
+    `fencing_tokens`, `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md))
+    and `error_explain` ([ADR-0025](0025-error-explanations.md)).
   - Third parties extend the vocabulary with `x-<namespace>.<name>`, a validated
     `CustomCapability` that can only be built by parsing, so it can never spell a
     well-known name.

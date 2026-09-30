@@ -158,6 +158,33 @@ impl Project {
         stdout
     }
 
+    /// `ods <args> -o plain`, whatever it exits with: its exit code and stdout.
+    fn ods_plain_status(&self, args: &[&str]) -> (i32, String) {
+        let target = self.dir.join("target");
+        let db = self.db();
+        let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+            .args(args)
+            .args([
+                "--target-dir",
+                target.to_str().unwrap(),
+                "--state-db",
+                db.to_str().unwrap(),
+                "-o",
+                "plain",
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("XDG_CONFIG_HOME", &self.dir)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .current_dir(&self.dir)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    }
+
     /// Like [`ods_with_stderr`](Self::ods_with_stderr), without `--target-dir`, so
     /// ODS finds the target directory itself (#227).
     fn ods_bare(&self, args: &[&str]) -> (i32, Value, String) {
@@ -3514,4 +3541,242 @@ fn a_callers_log_level_only_filters_what_is_shown() {
         "{argv:?}"
     );
     assert!(!argv.contains(&"warn".to_owned()), "{argv:?}");
+}
+
+/// The "Why it failed" section of a plain report, up to the next notice.
+fn why_it_failed(plain: &str) -> String {
+    plain
+        .lines()
+        .skip_while(|l| !l.starts_with("Why "))
+        .take_while(|l| !l.starts_with("info:") && !l.starts_with("warning:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_owned()
+}
+
+/// A real `DuckDB` message (`capture-errors.sh`), with a secret where dbt quoted a name.
+const MISSING_COLUMN: &str = "Runtime Error in model customers (models/marts/customers.sql)\n  Binder Error: Values list \"c\" does not have a column named \"sk_live_SENTINEL_9\"\n  \n  LINE 25:     c.sk_live_SENTINEL_9,\n               ^";
+
+/// #323: a failed node is explained in the report, plain and JSON: its category, how
+/// sure ODS is, the evidence, where, what to try and what it blocked. dbt's message is
+/// kept only redacted, so the secret in it never reaches the report, the journal or the
+/// history.
+#[test]
+fn a_failed_node_is_explained_without_values() {
+    let project = Project::new("explained");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.customers");
+    let project = project
+        .with("FAKE_DBT_FAIL", "customers")
+        .with("FAKE_DBT_FAIL_MESSAGE", MISSING_COLUMN);
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert!(!json.to_string().contains("SENTINEL"), "{json:#}");
+    let result = &json["result"];
+    let (path, _) = journal_of(&project, result);
+    assert!(!std::fs::read_to_string(path).unwrap().contains("SENTINEL"));
+    let failures = result["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1, "{json:#}");
+    let failure = &failures[0];
+    assert_eq!(failure["node"], "model.jaffle_ods.customers");
+    assert_eq!(failure["category"], "database");
+    assert_eq!(failure["symptom"], "missing_column");
+    // The fake's columns don't change, so lineage confirms nothing: a known pattern.
+    assert_eq!(failure["confidence"], "known_pattern");
+    assert_eq!(failure["location"]["reported_line"], 25);
+    let run_id = result["execution"]["run_id"].as_str().unwrap().to_owned();
+    let first_run = project.history().last().unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let redact = |text: &str| {
+        text.replace(&run_id, "<run>")
+            .replace(&first_run[..8], "<first run>")
+            .replace(project.dir.to_str().unwrap(), "<project>")
+    };
+    let mut stable = failure.clone();
+    // How long the fake took varies.
+    for item in stable["evidence"].as_array_mut().unwrap() {
+        if item["source"] == "run_stats" {
+            item["text"] = Value::String("<took>".into());
+        }
+    }
+    insta::assert_snapshot!(
+        "failure_explained_json",
+        redact(&serde_json::to_string_pretty(&stable).unwrap())
+    );
+
+    // The same run, from its journal, is explained the same way (with what is known
+    // now: no plan, so no retry of this past run is suggested).
+    let (code, shown) = project.ods(&["state", "history", "--run", &run_id]);
+    assert_eq!(code, 0, "{shown:#}");
+    assert!(!shown.to_string().contains("SENTINEL"));
+    let again = &shown["result"]["failures"][0];
+    assert_eq!(again["symptom"], "missing_column");
+    assert_eq!(again["headline"], failure["headline"]);
+
+    let (code, plain) = project.ods_plain_status(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+        "--exclude-resource-type",
+        "test",
+    ]);
+    assert_eq!(code, 1, "{plain}");
+    assert!(!plain.contains("SENTINEL"), "{plain}");
+    let section: String = why_it_failed(&plain)
+        .lines()
+        .map(|l| {
+            if l.contains("It failed after") {
+                "  It failed after <took>, during execution (compile succeeded).  [run stats]"
+                    .to_owned()
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("failure_explained_plain", redact(&section));
+}
+
+/// #323: when `dbt compile` fails in the prepare step, nothing runs; the report says
+/// so and explains dbt's error from the manifest: the macro the model calls isn't
+/// defined, and one with a close name is.
+#[test]
+fn a_compile_failure_is_explained_before_anything_runs() {
+    let project = Project::new("compile-failure");
+    let code_file = project.dir.join("stg_payments.sql");
+    std::fs::write(
+        &code_file,
+        "select\n    id as payment_id,\n    order_id,\n    payment_method,\n    {{ cent_to_dollars('amount_cents') }} as amount\nfrom {{ ref('raw_payments') }}\n",
+    )
+    .unwrap();
+    let project = project
+        .with(
+            "FAKE_DBT_COMPILE_ERROR",
+            "Runtime Error\n  Compilation Error in model stg_payments (models/staging/stg_payments.sql)\n    'cent_to_dollars' is undefined. This can happen when calling a macro that does not exist. Check for typos and/or install package dependencies with \"dbt deps\".",
+        )
+        .with(
+            "FAKE_DBT_RAW_CODE",
+            &format!("stg_payments={}", code_file.display()),
+        );
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["diagnostics"][0]["code"], "ODS-E0404", "{json:#}");
+    let result = &json["result"];
+    assert_eq!(result["outcome"], "failed_before_running");
+    let failure = &result["failures"][0];
+    assert_eq!(failure["node"], "model.jaffle_ods.stg_payments");
+    assert_eq!(failure["confidence"], "known_pattern_with_evidence");
+    assert_eq!(
+        failure["headline"],
+        "The macro `cent_to_dollars` isn't defined"
+    );
+    assert_eq!(failure["location"]["line"], 5);
+    let commands: Vec<&str> = failure["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["commands"].as_array().into_iter().flatten())
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(commands, ["dbt deps"]);
+    assert!(project.history().is_empty(), "nothing was recorded");
+
+    let (code, plain) = project.ods_plain_status(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ]);
+    assert_eq!(code, 1, "{plain}");
+    insta::assert_snapshot!("compile_failure_plain", plain.trim_end());
+}
+
+/// #323 against real dbt and `DuckDB` (`ODS_TEST_DBT`): a column renamed upstream is
+/// explained with column lineage, and a call to an undefined macro with the manifest.
+#[test]
+fn real_dbt_explains_a_missing_column_and_an_unknown_macro() {
+    let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
+        eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
+        return;
+    };
+    let dbt = dbt.to_str().unwrap().to_owned();
+    let build = |project: &Project| {
+        project.ods(&[
+            "state",
+            "build",
+            "--dbt",
+            &dbt,
+            "--profiles-dir",
+            ".",
+            "--dbt-output",
+            "capture",
+        ])
+    };
+    let project = real_project();
+    let (code, json) = build(&project);
+    assert_eq!(code, 0, "{json:#}");
+    let staging = project.dir.join("models/staging/stg_customers.sql");
+    let sql = std::fs::read_to_string(&staging).unwrap();
+    std::fs::write(
+        &staging,
+        sql.replace("    first_name,", "    first_name as given_name,"),
+    )
+    .unwrap();
+    let (code, json) = build(&project);
+    assert_eq!(code, 1, "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["node"], "model.jaffle_ods.customers", "{json:#}");
+    assert_eq!(
+        failure["confidence"], "known_pattern_with_evidence",
+        "{failure:#}"
+    );
+    assert_eq!(
+        failure["evidence"][0]["text"],
+        "Column lineage: `stg_customers` now outputs `given_name`, not `first_name`, from the same input column.",
+        "{failure:#}"
+    );
+    let blocked = failure["impact"]["blocked"].as_array().unwrap();
+    assert!(
+        blocked.contains(&Value::String("model.jaffle_ods.customer_segments".into())),
+        "{failure:#}"
+    );
+    // The command it suggests works on the project as it is now.
+    let (code, impact, _) = project.ods_in(
+        &project.dir,
+        &[
+            "lineage",
+            "impact",
+            "--column",
+            "stg_customers.first_name=removed",
+            "--target-dir",
+            "target",
+        ],
+    );
+    assert_eq!(code, 0, "{impact:#}");
+
+    std::fs::write(&staging, sql).unwrap();
+    let payments = project.dir.join("models/staging/stg_payments.sql");
+    let sql = std::fs::read_to_string(&payments).unwrap();
+    std::fs::write(
+        &payments,
+        sql.replace("cents_to_dollars(", "cent_to_dollars("),
+    )
+    .unwrap();
+    let (code, json) = build(&project);
+    assert_eq!(code, 1, "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["node"], "model.jaffle_ods.stg_payments", "{json:#}");
+    assert_eq!(
+        failure["confidence"], "known_pattern_with_evidence",
+        "{failure:#}"
+    );
+    assert_eq!(failure["location"]["line"], 5, "{failure:#}");
 }

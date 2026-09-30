@@ -1,0 +1,14 @@
+{
+  "depends_on": {
+    "macros": [],
+    "nodes": [
+      "seed.jaffle_ods.raw_payments"
+    ]
+  },
+  "name": "stg_payments",
+  "original_file_path": "models/staging/stg_payments.sql",
+  "path": "staging/stg_payments.sql",
+  "raw_code": "select\n    id as payment_id,\n    order_id,\n    payment_method,\n    {{ cent_to_dollars('amount_cents') }} as amount\nfrom {{ ref('raw_payments') }}",
+  "resource_type": "model",
+  "unique_id": "model.jaffle_ods.stg_payments"
+}
