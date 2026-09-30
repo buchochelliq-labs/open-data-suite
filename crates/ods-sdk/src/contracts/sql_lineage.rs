@@ -26,7 +26,8 @@ use crate::provider::{Contract, Provider};
 /// The `sql_lineage_analyzer` contract.
 pub const SQL_LINEAGE_ANALYZER: Contract = Contract {
     name: "sql_lineage_analyzer",
-    version: SchemaVersion::new(0, 1),
+    // 0.2: an opaque result names the columns it couldn't resolve (#323).
+    version: SchemaVersion::new(0, 2),
 };
 
 /// Column names of relations the query reads, for resolving `select *` and unqualified
@@ -111,6 +112,11 @@ pub struct QueryLineage {
     /// unknown.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub join_keys: BTreeSet<JoinKey>,
+    /// Columns the query reads from a relation whose columns are known, that the
+    /// relation doesn't have (#323): why an analysis may have been opaque. Only named
+    /// when the relation is certain (e.g. `c.first_name` with `c` a known table).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unresolved: BTreeSet<ColumnRef>,
 }
 
 /// One join between two relations: `left[i] = right[i]` for every `i`. Composite
@@ -171,6 +177,7 @@ impl QueryLineage {
             opaque: true,
             diagnostics: vec![reason.into()],
             join_keys: BTreeSet::new(),
+            unresolved: BTreeSet::new(),
         }
     }
 
@@ -197,6 +204,7 @@ impl QueryLineage {
             opaque: false,
             diagnostics,
             join_keys: BTreeSet::new(),
+            unresolved: BTreeSet::new(),
         }
     }
 
@@ -204,6 +212,13 @@ impl QueryLineage {
     #[must_use]
     pub fn with_join_keys(mut self, join_keys: BTreeSet<JoinKey>) -> Self {
         self.join_keys = join_keys;
+        self
+    }
+
+    /// Records columns read that their relations don't have.
+    #[must_use]
+    pub fn with_unresolved(mut self, columns: BTreeSet<ColumnRef>) -> Self {
+        self.unresolved = columns;
         self
     }
 

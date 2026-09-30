@@ -1,9 +1,9 @@
 {
   "tape": "docs/tapes/state-retry.tape",
-  "tape_fnv1a64": "737fdf4b90d76ae2",
+  "tape_fnv1a64": "efd211ee9b5e5d8c",
   "recorder": "rs-rich-record 0.0.1",
   "rich": "rich (rs-rich-cli) 0.0.13",
-  "commit": "fa3245b6192f78cac5e5bde43c4c177d63f1d106",
+  "commit": "5faebb54827eedc46f2236f2283affbfdc2f5227",
   "screenshots": [
     "state-build-failed",
     "state-retry-failed"

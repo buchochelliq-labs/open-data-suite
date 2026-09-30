@@ -132,7 +132,15 @@ impl TestReport {
     pub(super) fn run(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let settings = StateSettings::resolve(args, ctx.config)?;
         let remembered = super::state_retry::remember(&test_command(), args, &settings);
-        let report = Self::build(args, &settings, ctx.progress)?;
+        let started = std::time::SystemTime::now();
+        let report = match Self::build(args, &settings, ctx.progress) {
+            Ok(report) => report,
+            Err(error) => {
+                return super::state_run::failed_before_running::<true>(
+                    ctx, &settings, started, error,
+                );
+            }
+        };
         // How it ended, as `run` and `build` keep it: the dashboard shows the last run
         // only for its scope, tied to its snapshot by run id (#311).
         if let Some(remembered) = remembered {
@@ -281,6 +289,7 @@ impl TestReport {
             .with_engine_args(dbt_args(args))
             .with_scope(report.scope.clone());
         let execution = report.execute(&executor, &request, &steps)?;
+        report.explain_failures(&ws, settings, latest.as_ref());
         let store = match store {
             Some(store) => store,
             None => ws.open_store()?,
@@ -295,6 +304,32 @@ impl TestReport {
 }
 
 impl TestReport {
+    /// Explains each node that failed (#323).
+    fn explain_failures(
+        &mut self,
+        ws: &Workspace,
+        settings: &StateSettings,
+        latest: Option<&ods_sdk::contracts::state_store::StoredSnapshot>,
+    ) {
+        let Some(run) = &self.observed.run_stats else {
+            return;
+        };
+        let project_dir = super::failures::project_dir(settings);
+        let evidence = super::failures::Evidence {
+            files: super::failures::ProjectFiles {
+                project_dir: &project_dir,
+                target_dir: &ws.target_dir,
+                manifest: Some(&ws.manifest),
+            },
+            plan: None,
+            before: latest.map(|l| &l.snapshot),
+            state_db: &self.state_db,
+            retry: None,
+            project_is_run: true,
+        };
+        self.observed.failures = super::failures::explain_run(run, &evidence);
+    }
+
     /// Runs the tests, keeping the run's events in its journal (#322).
     fn execute(
         &mut self,
@@ -471,6 +506,7 @@ impl Present for TestReport {
                 rows: source_rows(&self.source_tests, self.execution.as_ref()),
             });
         }
+        blocks.extend(super::failures::section(&self.observed.failures));
         if !self.left_out.is_empty() {
             blocks.push(ViewNode::Notice {
                 level: Level::Info,

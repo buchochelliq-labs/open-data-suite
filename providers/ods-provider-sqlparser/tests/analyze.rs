@@ -595,3 +595,39 @@ fn diagnostics_never_quote_the_compiled_sql() {
         l.diagnostics
     );
 }
+
+/// A column a known table doesn't have leaves the query opaque, and names it (#323).
+#[test]
+fn unresolved_columns_of_known_tables_are_named() {
+    let qualified = analyze("select c.id, c.first_name from db.customers as c");
+    assert!(qualified.opaque);
+    assert_eq!(
+        qualified.unresolved,
+        BTreeSet::from([col("customers", "first_name")])
+    );
+    let single = analyze("select count(order_ref) as n from db.orders");
+    assert!(single.opaque);
+    assert_eq!(
+        single.unresolved,
+        BTreeSet::from([col("orders", "order_ref")])
+    );
+    // Two sources: which one was meant isn't certain, so nothing is named.
+    let ambiguous =
+        analyze("select nope from db.orders as o join db.customers as c on o.customer_id = c.id");
+    assert!(ambiguous.opaque);
+    assert!(ambiguous.unresolved.is_empty());
+    // Unknown columns are trusted, not unresolved; analyzed queries name nothing.
+    assert!(
+        analyze("select o.whatever from db.unknown as o")
+            .unresolved
+            .is_empty()
+    );
+    assert!(analyze("select id from db.orders").unresolved.is_empty());
+    // A lateral column alias is no table's column (#323 review).
+    for sql in [
+        "select amount * 2 as doubled, doubled + 1 as more from db.orders",
+        "select doubled + 1 as more, amount * 2 as doubled from db.orders",
+    ] {
+        assert!(analyze(sql).unresolved.is_empty(), "{sql}");
+    }
+}

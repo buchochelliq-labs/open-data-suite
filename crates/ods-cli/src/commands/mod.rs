@@ -5,6 +5,7 @@ mod config;
 mod doctor;
 mod doctor_checks;
 mod erd;
+mod failures;
 mod lineage;
 mod mcp;
 mod mcp_data;

@@ -1051,6 +1051,9 @@ pub(super) struct RunHistoryReport {
     #[serde(skip_serializing_if = "is_zero")]
     unreadable_lines: usize,
     run: ods_sdk::contracts::run_events::RunSummary,
+    /// Each failed node, explained (#323, ADR-0025), with the evidence there is now.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    failures: Vec<ods_core::failure::ErrorExplanation>,
 }
 
 #[allow(
@@ -1082,13 +1085,97 @@ impl RunHistoryReport {
         let read = super::run_journal::read(&journal)
             .map_err(|why| CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why))?
             .ok_or_else(|| no_journal(format!("run {run_id} has no journal")))?;
+        let run = ods_sdk::contracts::run_events::RunSummary::from_events(&read.events);
+        let failures = explain_history(args, &settings, &run);
         Ok(Self {
-            run: ods_sdk::contracts::run_events::RunSummary::from_events(&read.events),
+            run,
             unreadable_lines: read.unreadable,
             journal,
             state_db,
+            failures,
         })
     }
+}
+
+/// Explains a past run's failed nodes from what is known now: the project as it is,
+/// and the state before and after the run. Best effort: without a project or a store,
+/// with less evidence.
+fn explain_history(
+    args: &ArgMatches,
+    settings: &StateSettings,
+    run: &ods_sdk::contracts::run_events::RunSummary,
+) -> Vec<ods_core::failure::ErrorExplanation> {
+    use ods_sdk::contracts::run_events::NodeRunStatus;
+    if !run
+        .nodes
+        .iter()
+        .any(|n| n.stats.status == NodeRunStatus::Error)
+    {
+        return Vec::new();
+    }
+    let state_db = settings.state_db();
+    let ws = Workspace::load(args, settings, Sources::Ignore).ok();
+    let (before, after) = ws
+        .as_ref()
+        .filter(|ws| ws.state_db.is_file())
+        .and_then(|ws| states_around(ws, run))
+        .unwrap_or_default();
+    let plan = super::failures::plan_from_states(
+        run,
+        before.as_ref(),
+        after.as_ref(),
+        ws.as_ref().map(|w| &w.project),
+    );
+    let project_dir = super::failures::project_dir(settings);
+    let target_dir = ws.as_ref().map_or_else(
+        || PathBuf::from(&settings.target_dir.value),
+        |w| w.target_dir.clone(),
+    );
+    let evidence = super::failures::Evidence {
+        files: super::failures::ProjectFiles {
+            project_dir: &project_dir,
+            target_dir: &target_dir,
+            manifest: ws.as_ref().map(|w| &w.manifest),
+        },
+        plan: Some(&plan),
+        before: before.as_ref(),
+        state_db: &state_db,
+        retry: None,
+        // The manifest describes this run's code only if this run wrote it (dbt's
+        // invocation is the run id); otherwise it is the project as it is now.
+        project_is_run: ws
+            .as_ref()
+            .and_then(|w| w.manifest.invocation_id.as_deref())
+            .is_some_and(|id| run.run_id.as_deref() == Some(id)),
+    };
+    super::failures::explain_run(run, &evidence)
+}
+
+/// The state committed before `run` started, and the one it committed, if any.
+fn states_around(
+    ws: &Workspace,
+    run: &ods_sdk::contracts::run_events::RunSummary,
+) -> Option<(Option<StateSnapshot>, Option<StateSnapshot>)> {
+    let store = ws.open_store().ok()?;
+    let summaries = block_on(store.history(&ws.scope, usize::MAX)).ok()?.ok()?;
+    let run_id = run.run_id.as_deref()?;
+    let started = run.started_at?.to_seconds();
+    let get = |id| {
+        block_on(store.get(&ws.scope, id))
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+            .map(|s| s.snapshot)
+    };
+    let after = summaries.iter().find(|s| s.run_id == run_id);
+    let before = match after {
+        Some(after) => after.parent,
+        None => summaries
+            .iter()
+            .find(|s| s.created_at <= started && s.run_id != run_id)
+            .map(|s| s.id),
+    };
+    Some((before.and_then(get), after.and_then(|a| get(a.id))))
 }
 
 impl Present for RunHistoryReport {
@@ -1139,6 +1226,7 @@ impl Present for RunHistoryReport {
             ViewNode::KeyValue(summary),
             super::run_stats::nodes_table(run),
         ];
+        blocks.extend(super::failures::section(&self.failures));
         if self.unreadable_lines > 0 {
             blocks.push(ViewNode::Notice {
                 level: Level::Warning,

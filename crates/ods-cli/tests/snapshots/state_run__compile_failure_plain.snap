@@ -1,0 +1,31 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: plain.trim_end()
+---
+State run
+
+outcome: failed before any node ran: nothing was built or recorded
+
+Why it failed
+
+failed: stg_payments
+what: The macro cent_to_dollars isn't defined
+kind: compilation error · unknown macro
+confidence: known pattern + evidence
+
+The model calls a macro that isn't defined in this project or its installed packages, so it stopped before running any SQL. This model changed nothing in the warehouse.
+
+why ODS thinks so
+  cent_to_dollars isn't among the project's macros.  [project]
+  It failed while the project was compiled, before anything ran.  [run stats]
+
+where: models/staging/stg_payments.sql:5  compiled: target/compiled/jaffle_ods/models/staging/stg_payments.sql
+
+what to try
+  1. Check the name: a macro called cents_to_dollars exists.
+  2. Install the project's packages:
+    $ dbt deps
+  3. Then run the same command again: nothing was built or recorded.
+
+dbt said: [value removed] is undefined. This can happen when calling a macro that does not exist. Check for typos and/or install package dependencies with [value removed].  Literal values and SQL removed.
+full text: dbt's log file (logs/dbt.log in the project, unless --log-path)

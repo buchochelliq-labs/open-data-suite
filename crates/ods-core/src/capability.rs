@@ -51,6 +51,10 @@ pub enum Capability {
     /// with per-node stats (#322, ADR-0024). Without it, a host still gets the run's
     /// events, rebuilt from the final report, with no timing or rows.
     RunEvents,
+    /// A provider explains its engine's errors: it has a catalogue of error patterns
+    /// that classifies a failed node's (redacted) error into ODS's neutral taxonomy
+    /// (#323, ADR-0025). Without it, every failure reads "not recognised".
+    ErrorExplain,
     /// A capability outside the well-known set, as `x-<namespace>.<name>`.
     Custom(CustomCapability),
 }
@@ -93,7 +97,7 @@ impl FromStr for CustomCapability {
 
 impl Capability {
     /// Every well-known capability, for documentation and tests.
-    pub const WELL_KNOWN: [Capability; 14] = [
+    pub const WELL_KNOWN: [Capability; 15] = [
         Capability::RelationVersions,
         Capability::RelationProbe,
         Capability::RelationExistence,
@@ -108,6 +112,7 @@ impl Capability {
         Capability::LeaseExpiry,
         Capability::FencingTokens,
         Capability::RunEvents,
+        Capability::ErrorExplain,
     ];
 
     /// The capability's stable name.
@@ -127,6 +132,7 @@ impl Capability {
             Capability::LeaseExpiry => "lease_expiry",
             Capability::FencingTokens => "fencing_tokens",
             Capability::RunEvents => "run_events",
+            Capability::ErrorExplain => "error_explain",
             Capability::Custom(custom) => custom.as_str(),
         }
     }

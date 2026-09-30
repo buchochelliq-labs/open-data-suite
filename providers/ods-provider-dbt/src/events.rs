@@ -586,17 +586,70 @@ fn is_sql_echo(line: &str) -> bool {
     })
 }
 
+/// The line number of a SQL echo line (`LINE 35: …`), if it is one.
+fn sql_echo_line(line: &str) -> Option<u32> {
+    let rest = line.strip_prefix("LINE ")?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    (digits > 0 && rest[digits..].starts_with(':'))
+        .then(|| rest[..digits].parse().ok())
+        .flatten()
+}
+
+/// What dbt says first when a Python model raises: the exception follows, as the last
+/// line of a traceback.
+const PYTHON_FAILED: &str = "Python model failed:";
+
+/// A Python model's exception, from its traceback: the last line that names an
+/// exception (`KeyError: 'segment'`), and the line of the model's code it was raised
+/// at (the last `File "…", line N, in model`).
+fn python_exception<'a>(lines: &[&'a str]) -> (Option<&'a str>, Option<u32>) {
+    let exception = lines.iter().rev().copied().find(|l| {
+        let name = l.split_once(':').map_or(*l, |(head, _)| head);
+        !name.is_empty()
+            && name.len() <= 64
+            && name.starts_with(|c: char| c.is_ascii_uppercase())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+            && (name.ends_with("Error") || name.ends_with("Exception") || name.contains("Error."))
+    });
+    let line = lines
+        .iter()
+        .rev()
+        .filter(|l| l.starts_with("File ") && l.ends_with(", in model"))
+        .find_map(|l| {
+            let (_, after) = l.rsplit_once(", line ")?;
+            after.split(',').next()?.parse().ok()
+        });
+    (exception, line)
+}
+
 /// dbt's error message, summarised. dbt starts it with a header naming the kind and the
 /// node (`Runtime Error in model orders (models/orders.sql)`) and puts the engine's own
 /// message on the next line; the summary is that line, with the header's kind when
-/// the line has none. SQL echo lines (`LINE 35: …`) are never used.
+/// the line has none. SQL echo lines (`LINE 35: …`) are never used, but their line
+/// number is kept (#323). A Python model's failure is summarised by its exception
+/// (`Python model failed: KeyError: [value removed]`) and the line it was raised at.
 pub fn error_summary(message: &str) -> Option<ErrorSummary> {
-    let mut lines = message
+    let all: Vec<&str> = message
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !is_sql_echo(l));
+        .filter(|l| !l.is_empty())
+        .collect();
+    let line = all.iter().find_map(|l| sql_echo_line(l));
+    let mut lines = all.iter().copied().filter(|l| !is_sql_echo(l));
     let first = lines.next()?;
     let summary = match (header_kind(first), lines.next()) {
+        (Some(kind), Some(detail)) if detail == PYTHON_FAILED => {
+            let (exception, at) = python_exception(&all);
+            let text = exception.map_or_else(
+                || PYTHON_FAILED.to_owned(),
+                |e| format!("{PYTHON_FAILED} {e}"),
+            );
+            ErrorSummary::from_message(&text)?
+                .with_kind(kind)
+                .with_line(at)
+        }
         (Some(kind), Some(detail)) => {
             let summary = ErrorSummary::from_message(detail)?;
             if summary.kind().is_none() {
@@ -608,7 +661,65 @@ pub fn error_summary(message: &str) -> Option<ErrorSummary> {
         (Some(kind), None) => ErrorSummary::from_message(kind)?.with_kind(kind),
         (None, _) => ErrorSummary::from_message(first)?,
     };
+    let summary = if summary.line().is_none() {
+        summary.with_line(line)
+    } else {
+        summary
+    };
     Some(summary.with_details_at(DETAILS_AT))
+}
+
+/// Where a failure that stopped the whole project (e.g. `dbt compile`, before any node
+/// ran) happened, and what it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ProjectFailure {
+    /// The node dbt named in its header, e.g. `stg_payments`, if it named one.
+    pub node_name: Option<String>,
+    /// Its resource type, e.g. `model`.
+    pub resource_type: Option<String>,
+    /// Its file, relative to the project, if dbt said.
+    pub file: Option<String>,
+    /// The error, summarised as [`error_summary`] does.
+    pub summary: ErrorSummary,
+}
+
+/// Reads the error dbt printed when a whole command failed (`Encountered an error:`
+/// and what follows, in the lines people were shown). Finds the first error header
+/// (`Compilation Error in model stg_payments (models/staging/stg_payments.sql)`), or a
+/// bare error kind line (`Compilation Error`) and the line after it. `None` if there is
+/// neither.
+pub fn project_failure(output: &str) -> Option<ProjectFailure> {
+    let lines: Vec<&str> = output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if let Some(at) = lines.iter().position(|l| header_kind(l).is_some()) {
+        let header = lines[at];
+        let kind = header_kind(header)?;
+        let rest = header[kind.len()..].strip_prefix(" in ")?;
+        let mut words = rest.splitn(3, ' ');
+        let (resource, name, path) = (words.next()?, words.next()?, words.next()?);
+        let file = path.strip_prefix('(')?.strip_suffix(')')?;
+        return Some(ProjectFailure {
+            node_name: Some(name.to_owned()),
+            resource_type: Some(resource.to_owned()),
+            file: Some(file.to_owned()),
+            summary: error_summary(&lines[at..].join("\n"))?,
+        });
+    }
+    let at = lines.iter().position(|l| HEADER_KINDS.contains(l))?;
+    let kind = lines[at];
+    let detail = lines.get(at + 1)?;
+    Some(ProjectFailure {
+        node_name: None,
+        resource_type: None,
+        file: None,
+        summary: ErrorSummary::from_message(detail)?
+            .with_kind(kind)
+            .with_details_at(DETAILS_AT),
+    })
 }
 
 #[cfg(test)]

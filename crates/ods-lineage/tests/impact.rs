@@ -584,3 +584,61 @@ fn node_edges_are_the_dag_even_where_the_sql_says_nothing() {
     assert!(segments.opaque);
     assert_eq!(segments.layer, 3, "laid out after its parent");
 }
+
+/// `stg_customers` renamed `first_name` to `given_name`; `customers` still reads it
+/// (#323).
+#[test]
+fn missing_columns_name_the_upstream_and_what_it_was_renamed_to() {
+    let stg = query(
+        vec![
+            out("customer_id", &[(col("raw_customers", "id"), ID)]),
+            out("given_name", &[(col("raw_customers", "first_name"), ID)]),
+            out("email", &[(col("raw_customers", "email"), XFORM)]),
+        ],
+        &[],
+        &["raw_customers"],
+    );
+    let customers = query(
+        vec![
+            out("customer_id", &[(col("stg_customers", "customer_id"), ID)]),
+            out("first_name", &[(col("stg_customers", "first_name"), ID)]),
+            out("x", &[(col("opaque", "anything"), ID)]),
+        ],
+        &[(col("stg_customers", "email"), IndirectKind::Filter)],
+        &["stg_customers", "opaque"],
+    );
+    let analyzer = FakeSqlLineageAnalyzer::new()
+        .with("stg_customers.sql", stg)
+        .with("customers.sql", customers)
+        .with(
+            "opaque.sql",
+            QueryLineage::opaque([rel("raw_customers")].into(), "parse error"),
+        );
+    let model = |name: &str, deps: &[&str]| {
+        LineageNode::new(name, rel(name), NodeKind::Model)
+            .with_sql(format!("{name}.sql"))
+            .with_depends_on(deps.iter().copied())
+    };
+    let project = LineageProject::new(vec![
+        LineageNode::new("raw_customers", rel("raw_customers"), NodeKind::Seed).with_columns([
+            "id",
+            "first_name",
+            "email",
+        ]),
+        model("stg_customers", &["raw_customers"]),
+        model("opaque", &["raw_customers"]),
+        model("customers", &["stg_customers", "opaque"]),
+    ]);
+    let graph = build(&project, &analyzer, &MemoryCache::default())
+        .unwrap()
+        .0;
+    let missing = graph.missing_columns("customers");
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert_eq!(missing[0].upstream, "stg_customers");
+    assert_eq!(missing[0].column, "first_name");
+    assert_eq!(missing[0].renamed_to, vec!["given_name"]);
+    // Nothing is missing where everything read is produced, or unknown.
+    assert!(graph.missing_columns("stg_customers").is_empty());
+    assert!(graph.missing_columns("opaque").is_empty());
+    assert!(graph.missing_columns("nope").is_empty());
+}

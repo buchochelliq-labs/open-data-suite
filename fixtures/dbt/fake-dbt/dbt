@@ -42,6 +42,13 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
                  many adapters don't for views [default: none]
   FAKE_DBT_FAIL_MESSAGE  the message a failing node gives, as dbt writes it (a header
                  line, then the engine's message) [default: `error`]
+  FAKE_DBT_COMPILE_ERROR  `compile` writes the manifest, then fails with this text as
+                 dbt's error (e.g. `Compilation Error in model …` and its message), as
+                 dbt does when a model calls a macro that doesn't exist (#323)
+  FAKE_DBT_BUILD_CRASH  `build` starts a node, then fails with this text as dbt's error
+                 and writes no run results, as when dbt crashes mid-run (#323)
+  FAKE_DBT_RAW_CODE  `name=file`: the manifest gives model `name` the raw code in `file`
+                 (#323)
   With `--log-format json`, it prints its output as dbt's structured events: a `Note`
   per command, and `NodeStart` and `NodeFinished` (with `run_result`) per node, at
   debug level, as dbt 1.10 prints them (#322).
@@ -359,6 +366,13 @@ def main():
         manifest["metadata"]["adapter_type"] = os.environ["FAKE_DBT_ADAPTER"]
     if os.environ.get("FAKE_DBT_SOURCES"):
         add_sources(manifest)
+    if os.environ.get("FAKE_DBT_RAW_CODE"):
+        name, path = os.environ["FAKE_DBT_RAW_CODE"].split("=", 1)
+        with open(path) as f:
+            code = f.read()
+        for node in manifest["nodes"].values():
+            if node.get("name") == name and node.get("resource_type") == "model":
+                node["raw_code"] = code
 
     if words[:1] == ["show"]:
         return show(options, manifest, target)
@@ -406,11 +420,23 @@ def main():
         run_vars = json.loads(raw_vars)
     except ValueError:
         run_vars = raw_vars
+    if words[:1] == ["compile"] and os.environ.get("FAKE_DBT_COMPILE_ERROR"):
+        # Like dbt, it stops at the first node that can't compile, before results.
+        log(json_logs, invocation, "MainEncounteredError", "error",
+            "Encountered an error:\n" + os.environ["FAKE_DBT_COMPILE_ERROR"])
+        return 2
     if words[:1] == ["compile"]:
         doc = {"metadata": metadata("run-results", 6, invocation, started),
                "results": [], "elapsed_time": 0, "args": {"which": "compile", "vars": run_vars}}
         write(os.path.join(target, "run_results.json"), doc)
         return 0
+    if words[:1] == ["build"] and os.environ.get("FAKE_DBT_BUILD_CRASH"):
+        node = next(iter(sorted(n for n in manifest["nodes"] if n.startswith("model."))))
+        log(json_logs, invocation, "NodeStart", "debug", f"Began running node {node}",
+            {"node_info": {"unique_id": node}})
+        log(json_logs, invocation, "MainEncounteredError", "error",
+            "Encountered an error:\n" + os.environ["FAKE_DBT_BUILD_CRASH"])
+        return 2
     # `run`, `seed` and `snapshot` build only their own resource type, and never tests.
     only = {"run": "model", "seed": "seed", "snapshot": "snapshot"}
     if words[:1] not in (["build"], ["test"]) and words[0] not in only:

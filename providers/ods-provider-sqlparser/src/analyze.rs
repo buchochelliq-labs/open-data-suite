@@ -81,6 +81,9 @@ struct Scope<'a> {
     windows: BTreeMap<String, WindowSpec>,
     /// Outputs defined so far, for lateral column aliases (`select a + 1 as b, b * 2`).
     aliases: Vec<Col>,
+    /// Every alias the select list names, before or after a reference (#323): a name
+    /// among them is never a table's missing column.
+    projected: Vec<String>,
     /// The named windows as written, part of every column digest at this level so a
     /// changed `window w as (…)` changes the columns that use it.
     windows_text: String,
@@ -94,6 +97,7 @@ impl<'a> Scope<'a> {
             ctes,
             windows: BTreeMap::new(),
             aliases: Vec::new(),
+            projected: Vec::new(),
             windows_text: String::new(),
             outer,
         }
@@ -168,6 +172,8 @@ struct Analyzer<'s> {
     schema: &'s dyn SchemaLookup,
     /// Joins found at any query level (CTEs and subqueries included).
     joins: std::cell::RefCell<BTreeSet<JoinKey>>,
+    /// Columns read from a known table that doesn't have them (#323).
+    unresolved: std::cell::RefCell<BTreeSet<ColumnRef>>,
 }
 
 /// Niladic keywords some dialects parse as identifiers.
@@ -265,6 +271,7 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
         dialect,
         schema,
         joins: std::cell::RefCell::default(),
+        unresolved: std::cell::RefCell::default(),
     };
     match analyzer.query(query, &BTreeMap::new(), None) {
         Ok(out) => {
@@ -285,7 +292,7 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
         }
         Err(Opaque(reason)) => {
             let reads = analyzer.relations_in(query);
-            QueryLineage::opaque(reads, reason)
+            QueryLineage::opaque(reads, reason).with_unresolved(analyzer.unresolved.take())
         }
     }
 }
@@ -579,6 +586,14 @@ impl Analyzer<'_> {
         }
 
         // Projection.
+        scope.projected = select
+            .projection
+            .iter()
+            .filter_map(|item| match item {
+                SelectItem::ExprWithAlias { alias, .. } => Some(self.dialect.ident(alias)),
+                _ => None,
+            })
+            .collect();
         let mut outputs: Vec<Col> = Vec::new();
         for item in &select.projection {
             for col in self.select_item(item, &scope, &mut out)? {
@@ -1359,9 +1374,51 @@ impl Analyzer<'_> {
         {
             return Ok(());
         }
+        self.note_unresolved(parts, scope);
         Err(Opaque(format!(
             "`{name}` could not be resolved to a column"
         )))
+    }
+
+    /// Records a column that can't be resolved when it certainly names a column of a
+    /// known table that doesn't have it: qualified by that table (`c.first_name`), or
+    /// unqualified with that table the only source in scope and no column alias of
+    /// that name at any level (`select a * 2 as d, d + 1`: `d` is no table's column).
+    fn note_unresolved(&self, parts: &[Ident], scope: &Scope<'_>) {
+        let names: Vec<String> = parts.iter().map(|p| self.dialect.ident(p)).collect();
+        let source = match names.as_slice() {
+            [] => None,
+            [name] => {
+                let mut level = Some(scope);
+                let mut aliased = false;
+                while let Some(l) = level {
+                    aliased |= l.aliases.iter().any(|a| &a.name == name)
+                        || l.projected.iter().any(|p| p == name);
+                    level = l.outer;
+                }
+                match scope.sources.as_slice() {
+                    [only] if !aliased => Some(only),
+                    _ => None,
+                }
+            }
+            [qualifier @ .., _] => Self::source_named(qualifier, scope),
+        };
+        if let (
+            Some(Source {
+                kind:
+                    SourceKind::Table {
+                        relation,
+                        columns: Some(_),
+                    },
+                ..
+            }),
+            Some(column),
+        ) = (source, names.last())
+        {
+            self.unresolved
+                .borrow_mut()
+                .insert(ColumnRef::new(relation.clone(), column));
+        }
     }
 
     /// Resolves a column reference: `col`, `source.col`, `db.table.col`, or any of
