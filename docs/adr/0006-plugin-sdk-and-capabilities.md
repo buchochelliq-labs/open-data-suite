@@ -88,7 +88,7 @@ then have to break.
     `atomic_replace`, `change_tracking`, `query_history`, `source_freshness`,
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry`,
     `fencing_tokens`, `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md))
-    and `relation_link` (§7).
+    `error_explain` ([ADR-0025](0025-error-explanations.md)) and `relation_link` (§7).
   - Third parties extend the vocabulary with `x-<namespace>.<name>`, a validated
     `CustomCapability` that can only be built by parsing, so it can never spell a
     well-known name.
@@ -188,8 +188,9 @@ format, no dependency and no crate.
   deterministic), that a missing part is never guessed, that names are encoded into
   exactly one segment each, and that an unconfigured provider says so. The fake
   (`FakeRelationLinker`) and `CatalogExplorer` both pass it.
-- **Versions:** a new contract, so no existing contract version changes, and
-  `SDK_VERSION` stays 0.2, as when `relation_probe` and `change_provider` were added.
+- **Versions:** a new contract, so no existing contract version changes, and adding it
+  doesn't bump `SDK_VERSION`, as when `relation_probe` and `change_provider` were
+  added.
 
 ## Consequences
 - **Positive:**

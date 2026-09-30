@@ -1488,6 +1488,9 @@ pub(super) struct RunObserved {
     /// The run's journal, beside the state database.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) journal: Option<PathBuf>,
+    /// Each failed node, explained (#323, ADR-0025).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) failures: Vec<ods_core::failure::ErrorExplanation>,
 }
 
 /// Runs `request` through `executor`, keeping its events in the journal beside
@@ -1503,7 +1506,14 @@ pub(super) fn execute_observed(
     let executed = block_on(executor.execute_with_events(request, &observed))?;
     let (run_stats, journal, warning) = observed.finish();
     warnings.extend(warning);
-    Ok((executed, RunObserved { run_stats, journal }))
+    Ok((
+        executed,
+        RunObserved {
+            run_stats,
+            journal,
+            failures: Vec::new(),
+        },
+    ))
 }
 
 /// A node and why, e.g. why a retry leaves it as it is.
@@ -1692,7 +1702,11 @@ impl RunReport {
         } else {
             super::state_retry::remember(&build_command(kind), args, &settings)
         };
-        let (report, record_error) = Self::build(kind, args, &settings, ctx.progress, retry)?;
+        let started = std::time::SystemTime::now();
+        let (report, record_error) = match Self::build(kind, args, &settings, ctx.progress, retry) {
+            Ok(built) => built,
+            Err(error) => return failed_before_running(ctx, &settings, started, error),
+        };
         if let Some(remembered) = remembered {
             remembered.finish(
                 report.last_outcome(),
@@ -1864,9 +1878,34 @@ impl RunReport {
             (&executor, &steps),
             (requested, checked_sources),
             (sources, table_versions.as_ref()),
-            latest.as_ref(),
+            (latest.as_ref(), &ws),
             &store,
         )
+    }
+
+    /// Explains each node that failed (#323).
+    fn explain_failures(
+        &mut self,
+        ws: &Workspace,
+        settings: &StateSettings,
+        before: Option<&StoredSnapshot>,
+    ) {
+        let Some(run) = &self.observed.run_stats else {
+            return;
+        };
+        let project_dir = super::failures::project_dir(settings);
+        let evidence = super::failures::Evidence {
+            files: super::failures::ProjectFiles {
+                project_dir: &project_dir,
+                target_dir: &ws.target_dir,
+                manifest: Some(&ws.manifest),
+            },
+            plan: Some(&self.plan),
+            before: before.map(|s| &s.snapshot),
+            state_db: &self.state_db,
+            retry: Some(ods_state::RETRY_FAILED),
+        };
+        self.observed.failures = super::failures::explain_run(run, &evidence);
     }
 
     /// Steps 3 and 4: build the requested nodes with dbt, then record the run. A
@@ -1878,7 +1917,7 @@ impl RunReport {
         (executor, steps): (&DbtExecutor, &Steps),
         (requested, checked_sources): (Vec<RequestedNode>, Vec<RequestedNode>),
         sources: (Sources, Option<&VersionReading>),
-        latest: Option<&StoredSnapshot>,
+        (latest, ws): (Option<&StoredSnapshot>, &Workspace),
         store: &SqliteStateStore,
     ) -> Result<(Self, Option<CliError>), CliError> {
         // 3. Execute.
@@ -1921,6 +1960,7 @@ impl RunReport {
             &self.planned_checks,
         );
         self.execution = Some(execution);
+        self.explain_failures(ws, settings, latest);
         Ok(match recorded {
             Ok(record) => {
                 self.outcome = if self.execution.as_ref().is_some_and(|e| e.succeeded) {
@@ -2312,8 +2352,82 @@ impl Present for RunReport {
                 rows: source_rows(&self.source_tests, self.execution.as_ref()),
             });
         }
+        blocks.extend(super::failures::section(&self.observed.failures));
         blocks.extend(self.notices());
         ViewNode::Group(blocks)
+    }
+}
+
+/// A command that failed before any node ran, with dbt's error explained (#323).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct FailedBeforeRunning {
+    /// Always `failed_before_running`.
+    outcome: &'static str,
+    /// dbt's error, explained.
+    failures: Vec<ods_core::failure::ErrorExplanation>,
+}
+
+impl Present for FailedBeforeRunning {
+    const COMMAND: &'static str = "state.run";
+
+    fn view(&self) -> ViewNode {
+        let mut blocks = vec![
+            ViewNode::Heading("State run".into()),
+            ViewNode::KeyValue(vec![(
+                "outcome".into(),
+                vec![Span::toned(
+                    "failed before any node ran: nothing was built or recorded",
+                    Tone::Error,
+                )],
+            )]),
+        ];
+        blocks.extend(super::failures::section(&self.failures));
+        ViewNode::Group(blocks)
+    }
+}
+
+/// Returns `error`, first showing an explanation of dbt's own error in it when it has
+/// one (e.g. `dbt compile` failed in the prepare step).
+pub(super) fn failed_before_running(
+    ctx: &mut Context<'_>,
+    settings: &StateSettings,
+    started: std::time::SystemTime,
+    error: CliError,
+) -> Result<(), CliError> {
+    if error.code != codes::STATE_EXECUTION {
+        return Err(error);
+    }
+    let project_dir = super::failures::project_dir(settings);
+    let target_dir = PathBuf::from(&settings.target_dir.value);
+    // Only a manifest this command wrote describes the code that failed.
+    let manifest_path = target_dir.join("manifest.json");
+    let fresh = std::fs::metadata(&manifest_path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|at| at >= started);
+    let manifest = fresh
+        .then(|| ods_provider_dbt::Manifest::read(&manifest_path).ok())
+        .flatten();
+    let evidence = super::failures::Evidence {
+        files: super::failures::ProjectFiles {
+            project_dir: &project_dir,
+            target_dir: &target_dir,
+            manifest: manifest.as_ref(),
+        },
+        plan: None,
+        before: None,
+        state_db: Path::new(""),
+        retry: None,
+    };
+    match super::failures::explain_prepare(&error.message, &evidence) {
+        Some(explanation) => ctx.emit_failed(
+            &FailedBeforeRunning {
+                outcome: "failed_before_running",
+                failures: vec![explanation],
+            },
+            error,
+        ),
+        None => Err(error),
     }
 }
 

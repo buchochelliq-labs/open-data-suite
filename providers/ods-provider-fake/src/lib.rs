@@ -7,6 +7,7 @@
 
 mod changes;
 mod clock;
+mod error_catalogue;
 mod executor;
 mod lock;
 mod observed_lineage;
@@ -16,6 +17,7 @@ mod state_store;
 
 pub use changes::{FakeChangeProvider, FakeRelationProbe};
 pub use clock::FakeClock;
+pub use error_catalogue::FakeErrorCatalogue;
 pub use executor::FakeExecutor;
 pub use lock::{FakeLockFactory, FakeLockProvider};
 pub use observed_lineage::FakeObservedLineageSource;

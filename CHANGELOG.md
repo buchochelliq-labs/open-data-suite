@@ -18,6 +18,11 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- `SDK_VERSION` is now 0.3 (#323): the executor contract is 0.5 (an `ErrorSummary` may
+  carry the `line` the engine reported), the SQL lineage analyzer contract is 0.2 (an
+  opaque `QueryLineage` names the columns it couldn't resolve, `unresolved`), and there
+  is a new `error_catalogue` contract (0.1). Out-of-process plugins must be rebuilt
+  against it.
 - `ods serve`'s dashboard JSON (`/api/shell`, `/api/home`, `/api/state/…`,
   `/api/catalog…`) is now `schema_version` 2: a run in `/api/state/runs` may have no
   snapshot (a failed run listed from its journal), so its `snapshot`, `recorded_at` and
@@ -39,6 +44,28 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- A failed node is explained (#323, ADR-0025): `ods state run`, `seed`, `snapshot`,
+  `build`, `test` and `ods state history --run` end with **Why it failed**, and `--json`
+  with `failures`. Each explanation has a plain-language headline, a category (e.g.
+  `database error · missing column`), how sure ODS is (`known pattern + evidence`,
+  `known pattern` or `not recognised`), why ODS thinks so, from its own evidence (column
+  lineage showing the column an upstream no longer produces and what it was renamed to,
+  the manifest's macros, what changed in the run, new upstream data, and earlier runs),
+  where (the file, and the line dbt's adapter reported), what to try with real commands
+  to copy (`ods lineage impact --column …=removed`, `ods state retry --failed`,
+  `dbt deps`), the nodes it blocked, and dbt's own message, redacted. An error ODS
+  doesn't recognise never gets a guessed cause: it lists what ODS knows. A command that
+  fails before any node runs (e.g. `dbt compile` can't find a macro) is explained too,
+  with outcome `failed_before_running`. Explanations are computed when shown, so older
+  runs get them.
+- An `error_explain` capability and `ErrorCatalogue` SDK contract (#323, ADR-0025):
+  providers classify a failed node's redacted error summary into ODS's neutral
+  taxonomy, with a fake and a conformance suite. The dbt provider's catalogue
+  recognises dbt's own errors (an undefined macro, a ref to a missing node, packages not
+  installed, a missing profile or target, Jinja syntax, a Python model's exception, a
+  failed test), DuckDB's (missing column, table or view, conversion, constraint,
+  dependent entries, conflicts and locks), PostgreSQL's documented messages, and Apache
+  Spark's and Delta Lake's error classes as Databricks reports them.
 - An **Open in warehouse** link for a model's relation. With a Databricks
   target and the workspace `host` configured (`[providers.<name>] kind =
   "databricks"`, or `DATABRICKS_HOST`), the dashboard's model page has an **Open in
@@ -255,6 +282,11 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- `ods lineage impact --column MODEL.COLUMN=removed` accepts a column that is already
+  gone when some model still reads it, and reports what reads it (#323).
+- A failed Python model's error summary is its exception (`Python model failed:
+  KeyError: [value removed]`) and the line it was raised at, instead of dbt's
+  `Python model failed:` alone (#323).
 - `ods state run`, `build` and `test` show dbt's output from its structured log, as
   `HH:MM:SS  message` with the time in UTC, from the level dbt would show (`info`, or
   `DBT_LOG_LEVEL`, `-- --log-level` or `-- --quiet`, which only filter what is shown:

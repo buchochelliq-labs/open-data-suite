@@ -10,10 +10,14 @@ publish.workspace = true
 
 [dependencies]
 ods-core.workspace = true
+# The run events and error catalogue contracts failure explanations read (ADR-0025).
+ods-sdk.workspace = true
 serde.workspace = true
+strsim.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+ods-provider-fake.workspace = true
 serde_json.workspace = true
 
 [lints]

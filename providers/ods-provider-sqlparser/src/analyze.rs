@@ -168,6 +168,8 @@ struct Analyzer<'s> {
     schema: &'s dyn SchemaLookup,
     /// Joins found at any query level (CTEs and subqueries included).
     joins: std::cell::RefCell<BTreeSet<JoinKey>>,
+    /// Columns read from a known table that doesn't have them (#323).
+    unresolved: std::cell::RefCell<BTreeSet<ColumnRef>>,
 }
 
 /// Niladic keywords some dialects parse as identifiers.
@@ -265,6 +267,7 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
         dialect,
         schema,
         joins: std::cell::RefCell::default(),
+        unresolved: std::cell::RefCell::default(),
     };
     match analyzer.query(query, &BTreeMap::new(), None) {
         Ok(out) => {
@@ -285,7 +288,7 @@ pub(crate) fn analyze(dialect: SqlDialect, sql: &str, schema: &dyn SchemaLookup)
         }
         Err(Opaque(reason)) => {
             let reads = analyzer.relations_in(query);
-            QueryLineage::opaque(reads, reason)
+            QueryLineage::opaque(reads, reason).with_unresolved(analyzer.unresolved.take())
         }
     }
 }
@@ -1359,6 +1362,7 @@ impl Analyzer<'_> {
         {
             return Ok(());
         }
+        self.note_unresolved(parts, scope);
         Err(Opaque(format!(
             "`{name}` could not be resolved to a column"
         )))
@@ -1366,6 +1370,37 @@ impl Analyzer<'_> {
 
     /// Resolves a column reference: `col`, `source.col`, `db.table.col`, or any of
     /// those followed by struct field names (`source.col.field`).
+    /// Records a column that can't be resolved when it certainly names a column of a
+    /// known table that doesn't have it: qualified by that table (`c.first_name`), or
+    /// unqualified with that table the only source in scope.
+    fn note_unresolved(&self, parts: &[Ident], scope: &Scope<'_>) {
+        let names: Vec<String> = parts.iter().map(|p| self.dialect.ident(p)).collect();
+        let source = match names.as_slice() {
+            [] => None,
+            [_] => match scope.sources.as_slice() {
+                [only] => Some(only),
+                _ => None,
+            },
+            [qualifier @ .., _] => Self::source_named(qualifier, scope),
+        };
+        if let (
+            Some(Source {
+                kind:
+                    SourceKind::Table {
+                        relation,
+                        columns: Some(_),
+                    },
+                ..
+            }),
+            Some(column),
+        ) = (source, names.last())
+        {
+            self.unresolved
+                .borrow_mut()
+                .insert(ColumnRef::new(relation.clone(), column));
+        }
+    }
+
     fn resolve(&self, parts: &[Ident], scope: &Scope<'_>) -> Option<Resolved> {
         let names: Vec<String> = parts.iter().map(|p| self.dialect.ident(p)).collect();
         // Prefer the longest qualifier: `a.b.c` is column `c` of source `a.b` before it is

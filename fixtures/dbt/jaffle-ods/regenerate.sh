@@ -20,6 +20,9 @@
 # keeping the lines at info level and above, `NodeStart`, `NodeFinished`,
 # `MainReportArgs`, `RunResultError` and the first `SQLQuery` that holds the sentinel,
 # with the project's path replaced by <project_root>, and target/run_results.json.
+#
+# artifacts/dbt-1.10-errors (#323), real dbt error messages for the error catalogue's
+# tests, is written by ./capture-errors.sh (see there).
 set -euo pipefail
 cd "$(dirname "$0")"
 export DBT_SEND_ANONYMOUS_USAGE_STATS=false

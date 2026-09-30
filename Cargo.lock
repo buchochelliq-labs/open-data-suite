@@ -1422,8 +1422,11 @@ name = "ods-state"
 version = "0.0.0"
 dependencies = [
  "ods-core",
+ "ods-provider-fake",
+ "ods-sdk",
  "serde",
  "serde_json",
+ "strsim",
  "thiserror",
 ]
 

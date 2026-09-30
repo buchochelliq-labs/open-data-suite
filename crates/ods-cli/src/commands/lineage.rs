@@ -1230,7 +1230,15 @@ impl ImpactReport {
             // nothing" and report every reader as safe to skip (AGENTS.md rule 3).
             // Where the node's columns aren't known at all, fall back to "its rows may
             // change", which impacts every reader.
-            if kind != ColumnChangeKind::Added && !node.columns.contains(&column) {
+            // A column already removed (#323): some node still reads it, which is what
+            // `ods state run` suggests checking after it fails.
+            let still_read = kind == ColumnChangeKind::Removed
+                && loaded
+                    .graph
+                    .unresolved_readers(&ColumnRef::new(node.relation.clone(), column.clone()))
+                    .next()
+                    .is_some();
+            if kind != ColumnChangeKind::Added && !still_read && !node.columns.contains(&column) {
                 if node.columns.is_empty() {
                     changes.push(Change::Rows {
                         relation: node.relation.clone(),

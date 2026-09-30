@@ -2,7 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ods_core::{ColumnRef, EdgeKind, RelationName};
+use ods_core::failure::MissingColumn;
+use ods_core::{ColumnRef, DirectKind, EdgeKind, RelationName};
 use ods_sdk::contracts::sql_lineage::QueryLineage;
 use serde::Serialize;
 
@@ -171,6 +172,74 @@ impl ColumnGraph {
                 .map(|(c, k)| (c.clone(), EdgeKind::Indirect(*k))),
         );
         inputs.into_iter().collect()
+    }
+
+    /// Nodes whose SQL reads `column` though its relation doesn't have it (#323), e.g.
+    /// after the column was removed upstream. Sorted.
+    pub fn unresolved_readers<'a>(
+        &'a self,
+        column: &'a ColumnRef,
+    ) -> impl Iterator<Item = &'a str> {
+        self.nodes
+            .values()
+            .filter(move |n| {
+                n.lineage
+                    .as_ref()
+                    .is_some_and(|l| l.unresolved.contains(column))
+            })
+            .map(|n| n.id.as_str())
+    }
+
+    /// Columns `node` reads from an upstream node that doesn't produce them (#323,
+    /// ADR-0025): the lineage evidence for a missing column. Only upstreams whose
+    /// columns are known and aren't opaque count, so nothing is reported on a guess.
+    /// Each carries the upstream's columns copied straight from an input column of the
+    /// same name, which it was probably renamed to. Sorted.
+    pub fn missing_columns(&self, node: &str) -> Vec<MissingColumn> {
+        let Some(lineage) = self.nodes.get(node).and_then(|n| n.lineage.as_ref()) else {
+            return Vec::new();
+        };
+        let read = lineage
+            .outputs
+            .iter()
+            .flat_map(|o| o.inputs.iter().map(|(c, _)| c))
+            .chain(lineage.row_inputs.iter().map(|(c, _)| c))
+            .chain(&lineage.unresolved);
+        let mut missing = BTreeSet::new();
+        for column in read {
+            let Some(upstream) = self.node_for(&column.relation) else {
+                continue;
+            };
+            let known = !upstream.columns.is_empty() && !upstream.is_opaque();
+            let has = |name: &str| {
+                upstream
+                    .columns
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(name))
+            };
+            if upstream.id == node || !known || has(&column.column) {
+                continue;
+            }
+            let renamed_to = upstream
+                .lineage
+                .iter()
+                .flat_map(|l| &l.outputs)
+                .filter(|o| {
+                    !o.name.eq_ignore_ascii_case(&column.column)
+                        && o.inputs.iter().any(|(input, edge)| {
+                            *edge == EdgeKind::Direct(DirectKind::Identity)
+                                && input.column.eq_ignore_ascii_case(&column.column)
+                        })
+                })
+                .map(|o| o.name.clone())
+                .collect();
+            missing.insert(MissingColumn::new(
+                upstream.id.clone(),
+                column.column.clone(),
+                renamed_to,
+            ));
+        }
+        missing.into_iter().collect()
     }
 
     /// Every column that `column` transitively depends on through `Direct` edges, i.e.

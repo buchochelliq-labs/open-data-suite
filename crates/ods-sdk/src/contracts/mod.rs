@@ -16,6 +16,7 @@
 //! | `FingerprintProvider` | #13 | planned |
 //! | [`Executor`](executor::Executor) | #23, #24 | defined (ADR-0014) |
 //! | [Run events](run_events) (`Executor::execute_with_events`) | #322 | defined (ADR-0024) |
+//! | [`ErrorCatalogue`](error_catalogue::ErrorCatalogue) | #323 | defined (ADR-0025) |
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
 //! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
 //! | [`RelationProbe`](probe::RelationProbe) | #17 | defined (ADR-0022) |
@@ -29,6 +30,7 @@
 //! | `LlmProvider` | #33 | planned |
 
 pub mod changes;
+pub mod error_catalogue;
 pub mod executor;
 pub mod lock;
 pub mod observed_lineage;

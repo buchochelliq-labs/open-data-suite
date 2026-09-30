@@ -67,6 +67,8 @@ serde_path_to_error = "0.1"
 # POSIX shell quoting of command lines shown to people.
 shlex = "2"
 sha2 = "0.10"
+# Edit distance for "did you mean" in failure explanations (#323). MIT; clap already uses it.
+strsim = "0.11"
 # Temporary files and directories (atomic writes, tests).
 tempfile = "3"
 # SQL parsing for column lineage (ADR-0008). Every 0.N release breaks the AST: pin and
