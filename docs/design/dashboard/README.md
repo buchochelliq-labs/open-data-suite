@@ -155,6 +155,15 @@ Usage are greyed as planned.
 
 - **Tabs:** overview, columns, lineage, code, State and tests.
 - **Current decision:** the Build or Reuse pill, with its reason.
+- **Open in warehouse (#329):** a header button to the relation in the warehouse's
+  own UI, labelled by the provider (*Open in Catalog Explorer ↗* on Databricks), in a
+  new tab with `rel="noopener noreferrer"`. Beside the relation, *expected location*
+  says it is where the manifest puts it, not a check that it exists. Without a link,
+  the header says why in italics (no provider for the warehouse, no host, a relation
+  that isn't fully qualified); a URL is never guessed. The lineage side panel (head and
+  General tab) and each row of a run's Nodes table (a small ↗ after the name, the
+  reason once under the table) carry the same link. The dashboard gets it as neutral
+  fields from the CLI, never from a provider.
 
 ### State: plan and why
 
@@ -281,9 +290,11 @@ Board: `boards/live-run/ErrorExplained.dc.html` (in the repository, not on the d
   - the **impact** on downstream nodes.
 - **dbt's own message** stays one click away, with literal values and SQL removed.
 - **An unrecognised error** never gets a guessed cause. The card shows what ODS knows instead.
-- **Built:** the explanations and the terminal and JSON output (`ods state run`, `build`,
-  `test` and `history --run`, [ADR-0025](../../adr/0025-error-explanations.md)).
-  "Ask the ODS agent to investigate" stays planned (M6).
+- **Built:** the explanations, the terminal and JSON output (`ods state run`, `build`,
+  `test` and `history --run`, [ADR-0025](../../adr/0025-error-explanations.md)), and the
+  card on the Run page's Nodes tab and in the Runs side panel, with Copy buttons and
+  dbt's message in a disclosure (open when the error isn't recognised). "Ask the ODS
+  agent to investigate" is shown disabled, as planned (M6).
 
 ## Dark versions
 

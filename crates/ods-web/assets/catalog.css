@@ -96,6 +96,7 @@ table.cat { width: 100%; border-collapse: collapse; font-size: 13px; table-layou
 .mh-actions { margin-left: auto; display: flex; gap: 12px; }
 .mh-meta { display: flex; gap: 28px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .mh-meta .fg, .mh-meta code { color: var(--fg); }
+.mh-meta .nolink { font-style: italic; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tabs a, .tabs .tab-planned { height: 40px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; color: var(--muted); }
 .tabs a:hover { color: var(--fg); text-decoration: none; }

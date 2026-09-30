@@ -137,6 +137,7 @@ meanings get new numbers.
 | `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`; `--log-level` overrides it. |
 | `ODS_PROFILE` | Configuration profile to use; `--profile` overrides it. |
 | `ODS__SECTION__KEY` | Sets a configuration key, e.g. `ODS__OUTPUT__WIDTH=120`. |
+| `DATABRICKS_HOST` | The Databricks workspace URL that Catalog Explorer links are built from; read before `providers.<name>.settings.host` ([ADR-0021](adr/0021-databricks-authentication.md)). |
 | `NO_COLOR` | Any non-empty value disables colour when `--color auto`. `--color always` overrides it. |
 | `TERM` | `dumb` or `unknown` disables colour (results and logs) when `--color auto`. |
 
@@ -444,7 +445,17 @@ will power the VS Code view (#107).
 
 `ods lineage graph --format` writes `json` (the documented graph contract,
 `schema_version` 1), `dot` / `dot-columns` (Graphviz), `mermaid` (Markdown, model level)
-or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUMN]`
+or `graphml` (Gephi, yEd, Neo4j).
+
+**Warehouse links** (#329): the graph JSON's nodes and `ods lineage columns --output
+json`'s models and upstreams carry `relation_url`, the relation's expected location in
+the warehouse's own UI, and `relation_url_label`, what to call it, when a link can be
+built. Otherwise they carry `relation_url_unavailable`, why not (no provider for the
+target's warehouse, no host configured, a relation that isn't fully qualified). The
+fields are additive: consumers that don't know them ignore them. A link is never proof
+the relation exists, and never carries a credential or a query string. Only Databricks
+(Unity Catalog's Catalog Explorer) has links so far; see
+[Databricks](databricks.md#open-a-model-in-catalog-explorer). With `graph` and `view`, `--focus MODEL[.COLUMN]`
 (repeatable) plus `--upstream N` / `--downstream N` keeps only the connected part.
 
 | Flag | Meaning |
@@ -634,7 +645,7 @@ ods state build        # record a run first, if you haven't
 ods serve              # then open http://127.0.0.1:8765/
 ```
 
-![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node's redacted error](assets/recordings/dashboard/runs/runs.webp)
+![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node explained](assets/recordings/dashboard/runs/runs.webp)
 
 Home shows:
 - **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
@@ -679,8 +690,8 @@ Home, it only reads, and every action is a command to copy into a terminal.
 |---|---|---|
 | Plan | `/state/plan` | every planned node with its Build or Reuse pill and reason, the counts to build and reuse, and how many reused relations were checked; `?action=build` or `reuse` filters |
 | Why | `/state/plan?node=<id>` | for one node (its percent-encoded unique id, or a name only one node has): its recorded build, which fingerprint parts changed, what it reads (parents' decisions; each source's version, strategy and origin, ADR-0022), the relation check, the decision, and the reason chain; `&view=json` shows its data |
-| Runs | `/state/runs` | every recorded run, and every run whose journal is kept, newest first (the newest 50; `ods state history` lists all): its outcome, node counts, rows and duration. Filtered by `?outcome=` (`succeeded`, `partial`, `failed`, `unfinished`, `unknown`, or `recorded` for runs without a journal), `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel, with its failed nodes' errors |
-| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node's error. An unambiguous prefix of the id (8 characters or more) works too |
+| Runs | `/state/runs` | every recorded run, and every run whose journal is kept, newest first (the newest 50; `ods state history` lists all): its outcome, node counts, rows and duration. Filtered by `?outcome=` (`succeeded`, `partial`, `failed`, `unfinished`, `unknown`, or `recorded` for runs without a journal), `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel, with its failed nodes explained ([why a node failed](#why-a-node-failed)) |
+| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node explained: headline, category, how sure ODS is, why it thinks so (or what it knows), where, what to try with Copy buttons, the impact, and dbt's redacted message one click away. An unambiguous prefix of the id (8 characters or more) works too |
 
 What the pages claim is what ODS records, and no more:
 - **The plan** is the one `ods state plan` makes, offline, made again at most every 30
@@ -787,12 +798,33 @@ Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with
   changed since run …: not recorded*; the rest read *not recorded*. Column lineage is
   matched to columns whatever their case (a warehouse catalog may fold it).
 
+**Open in warehouse** (#329): when the target's warehouse has a provider that can link
+to its own UI, the model page's header has a button to the node's relation there, e.g.
+**Open in Catalog Explorer ↗** on Databricks. It opens in a new tab
+(`rel="noopener noreferrer"`), and is labelled the relation's *expected location*: it is
+where the manifest says the relation is, and ODS hasn't checked that it exists. When
+there is no link, the header says why instead of guessing one:
+- the target's warehouse has no such provider (*no warehouse link for `duckdb`
+  targets*);
+- the workspace host isn't configured, or isn't an `https://` workspace URL;
+- the relation isn't fully qualified (Unity Catalog needs `catalog.schema.table`; a
+  two-part name gets no link, as the catalog would be a guess);
+- a name in the relation can't be read as the warehouse writes it, or is `.` or `..`
+  (a name is never repaired into another one);
+- the node builds no relation (an ephemeral model).
+
+The lineage explorer's side panel (the node's head, and the General tab) and each row
+of a run's Nodes table (`/state/runs/<run>?tab=nodes`) carry the same link; the
+Nodes table says once why there is none. [Databricks](databricks.md#open-a-model-in-catalog-explorer)
+says how to configure the host.
+
 Relationships and Usage are greyed as planned. An unknown id, or one that isn't valid
 percent-encoding, gets a 404 page; `/catalog/` redirects to `/catalog`. Without a state
 store, every node reads *never built* and its last build *never*.
 
 `/api/catalog` (with the same query) and `/api/catalog/<unique_id>` return the view
-models the pages render, at `schema_version` 2; every tab's data is in the latter.
+models the pages render, at `schema_version` 2; every tab's data is in the latter,
+including `relation_url`, `relation_url_label` and `relation_url_unavailable` (below).
 Beyond loopback they leave out file paths and error text.
 
 ## dbt State configuration
@@ -1304,6 +1336,13 @@ calls an undefined macro), the report says `failed before any node ran: nothing 
 built or recorded` (`outcome: failed_before_running` in JSON) and explains dbt's error
 the same way. An error after dbt started building isn't reported this way: its hint
 names the run's journal, which `ods state history --run` explains.
+
+`ods serve` shows the same explanations on the Run page's Nodes tab and in the Runs side
+panel (`explanation` on each failed node in `/api/state/runs/<run_id>` and
+`/api/state/runs`), with Copy buttons for the commands; on the Nodes tab the side panel
+gives each failed node's headline with a link to its row. `ods state retry --failed` is
+offered only for the last run, which is what it retries. Beyond loopback, explanations
+leave out file paths and where dbt's full message is, as the Catalog does.
 
 `--output json` includes the explanations as `failures` (in `ods state history --run`, too):
 each has `schema_version`, `node`, `category`, `symptom` (when recognised),

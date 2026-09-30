@@ -3,6 +3,8 @@
 //! - [`DeltaVersions`]: each source's Delta table version, read through any
 //!   [`RelationProbe`](ods_sdk::contracts::probe::RelationProbe), as a
 //!   [`ChangeProvider`](ods_sdk::contracts::changes::ChangeProvider) (#17, ADR-0022).
+//! - [`CatalogExplorer`]: links to a relation's page in Catalog Explorer, as a
+//!   [`RelationLinker`](ods_sdk::contracts::relation_link::RelationLinker) (#329).
 //!
 //! Reading Unity Catalog's lineage system table,
 //! [`system.access.column_lineage`](https://docs.databricks.com/aws/en/admin/system-tables/lineage),
@@ -23,9 +25,11 @@
 //!   AND event_date >= current_date() - INTERVAL 30 DAYS
 //! ```
 
+pub mod catalog_explorer;
 mod column_lineage;
 pub mod delta_versions;
 
+pub use catalog_explorer::CatalogExplorer;
 pub use column_lineage::{ExportFormat, UcColumnLineage};
 pub use delta_versions::DeltaVersions;
 

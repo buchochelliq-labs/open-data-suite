@@ -96,6 +96,7 @@ expression: pretty(&body)
   ],
   "last_run": null,
   "nodes": [],
+  "relation_links": {},
   "run": {
     "at": "2026-09-29T00:02:37Z",
     "built": 2,

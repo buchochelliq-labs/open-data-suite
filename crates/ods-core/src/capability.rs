@@ -55,6 +55,10 @@ pub enum Capability {
     /// that classifies a failed node's (redacted) error into ODS's neutral taxonomy
     /// (#323, ADR-0025). Without it, every failure reads "not recognised".
     ErrorExplain,
+    /// A relation's name can be turned into a link to where the warehouse's own UI
+    /// shows it (#329). The link is where the relation is expected to be, not proof
+    /// that it exists.
+    RelationLink,
     /// A capability outside the well-known set, as `x-<namespace>.<name>`.
     Custom(CustomCapability),
 }
@@ -97,7 +101,7 @@ impl FromStr for CustomCapability {
 
 impl Capability {
     /// Every well-known capability, for documentation and tests.
-    pub const WELL_KNOWN: [Capability; 15] = [
+    pub const WELL_KNOWN: [Capability; 16] = [
         Capability::RelationVersions,
         Capability::RelationProbe,
         Capability::RelationExistence,
@@ -113,6 +117,7 @@ impl Capability {
         Capability::FencingTokens,
         Capability::RunEvents,
         Capability::ErrorExplain,
+        Capability::RelationLink,
     ];
 
     /// The capability's stable name.
@@ -133,6 +138,7 @@ impl Capability {
             Capability::FencingTokens => "fencing_tokens",
             Capability::RunEvents => "run_events",
             Capability::ErrorExplain => "error_explain",
+            Capability::RelationLink => "relation_link",
             Capability::Custom(custom) => custom.as_str(),
         }
     }

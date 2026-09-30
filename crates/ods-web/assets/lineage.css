@@ -135,6 +135,7 @@
 .lp-title .nm { font-family: var(--mono); font-weight: 500; font-size: 16px; overflow-wrap: anywhere; min-width: 0; }
 .lp-title svg { flex-shrink: 0; }
 .lp-title a { margin-left: auto; font-size: 13px; flex-shrink: 0; }
+.lp-title a + a { margin-left: 0; }
 .lp-close { border: none; background: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 0 2px; cursor: pointer; flex-shrink: 0; }
 .lp-title .nm + .lp-close { margin-left: auto; }
 .lp-close:hover { color: var(--fg); }

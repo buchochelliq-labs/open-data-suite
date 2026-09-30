@@ -1,6 +1,6 @@
 [package]
 name = "ods-provider-databricks"
-description = "Databricks provider for OpenDataSuite: Unity Catalog observed lineage (#74) and Delta table versions (#17)."
+description = "Databricks provider for OpenDataSuite: Unity Catalog observed lineage (#74), Delta table versions (#17) and Catalog Explorer links (#329)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

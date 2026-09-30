@@ -1120,12 +1120,13 @@ fn explain_history(
         .filter(|ws| ws.state_db.is_file())
         .and_then(|ws| states_around(ws, run))
         .unwrap_or_default();
-    let plan = super::failures::plan_from_states(
-        run,
-        before.as_ref(),
-        after.as_ref(),
-        ws.as_ref().map(|w| &w.project),
-    );
+    let parents = |id: &str| {
+        ws.as_ref()
+            .and_then(|w| w.project.nodes.iter().find(|n| n.id == id))
+            .map(|n| n.parents.clone())
+            .unwrap_or_default()
+    };
+    let plan = ods_state::plan_from_states(run, before.as_ref(), after.as_ref(), &parents);
     let project_dir = super::failures::project_dir(settings);
     let target_dir = ws.as_ref().map_or_else(
         || PathBuf::from(&settings.target_dir.value),

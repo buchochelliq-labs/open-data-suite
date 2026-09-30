@@ -19,6 +19,7 @@ pub mod error_catalogue;
 pub mod executor;
 pub mod lock;
 pub mod probe;
+pub mod relation_link;
 pub mod relations;
 pub mod state_store;
 

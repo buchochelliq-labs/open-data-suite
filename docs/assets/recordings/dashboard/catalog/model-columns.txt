@@ -41,6 +41,7 @@ marts
 View lineage
 Copy link
 Relation "jaffle_ods"."main"."customers"
+No warehouse link for duckdb targets
 Last successful build snapshot 2 · <run> · <when>
 File models/marts/customers.sql
 Overview
