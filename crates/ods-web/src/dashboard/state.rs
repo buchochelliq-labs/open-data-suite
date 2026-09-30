@@ -57,6 +57,8 @@ pub struct History {
     long_run_ids: OnceLock<Vec<String>>,
     /// The runs' journals (#322), when the binary names where they are.
     journals: JournalSource,
+    /// What explains failed nodes (#323), when the binary has a catalogue.
+    explainer: Option<super::explain::Explainer>,
 }
 
 impl History {
@@ -67,7 +69,15 @@ impl History {
             last_run: None,
             long_run_ids: OnceLock::new(),
             journals: JournalSource::default(),
+            explainer: None,
         }
+    }
+
+    /// Explains the failed nodes of the runs the pages show (#323, ADR-0025).
+    #[must_use]
+    pub fn with_explainer(mut self, explainer: super::explain::Explainer) -> Self {
+        self.explainer = Some(explainer);
+        self
     }
 
     /// Reads each run's journal from `journals` (#322, ADR-0024), when a page asks:
@@ -1534,6 +1544,59 @@ impl Dashboard {
         self.journals()?.run_of(run_id)
     }
 
+    /// Runs from their journals that started before `run`, newest first: a node's
+    /// history for its explanation (#323).
+    fn runs_before(
+        &self,
+        run: &ods_sdk::contracts::run_events::RunSummary,
+    ) -> Vec<ods_sdk::contracts::run_events::RunSummary> {
+        /// How many journals are read for it.
+        const READ: usize = 20;
+        let Some(source) = self.journals() else {
+            return Vec::new();
+        };
+        let mut runs: Vec<_> = source
+            .list()
+            .iter()
+            .filter(|f| Some(&f.run_id) != run.run_id.as_ref())
+            .take(READ)
+            .filter_map(|f| source.run(f))
+            .map(|j| j.summary.clone())
+            .filter(|r| matches!((r.started_at, run.started_at), (Some(a), Some(b)) if a < b))
+            .collect();
+        runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
+        runs
+    }
+
+    /// Adds its explanation to each failed node of the run `row` (#323), when the
+    /// binary gave an explainer.
+    fn explain_nodes(&self, row: &RunRow, journal: &JournalRun, nodes: &mut [NodeStatsView]) {
+        let Some(explainer) = self.history().and_then(|h| h.explainer.as_ref()) else {
+            return;
+        };
+        let snapshots = self.snapshots();
+        let find = |id: Option<u64>| {
+            id.and_then(|id| snapshots.iter().find(|(s, _)| *s == id))
+                .map(|(_, s)| s)
+        };
+        let after = find(row.snapshot);
+        let before = find(row.replaces.or(row.kept_state));
+        // Retrying is for the last run only.
+        let last = self
+            .last_run()
+            .and_then(|l| l.run_id.as_deref())
+            .is_some_and(|id| id == row.run_id);
+        let by_node = explainer.explain(
+            &journal.summary,
+            (before, after),
+            &self.runs_before(&journal.summary),
+            last.then_some(ods_state::RETRY_FAILED),
+        );
+        for node in nodes {
+            node.explanation = by_node.get(&node.node).cloned();
+        }
+    }
+
     /// Every listed run, newest first: the snapshots' runs, each with its journal if
     /// kept, and the runs of this scope whose journal is kept but that recorded no
     /// snapshot (e.g. they failed). The last run's command goes on the run whose id it
@@ -1823,15 +1886,17 @@ impl Dashboard {
         let selected_nodes = selected
             .as_deref()
             .filter(|id| *id != "last")
-            .and_then(|id| self.journal_of(id))
-            .map(|journal| {
+            .and_then(|id| Some((self.journal_of(id)?, find_row(&runs, id)?)))
+            .map(|(journal, row)| {
                 let mut names = names.clone();
                 names.extend(self.names());
-                journal
+                let mut nodes: Vec<NodeStatsView> = journal
                     .nodes(&|id| name_in(&names, id), &|_| None, details)
                     .into_iter()
                     .filter(|n| matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped))
-                    .collect()
+                    .collect();
+                self.explain_nodes(row, &journal, &mut nodes);
+                nodes
             })
             .unwrap_or_default();
         let (total, capped) = self
@@ -1940,10 +2005,13 @@ impl Dashboard {
             .unwrap_or_default();
         let lanes = snapshot.map(|s| lanes(s, &built)).unwrap_or_default();
         let kind = |id: &str| planned.get(id).map(|(_, kind)| kind.clone());
-        let nodes: Vec<NodeStatsView> = journal
+        let mut nodes: Vec<NodeStatsView> = journal
             .as_ref()
             .map(|j| j.nodes(&|id| name_in(&names, id), &kind, details))
             .unwrap_or_default();
+        if let Some(j) = &journal {
+            self.explain_nodes(&this, j, &mut nodes);
+        }
         let stats_of = |id: &str| nodes.iter().find(|n| n.node == id);
         let mut timeline: Vec<TimelineRow> = snapshot
             .map(|s| {
@@ -1995,7 +2063,6 @@ impl Dashboard {
             };
             key(a).cmp(&key(b)).then_with(|| a.node.cmp(&b.node))
         });
-        let mut nodes = nodes;
         nodes.sort_by(|a, b| {
             (a.start_offset_ms.unwrap_or(u64::MAX), at(&a.node), &a.node).cmp(&(
                 b.start_offset_ms.unwrap_or(u64::MAX),

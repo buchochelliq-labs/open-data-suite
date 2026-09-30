@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, StateSnapshot, Timestamp};
 use serde::Serialize;
 
+pub mod explain;
 pub mod journal;
 pub mod state;
 

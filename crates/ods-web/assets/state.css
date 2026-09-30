@@ -6,6 +6,7 @@
   --err-border: #F1C7C3; --seed: #7C9A6A; --kind: #6B7B93;
   --row-warn: #FDF8EC; --pill-warn-bg: #FBEFD3; --pill-warn: #8A5A00;
   --pill-kept-bg: #F1F3F6; --pill-kept: #18202A; --pill-skip-bg: #EEF0F3; --pill-skip: #4A5462;
+  --conf-bg: #DCE8FB; --conf: #1F4FA0; --conf-unknown: #AEB6C2; --impact-bg: #F6F7F9;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -15,6 +16,7 @@
     /* Subtle row tints, as PlanDark's selection: the text keeps its contrast. */
     --row-bad: #1F181C; --row-warn: #1E1C17; --pill-warn-bg: #3A2F14; --pill-warn: #E3B341;
     --pill-kept-bg: #2A3340; --pill-kept: #E4E9EF; --pill-skip-bg: #2A2F37; --pill-skip: #C3CBD5;
+    --conf-bg: #1B2E52; --conf: #9CC0FF; --conf-unknown: #5B6474; --impact-bg: #1A1F27;
   }
 }
 .st-split { flex-grow: 1; display: flex; min-height: 0; }
@@ -285,6 +287,31 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-sw.seed { width: 7px; height: 7px; border-radius: 50%; background: var(--seed); }
 .st-sw.kind { width: 4px; height: 12px; background: var(--kind); }
 .st-dl .st-why { display: inline; margin-left: 4px; }
+
+/* ---- A failed node, explained (#323, board 9 of the live-run canvas). */
+.st-explain { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; overflow-wrap: anywhere; border: 1px solid var(--err-border); border-radius: 10px; background: var(--surface); font-size: 13px; line-height: 1.45; white-space: normal; }
+.st-explain-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.st-chip-kind { padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
+.st-conf { padding: 2px 7px; border-radius: 999px; font-size: 11px; background: var(--conf-bg); color: var(--conf); }
+.st-conf.unknown { background: transparent; border: 1px dashed var(--conf-unknown); color: var(--muted); }
+.st-explain-head { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.35; }
+.st-side .st-explain { padding: 14px; }
+.st-side .st-explain-head { font-size: 15px; }
+.st-explain-detail { margin: 0; }
+.st-explain code, .st-explain-cmd code { font-family: var(--mono); font-size: 12px; }
+.st-explain-sec { display: flex; flex-direction: column; gap: 6px; }
+.st-explain-sec .st-label { margin: 0; }
+.st-explain-sec ul, .st-explain-sec ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.st-explain-cmd { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.st-explain-cmd code { overflow-wrap: anywhere; }
+.st-explain-cmd .st-btn { margin-left: auto; flex-shrink: 0; }
+.st-agent { width: 100%; box-sizing: border-box; border-style: dashed; justify-content: flex-start; gap: 8px; background: var(--bg); color: var(--muted); font: inherit; font-size: 13px; cursor: not-allowed; }
+.st-agent .chip { margin-left: auto; font-size: 10px; padding: 1px 6px; }
+.st-explain-impact { padding: 10px 12px; background: var(--impact-bg); border-radius: 8px; }
+.st-explain-said { border-top: 1px solid var(--border); padding-top: 10px; }
+.st-explain-said summary { color: var(--accent); }
+.st-explain-said pre { margin-top: 8px; }
+.st-explain-said .st-small { display: block; margin-top: 6px; }
 
 /* "Open in warehouse" on the Run page's Nodes table (#329). */
 .st-wh { font-size: 12px; text-decoration: none; margin-left: 2px; }

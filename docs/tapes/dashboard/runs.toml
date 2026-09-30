@@ -1,4 +1,5 @@
-# Home → Runs → a partial run's Nodes tab, with the failed node's redacted error.
+# Home → Runs → a partial run's Nodes tab, with the failed node explained (#323) and its
+# redacted error one click away.
 title = "Runs: from Home to a failed node"
 theme = "light"
 
@@ -28,8 +29,8 @@ caption = "Each node's result, time taken, rows, thread and why it ran"
 pause = 3000
 
 [[step]]
-hover = "text=KeyError >> nth=0"
-caption = "The error is dbt's first line, with quoted values and SQL removed"
-expect = ["[value removed]"]
-pause = 4000
+click = "details.st-explain-said > summary >> nth=0"
+caption = "The failed node, explained: what went wrong, how sure ODS is, what to try, and dbt's own words with values removed"
+expect = ["known pattern", "What to try", "[value removed]"]
+pause = 4500
 still = "run-nodes"
