@@ -134,6 +134,7 @@ model
 customer_order_rank
 model
 	kept	not in this run: kept the build of <run>
+No warehouse link for duckdb targets
 Run details
 Command
 not recorded
