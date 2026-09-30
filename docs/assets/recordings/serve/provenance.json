@@ -1,0 +1,11 @@
+{
+  "tape": "docs/tapes/serve.tape",
+  "tape_fnv1a64": "f99b10571ed177b3",
+  "recorder": "rs-rich-record 0.0.1",
+  "rich": "rich (rs-rich-cli) 0.0.13",
+  "commit": "fa3245b6192f78cac5e5bde43c4c177d63f1d106",
+  "screenshots": [
+    "serve"
+  ],
+  "note": "Every frame is real output of the program under test on a PTY."
+}

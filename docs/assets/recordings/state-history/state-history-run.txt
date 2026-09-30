@@ -1,0 +1,40 @@
+❯ ods state history
+State history of jaffle_ods/default
+
+┏─┳─┳─┳─┳─┳─┳─┓
+┃ snapshot ┃ after ┃ recorded ┃ run ┃ nodes ┃ took ┃ rows ┃
+┡─╇─╇─╇─╇─╇─╇─┩
+│ 2 │ 1 │ <time> │ <run-id> │ 13 │ <took> │ at least 298 (5 nodes didn't report rows) │
+│ 1 │ - │ <time> │ <run-id> │ 13 │ <took> │ at least 610 (7 nodes didn't report rows) │
+└─┴─┴─┴─┴─┴─┴─┘
+❯ ods state history --run $run
+Run
+
+run <run-id>
+scope jaffle_ods/default
+started <time>
+outcome succeeded
+totals <took> · 8 built
+rows at least 298 (5 nodes didn't report rows)
+stats reported as it ran
+journal .ods/state.db.runs/<run-id>.jsonl
+
+┏─┳─┳─┳─┳─┳─┓
+┃ node ┃ result ┃ took ┃ rows ┃ thread ┃ detail ┃
+┡─╇─╇─╇─╇─╇─┩
+│ stg_orders │ built │ <took> │ 99 │ Thread-1 (worker) │ tests: 2 passed │
+│ order_events │ built │ <took> │ — │ Thread-1 (worker) │ │
+│ orders │ built │ <took> │ 99 │ Thread-1 (worker) │ tests: 4 passed │
+│ customer_order_rank │ built │ <took> │ — │ Thread-1 (worker) │ tests: 2 passed │
+│ customers │ built │ <took> │ 100 │ Thread-1 (worker) │ tests: 3 passed │
+│ customer_segments │ built │ <took> │ — │ Thread-1 (worker) │ │
+│ customers_snapshot_view │ built │ <took> │ — │ Thread-1 (worker) │ │
+│ segment_summary │ built │ <took> │ — │ Thread-1 (worker) │ │
+└─┴─┴─┴─┴─┴─┘
+❯
+
+
+
+
+
+
