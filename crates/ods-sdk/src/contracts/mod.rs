@@ -19,6 +19,7 @@
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
 //! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
 //! | [`RelationProbe`](probe::RelationProbe) | #17 | defined (ADR-0022) |
+//! | [`RelationLinker`](relation_link::RelationLinker) | #329 | defined (ADR-0006 §7) |
 //! | `CloneProvider` | #29 | planned |
 //! | `PolicyProvider` | #9 | planned |
 //! | `EventSink` | #8 | planned |
@@ -32,6 +33,7 @@ pub mod executor;
 pub mod lock;
 pub mod observed_lineage;
 pub mod probe;
+pub mod relation_link;
 pub mod relations;
 pub mod run_events;
 pub mod sql_lineage;

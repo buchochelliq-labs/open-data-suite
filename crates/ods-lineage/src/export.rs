@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 
 use ods_core::{ColumnRef, Confidence, EdgeKind};
+use ods_sdk::contracts::relation_link::RelationLinkFields;
 use serde::Serialize;
 
 use crate::graph::ColumnGraph;
@@ -62,6 +63,12 @@ pub struct GraphNode {
     pub diagnostics: Vec<String>,
     /// Dependency depth (0 = no upstream in the graph), for layered layouts.
     pub layer: usize,
+    /// Where the relation is expected to be in the warehouse's own UI, or why there is
+    /// no link (#329): `relation_url`, `relation_url_label`,
+    /// `relation_url_unavailable`. Empty unless the binary fills it in, which only it
+    /// can: links need the target's provider and its configuration.
+    #[serde(flatten)]
+    pub relation_link: RelationLinkFields,
 }
 
 /// A node-level edge (the node reads the other): an edge of the DAG, never a
@@ -233,6 +240,7 @@ impl ColumnGraph {
                     .map(|l| l.diagnostics.clone())
                     .unwrap_or_default(),
                 layer: layers.get(n.id.as_str()).copied().unwrap_or(0),
+                relation_link: RelationLinkFields::default(),
             })
             .collect();
         GraphDocument {

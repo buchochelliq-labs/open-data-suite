@@ -51,6 +51,10 @@ pub enum Capability {
     /// with per-node stats (#322, ADR-0024). Without it, a host still gets the run's
     /// events, rebuilt from the final report, with no timing or rows.
     RunEvents,
+    /// A relation's name can be turned into a link to where the warehouse's own UI
+    /// shows it (#329). The link is where the relation is expected to be, not proof
+    /// that it exists.
+    RelationLink,
     /// A capability outside the well-known set, as `x-<namespace>.<name>`.
     Custom(CustomCapability),
 }
@@ -93,7 +97,7 @@ impl FromStr for CustomCapability {
 
 impl Capability {
     /// Every well-known capability, for documentation and tests.
-    pub const WELL_KNOWN: [Capability; 14] = [
+    pub const WELL_KNOWN: [Capability; 15] = [
         Capability::RelationVersions,
         Capability::RelationProbe,
         Capability::RelationExistence,
@@ -108,6 +112,7 @@ impl Capability {
         Capability::LeaseExpiry,
         Capability::FencingTokens,
         Capability::RunEvents,
+        Capability::RelationLink,
     ];
 
     /// The capability's stable name.
@@ -127,6 +132,7 @@ impl Capability {
             Capability::LeaseExpiry => "lease_expiry",
             Capability::FencingTokens => "fencing_tokens",
             Capability::RunEvents => "run_events",
+            Capability::RelationLink => "relation_link",
             Capability::Custom(custom) => custom.as_str(),
         }
     }

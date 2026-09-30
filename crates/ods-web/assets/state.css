@@ -285,3 +285,7 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-sw.seed { width: 7px; height: 7px; border-radius: 50%; background: var(--seed); }
 .st-sw.kind { width: 4px; height: 12px; background: var(--kind); }
 .st-dl .st-why { display: inline; margin-left: 4px; }
+
+/* "Open in warehouse" on the Run page's Nodes table (#329). */
+.st-wh { font-size: 12px; text-decoration: none; margin-left: 2px; }
+.st-links-note { margin: 8px 0 0; }

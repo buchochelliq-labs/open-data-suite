@@ -83,10 +83,12 @@ then have to break.
 ### 3. Capabilities (#3)
 - **The vocabulary lives in `ods-core`**, per ADR-0001.
   - Well-known capabilities are enum variants: `relation_versions`,
+    `relation_probe` ([ADR-0022](0022-delta-table-versions-as-source-evidence.md)),
     `relation_existence` ([ADR-0016](0016-relation-existence-before-reuse.md)), `zero_copy_clone`,
     `atomic_replace`, `change_tracking`, `query_history`, `source_freshness`,
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry`,
-    `fencing_tokens` and `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md)).
+    `fencing_tokens`, `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md))
+    and `relation_link` (§7).
   - Third parties extend the vocabulary with `x-<namespace>.<name>`, a validated
     `CustomCapability` that can only be built by parsing, so it can never spell a
     well-known name.
@@ -138,6 +140,57 @@ retryable one) and `Other`. Messages must never contain secret values (rule 9).
 - In-process providers are compiled against the SDK, so the check matters most for
   out-of-process plugins (ADR-0004 §6). It is enforced at registration regardless.
 
+### 7. Relation links (#329)
+*Amended 2026-09-30.* The dashboard and the CLI link a node's relation to the
+warehouse's own UI (for Unity Catalog, Catalog Explorer). This is a small, pure
+contract, so it is recorded here rather than in an ADR of its own: it adds no persisted
+format, no dependency and no crate.
+
+- **Capability** `relation_link`: the provider can turn a relation's name into a link.
+- **Contract** `relation_linker` 0.1 (`ods-sdk/src/contracts/relation_link.rs`):
+  `RelationLinker::link(relation) -> Result<RelationLink { url, label }, NoRelationLink>`.
+  - **Synchronous**, unlike the other contracts: it only formats a URL from
+    configuration, with no I/O (ADR-0002: async only at I/O boundaries).
+  - The relation is passed as the project's artifacts render it (quoted as the
+    warehouse quotes identifiers), so each provider parses its own dialect.
+  - **Conservative (rule 3):** a link is where the manifest says the relation is, never
+    proof that it exists. When no link can be built the provider says why
+    (`unsupported`, `not_configured`, `invalid_setting`, `not_qualified`,
+    `no_relation`), and never guesses one (e.g. a default catalog for a two-part name).
+  - **Private (rule 9):** a link is `https://` only, with no user part, query string or
+    fragment; each name is percent-encoded. The host is configuration, not a secret.
+  - The **label** comes from the provider ("Open in Catalog Explorer"), so hosts never
+    write a warehouse's name.
+- **Where it is used:** only the CLI maps the target's adapter to a linker, checks the
+  capability with `choose` (falling back to no link), and fills neutral
+  `RelationLinkFields` (`relation_url`, `relation_url_label`,
+  `relation_url_unavailable`) into the lineage document, the lineage JSON and
+  `ods-web`'s Catalog input. `ods-web` renders them and never imports a provider
+  (ADR-0001, ADR-0009).
+- **Providers:** `ods-provider-databricks::CatalogExplorer` builds
+  `https://<host>/explore/data/<catalog>/<schema>/<table>` from the configured `host`
+  (ADR-0021 §3; `DATABRICKS_HOST` first). The path is the one Databricks' own
+  documentation uses for a table's page (the `databricksWorkspaceUrl` in [access-request
+  notifications](https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/access-request-destinations#access-request-examples)).
+  Those links also carry `?o=<workspace id>`, which is left out: a query string is never
+  put in a link, and a workspace's own host already selects it. Whether a shared host
+  that serves several workspaces needs `?o=` wasn't verified against a live workspace.
+- **Alternatives considered:**
+  - *A method on an existing contract* (`RelationInspector`, `RelationProbe`): they are
+    async and implemented by executors (the dbt executor), which don't know the
+    workspace's UI; a linker needs only configuration. Rejected.
+  - *A URL template in configuration* (`relation_url = "https://…/{catalog}/…"`): no
+    provider code at all, but every user would have to know the UI's URL scheme, and
+    quoting and encoding would be left to a template. Kept as a possible later
+    addition for warehouses without a provider.
+- **Conformance:** `conformance::relation_link` checks the capability, a qualified
+  relation's link (https, no user part, query or fragment, non-empty label,
+  deterministic), that a missing part is never guessed, that names are encoded into
+  exactly one segment each, and that an unconfigured provider says so. The fake
+  (`FakeRelationLinker`) and `CatalogExplorer` both pass it.
+- **Versions:** a new contract, so no existing contract version changes, and
+  `SDK_VERSION` stays 0.2, as when `relation_probe` and `change_provider` were added.
+
 ## Consequences
 - **Positive:**
   - Every provider mechanism (versioning, capabilities, factories, conformance, fakes)
@@ -158,5 +211,5 @@ retryable one) and `Other`. Messages must never contain secret values (rule 9).
   - #28 implements distributed locking on top of `LockProvider`.
 
 ## References
-- #2, #3, #99, #28; ADR-0001 (layers), ADR-0002 (async at I/O boundaries), ADR-0005 (provider config)
+- #2, #3, #99, #28, #329; ADR-0001 (layers), ADR-0002 (async at I/O boundaries), ADR-0005 (provider config)
 - `crates/ods-core/src/{capability,strategy}.rs`, `crates/ods-sdk/src/`, `providers/ods-provider-fake/`

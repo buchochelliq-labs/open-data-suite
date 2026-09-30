@@ -1,0 +1,41 @@
+---
+source: crates/ods-cli/tests/lineage.rs
+expression: "serde_json::to_string_pretty(&models).unwrap()"
+---
+{
+  "model.jaffle_ods.customer_order_rank": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/customer_order_rank",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.customers": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/customers",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.customers_snapshot_view": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/customers_snapshot_view",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.order_events": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/order_events",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.orders": {
+    "relation_url_unavailable": "no warehouse link: `main`.`orders` has 2 parts, and a link needs 3"
+  },
+  "model.jaffle_ods.segment_summary": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/segment_summary",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.stg_customers": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/stg_customers",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.stg_orders": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/stg_orders",
+    "relation_url_label": "Open in Catalog Explorer"
+  },
+  "model.jaffle_ods.stg_payments": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/stg_payments",
+    "relation_url_label": "Open in Catalog Explorer"
+  }
+}

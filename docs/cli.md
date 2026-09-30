@@ -135,6 +135,7 @@ meanings get new numbers.
 | `ODS_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug` or `trace`. Overrides `-v`/`-q` and `log.level`; `--log-level` overrides it. |
 | `ODS_PROFILE` | Configuration profile to use; `--profile` overrides it. |
 | `ODS__SECTION__KEY` | Sets a configuration key, e.g. `ODS__OUTPUT__WIDTH=120`. |
+| `DATABRICKS_HOST` | The Databricks workspace URL that Catalog Explorer links are built from; read before `providers.<name>.settings.host` ([ADR-0021](adr/0021-databricks-authentication.md)). |
 | `NO_COLOR` | Any non-empty value disables colour when `--color auto`. `--color always` overrides it. |
 | `TERM` | `dumb` or `unknown` disables colour (results and logs) when `--color auto`. |
 
@@ -436,7 +437,17 @@ will power the VS Code view (#107).
 
 `ods lineage graph --format` writes `json` (the documented graph contract,
 `schema_version` 1), `dot` / `dot-columns` (Graphviz), `mermaid` (Markdown, model level)
-or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUMN]`
+or `graphml` (Gephi, yEd, Neo4j).
+
+**Warehouse links** (#329): the graph JSON's nodes and `ods lineage columns --output
+json`'s models and upstreams carry `relation_url`, the relation's expected location in
+the warehouse's own UI, and `relation_url_label`, what to call it, when a link can be
+built. Otherwise they carry `relation_url_unavailable`, why not (no provider for the
+target's warehouse, no host configured, a relation that isn't fully qualified). The
+fields are additive: consumers that don't know them ignore them. A link is never proof
+the relation exists, and never carries a credential or a query string. Only Databricks
+(Unity Catalog's Catalog Explorer) has links so far; see
+[Databricks](databricks.md#open-a-model-in-catalog-explorer). With `graph` and `view`, `--focus MODEL[.COLUMN]`
 (repeatable) plus `--upstream N` / `--downstream N` keeps only the connected part.
 
 | Flag | Meaning |
@@ -771,12 +782,31 @@ Each node has a **model page** at `/catalog/<unique_id>` (percent-encoded), with
   changed since run …: not recorded*; the rest read *not recorded*. Column lineage is
   matched to columns whatever their case (a warehouse catalog may fold it).
 
+**Open in warehouse** (#329): when the target's warehouse has a provider that can link
+to its own UI, the model page's header has a button to the node's relation there, e.g.
+**Open in Catalog Explorer ↗** on Databricks. It opens in a new tab
+(`rel="noopener noreferrer"`), and is labelled the relation's *expected location*: it is
+where the manifest says the relation is, and ODS hasn't checked that it exists. When
+there is no link, the header says why instead of guessing one:
+- the target's warehouse has no such provider (*no warehouse link for `duckdb`
+  targets*);
+- the workspace host isn't configured, or isn't an `https://` workspace URL;
+- the relation isn't fully qualified (Unity Catalog needs `catalog.schema.table`; a
+  two-part name gets no link, as the catalog would be a guess);
+- the node builds no relation (an ephemeral model).
+
+The lineage explorer's side panel (the node's head, and the General tab) and each row
+of a run's Nodes table (`/state/runs/<run>?tab=nodes`) carry the same link; the
+Nodes table says once why there is none. [Databricks](databricks.md#open-a-model-in-catalog-explorer)
+says how to configure the host.
+
 Relationships and Usage are greyed as planned. An unknown id, or one that isn't valid
 percent-encoding, gets a 404 page; `/catalog/` redirects to `/catalog`. Without a state
 store, every node reads *never built* and its last build *never*.
 
 `/api/catalog` (with the same query) and `/api/catalog/<unique_id>` return the view
-models the pages render, at `schema_version` 2; every tab's data is in the latter.
+models the pages render, at `schema_version` 2; every tab's data is in the latter,
+including `relation_url`, `relation_url_label` and `relation_url_unavailable` (below).
 Beyond loopback they leave out file paths and error text.
 
 ## dbt State configuration

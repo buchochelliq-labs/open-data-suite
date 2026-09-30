@@ -57,6 +57,36 @@ ods state history
 
 ![ods state history: three snapshots, from the seed, the first build and the rebuild](images/state-databricks-history.png)
 
+## Open a model in Catalog Explorer
+`ods serve`'s dashboard links each model to its table in Catalog Explorer, the
+workspace's UI for Unity Catalog: the model page's header has an **Open in Catalog
+Explorer ↗** button, and the lineage explorer's side panel and a run's Nodes table have
+the same link (#329). `ods lineage graph --format json` and `ods lineage columns --output
+json` carry it as `relation_url`.
+
+The link is built from the workspace URL, which ODS reads from `ods.toml` (or from
+`DATABRICKS_HOST`, which is read first, as in
+[ADR-0021](adr/0021-databricks-authentication.md)):
+
+```toml
+[providers.uc]
+kind = "databricks"
+
+[providers.uc.settings]
+host = "https://<workspace>.cloud.databricks.com"
+```
+
+A model whose relation is `catalog.schema.table` links to
+`https://<workspace>/explore/data/catalog/schema/table`, each name percent-encoded. The
+host must be `https://` (or a bare host name); a trailing `/` is dropped, and a path, a
+query string such as `?o=…` or a user name is refused. The host isn't a secret, and no
+token is ever put in a link. Nothing is fetched to build it.
+
+The link is where the manifest says the table is. It isn't proof that the table
+exists: it may not have been built yet, or may have been dropped. When there is no link,
+the page says why instead of guessing one: no `host` configured, a host that can't be
+used, or a relation named with only two parts (the catalog would be a guess).
+
 ## Next steps
 - **`ods state explain <node>`:** why a node was built or reused. See the [CLI reference](cli.md).
 - **`ods state retry --failed`:** after a failure, rebuild only what failed.

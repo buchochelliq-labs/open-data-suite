@@ -1,5 +1,7 @@
 //! The State pages (#311): Plan and its Why panel, Runs, one Run, and their JSON API.
 
+use ods_sdk::contracts::relation_link::{NoRelationLink, RelationLink, RelationLinkFields};
+use ods_web::catalog::{CatalogInput, CatalogNode};
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream};
@@ -1905,4 +1907,55 @@ mod journals {
         );
         assert!(!view.state_rule.contains("A failed run"));
     }
+}
+
+/// The demo, whose catalog gives each node `link`.
+fn with_links(link: &Result<RelationLink, NoRelationLink>) -> Dashboard {
+    let nodes = ["seed.raw_orders", "model.customers", "model.customers_view"]
+        .into_iter()
+        .map(|id| {
+            let mut node = CatalogNode::new(id, id.rsplit('.').next().unwrap(), "model");
+            node.relation_link = RelationLinkFields::from(
+                link.clone()
+                    .map(|l| RelationLink::new(format!("{}/{}", l.url, node.name), l.label)),
+            );
+            node
+        })
+        .collect();
+    demo().with_catalog(CatalogInput::new(nodes))
+}
+
+#[test]
+fn the_nodes_table_links_each_relation_to_the_warehouse() {
+    let addr = start(with_links(&Ok(RelationLink::new(
+        "https://w.example/explore/data/main/jaffle",
+        "Open in Catalog Explorer",
+    ))));
+    let (_, page) = get(addr, &format!("/state/runs/{RUN_3}?tab=nodes"));
+    assert!(
+        page.contains(r#"<a class="st-wh" href="https://w.example/explore/data/main/jaffle/customers" target="_blank" rel="noopener noreferrer""#),
+        "{page}"
+    );
+    assert!(!page.contains("no_relation_link"), "{page}");
+    let (_, body) = get(addr, &format!("/api/state/runs/{RUN_3}"));
+    let run: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        run["relation_links"]["model.customers"]["relation_url"],
+        "https://w.example/explore/data/main/jaffle/customers"
+    );
+
+    // Without links, the table says why once, and links nothing.
+    let addr = start(with_links(&Err(NoRelationLink::NotConfigured {
+        setting: "host".into(),
+    })));
+    let (_, page) = get(addr, &format!("/state/runs/{RUN_3}?tab=nodes"));
+    assert!(!page.contains("data-relation-link"), "{page}");
+    assert_eq!(
+        page.matches(
+            r#"data-state="no_relation_link">No warehouse link: <code>host</code> isn't configured</p>"#
+        )
+        .count(),
+        1,
+        "{page}"
+    );
 }

@@ -669,3 +669,169 @@ fn artifacts_are_found_where_the_project_is_configured() {
     );
     assert_eq!(code, 1);
 }
+
+/// The `jaffle-ods` artifacts as a Databricks project would have them: the manifest
+/// names `databricks` as its adapter and quotes relations with backticks, and one
+/// model's relation has only two parts. Links are built offline: nothing is fetched.
+fn databricks_project(config: &str) -> Temp {
+    let dir = Temp::new();
+    let target = dir.path().join("target");
+    fs::create_dir(&target).unwrap();
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture().join("manifest.json")).unwrap()).unwrap();
+    manifest["metadata"]["adapter_type"] = "databricks".into();
+    for section in ["nodes", "sources"] {
+        for node in manifest[section].as_object_mut().unwrap().values_mut() {
+            if let Some(relation) = node["relation_name"].as_str() {
+                node["relation_name"] = relation.replace('"', "`").into();
+            }
+        }
+    }
+    manifest["nodes"]["model.jaffle_ods.orders"]["relation_name"] = "`main`.`orders`".into();
+    fs::write(target.join("manifest.json"), manifest.to_string()).unwrap();
+    fs::copy(fixture().join("catalog.json"), target.join("catalog.json")).unwrap();
+    fs::write(dir.path().join("ods.toml"), config).unwrap();
+    dir
+}
+
+fn ods_at(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(args)
+        .current_dir(dir)
+        .env_clear()
+        .env("XDG_CONFIG_HOME", dir)
+        .output()
+        .expect("failed to spawn ods")
+}
+
+/// Each node's warehouse link fields, by id.
+fn link_fields(nodes: &Value, id: &str) -> Value {
+    let mut out = serde_json::Map::new();
+    for node in nodes.as_array().unwrap() {
+        let fields: serde_json::Map<String, Value> = node
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(k, _)| k.starts_with("relation_url"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        out.insert(node[id].as_str().unwrap().to_owned(), fields.into());
+    }
+    out.into()
+}
+
+const UC_HOST: &str = "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhost = \"https://DBC-0123.cloud.databricks.com/\"\n";
+
+#[test]
+fn lineage_json_links_each_relation_to_catalog_explorer() {
+    let project = databricks_project(UC_HOST);
+    let out = ods_at(
+        project.path(),
+        &["lineage", "columns", "--target-dir", "target", "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let models = link_fields(&envelope["result"]["models"], "unique_id");
+    insta::assert_snapshot!(
+        "lineage_columns_relation_urls",
+        serde_json::to_string_pretty(&models).unwrap()
+    );
+    let customers = &models["model.jaffle_ods.customers"];
+    assert_eq!(
+        customers["relation_url"],
+        "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/customers"
+    );
+    assert_eq!(customers["relation_url_label"], "Open in Catalog Explorer");
+    // Two parts: no link is guessed, and it says why.
+    let orders = &models["model.jaffle_ods.orders"];
+    assert!(orders.get("relation_url").is_none(), "{orders}");
+    assert_eq!(
+        orders["relation_url_unavailable"],
+        "no warehouse link: `main`.`orders` has 2 parts, and a link needs 3"
+    );
+
+    // The graph document carries the same fields, for every node.
+    let out = ods_at(
+        project.path(),
+        &[
+            "lineage",
+            "graph",
+            "--target-dir",
+            "target",
+            "--format",
+            "json",
+            "--output-file",
+            "graph.json",
+            "--json",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let graph: Value =
+        serde_json::from_slice(&fs::read(project.path().join("graph.json")).unwrap()).unwrap();
+    let nodes = link_fields(&graph["nodes"], "id");
+    assert_eq!(nodes["model.jaffle_ods.customers"], *customers);
+    assert!(
+        nodes["seed.jaffle_ods.raw_orders"]
+            .get("relation_url")
+            .is_some_and(|u| u
+                .as_str()
+                .unwrap()
+                .ends_with("/explore/data/jaffle_ods/main/raw_orders")),
+        "{nodes}"
+    );
+}
+
+#[test]
+fn lineage_json_says_why_there_is_no_link() {
+    // No host configured.
+    let project = databricks_project("");
+    let result = {
+        let out = ods_at(
+            project.path(),
+            &[
+                "lineage",
+                "columns",
+                "--target-dir",
+                "target",
+                "--model",
+                "customers",
+                "--json",
+            ],
+        );
+        assert!(out.status.success());
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["result"].clone()
+    };
+    let model = &result["models"][0];
+    assert!(model.get("relation_url").is_none(), "{model}");
+    assert!(
+        model["relation_url_unavailable"]
+            .as_str()
+            .unwrap()
+            .contains("isn't configured"),
+        "{model}"
+    );
+
+    // DuckDB has no warehouse link at all.
+    let result = json(&[
+        "lineage",
+        "columns",
+        "--target-dir",
+        fixture().to_str().unwrap(),
+        "--model",
+        "customers",
+    ]);
+    let model = &result["models"][0];
+    assert!(model.get("relation_url").is_none(), "{model}");
+    assert_eq!(
+        model["relation_url_unavailable"],
+        "no warehouse link for `duckdb` targets"
+    );
+}

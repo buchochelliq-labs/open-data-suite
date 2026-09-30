@@ -23,6 +23,7 @@ use ods_core::state::{
     Evidence, Exactness, ExecutionPlan, NodeState, PlanAction, PlanEntry, ReasonCode,
     StateSnapshot, Timestamp,
 };
+use ods_sdk::contracts::relation_link::RelationLinkFields;
 use ods_sdk::contracts::run_events::NodeRunStatus;
 use ods_sdk::run_journal::Journals;
 use ods_state::{Change, Explanation};
@@ -826,6 +827,10 @@ pub struct RunPageView {
     pub state_rule: String,
     /// The runs before it, newest first.
     pub earlier: Vec<RunRow>,
+    /// Where each listed node's relation is expected to be in the warehouse's own UI,
+    /// or why there is no link (#329), by node id; nodes the project no longer has are
+    /// left out.
+    pub relation_links: BTreeMap<String, RelationLinkFields>,
 }
 
 /// A run, by snapshot.
@@ -2012,6 +2017,18 @@ impl Dashboard {
         };
         let state_rule = state_rule(&this, this.kept_state);
         let position = rows.iter().position(|r| r.run_id == this.run_id);
+        let listed: BTreeSet<&str> = timeline
+            .iter()
+            .map(|r| r.node.as_str())
+            .chain(nodes.iter().map(|n| n.node.as_str()))
+            .collect();
+        let relation_links = self
+            .catalog
+            .nodes
+            .iter()
+            .filter(|n| listed.contains(n.id.as_str()))
+            .map(|n| (n.id.clone(), n.relation_link.clone()))
+            .collect();
         Some(RunPageView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             scope: self.scope.clone(),
@@ -2036,6 +2053,7 @@ impl Dashboard {
                 })
                 .unwrap_or_default(),
             run: this,
+            relation_links,
         })
     }
 }

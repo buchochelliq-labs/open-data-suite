@@ -1,0 +1,35 @@
+---
+source: crates/ods-web/tests/catalog.rs
+expression: head
+---
+<div class="model-head">
+<div class="mh-row">
+<span class="cube">
+<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+<path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z">
+</path>
+<path d="M3.3 7 12 12l8.7-5M12 22V12">
+</path>
+</svg>
+</span>
+<h1 class="mono" title="model.shop.orders">orders</h1>
+<span class="pill big build" title="sql changed since run 9ea38bd5">BUILD next run · code changed</span>
+<span class="tagchip" title="Type">model</span>
+<span class="tagchip" title="Materialization">view</span>
+<span class="tagchip" title="the folder under the model paths">staging</span>
+<span class="tagchip" title="Tag">#core</span>
+<span class="mh-actions">
+<a class="btn" href="../lineage?node=model.shop.orders">View lineage</a>
+<button class="btn" id="copylink" type="button" hidden>Copy link</button>
+</span>
+</div>
+<div class="mh-meta">
+<span>Relation <code class="fg">`main`.`shop`.`orders`</code>
+</span>
+<span class="nolink" data-state="no_relation_link">No warehouse link for <code>duckdb</code> targets</span>
+<span>Last successful build <span class="fg">snapshot 2 · run <span class="mono" title="9ea38bd5-0000-4000-8000-000000000002">9ea38bd5</span> · <time datetime="2026-09-28T09:00:00Z" title="2026-09-28T09:00:00Z" data-relative>2026-09-28T09:00:00Z</time>
+</span>
+</span>
+<span>File <code class="fg">models/staging/orders.sql</code>
+</span>
+</div>

@@ -15,6 +15,7 @@ use ods_core::Confidence;
 use ods_core::state::{ExecutionPlan, PlanAction, PlanEntry, ReasonCode, Timestamp};
 use ods_lineage::GraphDocument;
 use ods_lineage::export::{ColumnEdge, GraphNode};
+use ods_sdk::contracts::relation_link::RelationLinkFields;
 use serde::Serialize;
 
 use crate::dashboard::{DASHBOARD_SCHEMA_VERSION, Dashboard, StateInput, StateStatus};
@@ -113,6 +114,10 @@ pub struct CatalogNode {
     pub code: Option<String>,
     /// The tests on it.
     pub tests: Vec<CatalogTest>,
+    /// Where its relation is expected to be in the warehouse's own UI, or why there is
+    /// no link (#329). The binary fills it in from the target's provider; it is never
+    /// proof that the relation exists.
+    pub relation_link: RelationLinkFields,
 }
 
 impl CatalogNode {
@@ -137,6 +142,7 @@ impl CatalogNode {
             columns: Vec::new(),
             code: None,
             tests: Vec::new(),
+            relation_link: RelationLinkFields::default(),
         }
     }
 }
@@ -758,6 +764,10 @@ pub struct ModelView {
     pub description: Option<String>,
     /// The relation it builds.
     pub relation: Option<String>,
+    /// Where the relation is expected to be in the warehouse's UI (`relation_url`,
+    /// `relation_url_label`), or why there is no link (`relation_url_unavailable`).
+    #[serde(flatten)]
+    pub relation_link: RelationLinkFields,
     /// Its file in the project; on loopback only.
     pub file: Option<String>,
     /// Its next-run decision, with the planner's reasons.
@@ -822,6 +832,10 @@ pub(crate) const REUSE_CAVEAT: &str = "Reuse is decided offline: a reused node's
     isn't checked by this plan (it is when a run starts).";
 
 /// The same, for one node.
+/// What a warehouse link is, for people: where the relation is expected to be, not
+/// proof that it exists (#329, AGENTS rule 3).
+pub(crate) const LINK_TITLE: &str = "Where the project's manifest says the relation is, in the warehouse's own UI. ODS hasn't checked that it exists.";
+
 pub(crate) const REUSE_RELATION: &str = "not checked by this plan; checked when a run starts";
 
 /// What the catalog pages need from the dashboard, worked out once per request, with
@@ -1391,6 +1405,7 @@ impl Dashboard {
             tags: node.tags.clone(),
             description: node.description.clone(),
             relation: node.relation.clone(),
+            relation_link: node.relation_link.clone(),
             file: node.file.clone().filter(|_| cx.details),
             decision,
             decisions: cx.basis.clone(),

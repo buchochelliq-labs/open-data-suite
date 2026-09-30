@@ -23,6 +23,7 @@ use ods_web::dashboard::{
 use ods_web::{Dashboard, Snapshot};
 
 use super::lineage::Loaded;
+use super::relation_links::{LinkSettings, Links};
 use super::state_plan::{Planned, Sources, Workspace, block_on, plan_latest};
 use super::state_settings::{DEFAULT_STORE, StateSettings};
 use crate::exit::CliError;
@@ -61,6 +62,8 @@ pub(super) fn state_args(command: Command) -> Command {
 pub(super) struct DashboardSource {
     args: ArgMatches,
     settings: StateSettings,
+    /// Where warehouse links point (#329), read once like the rest of the settings.
+    links: LinkSettings,
 }
 
 impl DashboardSource {
@@ -68,6 +71,7 @@ impl DashboardSource {
         Ok(Self {
             args: args.clone(),
             settings: StateSettings::resolve(args, config)?,
+            links: LinkSettings::read(config),
         })
     }
 
@@ -93,21 +97,20 @@ impl DashboardSource {
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
     pub(super) fn snapshot(&self, loaded: &Loaded, source: String) -> Snapshot {
-        let document = loaded
-            .graph
-            .document(&|id| loaded.node_name(id), &GraphFilter::default());
+        let links = loaded.links(&self.links);
+        let document = loaded.linked_document(&GraphFilter::default(), &links);
         let opaque_ids: Vec<(String, String, Option<String>)> = document
             .nodes
             .iter()
             .filter(|n| n.opaque)
             .map(|n| (n.id.clone(), n.name.clone(), n.diagnostics.first().cloned()))
             .collect();
-        let dashboard = self.dashboard(&opaque_ids);
+        let dashboard = self.dashboard(&opaque_ids, &links);
         Snapshot::new(document, loaded.graph.clone(), source).with_dashboard(dashboard)
     }
 
     /// Never fails: what can't be read is shown as such.
-    fn dashboard(&self, opaque: &[(String, String, Option<String>)]) -> Dashboard {
+    fn dashboard(&self, opaque: &[(String, String, Option<String>)], links: &Links) -> Dashboard {
         let environment = self.settings.environment.value.clone();
         let ws = match Workspace::load(&self.args, &self.settings, Sources::AsGiven) {
             Ok(ws) => ws,
@@ -154,7 +157,8 @@ impl DashboardSource {
         let (state, last_builds) = self.state(Arc::clone(&ws));
         // The Catalog (#313): the project's nodes, and their last builds from the
         // snapshot the plan is made against.
-        let catalog = super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds);
+        let catalog =
+            super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, links);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         let target = self
             .settings

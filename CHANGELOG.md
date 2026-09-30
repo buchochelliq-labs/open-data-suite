@@ -39,6 +39,19 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- An **Open in warehouse** link for a model's relation. With a Databricks
+  target and the workspace `host` configured (`[providers.<name>] kind =
+  "databricks"`, or `DATABRICKS_HOST`), the dashboard's model page has an **Open in
+  Catalog Explorer ↗** button to
+  `https://<host>/explore/data/<catalog>/<schema>/<table>`; the lineage explorer's side
+  panel and a run's Nodes table have the same link. `ods lineage graph --format json`,
+  `ods lineage columns --output json` and `/api/catalog/<id>` add `relation_url` and
+  `relation_url_label`, or `relation_url_unavailable` with the reason there is no
+  link: another warehouse, no host, or a relation that isn't fully qualified. The link
+  is the relation's expected location, not proof it exists, and never carries a token.
+  `/api/state/runs/<run>` adds `relation_links` by node. Plugin authors get the
+  `relation_link` capability and the `relation_linker` 0.1 contract, with a fake and a
+  conformance suite (ADR-0006 §7) (#329).
 - The dashboard's Runs and Run pages (`ods serve`) show each run's outcome, duration,
   node counts and rows from its run journal (#322, ADR-0024): *succeeded*, *partial*,
   *failed*, or *unknown* / *running or stopped without finishing* when the journal

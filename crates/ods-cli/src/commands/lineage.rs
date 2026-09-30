@@ -16,16 +16,19 @@ use ods_core::{ColumnRef, EdgeKind};
 use ods_lineage::export::Endpoint;
 use ods_lineage::openlineage::{EventKind, ExportOptions, IndirectPlacement};
 use ods_lineage::{
-    Agreement, BuildStats, Change, ColumnChangeKind, ColumnGraph, Comparison, GraphFilter, Impact,
-    ImpactReason, LineageNode, LineageProject, MemoryCache, NodeKind, Stitched, build, diff,
+    Agreement, BuildStats, Change, ColumnChangeKind, ColumnGraph, Comparison, GraphDocument,
+    GraphFilter, Impact, ImpactReason, LineageNode, LineageProject, MemoryCache, NodeKind,
+    Stitched, build, diff,
 };
 use ods_provider_databricks::UcColumnLineage;
 use ods_provider_dbt::{ArtifactPreference, Artifacts, ResourceType};
 use ods_provider_sqlparser::{SqlDialect, SqlparserAnalyzer};
 use ods_sdk::contracts::observed_lineage::{ObservedLineage, ObservedLineageSource};
+use ods_sdk::contracts::relation_link::RelationLinkFields;
 use ods_sdk::contracts::sql_lineage::SqlLineageAnalyzer;
 use serde::Serialize;
 
+use super::relation_links::{LinkSettings, Links};
 use super::state_settings::{artifact_dir_args, artifacts_dir};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
@@ -118,10 +121,11 @@ impl Module for Lineage {
             return Ok(());
         };
         let loaded = Loaded::load(args, ctx.config)?;
+        let links = loaded.links(&LinkSettings::read(ctx.config));
         match name {
             "columns" => {
                 let model = args.get_one::<String>("model").map(String::as_str);
-                ctx.emit(&ColumnsReport::build(&loaded, model)?)
+                ctx.emit(&ColumnsReport::build(&loaded, model, &links)?)
             }
             "impact" => {
                 let report = if let Some(base) = args.get_one::<String>("base") {
@@ -142,8 +146,8 @@ impl Module for Lineage {
             }
             "compare" => ctx.emit(&CompareReport::build(&loaded)),
             "export" => ctx.emit(&ExportReport::write(&loaded, args)?),
-            "graph" => ctx.emit(&GraphReport::write(&loaded, args, false)?),
-            "view" => ctx.emit(&GraphReport::write(&loaded, args, true)?),
+            "graph" => ctx.emit(&GraphReport::write(&loaded, args, false, &links)?),
+            "view" => ctx.emit(&GraphReport::write(&loaded, args, true, &links)?),
             _ => Ok(()),
         }
     }
@@ -330,6 +334,10 @@ pub(super) struct Loaded {
     stats: BuildStats,
     elapsed_ms: u128,
     observed: Option<Observed>,
+    /// dbt `unique_id` → its relation, as the manifest renders it (quoted), for links.
+    relations: BTreeMap<String, String>,
+    /// The warehouse the manifest names (`metadata.adapter_type`).
+    adapter_type: Option<String>,
 }
 
 impl Loaded {
@@ -377,6 +385,13 @@ impl Loaded {
             .iter()
             .map(|n| (n.unique_id.clone(), n.checksum.clone()))
             .collect();
+        let relations = artifacts
+            .manifest
+            .nodes
+            .iter()
+            .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
+            .collect();
+        let adapter_type = artifacts.manifest.adapter_type.clone();
         let (mut graph, stats) = build(&project, &analyzer, cache)
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
         let observed = match &options.observed {
@@ -403,7 +418,26 @@ impl Loaded {
             stats,
             elapsed_ms: started.elapsed().as_millis(),
             observed,
+            relations,
+            adapter_type,
         })
+    }
+
+    /// Warehouse links for this project's target (#329).
+    pub(super) fn links(&self, settings: &LinkSettings) -> Links {
+        Links::new(self.adapter_type.as_deref(), settings)
+    }
+
+    /// The graph's document, with each node's warehouse link filled in by `links`.
+    pub(super) fn linked_document(&self, filter: &GraphFilter, links: &Links) -> GraphDocument {
+        let mut document = self.graph.document(&|id| self.node_name(id), filter);
+        links.annotate(&mut document, &self.relations);
+        document
+    }
+
+    /// The link to node `id`'s relation, or why there is none.
+    fn relation_link(&self, id: &str, links: &Links) -> RelationLinkFields {
+        links.fields(self.relations.get(id).map(String::as_str))
     }
 
     /// The graph as the code alone describes it, without observed lineage.
@@ -830,6 +864,8 @@ struct UpstreamColumns {
     name: String,
     kind: NodeKind,
     relation: String,
+    #[serde(flatten)]
+    relation_link: RelationLinkFields,
     columns: Vec<ColumnUses>,
 }
 
@@ -952,6 +988,8 @@ struct ModelColumns {
     unique_id: String,
     name: String,
     relation: String,
+    #[serde(flatten)]
+    relation_link: RelationLinkFields,
     confidence: ods_core::Confidence,
     opaque: bool,
     columns: Vec<ColumnInputs>,
@@ -974,7 +1012,7 @@ struct Input {
 }
 
 impl ColumnsReport {
-    fn build(loaded: &Loaded, model: Option<&str>) -> Result<Self, CliError> {
+    fn build(loaded: &Loaded, model: Option<&str>, links: &Links) -> Result<Self, CliError> {
         let only = model.map(|m| loaded.node_id(m)).transpose()?;
         let models = loaded
             .graph
@@ -990,6 +1028,7 @@ impl ColumnsReport {
                     unique_id: n.id.clone(),
                     name: loaded.node_name(&n.id),
                     relation: n.relation.to_string(),
+                    relation_link: loaded.relation_link(&n.id, links),
                     confidence: lineage.confidence,
                     opaque: lineage.opaque,
                     columns: lineage
@@ -1020,6 +1059,7 @@ impl ColumnsReport {
                 name: loaded.node_name(&n.id),
                 kind: n.kind,
                 relation: n.relation.to_string(),
+                relation_link: loaded.relation_link(&n.id, links),
                 columns: n
                     .columns
                     .iter()
@@ -1574,7 +1614,12 @@ struct GraphReport {
 }
 
 impl GraphReport {
-    fn write(loaded: &Loaded, args: &ArgMatches, viewer: bool) -> Result<Self, CliError> {
+    fn write(
+        loaded: &Loaded,
+        args: &ArgMatches,
+        viewer: bool,
+        links: &Links,
+    ) -> Result<Self, CliError> {
         let mut focus = Vec::new();
         for spec in args.get_many::<String>("focus").into_iter().flatten() {
             focus.push(loaded.endpoint(spec)?);
@@ -1583,7 +1628,7 @@ impl GraphReport {
             args.get_one::<usize>("upstream").copied(),
             args.get_one::<usize>("downstream").copied(),
         );
-        let document = loaded.graph.document(&|id| loaded.node_name(id), &filter);
+        let document = loaded.linked_document(&filter, links);
         let format = if viewer {
             "html".to_owned()
         } else {
