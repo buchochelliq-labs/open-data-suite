@@ -136,7 +136,9 @@ impl TestReport {
         let report = match Self::build(args, &settings, ctx.progress) {
             Ok(report) => report,
             Err(error) => {
-                return super::state_run::failed_before_running(ctx, &settings, started, error);
+                return super::state_run::failed_before_running::<true>(
+                    ctx, &settings, started, error,
+                );
             }
         };
         // How it ended, as `run` and `build` keep it: the dashboard shows the last run
@@ -323,6 +325,7 @@ impl TestReport {
             before: latest.map(|l| &l.snapshot),
             state_db: &self.state_db,
             retry: None,
+            project_is_run: true,
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);
     }

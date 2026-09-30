@@ -45,6 +45,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_COMPILE_ERROR  `compile` writes the manifest, then fails with this text as
                  dbt's error (e.g. `Compilation Error in model …` and its message), as
                  dbt does when a model calls a macro that doesn't exist (#323)
+  FAKE_DBT_BUILD_CRASH  `build` starts a node, then fails with this text as dbt's error
+                 and writes no run results, as when dbt crashes mid-run (#323)
   FAKE_DBT_RAW_CODE  `name=file`: the manifest gives model `name` the raw code in `file`
                  (#323)
   With `--log-format json`, it prints its output as dbt's structured events: a `Note`
@@ -428,6 +430,13 @@ def main():
                "results": [], "elapsed_time": 0, "args": {"which": "compile", "vars": run_vars}}
         write(os.path.join(target, "run_results.json"), doc)
         return 0
+    if words[:1] == ["build"] and os.environ.get("FAKE_DBT_BUILD_CRASH"):
+        node = next(iter(sorted(n for n in manifest["nodes"] if n.startswith("model."))))
+        log(json_logs, invocation, "NodeStart", "debug", f"Began running node {node}",
+            {"node_info": {"unique_id": node}})
+        log(json_logs, invocation, "MainEncounteredError", "error",
+            "Encountered an error:\n" + os.environ["FAKE_DBT_BUILD_CRASH"])
+        return 2
     # `run`, `seed` and `snapshot` build only their own resource type, and never tests.
     only = {"run": "model", "seed": "seed", "snapshot": "snapshot"}
     if words[:1] not in (["build"], ["test"]) and words[0] not in only:
