@@ -60,10 +60,13 @@ ods state history
 ## Next steps
 - **`ods state explain <node>`:** why a node was built or reused. See the [CLI reference](cli.md).
 - **`ods state retry --failed`:** after a failure, rebuild only what failed.
-- **Coming next:**
-  - a dbt state that `dbt retry --defer --favor-state` can trust
-    ([ADR-0020](adr/0020-dbt-state-interop-and-favor-state.md));
-  - direct Databricks sign-in for Unity Catalog metadata
-    ([ADR-0021](adr/0021-databricks-authentication.md)).
+- **`ods state history --run <run_id>`:** one run's per-node stats (result, time taken,
+  rows, thread, redacted error) from its run journal. The screenshots above predate the
+  per-node stats; the [CLI reference](cli.md#run-stats-and-the-run-journal) shows them.
+- **`ods state export`:** a dbt state that `dbt retry --defer-state` and
+  `--defer --favor-state` can trust
+  ([ADR-0020](adr/0020-dbt-state-interop-and-favor-state.md), [more](cli.md#state-export-for-dbt-deferral)).
+- **Coming next:** direct Databricks sign-in for Unity Catalog metadata
+  ([ADR-0021](adr/0021-databricks-authentication.md)).
 - **Contributors:** [Testing against Databricks](contributing-databricks.md) covers how
   the CI job and these screenshots are made.

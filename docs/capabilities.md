@@ -109,28 +109,30 @@ run: dbt build --select stg_orders order_events orders customer_order_rank custo
 Comments and whitespace don't count as changes: reformatting a model
 reuses it, and the plan says only formatting changed.
 
-`ods state run` does all of it: it compiles, plans, runs `dbt build` on exactly the
-nodes that must build, and records the result. Nodes that fail keep their last
-successful state and are built next time.
+`ods state build` does all of it: it measures sources, compiles, plans, runs
+`dbt build` on exactly the nodes that must build, and records the result
+(`ods state run`, `seed`, `snapshot` and `test` do the same with their dbt namesakes).
+Nodes that fail keep their last successful state and are built next time;
+`ods state retry --failed` builds only those.
 
-```console
-$ ods state run           # after editing segment_summary
-plan: 1 to build, 12 to reuse
-ran: dbt build --select segment_summary …
-outcome: succeeded
-recorded: snapshot 2: 1 node advanced
-```
+As dbt runs, each node's result is a line on the terminal; the report then gives every
+node's result, time taken and rows, and why it ran. Rows the adapter doesn't report
+read `—`, never `0`, and the total says "at least N". Every run's events are kept in a
+journal beside the state database, so `ods state history --run <run_id>` shows them
+later, even for a run that failed and recorded nothing.
+
+![ods state build after an edit to stg_orders](assets/recordings/state-build/state-build.svg)
 
 Details: [CLI reference](cli.md#state-run),
 [ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md),
-[ADR-0014](adr/0014-executor-contract-and-state-run.md).
+[ADR-0014](adr/0014-executor-contract-and-state-run.md),
+[ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md).
 
 ## dbt State configuration
 
 `ods state policies` reads dbt's State configuration (`lag_tolerance`,
 `require_fresh_data_from`, `build_after`) as you already write it, and shows each
-model's effective freshness policy. It is the first piece of ODS State, the
-incremental "what needs to run" planner planned for v0.0.1, the first release.
+model's effective freshness policy: the lag tolerances the State planner applies.
 
 Details: [CLI reference](cli.md#dbt-state-configuration),
 [ADR-0011](adr/0011-dbt-state-config-compatibility.md).

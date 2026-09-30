@@ -1,6 +1,6 @@
 # OpenDataSuite (ODS) — Roadmap, Milestones & Release Plan
 
-Status: **proposed** · Last updated: 2026-09-29
+Status: **proposed** · Last updated: 2026-09-30
 
 > **Plans, not promises.** Target dates are proposals for a small team and are revisited
 > at the end of each milestone. Scope, order and dates will change.
@@ -128,6 +128,19 @@ v0.0.1 also carries the first dashboard screens (#310–#313, listed below and u
 | **#312** | Dashboard: Lineage with State overlay (restyle `ods serve` lineage) |
 | **#313** | Dashboard: Catalog (models) and Model page |
 | #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
+
+**Status (2026-09-30):**
+- Closed on GitHub: #11, #18, #20, #21, #22, #23, #24, #168, #181, #188, #209, #211,
+  #212, #214, #220, #227, #229, #230, #232, #233 and the four dashboard screens
+  #310–#313 (merged in #316, #318, #319, #320).
+- Open, with the M1 work merged and in use: #12 (dbt artifacts), #13 (fingerprints),
+  #16 (`sources.json` evidence), #17 (the M1 slice: Delta table versions, #306–#308),
+  #19 (the M1 slice), #25 (the SQLite state store) and #73/#74 (the lineage preview).
+  #26 and #99 have no work merged yet.
+- Beyond the table: #322 (run events, per-node run stats and the run journal,
+  [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md)) has steps 1–3 merged:
+  `ods state` shows each node's stats, `ods state history --run` reads the journal, and
+  the Runs and Run pages show real outcomes. Its live view (step 4) is still to come.
 
 **Why data awareness moved into M1:** skipping only on code changes still rebuilds
 models whose upstream data hasn't changed. Skipping on unchanged code *and* data is the

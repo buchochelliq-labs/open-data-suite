@@ -353,6 +353,16 @@ fn steps(found: PatternMatch) -> PatternMatch {
     }
 }
 
+/// Whether `kind` names a Python exception: one CamelCase word ending in `Error` or
+/// `Exception` (`KeyError`, `ZeroDivisionError`), unlike adapters' kinds, which have
+/// spaces (`Binder Error`).
+fn is_python_exception(kind: &str) -> bool {
+    let named = |suffix: &str| kind.len() > suffix.len() && kind.ends_with(suffix);
+    kind.starts_with(|c: char| c.is_ascii_uppercase())
+        && kind.chars().all(|c| c.is_ascii_alphanumeric())
+        && (named("Error") || named("Exception"))
+}
+
 /// The exception named in a Python model's summary, `Python model failed: KeyError: …`.
 fn python_exception(message: &str) -> Option<String> {
     let rest = message.strip_prefix("Python model failed: ")?;
@@ -372,7 +382,14 @@ impl ErrorCatalogue for DbtErrorCatalogue {
             pattern.kind.is_none_or(|k| kind.as_deref() == Some(k))
                 && pattern.all.iter().all(|phrase| message.contains(phrase))
         });
+        // A Python exception's name as the error's kind (`KeyError: …`): only a Python
+        // model's code raises one into a node's result.
+        let python = error.kind().filter(|k| is_python_exception(k));
         match found {
+            None if python.is_some() => Classification::Recognised(steps(
+                PatternMatch::new("python-exception", Symptom::PythonException)
+                    .about(python.map(str::to_owned)),
+            )),
             Some(pattern) => {
                 let mut found = PatternMatch::new(pattern.id, pattern.symptom);
                 if pattern.symptom == Symptom::PythonException {
@@ -819,6 +836,22 @@ mod tests {
         // `ref`, `config`, loops and filters are not macros; nothing else is undefined.
         let orders = &index.nodes["model.jaffle_ods.orders"];
         assert!(orders.undefined_calls.is_empty(), "{orders:?}");
+    }
+
+    #[test]
+    fn a_python_exception_as_the_kind_is_a_python_model_failure() {
+        let summary = error_summary(
+            "Runtime Error in model customer_segments (models/marts/customer_segments.py)\n  KeyError: 'lifetime_value'",
+        )
+        .unwrap();
+        let Classification::Recognised(m) = DbtErrorCatalogue.classify(&summary) else {
+            panic!("{summary:?}");
+        };
+        assert_eq!(m.symptom, Symptom::PythonException);
+        assert_eq!(m.subject.as_deref(), Some("KeyError"));
+        // An adapter's kind has a space: not a Python exception.
+        assert!(!is_python_exception("Binder Error"));
+        assert!(!is_python_exception("Error"));
     }
 
     #[test]

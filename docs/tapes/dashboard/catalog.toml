@@ -1,0 +1,34 @@
+# Catalog → a model page: its columns and where they come from, its code, its State.
+title = "Catalog and the model page"
+theme = "light"
+
+[[step]]
+goto = "/catalog"
+caption = "The Catalog: every model, seed and snapshot, with its next-run decision"
+expect = ["customers", "orders"]
+pause = 3800
+still = "catalog"
+
+[[step]]
+click = "a.mono[href='catalog/model.jaffle_ods.customers']"
+caption = "A model page"
+pause = 3000
+
+[[step]]
+click = "a[data-tab=columns]"
+caption = "Columns: type, tests, and the columns each is computed from"
+expect = ["lifetime_value"]
+pause = 4000
+still = "model-columns"
+
+[[step]]
+click = "a[data-tab=code]"
+caption = "Code: as written; compiled SQL is never shown"
+pause = 3600
+
+[[step]]
+click = "a[data-tab=state]"
+caption = "State: the next run's decision, the planner's reasons and the last build"
+expect = ["upstream code changed"]
+pause = 4000
+still = "model-state"

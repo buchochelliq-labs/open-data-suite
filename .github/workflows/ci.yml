@@ -115,6 +115,44 @@ jobs:
           cargo test -p ods-provider-dbt --test env_params 2>&1 | tee env-params.log
           grep -q '^test every_setting_the_installed_dbt_reads_is_classified \.\.\. ok' env-params.log
 
+  # The docs' recordings can't drift from what `ods` prints (scripts/record-docs.sh,
+  # scripts/record-dashboard.py): every terminal tape in docs/tapes/ runs again with the
+  # fake dbt, and each screenshot's text (masked for run ids, times and durations) must
+  # match the committed one; every dashboard tour's steps must find their elements and
+  # its stills' text must match. Offline apart from installing the tools.
+  docs-media:
+    runs-on: ubuntu-latest
+    env:
+      RICH_VERSION: 0.0.13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache the rich CLI (rs-rich-cli)
+        id: rich-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/rich
+          key: rs-rich-cli-${{ env.RICH_VERSION }}-${{ runner.os }}
+      - name: Install the rich CLI
+        if: steps.rich-cache.outputs.cache-hit != 'true'
+        run: cargo install rs-rich-cli --version "$RICH_VERSION" --locked --root ~/.local/rich
+      - name: Terminal recordings match `ods`
+        run: |
+          export PATH="$HOME/.local/rich/bin:$PATH"
+          scripts/record-docs.sh --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements-record.txt
+      - name: Install Playwright and Chromium
+        run: |
+          pip install -r scripts/requirements-record.txt
+          python -m playwright install --with-deps chromium
+      - name: Dashboard tours match `ods serve`
+        run: python scripts/record-dashboard.py --check
+
   msrv:
     runs-on: ubuntu-latest
     steps:

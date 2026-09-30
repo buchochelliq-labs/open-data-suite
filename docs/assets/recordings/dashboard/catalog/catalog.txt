@@ -1,0 +1,148 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Models
+Freshness evidence
+Planned
+Semantic layer
+Planned
+Lineage
+State
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+Catalog
+/
+Models
+snapshot 3 ·
+<when>
+Filters
+Clear all
+RESOURCE TYPE
+model
+10
+seed
+3
+LAYER
+staging
+3
+marts
+7
+Inferred from each model's first folder under the model paths (its dbt fqn), not declared. Seeds have none.
+MATERIALIZATION
+table
+6
+view
+4
+seed
+3
+TAGS
+No tags in this project
+NEXT-RUN DECISION
+Build
+6
+Reuse
+7
+Never built
+0
+Unknown
+0
+From the plan against the latest snapshot, made offline. Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts).
+LINEAGE CONFIDENCE
+parsed
+8
+inferred
+1
+observed
+0
+unknown
+0
+opaque
+1
+n/a
+3
+Column lineage from the SQL; seeds have none (n/a).
+/
+13 of 13 nodes
+decisions against snapshot 3
+Name
+↑
+	Type
+↕
+	Layer*
+↕
+	Material.
+↕
+	Lineage
+↕
+	Next run
+↕
+	Health	Last built
+↕
+customer_order_rank
+model	marts	table
+parsed	BUILD	[n]	1 · <run>
+customer_segments
+python model	marts	table
+opaque	BUILD	[n]	3 · <run>
+customers
+model	marts	table
+parsed	BUILD	[n]	2 · <run>
+customers_snapshot_view
+model	marts	view
+parsed	BUILD	[n]	2 · <run>
+order_events
+model	marts	table
+parsed	REUSE	[n]	1 · <run>
+orders
+model	marts	table
+parsed	BUILD	[n]	1 · <run>
+raw_customers
+seed	n/a	seed
+n/a	REUSE	[n]	1 · <run>
+raw_orders
+seed	n/a	seed
+n/a	REUSE	[n]	1 · <run>
+raw_payments
+seed	n/a	seed
+n/a	REUSE	[n]	1 · <run>
+segment_summary
+model	marts	table
+inferred	BUILD	[n]	3 · <run>
+stg_customers
+model	staging	view
+parsed	REUSE	[n]	1 · <run>
+stg_orders
+model	staging	view
+parsed	REUSE	[n]	1 · <run>
+stg_payments
+model	staging	view
+parsed	REUSE	[n]	1 · <run>
+BUILD
+will run
+REUSE
+unchanged; its relation isn't checked by this plan (it is when a run starts)
+NEVER BUILT
+no recorded build: builds
+UNKNOWN
+not known: see why
+Last built: snapshot · run
+Layer*
+Inferred from each model's first folder under the model paths (its dbt fqn), not declared. Seeds have none.
+Health
+[n]
+health signals from run, test and freshness evidence come later (#117)

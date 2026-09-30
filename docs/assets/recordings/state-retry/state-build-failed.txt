@@ -1,0 +1,50 @@
+--partial-parse-file-diff --indirect-selection eager --log-format json --log-level debug
+outcome        failed
+totals         <took> · 2 built · 1 failed · 1 skipped
+rows           at least 100 (2 nodes didn't report rows)
+stats          reported as it ran
+journal        .ods/state.db.runs/<run-id>.jsonl
+recorded       snapshot 2: 2 nodes advanced
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ node                    ┃ result                            ┃ took  ┃ rows ┃ why it ran                              ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ customers               │ success                           │ 250ms │ 100  │ code changed since run                  │
+│                         │                                   │       │      │ <run-id>:   │
+│                         │                                   │       │      │ sql                                     │
+│ customer_segments       │ failed: KeyError: [value removed] │ 250ms │ —    │ upstream code changed: customers will   │
+│                         │                                   │       │      │ be rebuilt                              │
+│ customers_snapshot_view │ success                           │ 250ms │ —    │ upstream code changed: customers will   │
+│                         │                                   │       │      │ be rebuilt                              │
+│ segment_summary         │ skipped                           │ —     │ —    │ upstream code changed:                  │
+│                         │                                   │       │      │ customer_segments will be rebuilt       │
+└─────────────────────────┴───────────────────────────────────┴───────┴──────┴─────────────────────────────────────────┘
+
+Why it failed
+
+failed      customer_segments
+what        The Python model raised KeyError
+kind        python model · python exception
+confidence  known pattern
+
+why ODS thinks so
+├── It failed after 250ms, during execution (compile succeeded).  [run stats]
+├── Its code didn't change since its last successful build, in run <run>.  [fingerprints]
+└── It built fine in its last 1 run.  [run history]
+
+where   models/marts/customer_segments.py  compiled: target/compiled/jaffle_ods/models/marts/customer_segments.py
+impact  blocks 1 downstream node (segment_summary was skipped). Its last good build is kept.
+
+what to try
+├── 1. Read the traceback in the full log: it shows where in the model's code the exception was raised.
+└── 2. Then retry what failed:
+    └── $ ods state retry --failed
+
+dbt said  KeyError: [value removed]  (values and SQL removed; full text: dbt's log file (logs/dbt.log in the project,
+unless --log-path))
+
+info: 2 nodes kept their last successful state and will be built next run
+error[ODS-E0404]: the run didn't fully succeed (2 nodes failed, were skipped or failed their tests; 0 checks failed)
+  hint: nodes that built and passed their tests were recorded; the others keep their last successful state and are built
+ (and tested) next run
+❯

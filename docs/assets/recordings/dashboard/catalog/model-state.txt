@@ -1,0 +1,69 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Models
+Freshness evidence
+Planned
+Semantic layer
+Planned
+Lineage
+State
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+Catalog
+/
+Models
+/
+customers
+/
+snapshot 3 ·
+<when>
+customers
+BUILD next run · upstream code changed
+model
+table
+marts
+View lineage
+Copy link
+Relation "jaffle_ods"."main"."customers"
+Last successful build snapshot 2 · <run> · <when>
+File models/marts/customers.sql
+Overview
+Code
+Columns
+Lineage
+State
+Tests
+Relationships
+PLANNED
+Usage
+PLANNED
+Next run
+BUILD
+upstream code changed upstream code changed: orders will be rebuilt
+Relation
+not needed: it builds
+From the plan against snapshot 3, made offline for this request (ods state plan).
+Why this decision
+Last successful build
+Snapshot
+2
+Run
+<run>
+Finished
+<when>

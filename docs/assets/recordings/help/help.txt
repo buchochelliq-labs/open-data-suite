@@ -1,0 +1,40 @@
+❯ ods -h
+OpenDataSuite: explainable control plane for analytics engineering
+
+Usage: ods [OPTIONS] <COMMAND>
+
+Commands:
+  state        Plan and run only what needs to run, with explanations [preview: `run`, `plan`, `record`, `history`, `pol
+icies`, `doctor`, `retry`, `explain`, `diff`, `graph`, `export`; more in M1 State MVP (v0.0.1)]
+  erd          Generate and inspect entity-relationship models [planned: M3 ERD & Usage (v0.3.0)] (`ods erd generate` is
+ available)
+  usage        Inspect real downstream usage of assets and columns [planned: M3 ERD & Usage (v0.3.0)]
+  ci           Change-impact analysis and selective CI [planned: M4 ODS CI (v0.4.0)]
+  lsp          Run the ODS language server [planned: M5 LSP & VS Code (v0.5.0)]
+  agent        Analytics-engineering agent and skills [planned: M6 ODS Agent (v0.6.0)]
+  lineage      Column-level lineage, downstream impact and OpenLineage export
+  serve        Host the read-only dashboard, the lineage explorer and their JSON API over HTTP
+  mcp          Serve the ODS tools to AI agents over the Model Context Protocol (stdio)
+  doctor       Check that ODS can work here: configuration, dbt project, tools, target, state store and provider capabil
+ities
+  config       Inspect configuration and profiles
+  version      Print build and compatibility version information
+  completions  Print a shell completion script
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -o, --output <OUTPUT>    Output format [default: human on a terminal, plain otherwise] [possible values: human, plain,
+ json]
+      --json               Shorthand for `--output json`
+      --color <COLOR>      When to use colour in human output [default: auto] [possible values: auto, always, never]
+      --width <WIDTH>      Render width in columns [default: terminal width, or 100 when not a terminal]
+      --log-level <LEVEL>  Log level on stderr [possible values: off, error, warn, info, debug, trace]
+  -v, --verbose...         More log output on stderr (-v info, -vv debug, -vvv trace)
+  -q, --quiet              Only log errors
+      --profile <NAME>     Configuration profile to use [env: `ODS_PROFILE`]
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version
+❯
+
+
+
