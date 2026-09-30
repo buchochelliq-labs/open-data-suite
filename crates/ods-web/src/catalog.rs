@@ -831,11 +831,15 @@ fn short(run_id: &str) -> String {
 pub(crate) const REUSE_CAVEAT: &str = "Reuse is decided offline: a reused node's relation \
     isn't checked by this plan (it is when a run starts).";
 
-/// The same, for one node.
 /// What a warehouse link is, for people: where the relation is expected to be, not
 /// proof that it exists (#329, AGENTS rule 3).
 pub(crate) const LINK_TITLE: &str = "Where the project's manifest says the relation is, in the warehouse's own UI. ODS hasn't checked that it exists.";
 
+/// The same, on a past run's page: the link comes from the current manifest, which may
+/// put the relation somewhere else than that run built it.
+pub(crate) const RUN_LINK_TITLE: &str = "Expected location from the current manifest, not checked: this run may have built the relation elsewhere.";
+
+/// The same, for one node.
 pub(crate) const REUSE_RELATION: &str = "not checked by this plan; checked when a run starts";
 
 /// What the catalog pages need from the dashboard, worked out once per request, with

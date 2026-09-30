@@ -13,22 +13,15 @@
 //! the relation is, not proof that it exists.
 
 use ods_core::{Capability, CapabilitySet};
-use ods_sdk::contracts::relation_link::{NoRelationLink, RelationLink, RelationLinker};
+use ods_sdk::contracts::relation_link::{
+    NoRelationLink, RelationLink, RelationLinker, path_segment, split_relation,
+};
 use ods_sdk::{Provider, ProviderInfo};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 use crate::KIND;
 
 /// What the link is called.
 pub const LABEL: &str = "Open in Catalog Explorer";
-
-/// Kept as they are in a path segment (RFC 3986's unreserved characters); everything
-/// else is percent-encoded, so a name is always exactly one segment.
-const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
 
 /// Links relations to Catalog Explorer in one workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,30 +100,6 @@ fn base(host: Option<&str>) -> Result<String, NoRelationLink> {
     Ok(format!("https://{}", authority.to_ascii_lowercase()))
 }
 
-/// The parts of a relation as dbt renders it for Databricks: `` `c`.`s`.`t` ``, where a
-/// backtick in a name is doubled, or unquoted `c.s.t`. `None` if a quote isn't closed
-/// or a part is empty.
-fn parts(relation: &str) -> Option<Vec<String>> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut chars = relation.trim().chars().peekable();
-    let mut quoted = false;
-    while let Some(c) = chars.next() {
-        match c {
-            '`' if quoted && chars.peek() == Some(&'`') => {
-                chars.next();
-                current.push('`');
-            }
-            '`' => quoted = !quoted,
-            '.' if !quoted => out.push(std::mem::take(&mut current)),
-            c if !quoted && c.is_whitespace() => {}
-            c => current.push(c),
-        }
-    }
-    out.push(current);
-    (!quoted && out.iter().all(|p| !p.is_empty())).then_some(out)
-}
-
 impl Provider for CatalogExplorer {
     fn info(&self) -> ProviderInfo {
         ProviderInfo::new(
@@ -145,20 +114,28 @@ impl Provider for CatalogExplorer {
 impl RelationLinker for CatalogExplorer {
     fn link(&self, relation: &str) -> Result<RelationLink, NoRelationLink> {
         let base = self.base.as_ref().map_err(Clone::clone)?;
-        let parts = parts(relation).unwrap_or_default();
+        let relation = relation.trim();
+        let invalid = |why: String| NoRelationLink::InvalidName {
+            relation: relation.to_owned(),
+            why,
+        };
+        // dbt renders Databricks relations as `` `c`.`s`.`t` ``, a backtick doubled
+        // inside a name. A name that isn't well formed is refused, never repaired.
+        let parts = split_relation(relation, '`').map_err(invalid)?;
         // Unity Catalog's three levels. Two parts would leave the catalog to a
         // default this can't see, so no link is guessed (AGENTS rule 3).
         if parts.len() != 3 {
             return Err(NoRelationLink::NotQualified {
-                relation: relation.trim().to_owned(),
+                relation: relation.to_owned(),
                 parts: parts.len(),
                 needed: 3,
             });
         }
-        let path: Vec<String> = parts
+        let path = parts
             .iter()
-            .map(|p| utf8_percent_encode(p, SEGMENT).to_string())
-            .collect();
+            .map(|p| path_segment(p))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?;
         Ok(RelationLink::new(
             format!("{base}/explore/data/{}", path.join("/")),
             LABEL,
@@ -267,15 +244,39 @@ mod tests {
     }
 
     #[test]
-    fn needs_every_part() {
+    fn refuses_names_it_would_have_to_repair() {
         for relation in [
-            "`sales`.`orders`",
-            "orders",
             "",
             "a..c",
             "`a`.`b",
-            "a.b.c.d",
+            "my table.s.t",
+            "`a`b.c.d",
+            "`.`.s.t",
+            "`..`.s.t",
+            "c.`..`.t",
+            "c.s.``",
         ] {
+            let got = link(Some("h.example"), relation);
+            assert!(
+                matches!(got, Err(NoRelationLink::InvalidName { .. })),
+                "{relation}: {got:?}"
+            );
+        }
+        // Whitespace around the separators is fine.
+        assert_eq!(
+            link(Some("h.example"), " `c` . `s` . t "),
+            Ok("https://h.example/explore/data/c/s/t".to_owned())
+        );
+        // Dots inside a longer name are ordinary characters.
+        assert_eq!(
+            link(Some("h.example"), "c.s.`...x`"),
+            Ok("https://h.example/explore/data/c/s/...x".to_owned())
+        );
+    }
+
+    #[test]
+    fn needs_every_part() {
+        for relation in ["`sales`.`orders`", "orders", "a.b.c.d"] {
             let got = link(Some("h.example"), relation);
             assert!(
                 matches!(got, Err(NoRelationLink::NotQualified { needed: 3, .. })),

@@ -83,6 +83,20 @@ pub enum NoRelationLink {
         /// How many the link needs.
         needed: usize,
     },
+    /// The relation's name can't be read, or a name in it can't be one segment of a
+    /// link's path (empty, `.` or `..`).
+    InvalidName {
+        /// The relation's name, as given.
+        relation: String,
+        /// What is wrong with it.
+        why: String,
+    },
+    /// The provider serving the target's warehouse doesn't advertise the
+    /// `relation_link` capability.
+    NotOffered {
+        /// The provider's kind.
+        provider: String,
+    },
     /// The node builds no relation (e.g. it is inlined into its readers).
     NoRelation,
 }
@@ -110,6 +124,13 @@ impl fmt::Display for NoRelationLink {
                 f,
                 "no warehouse link: {relation} has {parts} part{s}, and a link needs {needed}",
                 s = if *parts == 1 { "" } else { "s" }
+            ),
+            Self::InvalidName { relation, why } => {
+                write!(f, "no warehouse link: {relation} {why}")
+            }
+            Self::NotOffered { provider } => write!(
+                f,
+                "no warehouse link: the `{provider}` provider doesn't offer links"
             ),
             Self::NoRelation => f.write_str("no warehouse link: it builds no relation"),
         }
@@ -160,6 +181,83 @@ impl From<Result<RelationLink, NoRelationLink>> for RelationLinkFields {
     }
 }
 
+/// Kept as they are in a path segment (RFC 3986's unreserved characters); everything
+/// else is percent-encoded, so a name is always exactly one segment.
+const SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// Splits a relation's name into its names, for providers: `quote` quotes a name (and
+/// is doubled inside one), and whitespace is allowed only around the `.` separators.
+/// Nothing is repaired: a name with whitespace inside it unquoted, text straight after
+/// a closing quote, an unclosed quote, a stray quote or an empty part is refused, with
+/// why.
+///
+/// # Errors
+/// What is wrong with the name, as the end of a sentence ("isn't …").
+pub fn split_relation(relation: &str, quote: char) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut chars = relation.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let mut name = String::new();
+        if chars.next_if_eq(&quote).is_some() {
+            loop {
+                match chars.next() {
+                    Some(c) if c == quote => {
+                        if chars.next_if_eq(&quote).is_some() {
+                            name.push(quote);
+                        } else {
+                            break;
+                        }
+                    }
+                    Some(c) => name.push(c),
+                    None => return Err("has a quote that isn't closed".to_owned()),
+                }
+            }
+        } else {
+            while let Some(c) = chars.next_if(|c| *c != '.' && !c.is_whitespace()) {
+                if c == quote {
+                    return Err("has a quote inside an unquoted name".to_owned());
+                }
+                name.push(c);
+            }
+        }
+        if name.is_empty() {
+            return Err("has an empty name".to_owned());
+        }
+        out.push(name);
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        match chars.next() {
+            None => return Ok(out),
+            Some('.') => {}
+            Some(_) => {
+                return Err(
+                    "has text that isn't separated by `.` (whitespace or text after a quoted name)"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+}
+
+/// `name` as one percent-encoded segment of a URL's path, for providers. `.` and `..`
+/// are refused: browsers resolve them as dot segments even when encoded (`%2E`), so they
+/// would leave the path.
+///
+/// # Errors
+/// Why `name` can't be a segment, as the end of a sentence ("has …").
+pub fn path_segment(name: &str) -> Result<String, String> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(format!(
+            "has a name, `{name}`, that can't be one segment of a link"
+        ));
+    }
+    Ok(percent_encoding::utf8_percent_encode(name, SEGMENT).to_string())
+}
+
 /// Turns relations' names into links to the warehouse's UI.
 pub trait RelationLinker: Provider {
     /// The link to `relation`, named as the project's artifacts render it (quoted as
@@ -202,6 +300,38 @@ mod tests {
     }
 
     #[test]
+    fn splits_only_well_formed_names() {
+        let split = |r: &str| split_relation(r, '`');
+        assert_eq!(split("a.b.c").unwrap(), ["a", "b", "c"]);
+        assert_eq!(split(" `a` . b .`c`` d` ").unwrap(), ["a", "b", "c` d"]);
+        assert_eq!(split("`s.x`.t").unwrap(), ["s.x", "t"]);
+        for bad in [
+            "",
+            "   ",
+            "a..c",
+            "a.b.",
+            ".a.b",
+            "my table.s.t",
+            "`a`b.c.d",
+            "`a` b.c",
+            "a`b`.c",
+            "`a.b",
+            "``.b.c",
+        ] {
+            assert!(split(bad).is_err(), "{bad}: {:?}", split(bad));
+        }
+    }
+
+    #[test]
+    fn path_segments_never_leave_the_path() {
+        assert_eq!(path_segment("a/b %").unwrap(), "a%2Fb%20%25");
+        assert_eq!(path_segment("a.b").unwrap(), "a.b");
+        for bad in ["", ".", ".."] {
+            assert!(path_segment(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn reasons_read_as_sentences() {
         for (why, text) in [
             (
@@ -226,6 +356,19 @@ mod tests {
             (
                 NoRelationLink::NoRelation,
                 "no warehouse link: it builds no relation",
+            ),
+            (
+                NoRelationLink::NotOffered {
+                    provider: "p".into(),
+                },
+                "no warehouse link: the `p` provider doesn't offer links",
+            ),
+            (
+                NoRelationLink::InvalidName {
+                    relation: "a..b".into(),
+                    why: "has an empty name".into(),
+                },
+                "no warehouse link: a..b has an empty name",
             ),
         ] {
             assert_eq!(why.to_string(), text);

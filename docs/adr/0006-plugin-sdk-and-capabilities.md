@@ -155,8 +155,15 @@ format, no dependency and no crate.
     warehouse quotes identifiers), so each provider parses its own dialect.
   - **Conservative (rule 3):** a link is where the manifest says the relation is, never
     proof that it exists. When no link can be built the provider says why
-    (`unsupported`, `not_configured`, `invalid_setting`, `not_qualified`,
-    `no_relation`), and never guesses one (e.g. a default catalog for a two-part name).
+    (`unsupported`, `not_offered`, `not_configured`, `invalid_setting`,
+    `not_qualified`, `invalid_name`, `no_relation`), and never guesses one (e.g. a
+    default catalog for a two-part name).
+  - **Names are never repaired.** `split_relation` (in the SDK, given the warehouse's
+    quote character) allows whitespace only around the `.` separators; whitespace
+    inside an unquoted name, text straight after a closing quote, a stray or unclosed
+    quote and an empty name are refused. `path_segment` refuses `.` and `..`, which
+    browsers resolve as dot segments even percent-encoded, so a link can't leave its
+    path.
   - **Private (rule 9):** a link is `https://` only, with no user part, query string or
     fragment; each name is percent-encoded. The host is configuration, not a secret.
   - The **label** comes from the provider ("Open in Catalog Explorer"), so hosts never
@@ -188,9 +195,14 @@ format, no dependency and no crate.
   deterministic), that a missing part is never guessed, that names are encoded into
   exactly one segment each, and that an unconfigured provider says so. The fake
   (`FakeRelationLinker`) and `CatalogExplorer` both pass it.
-- **Versions:** a new contract, so no existing contract version changes, and adding it
-  doesn't bump `SDK_VERSION`, as when `relation_probe` and `change_provider` were
-  added.
+- **Versions:** a new contract at 0.1; no existing contract changes. Adding a
+  contract is an SDK minor bump (§6), and it ships under the bump to `SDK_VERSION` 0.3
+  already in `[Unreleased]` for #323, beside `error_catalogue`.
+- **The lineage document** (`GraphDocument`, `schema_version` 1) gains the three
+  fields as optional additions, with no version change: its version is a single
+  integer, which can't record a minor bump, and readers ignore fields they don't know.
+  The JSON output envelope stays at 0.1 for the same additive change, as with earlier
+  additions.
 
 ## Consequences
 - **Positive:**

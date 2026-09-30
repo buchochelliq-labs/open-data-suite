@@ -193,12 +193,13 @@ fn headline(view: &ModelView) -> String {
 }
 
 /// The link to where the relation is expected to be in the warehouse's UI (#329): it
-/// opens in a new tab, and never passes this page's address on. `class` styles it, and
-/// `shown` gives its text from the provider's label.
+/// opens in a new tab, and never passes this page's address on. `class` styles it,
+/// `shown` gives its text from the provider's label, and `note` says what the link is.
 pub(crate) fn warehouse_link(
     fields: &RelationLinkFields,
     class: &str,
     shown: &dyn Fn(&str) -> String,
+    note: &str,
 ) -> String {
     let Some(url) = &fields.relation_url else {
         return String::new();
@@ -215,7 +216,7 @@ pub(crate) fn warehouse_link(
         r#"<a class="{class}" href="{url}" target="_blank" rel="noopener noreferrer" title="{title}" aria-label="{label_attr} (expected location, opens in a new tab)" data-relation-link>{shown}</a>"#,
         class = attr(class),
         url = attr(url),
-        title = attr(&format!("{label}. {LINK_TITLE}")),
+        title = attr(&format!("{label}. {note}")),
         label_attr = attr(label),
         shown = text(&shown(label)),
     )
@@ -284,7 +285,12 @@ fn head(b: &mut String, view: &ModelView, current: &str) {
         b,
         r#"<span class="mh-actions">{warehouse}<a class="btn" href="{ROOT}{lineage}">View lineage</a><button class="btn" id="copylink" type="button" hidden>Copy link</button></span></div><div class="mh-meta">"#,
         // The label is the provider's; the arrow says the link leaves ODS.
-        warehouse = warehouse_link(&view.relation_link, "btn", &|label| format!("{label} ↗")),
+        warehouse = warehouse_link(
+            &view.relation_link,
+            "btn",
+            &|label| format!("{label} ↗"),
+            LINK_TITLE
+        ),
         lineage = attr(&view.links.lineage),
     );
     if let Some(relation) = &view.relation {

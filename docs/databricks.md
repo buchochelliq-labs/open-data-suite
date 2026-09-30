@@ -85,7 +85,9 @@ token is ever put in a link. Nothing is fetched to build it.
 The link is where the manifest says the table is. It isn't proof that the table
 exists: it may not have been built yet, or may have been dropped. When there is no link,
 the page says why instead of guessing one: no `host` configured, a host that can't be
-used, or a relation named with only two parts (the catalog would be a guess).
+used, a relation named with only two parts (the catalog would be a guess), or a name
+that isn't well formed (whitespace inside an unquoted name, text after a closing
+backtick, or a name that is `.` or `..`), which is never repaired.
 
 ## Next steps
 - **`ods state explain <node>`:** why a node was built or reused. See the [CLI reference](cli.md).

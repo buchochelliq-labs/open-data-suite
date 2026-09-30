@@ -28,13 +28,25 @@ impl RelationLinkHarness for Harness {
     fn awkward(&self) -> String {
         r#""my shop"."a?b#c"."d/e%f""#.to_owned()
     }
+
+    fn malformed(&self) -> Vec<String> {
+        [
+            r#""shop"."."."orders""#,
+            r#""shop".".."."orders""#,
+            r#""shop".""."orders""#,
+            r#""shop"x."mart"."orders""#,
+            "my shop.mart.orders",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
 }
 
 #[test]
 fn conforms() {
     let report = run(&Harness);
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 5, "{report:?}");
+    assert_eq!(report.passed.len(), 6, "{report:?}");
 }
 
 #[test]

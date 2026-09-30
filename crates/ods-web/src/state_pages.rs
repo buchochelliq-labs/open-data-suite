@@ -16,6 +16,7 @@ use html_escape::{encode_double_quoted_attribute as attr, encode_text as text};
 use ods_core::state::{PlanAction, Timestamp};
 use serde::Deserialize;
 
+use crate::catalog::RUN_LINK_TITLE;
 use crate::dashboard::journal::{MISSING, NodeStatsView};
 use crate::dashboard::state::{
     ChainLine, LastRunView, NO_JOURNAL, OutcomeFrom, PlanRow, PlanView, RunFilter, RunOutcome,
@@ -2603,7 +2604,7 @@ fn run_node_name(view: &RunPageView, node: &str, name: &str) -> String {
         .relation_links
         .get(node)
         .map_or_else(String::new, |fields| {
-            warehouse_link(fields, "st-wh", &|_| "↗".to_owned())
+            warehouse_link(fields, "st-wh", &|_| "↗".to_owned(), RUN_LINK_TITLE)
         });
     let name = node_name(node, name, "../../");
     if link.is_empty() {

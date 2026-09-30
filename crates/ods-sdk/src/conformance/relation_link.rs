@@ -24,6 +24,12 @@ pub trait RelationLinkHarness: Send + Sync {
 
     /// A fully qualified relation whose names hold a space, `?`, `#`, `/` and `%`.
     fn awkward(&self) -> String;
+
+    /// Fully qualified relations the provider must refuse rather than repair: one
+    /// whose name is `.`, one whose name is `..`, one with an empty quoted name, one
+    /// with text straight after a closing quote, and one with whitespace inside an
+    /// unquoted name.
+    fn malformed(&self) -> Vec<String>;
 }
 
 /// The URL's scheme and host, and the rest (path).
@@ -92,6 +98,11 @@ fn encodes_every_name(harness: &dyn RelationLinkHarness) {
         "{case}: unencoded in {}",
         link.url
     );
+    assert!(
+        path.split('/').all(|segment| !is_dot_segment(segment)),
+        "{case}: a dot segment in {}",
+        link.url
+    );
     // Each name stays one segment, so a `/` in a name is encoded.
     let qualified = harness
         .linker()
@@ -99,6 +110,29 @@ fn encodes_every_name(harness: &dyn RelationLinkHarness) {
         .unwrap_or_else(|e| panic!("{case}: {e}"));
     let plain = split(&qualified.url).1.split('/').count();
     assert_eq!(path.split('/').count(), plain, "{case}: {}", link.url);
+}
+
+/// `.` or `..`, encoded or not: browsers resolve both forms, so they leave the path.
+fn is_dot_segment(segment: &str) -> bool {
+    let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+    decoded == "." || decoded == ".."
+}
+
+fn refuses_malformed_names(harness: &dyn RelationLinkHarness) {
+    let case = "refuses_malformed_names";
+    let linker = harness.linker();
+    let malformed = harness.malformed();
+    assert!(
+        malformed.len() >= 5,
+        "{case}: the harness needs five malformed relations"
+    );
+    for relation in malformed {
+        let got = linker.link(&relation);
+        assert!(
+            matches!(got, Err(NoRelationLink::InvalidName { .. })),
+            "{case}: `{relation}` gave {got:?}"
+        );
+    }
 }
 
 fn says_what_is_not_configured(harness: &dyn RelationLinkHarness) -> bool {
@@ -125,6 +159,8 @@ pub fn run(harness: &dyn RelationLinkHarness) -> Report {
     report.passed.push("never_guesses_a_missing_part");
     encodes_every_name(harness);
     report.passed.push("encodes_every_name");
+    refuses_malformed_names(harness);
+    report.passed.push("refuses_malformed_names");
     if says_what_is_not_configured(harness) {
         report.passed.push("says_what_is_not_configured");
     } else {

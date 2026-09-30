@@ -2087,6 +2087,11 @@ fn the_nodes_table_links_each_relation_to_the_warehouse() {
         "{page}"
     );
     assert!(!page.contains("no_relation_link"), "{page}");
+    // A past run's link comes from the current manifest, and says so.
+    assert!(
+        page.contains("Expected location from the current manifest, not checked"),
+        "{page}"
+    );
     let (_, body) = get(addr, &format!("/api/state/runs/{RUN_3}"));
     let run: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(

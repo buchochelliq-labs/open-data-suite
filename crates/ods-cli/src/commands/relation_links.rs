@@ -20,10 +20,22 @@ const DATABRICKS: &str = ods_provider_databricks::KIND;
 const HOST_ENV: &str = "DATABRICKS_HOST";
 
 /// The workspace host links are built from, read once from configuration.
+///
+/// Only a host that passed the provider's checks is kept, as the `https://<host>` it
+/// normalises to: the value as configured, which could carry a user part, is never
+/// stored, so it can't reach `Debug` output or logs (rule 9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LinkSettings {
-    /// The provider instance and its `host`, or why there is none.
+    /// The provider instance and its checked `https://<host>`, or why there is none.
     host: Result<(String, String), NoRelationLink>,
+}
+
+/// `host`, checked and normalised as the provider builds links from it.
+fn checked(instance: &str, host: &str) -> Result<String, NoRelationLink> {
+    CatalogExplorer::new(instance, Some(host))
+        .base()
+        .map(str::to_owned)
+        .map_err(Clone::clone)
 }
 
 impl LinkSettings {
@@ -47,15 +59,19 @@ impl LinkSettings {
         };
         // The environment is read before configuration (ADR-0021 §3).
         if let Some(host) = env_host.filter(|h| !h.trim().is_empty()) {
+            let instance = instance();
             return Self {
-                host: Ok((instance(), host)),
+                host: checked(&instance, &host).map(|base| (instance, base)),
             };
         }
         let mut hosts: Vec<(&String, String)> = Vec::new();
         for (name, host) in &instances {
             match host {
                 None => {}
-                Some(toml::Value::String(h)) => hosts.push((name, h.clone())),
+                Some(toml::Value::String(h)) => match checked(name, h) {
+                    Ok(base) => hosts.push((name, base)),
+                    Err(why) => return Self { host: Err(why) },
+                },
                 Some(_) => {
                     return Self {
                         host: Err(NoRelationLink::InvalidSetting {
@@ -116,9 +132,12 @@ impl Links {
                 Strategy::new("relation_link", [Capability::RelationLink], true),
                 Strategy::fallback("no_link", false),
             ];
-            match choose(&linker.info().capabilities, &strategies) {
+            let info = linker.info();
+            match choose(&info.capabilities, &strategies) {
                 Ok(choice) if choice.chosen.value => Ok(linker),
-                _ => Err(unsupported()),
+                _ => Err(NoRelationLink::NotOffered {
+                    provider: info.kind,
+                }),
             }
         });
         Self { linker }
@@ -220,6 +239,35 @@ mod tests {
         );
         let only_env = Links::new(Some("databricks"), &settings("", Some("env.example")));
         assert!(only_env.fields(Some("a.b.c")).relation_url.is_some());
+    }
+
+    #[test]
+    fn keeps_only_a_checked_host() {
+        let with_user = settings(&UC.replace("https://", "https://me:secret@"), None);
+        assert!(matches!(
+            with_user.host,
+            Err(NoRelationLink::InvalidSetting { .. })
+        ));
+        assert!(
+            !format!("{with_user:?}").contains("secret"),
+            "{with_user:?}"
+        );
+        let env = settings("", Some("https://me:secret@env.example"));
+        assert!(!format!("{env:?}").contains("secret"), "{env:?}");
+        // Stored as it is normalised: the same workspace written two ways is one.
+        let same = settings(
+            &format!(
+                "{UC}[providers.b]\nkind = \"databricks\"\n[providers.b.settings]\nhost = \"DBC-1.cloud.databricks.com\"\n"
+            ),
+            None,
+        );
+        assert_eq!(
+            same.host,
+            Ok((
+                "b".to_owned(),
+                "https://dbc-1.cloud.databricks.com".to_owned()
+            ))
+        );
     }
 
     #[test]

@@ -809,6 +809,8 @@ there is no link, the header says why instead of guessing one:
 - the workspace host isn't configured, or isn't an `https://` workspace URL;
 - the relation isn't fully qualified (Unity Catalog needs `catalog.schema.table`; a
   two-part name gets no link, as the catalog would be a guess);
+- a name in the relation can't be read as the warehouse writes it, or is `.` or `..`
+  (a name is never repaired into another one);
 - the node builds no relation (an ephemeral model).
 
 The lineage explorer's side panel (the node's head, and the General tab) and each row

@@ -21,8 +21,8 @@ the changelog was introduced.
 - `SDK_VERSION` is now 0.3 (#323): the executor contract is 0.5 (an `ErrorSummary` may
   carry the `line` the engine reported), the SQL lineage analyzer contract is 0.2 (an
   opaque `QueryLineage` names the columns it couldn't resolve, `unresolved`), and there
-  is a new `error_catalogue` contract (0.1). Out-of-process plugins must be rebuilt
-  against it.
+  are two new contracts, `error_catalogue` (0.1) and `relation_linker` (0.1, #329).
+  Out-of-process plugins must be rebuilt against it.
 - `ods serve`'s dashboard JSON (`/api/shell`, `/api/home`, `/api/state/…`,
   `/api/catalog…`) is now `schema_version` 2: a run in `/api/state/runs` may have no
   snapshot (a failed run listed from its journal), so its `snapshot`, `recorded_at` and
@@ -80,7 +80,9 @@ the changelog was introduced.
   is the relation's expected location, not proof it exists, and never carries a token.
   `/api/state/runs/<run>` adds `relation_links` by node. Plugin authors get the
   `relation_link` capability and the `relation_linker` 0.1 contract, with a fake and a
-  conformance suite (ADR-0006 §7) (#329).
+  conformance suite (ADR-0006 §7). The lineage graph document keeps `schema_version`
+  1: the new fields are optional, and a single-integer version can't mark a minor
+  change (#329).
 - The dashboard's Runs and Run pages (`ods serve`) show each run's outcome, duration,
   node counts and rows from its run journal (#322, ADR-0024): *succeeded*, *partial*,
   *failed*, or *unknown* / *running or stopped without finishing* when the journal
