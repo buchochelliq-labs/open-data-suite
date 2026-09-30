@@ -12,6 +12,7 @@ use ods_core::state::{
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, RelationName};
 use ods_lineage::{GraphFilter, LineageNode, LineageProject, MemoryCache, NodeKind, build};
 use ods_provider_fake::FakeSqlLineageAnalyzer;
+use ods_sdk::contracts::relation_link::{NoRelationLink, RelationLink, RelationLinkFields};
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
 use ods_web::catalog::{
     CatalogColumn, CatalogInput, CatalogNode, CatalogQuery, CatalogTest, ColumnSource, LastBuild,
@@ -1014,4 +1015,83 @@ fn column_lineage_matches_whatever_the_case() {
         model["columns"][0]["upstream"][0], "raw_orders.id",
         "{model}"
     );
+}
+
+/// The model page's header, up to its tabs.
+fn model_head(page: &str) -> String {
+    let start = page.find(r#"<div class="model-head">"#).expect("a header");
+    let end = page[start..].find(r#"<nav class="tabs""#).expect("tabs") + start;
+    page[start..end].replace("><", ">\n<")
+}
+
+/// `recorded()`, with `orders`' warehouse link set to `link`.
+fn with_link(link: &Result<RelationLink, NoRelationLink>) -> Dashboard {
+    let mut nodes = nodes();
+    for node in &mut nodes {
+        if node.id == "model.shop.orders" {
+            node.relation = Some("`main`.`shop`.`orders`".into());
+            node.relation_link = RelationLinkFields::from(link.clone());
+        }
+    }
+    let mut input = catalog_input();
+    input.nodes = nodes;
+    recorded().with_catalog(input)
+}
+
+#[test]
+fn a_model_page_opens_its_relation_in_the_warehouse() {
+    let url = "https://dbc-1.cloud.databricks.com/explore/data/main/shop/orders";
+    let addr = start(with_link(&Ok(RelationLink::new(
+        url,
+        "Open in Catalog Explorer",
+    ))));
+    let (_, _, page) = get(addr, "/catalog/model.shop.orders");
+    let head = model_head(&page);
+    insta::assert_snapshot!("model_head_with_link", head);
+    // A new tab that is given nothing of this page (no opener, no referrer).
+    assert!(head.contains(&format!(
+        r#"<a class="btn" href="{url}" target="_blank" rel="noopener noreferrer""#
+    )));
+    assert!(head.contains("Open in Catalog Explorer ↗</a>"), "{head}");
+    // Where it is expected to be, not proof that it exists (AGENTS rule 3).
+    assert!(head.contains("expected location"), "{head}");
+    assert!(head.contains("hasn't checked that it exists"), "{head}");
+    assert!(!head.contains("no_relation_link"), "{head}");
+    let model = json(addr, "/api/catalog/model.shop.orders");
+    assert_eq!(model["relation_url"], url);
+    assert_eq!(model["relation_url_label"], "Open in Catalog Explorer");
+    assert!(model.get("relation_url_unavailable").is_none(), "{model}");
+}
+
+#[test]
+fn a_model_page_without_a_link_says_why() {
+    let addr = start(with_link(&Err(NoRelationLink::Unsupported {
+        warehouse: Some("duckdb".into()),
+    })));
+    let (_, _, page) = get(addr, "/catalog/model.shop.orders");
+    let head = model_head(&page);
+    insta::assert_snapshot!("model_head_without_link", head);
+    assert!(
+        !head.contains("data-relation-link"),
+        "no guessed link: {head}"
+    );
+    assert!(!head.contains("expected location"), "{head}");
+    assert!(
+        head.contains(r#"<span class="nolink" data-state="no_relation_link">No warehouse link for <code>duckdb</code> targets</span>"#),
+        "{head}"
+    );
+    let model = json(addr, "/api/catalog/model.shop.orders");
+    assert!(model.get("relation_url").is_none(), "{model}");
+    assert_eq!(
+        model["relation_url_unavailable"],
+        "no warehouse link for `duckdb` targets"
+    );
+
+    // A link that isn't https:// is never rendered, whatever the binary handed over.
+    let addr = start(with_link(&Ok(RelationLink::new(
+        "javascript:alert(1)",
+        "Open",
+    ))));
+    let (_, _, page) = get(addr, "/catalog/model.shop.orders");
+    assert!(!page.contains("javascript:alert"), "{page}");
 }

@@ -18,6 +18,7 @@ use ods_web::catalog::{
     TypeSource,
 };
 
+use super::relation_links::Links;
 use super::state_plan::{display_name, node_name};
 
 /// How layers are worked out, for people: derived, so it says so.
@@ -29,6 +30,7 @@ pub(super) fn catalog(
     manifest: &Manifest,
     target_dir: &Path,
     last_builds: BTreeMap<String, LastBuild>,
+    links: &Links,
 ) -> CatalogInput {
     // `catalog.json` is optional; without it, only declared types are known.
     let path = target_dir.join("catalog.json");
@@ -51,6 +53,7 @@ pub(super) fn catalog(
         })
         .map(|n| {
             let mut node = node(n, warehouse.as_ref());
+            node.relation_link = links.fields(n.relation_name.as_deref());
             node.tests = tests.remove(n.unique_id.as_str()).unwrap_or_default();
             node
         })

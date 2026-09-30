@@ -16,6 +16,7 @@ use html_escape::{encode_double_quoted_attribute as attr, encode_text as text};
 use ods_core::state::{PlanAction, Timestamp};
 use serde::Deserialize;
 
+use crate::catalog::RUN_LINK_TITLE;
 use crate::dashboard::journal::{MISSING, NodeStatsView};
 use crate::dashboard::state::{
     ChainLine, LastRunView, NO_JOURNAL, OutcomeFrom, PlanRow, PlanView, RunFilter, RunOutcome,
@@ -23,6 +24,7 @@ use crate::dashboard::state::{
 };
 use crate::dashboard::{CommandHint, EmptyState, ShellView, StateStatus};
 use crate::home::{Frame, framed};
+use crate::model_page::{no_link_reason, warehouse_link, with_code};
 use crate::server::Shared;
 use ods_sdk::contracts::run_events::NodeRunStatus;
 
@@ -2641,6 +2643,48 @@ fn clock(at: ods_core::state::TimestampMs) -> String {
         .map_or(text.clone(), |(_, t)| t.chars().take(8).collect())
 }
 
+/// A node's name on the Run page, with the link to where its relation is expected to
+/// be in the warehouse's own UI, when there is one (#329).
+fn run_node_name(view: &RunPageView, node: &str, name: &str) -> String {
+    let link = view
+        .relation_links
+        .get(node)
+        .map_or_else(String::new, |fields| {
+            warehouse_link(fields, "st-wh", &|_| "↗".to_owned(), RUN_LINK_TITLE)
+        });
+    let name = node_name(node, name, "../../");
+    if link.is_empty() {
+        name
+    } else {
+        format!("{name} {link}")
+    }
+}
+
+/// Why no node has a warehouse link, once under the table: the reason is the
+/// warehouse's or the configuration's, the same for every row.
+fn links_note(b: &mut String, view: &RunPageView) {
+    if view
+        .relation_links
+        .values()
+        .any(|f| f.relation_url.is_some())
+    {
+        return;
+    }
+    let reasons: std::collections::BTreeSet<String> = view
+        .relation_links
+        .values()
+        .map(no_link_reason)
+        .filter(|r| !r.is_empty())
+        .collect();
+    for reason in reasons {
+        let _ = write!(
+            b,
+            r#"<p class="st-small st-links-note" data-state="no_relation_link">{}</p>"#,
+            with_code(&reason)
+        );
+    }
+}
+
 #[allow(clippy::too_many_lines, reason = "one table, column by column")]
 fn nodes_table(b: &mut String, view: &RunPageView) {
     if view.nodes.is_empty() {
@@ -2655,7 +2699,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
             let _ = write!(
                 b,
                 r#"<tr><th scope="row">{name}</th><td class="st-dim">{kind}</td><td>{what}</td><td class="mono st-dim">{from}</td></tr>"#,
-                name = node_name(&r.node, &r.name, "../../"),
+                name = run_node_name(view, &r.node, &r.name),
                 kind = text(r.kind.as_deref().unwrap_or("—")),
                 what = if r.built {
                     r#"<span class="st-num built">built</span>"#
@@ -2669,7 +2713,9 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
                 ),
             );
         }
-        b.push_str("</tbody></table></section>");
+        b.push_str("</tbody></table>");
+        links_note(b, view);
+        b.push_str("</section>");
         return;
     }
     let why: std::collections::BTreeMap<&str, &str> = view
@@ -2751,7 +2797,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
             },
             id = attr(&n.node),
             status = attr(n.status_label),
-            name = node_name(&n.node, &n.name, "../../"),
+            name = run_node_name(view, &n.node, &n.name),
             kind = text(n.kind.as_deref().unwrap_or("")),
             label = text(n.status_label),
             // Failed and skipped nodes keep their last good build (AGENTS rule 5).
@@ -2825,7 +2871,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
             b,
             r#"<tr data-node="{id}" data-status="kept"><th scope="row">{name}<span class="st-small">{kind}</span></th><td><span class="st-num kept">kept</span></td><td colspan="6" class="st-small">{from}</td></tr>"#,
             id = attr(&r.node),
-            name = node_name(&r.node, &r.name, "../../"),
+            name = run_node_name(view, &r.node, &r.name),
             kind = text(r.kind.as_deref().unwrap_or("")),
             from = text(&r.kept_from.as_deref().map_or_else(
                 || "not in this run: kept an earlier build".to_owned(),
@@ -2836,7 +2882,9 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
             )),
         );
     }
-    b.push_str("</tbody></table></section>");
+    b.push_str("</tbody></table>");
+    links_note(b, view);
+    b.push_str("</section>");
 }
 
 #[allow(clippy::too_many_lines, reason = "one panel, built top to bottom")]

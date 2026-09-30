@@ -11,6 +11,7 @@ mod mcp;
 mod mcp_data;
 mod mcp_tools;
 mod planned;
+mod relation_links;
 mod run_journal;
 mod run_stats;
 mod serve;

@@ -318,3 +318,7 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-explain-said summary { color: var(--accent); }
 .st-explain-said pre { margin-top: 8px; }
 .st-explain-said .st-small { display: block; margin-top: 6px; }
+
+/* "Open in warehouse" on the Run page's Nodes table (#329). */
+.st-wh { font-size: 12px; text-decoration: none; margin-left: 2px; }
+.st-links-note { margin: 8px 0 0; }

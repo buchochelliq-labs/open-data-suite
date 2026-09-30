@@ -471,6 +471,20 @@ if (typeof document !== "undefined") (async function () {
     a.addEventListener("click", () => select(node, column, { center: true }));
     if (note) h("span", " " + note, "note", li);
   }
+  // "Open in warehouse" (#329): where the manifest says the relation is, in the
+  // warehouse's own UI, when the binary could build a link. It opens in a new tab and
+  // passes nothing on; it isn't proof the relation exists (AGENTS rule 3).
+  const LINK_NOTE = "Where the project's manifest says the relation is. ODS hasn't checked that it exists.";
+  function warehouseLink(n, text, parent) {
+    if (!n.relation_url || !/^https:\/\//.test(n.relation_url)) return null;
+    const a = h("a", text, "wh-link", parent);
+    a.href = n.relation_url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.title = `${n.relation_url_label || "Open in warehouse"}. ${LINK_NOTE}`;
+    a.setAttribute("data-relation-link", "");
+    return a;
+  }
   const CUBE = '<path d="M21 8 12 3 3 8v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5M12 13v8"></path>';
   function icon(kind) {
     const s = document.createElementNS(SVG, "svg");
@@ -494,6 +508,7 @@ if (typeof document !== "undefined") (async function () {
       open.href = d ? d.model_href : "catalog/" + enc(node);
       open.title = "The model page";
     }
+    warehouseLink(n, "Open in warehouse ↗", title);
     const close = h("button", "×", "lp-close", title);
     close.type = "button";
     close.setAttribute("aria-label", "Clear the selection");
@@ -624,6 +639,12 @@ if (typeof document !== "undefined") (async function () {
 
   function general(body, node, column, n) {
     h("p", `${n.kind} · ${n.relation}`, "sub", body);
+    const where = h("p", null, "note", body);
+    if (warehouseLink(n, `${n.relation_url_label || "Open in warehouse"} ↗`, where)) {
+      where.append(" · expected location, not checked");
+    } else if (n.relation_url_unavailable) {
+      rich("span", n.relation_url_unavailable.charAt(0).toUpperCase() + n.relation_url_unavailable.slice(1), null, where);
+    } else where.remove();
     if (n.confidence) h("p", `Lineage confidence: ${n.confidence}`, "note", body);
     if (n.opaque) h("p", "Opaque: the SQL could not be analyzed, so every input is assumed to affect every column.", "warn", body);
     for (const note of n.diagnostics || []) h("p", note, "warn", body);

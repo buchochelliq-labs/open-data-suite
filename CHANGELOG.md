@@ -21,8 +21,8 @@ the changelog was introduced.
 - `SDK_VERSION` is now 0.3 (#323): the executor contract is 0.5 (an `ErrorSummary` may
   carry the `line` the engine reported), the SQL lineage analyzer contract is 0.2 (an
   opaque `QueryLineage` names the columns it couldn't resolve, `unresolved`), and there
-  is a new `error_catalogue` contract (0.1). Out-of-process plugins must be rebuilt
-  against it.
+  are two new contracts, `error_catalogue` (0.1) and `relation_linker` (0.1, #329).
+  Out-of-process plugins must be rebuilt against it.
 - `ods serve`'s dashboard JSON (`/api/shell`, `/api/home`, `/api/state/…`,
   `/api/catalog…`) is now `schema_version` 2: a run in `/api/state/runs` may have no
   snapshot (a failed run listed from its journal), so its `snapshot`, `recorded_at` and
@@ -68,6 +68,21 @@ the changelog was introduced.
   failed test), DuckDB's (missing column, table or view, conversion, constraint,
   dependent entries, conflicts and locks), PostgreSQL's documented messages, and Apache
   Spark's and Delta Lake's error classes as Databricks reports them.
+- An **Open in warehouse** link for a model's relation. With a Databricks
+  target and the workspace `host` configured (`[providers.<name>] kind =
+  "databricks"`, or `DATABRICKS_HOST`), the dashboard's model page has an **Open in
+  Catalog Explorer ↗** button to
+  `https://<host>/explore/data/<catalog>/<schema>/<table>`; the lineage explorer's side
+  panel and a run's Nodes table have the same link. `ods lineage graph --format json`,
+  `ods lineage columns --output json` and `/api/catalog/<id>` add `relation_url` and
+  `relation_url_label`, or `relation_url_unavailable` with the reason there is no
+  link: another warehouse, no host, or a relation that isn't fully qualified. The link
+  is the relation's expected location, not proof it exists, and never carries a token.
+  `/api/state/runs/<run>` adds `relation_links` by node. Plugin authors get the
+  `relation_link` capability and the `relation_linker` 0.1 contract, with a fake and a
+  conformance suite (ADR-0006 §7). The lineage graph document keeps `schema_version`
+  1: the new fields are optional, and a single-integer version can't mark a minor
+  change (#329).
 - The dashboard's Runs and Run pages (`ods serve`) show each run's outcome, duration,
   node counts and rows from its run journal (#322, ADR-0024): *succeeded*, *partial*,
   *failed*, or *unknown* / *running or stopped without finishing* when the journal
