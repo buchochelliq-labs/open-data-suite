@@ -501,6 +501,7 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
 
 /// The runs listed from their journals (#322): the failed one first, by itself, then
 /// the recorded one, with their outcomes. Returns the failed run's row.
+#[cfg(unix)]
 fn journal_rows(runs: &Value) -> &Value {
     let failed = &runs["runs"][0];
     assert_eq!(failed["snapshot"], Value::Null, "{failed}");
@@ -517,6 +518,7 @@ fn journal_rows(runs: &Value) -> &Value {
 
 /// The page of `run_id`, a run that recorded nothing, lists `orders` as failed, from
 /// its journal (#322).
+#[cfg(unix)]
 fn orders_failed_in(server: &Server, run_id: &str) {
     let (status, run) = get(server, &format!("api/state/runs/{run_id}"));
     assert_eq!(status, 200, "{run}");
