@@ -221,6 +221,7 @@ impl DashboardSource {
             super::serve_catalog::last_builds(latest.as_ref(), &runs_index, &ws.manifest);
         // Plans depend on time (lag tolerances expire), so Home plans again on every
         // request, as of then; this first plan is the fallback.
+        let journals = ods_sdk::run_journal::Journals::beside(&ws.state_db);
         let settings = self.settings.clone();
         let planner: Planner = Arc::new(move |now| {
             plan_latest(&ws, &settings, latest.clone(), &[], now)
@@ -239,7 +240,13 @@ impl DashboardSource {
                 .capped(counted >= SNAPSHOTS_READ)
                 .with_warnings(warnings)
                 .with_planner(planner)
-                .with_history(History::new(snapshots).with_last_run(last_run)),
+                .with_history(
+                    History::new(snapshots)
+                        .with_last_run(last_run)
+                        // Each run's outcome, times and per-node stats (#322): read by
+                        // the pages when asked, through ods-sdk's journal reader.
+                        .with_journals(journals),
+                ),
         ));
         (state, last_builds)
     }

@@ -111,7 +111,7 @@ fn pairs(list: &[(&str, u64)]) -> Vec<(String, u64)> {
 fn without_a_state_store_the_catalog_lists_the_manifest_and_never_built() {
     let server = serve(&fixtures("jaffle-ods/artifacts/dbt-1.10"), &[]);
     let view = json(&server, "api/catalog");
-    assert_eq!(view["schema_version"], 1);
+    assert_eq!(view["schema_version"], 2);
     assert_eq!(view["total"], 13, "10 models and 3 seeds: {view}");
     assert_eq!(counts(&view, "type"), pairs(&[("model", 10), ("seed", 3)]));
     assert_eq!(

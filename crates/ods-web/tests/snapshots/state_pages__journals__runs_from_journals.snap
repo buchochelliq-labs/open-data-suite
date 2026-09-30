@@ -11,21 +11,21 @@ expression: pretty(&body)
       "label": "Outcome",
       "options": [
         {
-          "count": 3,
+          "count": 5,
           "label": "All",
-          "selected": true,
+          "selected": false,
           "value": ""
         },
         {
-          "count": 0,
+          "count": 1,
           "label": "Succeeded",
           "selected": false,
           "value": "succeeded"
         },
         {
-          "count": 0,
+          "count": 1,
           "label": "Partial",
-          "selected": false,
+          "selected": true,
           "value": "partial"
         },
         {
@@ -35,7 +35,7 @@ expression: pretty(&body)
           "value": "failed"
         },
         {
-          "count": 0,
+          "count": 1,
           "label": "Running or stopped",
           "selected": false,
           "value": "unfinished"
@@ -47,7 +47,7 @@ expression: pretty(&body)
           "value": "unknown"
         },
         {
-          "count": 3,
+          "count": 2,
           "label": "No journal",
           "selected": false,
           "value": "recorded"
@@ -60,7 +60,7 @@ expression: pretty(&body)
       "label": "Command",
       "options": [
         {
-          "count": 3,
+          "count": 5,
           "label": "All",
           "selected": true,
           "value": ""
@@ -73,13 +73,13 @@ expression: pretty(&body)
       "label": "Target",
       "options": [
         {
-          "count": 3,
+          "count": 1,
           "label": "All",
           "selected": true,
           "value": ""
         },
         {
-          "count": 3,
+          "count": 0,
           "label": "dev",
           "selected": false,
           "value": "dev"
@@ -92,7 +92,7 @@ expression: pretty(&body)
       "label": "Date",
       "options": [
         {
-          "count": 3,
+          "count": 1,
           "label": "All",
           "selected": true,
           "value": ""
@@ -104,13 +104,13 @@ expression: pretty(&body)
           "value": "1d"
         },
         {
-          "count": 3,
+          "count": 1,
           "label": "Last 7 days",
           "selected": false,
           "value": "7d"
         },
         {
-          "count": 3,
+          "count": 1,
           "label": "Last 30 days",
           "selected": false,
           "value": "30d"
@@ -119,12 +119,12 @@ expression: pretty(&body)
       "unavailable": null
     }
   ],
-  "failed": 0,
-  "filtered": false,
+  "failed": 1,
+  "filtered": true,
   "last_run": null,
   "last_run_listed": false,
   "limit": 50,
-  "listed": 3,
+  "listed": 1,
   "project": "jaffle_ods",
   "recorded": [
     "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
@@ -133,98 +133,116 @@ expression: pretty(&body)
     "Without a journal, failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the run that has its run id; that it recorded nothing is inferred.",
     "Who ran each run isn't recorded yet."
   ],
-  "recorded_snapshots": 3,
+  "recorded_snapshots": 0,
   "runs": [
     {
-      "at": "2026-09-29T00:02:37Z",
-      "built": 2,
+      "at": "2026-09-29T00:04:10Z",
+      "built": 0,
       "command": null,
-      "duration": null,
-      "failed": null,
+      "duration": "4.0s",
+      "failed": 1,
       "from_last_run": false,
-      "kept": 1,
-      "kept_state": null,
-      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
-      "outcome": "recorded",
-      "outcome_from": "snapshot",
-      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
-      "recorded_at": "2026-09-29T00:02:37Z",
-      "replaces": 2,
-      "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
-      "short_run_id": "4c0b5c8f",
-      "skipped": null,
-      "snapshot": 3,
-      "stats": null,
-      "target": {
-        "kind": "warehouse",
-        "name": "dev"
-      },
-      "triggered_by": null
-    },
-    {
-      "at": "2026-09-29T00:01:03Z",
-      "built": 2,
-      "command": null,
-      "duration": null,
-      "failed": null,
-      "from_last_run": false,
-      "kept": 1,
-      "kept_state": null,
-      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
-      "outcome": "recorded",
-      "outcome_from": "snapshot",
-      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
-      "recorded_at": "2026-09-29T00:01:03Z",
-      "replaces": 1,
-      "run_id": "9ea38bd5-0000-4000-8000-000000000002",
-      "short_run_id": "9ea38bd5",
-      "skipped": null,
-      "snapshot": 2,
-      "stats": null,
-      "target": {
-        "kind": "warehouse",
-        "name": "dev"
-      },
-      "triggered_by": null
-    },
-    {
-      "at": "2026-09-29T00:00:15Z",
-      "built": 1,
-      "command": null,
-      "duration": null,
-      "failed": null,
-      "from_last_run": false,
-      "kept": 0,
-      "kept_state": null,
-      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
-      "outcome": "recorded",
-      "outcome_from": "snapshot",
-      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
-      "recorded_at": "2026-09-29T00:00:15Z",
+      "kept": null,
+      "kept_state": 3,
+      "no_journal": null,
+      "outcome": "partial",
+      "outcome_from": "journal",
+      "outcome_note": "Its journal says the run failed: some nodes failed, others succeeded.",
+      "recorded_at": null,
       "replaces": null,
-      "run_id": "e6f54fe3-0000-4000-8000-000000000001",
-      "short_run_id": "e6f54fe3",
-      "skipped": null,
-      "snapshot": 1,
-      "stats": null,
-      "target": {
-        "kind": "warehouse",
-        "name": "dev"
+      "run_id": "7d21a0c4-0000-4000-8000-000000000004",
+      "short_run_id": "7d21a0c4",
+      "skipped": 1,
+      "snapshot": null,
+      "stats": {
+        "by_status": {
+          "error": 1,
+          "skipped": 1,
+          "success": 1
+        },
+        "duration": "4.0s",
+        "duration_ms": 4000,
+        "finished_at": "2026-09-29T00:04:14.000Z",
+        "live": true,
+        "nodes": 3,
+        "rows": "at least 12",
+        "rows_affected": 12,
+        "rows_at_least": true,
+        "rows_unreported": 1,
+        "started_at": "2026-09-29T00:04:10.000Z",
+        "unreadable_lines": 1
       },
+      "target": null,
       "triggered_by": null
     }
   ],
   "schema_version": 2,
   "scope": "jaffle_ods/dev",
-  "selected": "4c0b5c8f-0000-4000-8000-000000000003",
-  "selected_nodes": [],
+  "selected": "7d21a0c4-0000-4000-8000-000000000004",
+  "selected_nodes": [
+    {
+      "adapter": {},
+      "blocked_by": [],
+      "compile": null,
+      "end_offset_ms": 3800,
+      "error": {
+        "details_at": null,
+        "kind": "Database Error",
+        "message": "division by zero [SQL removed]"
+      },
+      "execute": null,
+      "finished_at": "2026-09-29T00:04:13.800Z",
+      "kind": null,
+      "name": "orders",
+      "node": "model.orders",
+      "requested": true,
+      "rows_affected": null,
+      "rows_missing": "not reported by the adapter",
+      "start_offset_ms": 200,
+      "started_at": "2026-09-29T00:04:10.200Z",
+      "status": "error",
+      "status_label": "failed",
+      "tests": null,
+      "thread": "Thread-1 [value removed]",
+      "took": "3.6s",
+      "took_ms": 3600
+    },
+    {
+      "adapter": {},
+      "blocked_by": [
+        {
+          "name": "orders",
+          "node": "model.orders"
+        }
+      ],
+      "compile": null,
+      "end_offset_ms": null,
+      "error": null,
+      "execute": null,
+      "finished_at": null,
+      "kind": null,
+      "name": "model.orders_view",
+      "node": "model.orders_view",
+      "requested": true,
+      "rows_affected": null,
+      "rows_missing": "didn't run",
+      "start_offset_ms": null,
+      "started_at": null,
+      "status": "skipped",
+      "status_label": "skipped",
+      "tests": null,
+      "thread": null,
+      "took": null,
+      "took_ms": null
+    }
+  ],
   "state": "recorded",
   "store": {
     "full": ".ods/state.db",
     "shown": ".ods/state.db"
   },
-  "total": 3,
+  "total": 5,
   "total_capped": false,
-  "unfiltered": 3,
+  "unfiltered": 5,
   "unscoped_last_run": null
 }

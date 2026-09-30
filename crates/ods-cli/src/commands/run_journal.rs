@@ -9,56 +9,14 @@
 //! summary.
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use ods_sdk::contracts::run_events::{
-    RUN_EVENTS_SCHEMA_VERSION, RunEvent, RunEventKind, RunEventSink,
-};
-
-/// How many journals are kept per state database: the newest, by modification time.
-pub(super) const KEEP: usize = 50;
-
-/// The directory of the journals beside `state_db`.
-pub(super) fn dir_for(state_db: &Path) -> PathBuf {
-    let mut name = state_db.as_os_str().to_owned();
-    name.push(".runs");
-    PathBuf::from(name)
-}
-
-/// The journal of `run_id` beside `state_db`, if `run_id` can name a file.
-pub(super) fn path_for(state_db: &Path, run_id: &str) -> Option<PathBuf> {
-    usable(run_id).then(|| dir_for(state_db).join(format!("{run_id}.jsonl")))
-}
-
-/// Whether a run id can be a file name as it is, on every system: 1 to 128 ASCII
-/// letters, digits, `-`, `_` and `.`, not starting or ending with `.`, and not a name
-/// Windows reserves for a device (`CON`, `NUL`, `COM1`, … in any case, with or
-/// without an extension). No maintained crate does only this; the list is short.
-fn usable(run_id: &str) -> bool {
-    const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
-    let stem = run_id
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    let device = DEVICES.contains(&stem.as_str())
-        || ["COM", "LPT"].iter().any(|p| {
-            stem.strip_prefix(p)
-                .is_some_and(|n| n.len() == 1 && n.bytes().all(|b| b.is_ascii_digit()))
-        });
-    (1..=128).contains(&run_id.len())
-        && !run_id.starts_with('.')
-        && !run_id.ends_with('.')
-        && !device
-        && run_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-}
-
-/// A journal changed this recently may belong to a run still going: never pruned.
-const RECENT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+use ods_sdk::contracts::run_events::{RunEvent, RunEventKind, RunEventSink};
+// Reading and naming journals is shared with `ods serve` (ods-sdk, one reader).
+use ods_sdk::run_journal::RECENT;
+pub(super) use ods_sdk::run_journal::{KEEP, ReadJournal, dir_for, path_for};
 
 /// Appends a run's events to its journal. Opens the file at `run_started`, never
 /// overwriting one; if the journal can't be written, it says why once
@@ -185,40 +143,12 @@ fn prune(dir: &Path, keep: usize, now: std::time::SystemTime) {
     }
 }
 
-/// A journal, as read back.
-#[derive(Debug, Default)]
-pub(super) struct ReadJournal {
-    /// Its events, in order.
-    pub(super) events: Vec<RunEvent>,
-    /// Lines that couldn't be read: a newer version, or a last line cut short by a run
-    /// that stopped mid-write.
-    pub(super) unreadable: usize,
-}
-
 /// Reads the journal at `path`; `None` if there is none.
 ///
 /// # Errors
 /// When the file exists but can't be read.
 pub(super) fn read(path: &Path) -> Result<Option<ReadJournal>, String> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("can't read `{}`: {e}", path.display())),
-    };
-    let mut journal = ReadJournal::default();
-    for line in BufReader::new(file).lines() {
-        let line = line.map_err(|e| format!("can't read `{}`: {e}", path.display()))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<RunEvent>(&line) {
-            Ok(event) if RUN_EVENTS_SCHEMA_VERSION.can_read(event.schema_version) => {
-                journal.events.push(event);
-            }
-            _ => journal.unreadable += 1,
-        }
-    }
-    Ok(Some(journal))
+    ods_sdk::run_journal::read(path).map_err(|e| format!("can't read `{}`: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -241,28 +171,6 @@ mod tests {
                 live: true,
             },
         )
-    }
-
-    #[test]
-    fn only_plain_run_ids_name_files() {
-        assert!(usable("0e3c6a40-1b2c-4d5e-8f90-123456789abc"));
-        assert!(usable("fake-run-1"));
-        for bad in [
-            "",
-            ".hidden",
-            "../x",
-            "a/b",
-            "a b",
-            &"x".repeat(129),
-            "CON",
-            "nul",
-            "Aux.jsonl",
-            "com1",
-            "LPT9.x",
-            "trailing.",
-        ] {
-            assert!(!usable(bad), "{bad}");
-        }
     }
 
     #[test]

@@ -133,21 +133,33 @@ no font files, so it falls back to the system fonts.
 
 ![Runs](images/runs.png)
 
-- **Source:** every run recorded in `.ods/state.db` on this machine, newest first. ODS
-  doesn't schedule anything; runs appear after `ods state build/run` in a terminal or
-  CI job.
-- **Failed run:** shows that the last good snapshot was kept, the failed node, and
-  the next command (`ods state retry --failed`).
+- **Source:** every run recorded in `.ods/state.db` on this machine, and every run whose
+  journal is kept beside it (#322), newest first. ODS doesn't schedule anything; runs
+  appear after `ods state build/run` in a terminal or CI job.
+- **Each run:** its outcome (succeeded, partial, failed; unknown or "running or stopped
+  without finishing" when its journal doesn't say, never success), node counts, rows
+  ("at least N" when some nodes didn't report) and duration, from its journal. A run
+  without one says so, and its outcome reads *recorded*.
+- **Failed run:** shows that the last good snapshot was kept, the failed node with its
+  redacted error summary, and the next command (`ods state retry --failed`). A failed
+  run that recorded nothing is listed from its journal.
 - **CI runs:** a placeholder tab until server mode.
 
 ### State: one run
 
 ![Run](images/run.png)
 
-- **Timeline:** built and reused per node, with durations as `[duration]` until they
-  are recorded.
+- **Timeline:** when each node started and finished, from the run's journal, as bars
+  (red when it failed), beside the nodes that kept an earlier build. Without a journal,
+  the order comes from lineage and times read `—`.
+- **Totals and Nodes:** node counts by status and rows under the tiles; the Nodes tab
+  lists each node's status, start, time taken (compile and execute), rows (`—` with the
+  reason), thread, tests, why it ran and a failed node's error.
 - **Built this run:** why each node was built.
 - **Earlier runs:** the runs before it.
+
+**Needs:** the snapshots (`ods state history`) and the run journals
+(`<state-db>.runs/`, [ADR-0024](../../adr/0024-run-events-node-stats-and-run-journal.md)).
 
 ### ERD
 

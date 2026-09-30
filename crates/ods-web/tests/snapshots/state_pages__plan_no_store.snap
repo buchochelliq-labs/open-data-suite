@@ -31,7 +31,7 @@ expression: pretty(&body)
   "error": null,
   "filter": "all",
   "rows": [],
-  "schema_version": 1,
+  "schema_version": 2,
   "scope": "jaffle_ods/dev",
   "selected": null,
   "state": "no_store",

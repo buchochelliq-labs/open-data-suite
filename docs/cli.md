@@ -651,7 +651,7 @@ comes later. The search box hands its text to the explorer's search.
 
 The dashboard never writes configuration or state: the database is opened read-only,
 and every route is `GET`. `/api/shell` and `/api/home` return exactly what the page
-shows, as JSON view models at `schema_version` 1. The page uses IBM Plex, served by
+shows, as JSON view models at `schema_version` 2. The page uses IBM Plex, served by
 `ods serve` itself (no font CDN), with system fonts as the fallback.
 
 ### State pages
@@ -663,8 +663,8 @@ Home, it only reads, and every action is a command to copy into a terminal.
 |---|---|---|
 | Plan | `/state/plan` | every planned node with its Build or Reuse pill and reason, the counts to build and reuse, and how many reused relations were checked; `?action=build` or `reuse` filters |
 | Why | `/state/plan?node=<id>` | for one node (its percent-encoded unique id, or a name only one node has): its recorded build, which fingerprint parts changed, what it reads (parents' decisions; each source's version, strategy and origin, ADR-0022), the relation check, the decision, and the reason chain; `&view=json` shows its data |
-| Runs | `/state/runs` | every recorded run, newest first (the newest 50; `ods state history` lists all), filtered by `?outcome=`, `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel |
-| Run | `/state/runs/<run_id>` | a timeline of the nodes it built and the ones that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists them. An unambiguous prefix of the id (8 characters or more) works too |
+| Runs | `/state/runs` | every recorded run, and every run whose journal is kept, newest first (the newest 50; `ods state history` lists all): its outcome, node counts, rows and duration. Filtered by `?outcome=` (`succeeded`, `partial`, `failed`, `unfinished`, `unknown`, or `recorded` for runs without a journal), `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel, with its failed nodes' errors |
+| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node's error. An unambiguous prefix of the id (8 characters or more) works too |
 
 What the pages claim is what ODS records, and no more:
 - **The plan** is the one `ods state plan` makes, offline, made again at most every 30
@@ -674,10 +674,23 @@ What the pages claim is what ODS records, and no more:
   `explanation`). An offline plan doesn't check the warehouse, so reused relations read
   *not checked*; `ods state build --dry-run` checks them. Evidence below *semantic* is
   shown as *proxy*, *inferred* or *unknown*, never as fact.
-- **A run** is a committed snapshot: the nodes whose last build is the run's were built
-  by it, and every other node *kept an earlier build*, whether it was reused, left out
-  or failed, as the snapshot can't tell. The outcome reads *recorded*.
-- **Failures** are known only for the last run, from `<state-db>.last-run.json`,
+- **A run** is a committed snapshot, its journal, or both: the nodes whose last build is
+  the run's were built by it, and every other node *kept an earlier build*, whether it
+  was reused, left out or failed.
+- **Its journal** (`<state-db>.runs/<run_id>.jsonl`, #322) says how it ended
+  (*succeeded*, *partial* when some nodes failed and others succeeded, *failed*), when
+  each node started and finished, the rows the adapter reported, and each failed node's
+  error as its one-line summary with values and SQL removed; the page never shows more
+  than the journal keeps, and reads every line through the same redaction again. A stat
+  it doesn't report reads `—` with the reason, never `0`, and a rows total that misses
+  some nodes reads *at least N*. A journal with no end is *running or stopped without
+  finishing* while it changed in the last 10 minutes, then *unknown*: never a success.
+  A failed run that recorded no snapshot is listed from its journal, with the snapshot
+  that stayed the last good state (*inferred*: no listed snapshot has its id). Only
+  journals of the page's scope are listed. A run without a journal (from before
+  journals, one that didn't run dbt, such as `ods state record`, or one pruned beyond
+  the newest 50) says so, and its outcome reads *recorded*.
+- **Without a journal, failures** are known only for the last run, from `<state-db>.last-run.json`,
   which `ods state retry` keeps (since version 1.2 with the run's scope and id). It is
   shown only when its scope is the page's; a file from an older ODS names none, so it
   is shown apart, as possibly another target's. The run is tied to the snapshot that
@@ -688,15 +701,16 @@ What the pages claim is what ODS records, and no more:
   option names, but values other than the selection and target, and everything after
   `--`, read `<redacted>`: `--vars` may carry secrets. The server reloads when this
   file changes.
-- **Not recorded yet:** durations (`[duration]`, `[wall clock]`), start times, who ran a
-  run (`[user]`), the command of earlier runs, and run logs. CI runs are a *Planned* tab
-  until server mode.
+- **Not recorded yet:** who ran a run (`[user]`), the command of earlier runs, and run
+  logs (a failed node's summary says where dbt's full message is). CI runs are a
+  *Planned* tab until server mode.
 
-The same view models are served as JSON at `schema_version` 1, `GET` only:
+The same view models are served as JSON at `schema_version` 2, `GET` only:
 `/api/state/plan` (with the same `?node=` and `?action=`), `/api/state/plan/<node>`
 (404 if not planned), `/api/state/runs` (with the same filters) and
 `/api/state/runs/<run_id>` (404 if not listed). Beyond loopback they leave out local
-paths, error text and the last run's options. The Why panel links to the node in
+paths (including where an error's full message is), error text and the last run's
+options. The Why panel links to the node in
 the lineage explorer (`/lineage?node=<id>`) and to its model page (`/catalog/<id>`).
 
 ### The Catalog and model pages
@@ -757,7 +771,7 @@ percent-encoding, gets a 404 page; `/catalog/` redirects to `/catalog`. Without 
 store, every node reads *never built* and its last build *never*.
 
 `/api/catalog` (with the same query) and `/api/catalog/<unique_id>` return the view
-models the pages render, at `schema_version` 1; every tab's data is in the latter.
+models the pages render, at `schema_version` 2; every tab's data is in the latter.
 Beyond loopback they leave out file paths and error text.
 
 ## dbt State configuration

@@ -636,7 +636,7 @@ fn runs_list_what_the_store_records_and_nothing_more() {
     assert!(page.contains("CI runs — coming with server mode"));
     assert!(page.contains(r#"aria-disabled="true""#));
     assert!(page.contains(">Kept</th>"));
-    assert!(page.contains(r#"<th scope="rowgroup" colspan="12">2026-09-29 · UTC</th>"#));
+    assert!(page.contains(r#"<th scope="rowgroup" colspan="13">2026-09-29 · UTC</th>"#));
     assert!(page.contains(r#"aria-label="not recorded""#));
     assert!(page.contains("recorded: outcome not stored"));
     assert!(!page.contains(">Reused<"), "kept isn't claimed as reuse");
@@ -647,7 +647,9 @@ fn runs_list_what_the_store_records_and_nothing_more() {
     assert!(page.contains(r#"href="runs/4c0b5c8f%2D0000%2D4000%2D8000%2D000000000003""#));
     assert!(page.contains("3 runs · 3 recorded a snapshot"), "{page}");
     assert!(page.contains("2026-09-29 · UTC"));
-    assert!(page.contains("[duration]") && page.contains("[user]"));
+    // No journals: durations and rows say why they're missing, never a placeholder.
+    assert!(!page.contains("[duration]") && page.contains("[user]"));
+    assert!(page.contains("no run journal: the run predates run journals"));
     assert!(page.contains(r#"<a class="crumb" href="plan">State</a>"#));
     assert!(page.contains("Local runs · from <code"));
 
@@ -690,7 +692,8 @@ fn a_failed_last_run_is_tied_to_the_snapshot_that_records_its_run_id() {
         page.contains("from the last run&#x27;s record")
             || page.contains("from the last run's record")
     );
-    assert!(page.contains("[error excerpt]"));
+    assert!(!page.contains("[error excerpt]"));
+    assert!(page.contains("the run has no journal, which keeps each error"));
     assert!(page.contains(r#"aria-label="Show run 4c0b5c8f in the side panel, failed (from the last run's record)""#), "{page}");
     let (status, page) = get(addr, &format!("/state/runs/{RUN_3}"));
     assert_eq!(status, 200);
@@ -888,8 +891,11 @@ fn a_run_shows_its_timeline_why_each_node_was_built_and_earlier_runs() {
     let (status, page) = get(addr, &format!("/state/runs/{RUN_3}"));
     assert_eq!(status, 200);
     assert!(page.contains("run 4c0b5c8f"));
-    assert!(page.contains("[wall clock]") && page.contains("[duration]"));
-    assert!(page.contains("[start time]"));
+    // Without a journal, times say why they're missing: no placeholders.
+    for placeholder in ["[wall clock]", "[duration]", "[start time]"] {
+        assert!(!page.contains(placeholder), "{placeholder}");
+    }
+    assert!(page.contains("No run journal: the run predates run journals"));
     assert!(page.contains("Kept earlier build"));
     assert!(page.contains("3 (replaces 2)"));
     assert!(page.contains("Earlier runs on dev"));
@@ -1101,4 +1107,530 @@ fn a_run_whose_only_failures_are_source_tests_failed() {
     let view = dashboard.runs_view(true, at(NOW), &RunFilter::default(), &BTreeMap::new());
     assert_eq!(view.runs[0].outcome, RunOutcome::Failed);
     assert_eq!(view.runs[0].failed, Some(1));
+}
+
+// ------------------------------------------------------------------ run journals (#322)
+
+mod journals {
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    use ods_core::state::TimestampMs;
+    use ods_sdk::contracts::executor::ExecutionMode;
+    use ods_sdk::contracts::run_events::{
+        CheckStatus, ErrorSummary, NodeRunStats, NodeRunStatus, RunEvent, RunEventKind,
+        RunOutcome as Ended,
+    };
+    use ods_sdk::run_journal::Journals;
+
+    use super::*;
+
+    /// A failed run that recorded no snapshot: `orders` failed while `payments` built
+    /// beside it, and `orders_view` was skipped.
+    pub(super) const RUN_4: &str = "7d21a0c4-0000-4000-8000-000000000004";
+    /// A run of another target, sharing the state database.
+    const RUN_PROD: &str = "0b0b0b0b-0000-4000-8000-00000000000b";
+    /// A run whose journal doesn't say it ended.
+    const RUN_5: &str = "5e5e5e5e-0000-4000-8000-000000000005";
+    const SCOPE: &str = "jaffle_ods/dev";
+
+    fn ms(text: &str) -> TimestampMs {
+        TimestampMs::parse(text).unwrap()
+    }
+
+    fn event(run: &str, scope: &str, at: &str, kind: RunEventKind) -> RunEvent {
+        RunEvent::new(run, Some(scope.to_owned()), ms(at), kind)
+    }
+
+    fn started(run: &str, scope: &str, at: &str, nodes: &[&str]) -> RunEvent {
+        event(
+            run,
+            scope,
+            at,
+            RunEventKind::RunStarted {
+                nodes: nodes.iter().map(|n| (*n).to_owned()).collect(),
+                mode: ExecutionMode::Build,
+                live: true,
+            },
+        )
+    }
+
+    fn node_started(run: &str, at: &str, node: &str, thread: &str) -> RunEvent {
+        event(
+            run,
+            SCOPE,
+            at,
+            RunEventKind::NodeStarted {
+                node: node.into(),
+                thread: Some(thread.into()),
+            },
+        )
+    }
+
+    fn finished(run: &str, at: &str, node: &str, stats: NodeRunStats) -> RunEvent {
+        event(
+            run,
+            SCOPE,
+            at,
+            RunEventKind::NodeFinished {
+                node: node.into(),
+                stats,
+            },
+        )
+    }
+
+    fn ended(run: &str, at: &str, outcome: Ended) -> RunEvent {
+        event(run, SCOPE, at, RunEventKind::RunFinished { outcome })
+    }
+
+    fn write(dir: &Path, run: &str, events: &[RunEvent], tail: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(format!("{run}.jsonl"));
+        let mut file = std::fs::File::create(&path).unwrap();
+        for e in events {
+            writeln!(file, "{}", serde_json::to_string(e).unwrap()).unwrap();
+        }
+        file.write_all(tail.as_bytes()).unwrap();
+        path
+    }
+
+    /// Snapshot 3's run, timed: `customers` wrote 99 rows, then its view reported none.
+    fn run_3(dir: &Path) {
+        write(
+            dir,
+            RUN_3,
+            &[
+                started(
+                    RUN_3,
+                    SCOPE,
+                    "2026-09-29T00:02:30.000Z",
+                    &["model.customers", "model.customers_view"],
+                ),
+                node_started(
+                    RUN_3,
+                    "2026-09-29T00:02:30.500Z",
+                    "model.customers",
+                    "Thread-1",
+                ),
+                finished(
+                    RUN_3,
+                    "2026-09-29T00:02:34.700Z",
+                    "model.customers",
+                    NodeRunStats::new(NodeRunStatus::Success)
+                        .with_times(
+                            Some(ms("2026-09-29T00:02:30.500Z")),
+                            Some(ms("2026-09-29T00:02:34.700Z")),
+                        )
+                        .with_durations(Some(4_200), Some(400), Some(3_800))
+                        .with_rows_affected(Some(99))
+                        .with_extra("query_id", "q-123"),
+                ),
+                event(
+                    RUN_3,
+                    SCOPE,
+                    "2026-09-29T00:02:34.800Z",
+                    RunEventKind::CheckFinished {
+                        check: "test.not_null_customers_id".into(),
+                        covers: vec!["model.customers".into()],
+                        status: CheckStatus::Passed,
+                    },
+                ),
+                node_started(
+                    RUN_3,
+                    "2026-09-29T00:02:34.800Z",
+                    "model.customers_view",
+                    "Thread-1",
+                ),
+                finished(
+                    RUN_3,
+                    "2026-09-29T00:02:35.900Z",
+                    "model.customers_view",
+                    NodeRunStats::new(NodeRunStatus::Success).with_times(
+                        Some(ms("2026-09-29T00:02:34.800Z")),
+                        Some(ms("2026-09-29T00:02:35.900Z")),
+                    ),
+                ),
+                ended(RUN_3, "2026-09-29T00:02:36.000Z", Ended::Succeeded),
+            ],
+            "",
+        );
+    }
+
+    /// The failed run: its error line is written around the writer, with a value the
+    /// redaction removes, and its last line was cut short.
+    fn run_4(dir: &Path) {
+        let mut orders = serde_json::to_value(finished(
+            RUN_4,
+            "2026-09-29T00:04:13.800Z",
+            "model.orders",
+            NodeRunStats::new(NodeRunStatus::Error)
+                .with_times(
+                    Some(ms("2026-09-29T00:04:10.200Z")),
+                    Some(ms("2026-09-29T00:04:13.800Z")),
+                )
+                .with_error(ErrorSummary::from_message("Database Error: boom")),
+        ))
+        .unwrap();
+        orders["stats"]["error"]["message"] =
+            "Database Error: division by zero where token = 'SENTINEL-4242'".into();
+        orders["stats"]["thread"] = "Thread-1 'SENTINEL-4242'".into();
+        let events = [
+            started(
+                RUN_4,
+                SCOPE,
+                "2026-09-29T00:04:10.000Z",
+                &["model.orders", "model.payments", "model.orders_view"],
+            ),
+            node_started(
+                RUN_4,
+                "2026-09-29T00:04:10.200Z",
+                "model.orders",
+                "Thread-1",
+            ),
+            node_started(
+                RUN_4,
+                "2026-09-29T00:04:10.300Z",
+                "model.payments",
+                "Thread-2",
+            ),
+            finished(
+                RUN_4,
+                "2026-09-29T00:04:11.500Z",
+                "model.payments",
+                NodeRunStats::new(NodeRunStatus::Success)
+                    .with_times(
+                        Some(ms("2026-09-29T00:04:10.300Z")),
+                        Some(ms("2026-09-29T00:04:11.500Z")),
+                    )
+                    .with_rows_affected(Some(12)),
+            ),
+        ];
+        let path = write(dir, RUN_4, &events, "");
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{orders}").unwrap();
+        for e in [
+            finished(
+                RUN_4,
+                "2026-09-29T00:04:13.900Z",
+                "model.orders_view",
+                NodeRunStats::new(NodeRunStatus::Skipped)
+                    .with_blocked_by(vec!["model.orders".into()]),
+            ),
+            ended(RUN_4, "2026-09-29T00:04:14.000Z", Ended::Failed),
+        ] {
+            writeln!(file, "{}", serde_json::to_string(&e).unwrap()).unwrap();
+        }
+        // A run killed mid-write leaves a line cut short.
+        file.write_all(br#"{"schema_version":{"major":1,"minor":0},"run_id":"7d21"#)
+            .unwrap();
+    }
+
+    /// Journals beside the demo's store: snapshot 3's run, the failed run, a run of
+    /// another scope, and one that didn't say it ended, `quiet_for` ago.
+    pub(super) fn dashboard(quiet_for: Duration) -> (Dashboard, PathBuf) {
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        run_3(&dir);
+        run_4(&dir);
+        write(
+            &dir,
+            RUN_PROD,
+            &[
+                started(
+                    RUN_PROD,
+                    "jaffle_ods/prod",
+                    "2026-09-29T00:05:00.000Z",
+                    &["model.orders"],
+                ),
+                ended(RUN_PROD, "2026-09-29T00:05:01.000Z", Ended::Failed),
+            ],
+            "",
+        );
+        let path = write(
+            &dir,
+            RUN_5,
+            &[
+                started(RUN_5, SCOPE, "2026-09-29T00:06:00.000Z", &["model.orders"]),
+                node_started(
+                    RUN_5,
+                    "2026-09-29T00:06:00.100Z",
+                    "model.orders",
+                    "Thread-1",
+                ),
+            ],
+            "",
+        );
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - quiet_for)
+            .unwrap();
+        let history = History::new(snapshots()).with_journals(Journals::in_dir(&dir));
+        (recorded(history, plan()), dir)
+    }
+
+    fn now() -> Timestamp {
+        Timestamp::now()
+    }
+
+    #[test]
+    fn runs_merge_journals_with_snapshots_newest_first_with_real_outcomes() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let view = dashboard.runs_view(true, now(), &RunFilter::default(), &BTreeMap::new());
+        let ids: Vec<&str> = view.runs.iter().map(|r| r.run_id.as_str()).collect();
+        // Another scope's run isn't listed; the failed run without a snapshot is.
+        assert_eq!(ids, [super::journals::RUN_5, RUN_4, RUN_3, RUN_2, RUN_1]);
+        let by = |id: &str| view.runs.iter().find(|r| r.run_id == id).unwrap();
+
+        let unfinished = by(RUN_5);
+        assert_eq!(unfinished.outcome, RunOutcome::Unfinished, "never success");
+        assert_eq!(unfinished.duration, None);
+
+        let failed = by(RUN_4);
+        assert_eq!(failed.outcome, RunOutcome::Partial);
+        assert_eq!(failed.snapshot, None);
+        assert_eq!(failed.kept_state, Some(3), "the last good state stayed");
+        assert_eq!((failed.failed, failed.skipped), (Some(1), Some(1)));
+        assert_eq!(failed.duration.as_deref(), Some("4.0s"));
+        let stats = failed.stats.as_ref().unwrap();
+        assert_eq!(stats.unreadable_lines, 1, "the torn last line is skipped");
+        // `orders` failed without reporting rows: 12 is only a lower bound.
+        assert_eq!((stats.rows_affected, stats.rows_at_least), (Some(12), true));
+
+        let ok = by(RUN_3);
+        assert_eq!(ok.outcome, RunOutcome::Succeeded);
+        assert_eq!(ok.snapshot, Some(3));
+        assert_eq!(ok.duration.as_deref(), Some("6.0s"));
+        let stats = ok.stats.as_ref().unwrap();
+        assert_eq!(stats.rows, "at least 99", "the view didn't report rows");
+
+        let pruned = by(RUN_2);
+        assert_eq!(pruned.outcome, RunOutcome::Recorded);
+        assert!(
+            pruned
+                .no_journal
+                .as_deref()
+                .unwrap()
+                .starts_with("no run journal")
+        );
+        assert_eq!(pruned.duration, None);
+
+        // A failed run is selected first, with its failures and redacted errors.
+        assert_eq!(view.selected.as_deref(), Some(RUN_4));
+        let failures: Vec<&str> = view
+            .selected_nodes
+            .iter()
+            .map(|n| n.node.as_str())
+            .collect();
+        assert_eq!(failures, ["model.orders", "model.orders_view"]);
+        assert_eq!(view.failed, 1);
+        assert_eq!(view.recorded_snapshots, 3);
+
+        // The outcome filter uses the journals' outcomes.
+        let only = |outcome: &str| {
+            let mut filter = RunFilter::default();
+            filter.outcome = Some(outcome.into());
+            dashboard
+                .runs_view(true, now(), &filter, &BTreeMap::new())
+                .runs
+                .into_iter()
+                .map(|r| r.run_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(only("partial"), [RUN_4]);
+        assert_eq!(only("succeeded"), [RUN_3]);
+        assert_eq!(only("unfinished"), [RUN_5]);
+        assert_eq!(only("recorded"), [RUN_2, RUN_1]);
+        assert!(only("failed").is_empty());
+        // Journal-only runs name no target: a target filter leaves them out.
+        let mut filter = RunFilter::default();
+        filter.target = Some("dev".into());
+        assert_eq!(
+            dashboard
+                .runs_view(true, now(), &filter, &BTreeMap::new())
+                .runs
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_run_whose_journal_went_quiet_is_unknown_not_running() {
+        let (dashboard, _) = dashboard(Duration::from_secs(60 * 60));
+        let view = dashboard.runs_view(true, now(), &RunFilter::default(), &BTreeMap::new());
+        let row = view.runs.iter().find(|r| r.run_id == RUN_5).unwrap();
+        assert_eq!(row.outcome, RunOutcome::Unknown);
+        assert!(row.outcome_note.contains("Stopped without finishing"));
+    }
+
+    #[test]
+    fn a_run_page_shows_each_nodes_stats_from_its_journal() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let view = dashboard.run_view(true, RUN_3, &BTreeMap::new()).unwrap();
+        assert_eq!(view.started_at, Some(at("2026-09-29T00:02:30Z")));
+        let customers = view
+            .nodes
+            .iter()
+            .find(|n| n.node == "model.customers")
+            .unwrap();
+        assert_eq!(customers.took.as_deref(), Some("4.2s"));
+        assert_eq!(
+            (customers.compile.as_deref(), customers.execute.as_deref()),
+            (Some("400ms"), Some("3.8s"))
+        );
+        assert_eq!(customers.rows_affected, Some(99));
+        assert_eq!(customers.start_offset_ms, Some(500));
+        assert_eq!(customers.tests.unwrap().passed, 1);
+        let view_node = view
+            .nodes
+            .iter()
+            .find(|n| n.node == "model.customers_view")
+            .unwrap();
+        assert_eq!(view_node.rows_affected, None, "missing is never 0");
+        assert_eq!(view_node.rows_missing, Some("not reported by the adapter"));
+        // The timeline: the kept seed first, then by start.
+        let order: Vec<&str> = view.timeline.iter().map(|t| t.node.as_str()).collect();
+        assert_eq!(
+            order,
+            ["seed.raw_orders", "model.customers", "model.customers_view"]
+        );
+        assert_eq!(view.timeline[1].end_offset_ms, Some(4_700));
+
+        let addr = start(dashboard.clone());
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_3}"));
+        for placeholder in ["[wall clock]", "[duration]", "[start time]"] {
+            assert!(!page.contains(placeholder), "{placeholder}");
+        }
+        assert!(page.contains(r#"class="st-value mono">6.0s<"#), "{page}");
+        assert!(page.contains("at least <strong class=\"mono\">99</strong> rows"));
+        assert!(page.contains(r#"<rect class="tl-bar" x="#));
+        assert!(page.contains("reported as it ran"));
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_3}?tab=nodes"));
+        assert!(page.contains("compile 400ms") && page.contains("execute 3.8s"));
+        assert!(page.contains("not reported by the adapter"));
+        assert!(page.contains("query_id q-123"));
+        assert!(
+            page.contains("code: sql changed"),
+            "why it ran, from the snapshots"
+        );
+        assert!(page.contains(r#"data-status="kept""#));
+    }
+
+    #[test]
+    fn a_failed_run_that_recorded_nothing_has_its_own_page() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let view = dashboard.run_view(true, RUN_4, &BTreeMap::new()).unwrap();
+        assert_eq!(view.run.snapshot, None);
+        assert!(
+            view.state_rule
+                .contains("snapshot 3 is still the last good state")
+        );
+        assert!(view.built.is_empty());
+        let names: Vec<&str> = view.timeline.iter().map(|t| t.node.as_str()).collect();
+        // Parallel nodes by start; the skipped one never started.
+        assert_eq!(
+            names,
+            ["model.orders", "model.payments", "model.orders_view"]
+        );
+        let orders = view
+            .nodes
+            .iter()
+            .find(|n| n.node == "model.orders")
+            .unwrap();
+        let error = orders.error.as_ref().unwrap();
+        assert_eq!(error.kind.as_deref(), Some("Database Error"));
+        assert!(!error.message.contains("SENTINEL"));
+        let skipped = view
+            .nodes
+            .iter()
+            .find(|n| n.node == "model.orders_view")
+            .unwrap();
+        assert_eq!(skipped.rows_missing, Some("didn't run"));
+        assert_eq!(skipped.blocked_by[0].node, "model.orders");
+        assert_eq!(view.earlier[0].run_id, RUN_3);
+
+        let addr = start(dashboard);
+        let (_, body) = get(addr, &format!("/api/state/runs/{RUN_4}"));
+        insta::assert_snapshot!("run_failed_from_journal", pretty(&body));
+        let (_, body) = get(addr, "/api/state/runs?outcome=partial");
+        insta::assert_snapshot!("runs_from_journals", pretty(&body));
+        let (status, page) = get(addr, &format!("/state/runs/{RUN_4}"));
+        assert_eq!(status, 200);
+        assert!(page.contains("no snapshot · started"));
+        assert!(page.contains("Failed node"));
+        assert!(page.contains("Database Error"));
+        assert!(page.contains(r#"class="tl-bar failed""#));
+        assert!(page.contains("1 line of its journal couldn"));
+        let (_, page) = get(addr, "/state/runs");
+        assert!(
+            page.contains(
+                r#"data-run="7d21a0c4-0000-4000-8000-000000000004" data-outcome="partial""#
+            )
+        );
+        assert!(page.contains("kept 3"));
+        assert!(page.contains("running or stopped without finishing"));
+    }
+
+    #[test]
+    fn nothing_beyond_the_sanitized_journal_reaches_a_page_or_the_api() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let addr = start(dashboard);
+        for path in [
+            "/".to_owned(),
+            "/api/home".to_owned(),
+            "/state/runs".to_owned(),
+            format!("/state/runs?run={RUN_4}"),
+            "/api/state/runs".to_owned(),
+            format!("/api/state/runs?run={RUN_4}"),
+            format!("/state/runs/{RUN_4}"),
+            format!("/state/runs/{RUN_4}?tab=nodes"),
+            format!("/api/state/runs/{RUN_4}"),
+        ] {
+            let (status, body) = get(addr, &path);
+            assert_eq!(status, 200, "{path}");
+            assert!(!body.contains("SENTINEL"), "{path}: {body}");
+        }
+    }
+
+    #[test]
+    fn beyond_loopback_an_errors_log_path_isnt_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let journals = dir.path().join("state.db.runs");
+        let with_path = finished(
+            RUN_3,
+            "2026-09-29T00:02:34.700Z",
+            "model.customers",
+            NodeRunStats::new(NodeRunStatus::Error).with_error(
+                ErrorSummary::from_message("Runtime Error: boom")
+                    .map(|e| e.with_details_at("logs/dbt.log")),
+            ),
+        );
+        write(
+            &journals,
+            RUN_3,
+            &[
+                started(
+                    RUN_3,
+                    SCOPE,
+                    "2026-09-29T00:02:30.000Z",
+                    &["model.customers"],
+                ),
+                with_path,
+            ],
+            "",
+        );
+        let dashboard = recorded(
+            History::new(snapshots()).with_journals(Journals::in_dir(&journals)),
+            plan(),
+        );
+        let local = dashboard.run_view(true, RUN_3, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            local.nodes[0].error.as_ref().unwrap().details_at.as_deref(),
+            Some("logs/dbt.log")
+        );
+        let remote = dashboard.run_view(false, RUN_3, &BTreeMap::new()).unwrap();
+        assert_eq!(remote.nodes[0].error.as_ref().unwrap().details_at, None);
+        // It didn't say it ended, but its journal is old: unknown, never success.
+        assert_ne!(remote.run.outcome, RunOutcome::Succeeded);
+    }
 }

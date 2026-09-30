@@ -230,3 +230,30 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-side-head code { overflow-wrap: anywhere; }
 .dot.bad { background: var(--bad); }
 .cmd .st-btn { height: 26px; font-size: 12px; padding: 0 8px; }
+/* Run journals (#322): outcomes beyond succeeded and failed, and per-node stats. */
+.st-glyph.warn { background: var(--warn); }
+.st-glyph.rec.run { border-style: dotted; }
+.st-outcome.partial { background: var(--pill-bad-bg); color: var(--warn); }
+.st-outcome-value.warn { color: var(--warn); }
+.st-o.partial { color: var(--warn); }
+.st-runs th:nth-child(13) { width: 76px; }
+.st-runs th:nth-child(10) { width: 58px; } .st-runs th:nth-child(11) { width: 78px; } .st-runs th:nth-child(12) { width: 66px; }
+.st-runs .st-snap .st-grade { display: inline-block; margin-top: 2px; font-weight: 400; }
+.st-totals { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.st-totals > span { display: flex; align-items: center; gap: 6px; }
+.tl-bar.failed { fill: var(--bad); }
+.tl-bar.unknown, .tl-bar.untimed { fill: none; stroke: var(--dashed); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.tl-bar.untimed { stroke: var(--build); }
+.tl-bar.running { fill: var(--build); opacity: 0.55; }
+.st-sw.failed { width: 18px; height: 10px; border-radius: 2px; background: var(--bad); }
+.st-error.real { border-style: solid; border-left-color: var(--bad); background: var(--row-bad); color: var(--fg); display: block; }
+.st-error.real strong { color: var(--pill-bad); font-weight: 600; }
+.st-stats th, .st-stats td { padding-right: 10px; vertical-align: top; }
+.st-stats .st-small { display: block; }
+.st-stats tr.failed > * { background: var(--row-bad); }
+.st-stats tr.st-err-row td { padding: 0 10px 10px; }
+.st-stats tr.st-err-row + tr > * { border-top: none; }
+.st-stats { table-layout: fixed; }
+.st-stats td, .st-stats th { overflow-wrap: anywhere; }
+.st-totals .muted { margin-left: 4px; }
+.st-totals .st-right { margin-left: auto; }

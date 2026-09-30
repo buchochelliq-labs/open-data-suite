@@ -67,7 +67,7 @@ expression: pretty(&body)
   ],
   "plan": null,
   "runs": [],
-  "schema_version": 1,
+  "schema_version": 2,
   "scope": "jaffle_ods/default",
   "state": "no_store",
   "store": {

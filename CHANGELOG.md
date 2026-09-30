@@ -18,6 +18,11 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- `ods serve`'s dashboard JSON (`/api/shell`, `/api/home`, `/api/state/…`,
+  `/api/catalog…`) is now `schema_version` 2: a run in `/api/state/runs` may have no
+  snapshot (a failed run listed from its journal), so its `snapshot`, `recorded_at` and
+  `kept` can be `null`, and `at` is the time it is listed by. Its `outcome` can also be
+  `partial`, `unknown` or `unfinished` (#322).
 - `SDK_VERSION` is now 0.2, as ADR-0019 bumps it whenever a contract changes (here the
   executor contract, #322). Out-of-process plugins must be rebuilt against it.
 - The executor contract is now version 0.4: `Executor::execute_with_events` reports a
@@ -34,6 +39,17 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- The dashboard's Runs and Run pages (`ods serve`) show each run's outcome, duration,
+  node counts and rows from its run journal (#322, ADR-0024): *succeeded*, *partial*,
+  *failed*, or *unknown* / *running or stopped without finishing* when the journal
+  doesn't say it ended, never a success. A failed run that recorded no snapshot is
+  listed too. The Run page's timeline draws when each node started and finished, its
+  Nodes tab lists each node's status, start, time taken (compile and execute), rows,
+  thread, tests and why it ran, and a failed node shows its redacted error summary.
+  A stat that isn't reported reads `—` with the reason, never `0`; a rows total reads
+  "at least N" when some nodes didn't report. A run without a journal says so. The
+  `?outcome=` filter uses these outcomes. The `[duration]`, `[wall clock]` and
+  `[start time]` placeholders are gone.
 - `ods state run`, `seed`, `snapshot`, `build` and `test` show each node's stats
   (#322, ADR-0024): result, time taken, rows affected (`—` when dbt's adapter doesn't
   report them, never `0`), and a failed node's error with quoted values, numbers and

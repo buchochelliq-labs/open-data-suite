@@ -21,6 +21,7 @@ pub mod contracts;
 mod error;
 mod provider;
 mod registry;
+pub mod run_journal;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
