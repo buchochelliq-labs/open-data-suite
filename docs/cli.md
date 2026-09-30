@@ -634,7 +634,7 @@ ods state build        # record a run first, if you haven't
 ods serve              # then open http://127.0.0.1:8765/
 ```
 
-![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node's redacted error](assets/recordings/dashboard/runs/runs.webp)
+![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node explained](assets/recordings/dashboard/runs/runs.webp)
 
 Home shows:
 - **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
