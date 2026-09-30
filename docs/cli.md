@@ -1221,6 +1221,11 @@ and the rows written: `at least 17 (6 nodes didn't report rows)` when some didn'
 report. `--json` has it all under `run_stats`: `nodes` (each with its `stats`) and
 `totals`. A stat that isn't reported is `null`, never `0`.
 
+`ods state history --run <run_id>` shows the same stats for any run whose journal is
+kept (below):
+
+![ods state history, then ods state history --run with one run's per-node stats](assets/recordings/state-history/state-history-run.svg)
+
 The run's events are also appended, as they happen, to a **journal** beside the state
 database, `<state-db>.runs/<run_id>.jsonl` (`journal` in the report), under the same
 run id as `.last-run.json` and the snapshot the run records. It is one JSON event per
@@ -1231,8 +1236,6 @@ journal, and nothing ODS decides reads it. It holds no SQL, no `--vars` values a
 secrets: no options at all, and errors only as the redacted summary above. The 50 most
 recent journals are kept; older ones are deleted when a run starts. `ods state history
 --run <run_id>` shows a run from its journal.
-
-![ods state history, then ods state history --run with one run's per-node stats](assets/recordings/state-history/state-history-run.svg)
 
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.
