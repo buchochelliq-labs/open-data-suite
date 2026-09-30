@@ -1,0 +1,101 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Lineage
+State
+Plan
+Runs
+History
+Planned
+Policies
+Planned
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+State
+/
+Runs
+/
+Local runs · from
+.ods/state.db
+on this machine
+Runs
+jaffle_ods · every run recorded in this state store, newest first
+ODS doesn't schedule anything. A run appears here after ods state build or ods state run records it in this state store, from your terminal or a CI job.
+Local runs
+3
+CI runs — coming with server mode
+PLANNED
+Outcome:
+All
+▾
+Command:
+All
+▾
+Target:
+All
+▾
+Date:
+All
+▾
+3 runs · 3 recorded a snapshot · 1 partial
+Outcome
+	Run	Command	Target	Snapshot	Built	Kept	Failed	Skipped	Rows	Started	Duration	Triggered by
+2026-09-30 · UTC
+✓
+	<run>
+ods state build --state-db '<redacted>'
+	dev · fake	3	2	11	0	0	—	<clock>	<took>	[user]
+!
+	<run>	—	dev · fake	2	2	9	1	1	≥ 100	<clock>	<took>	[user]
+✓
+	<run>	—	dev · fake	1	13	0	0	0	≥ 610	<clock>	<took>	[user]
+n
+built
+n
+kept earlier build: not in the run (reused or not selected); without a journal, also its failed nodes
+n
+failed: kept its last good build
+n
+skipped: waited on a failed node
+!
+partial: some nodes failed, others succeeded
+no journal: outcome not stored
+—
+not recorded or not reported
+Who ran each run isn't recorded yet.
+What the state store records
+!
+<run>
+PARTIAL
+from its run journal
+command not recorded · dev · fake · <clock>
+2 built · 9 kept earlier build · 1 failed · 1 skipped
+<took> · at least 100 rows (2 nodes didn't report)
+FAILED NODE
+customer_segments
+· after <took>
+KeyError
+[value removed]
+Quoted values, numbers and SQL removed. Full message: dbt's log file (logs/dbt.log in the project, unless --log-path)
+SKIPPED
+segment_summary · waited on a failed node
+STATE
+Snapshot 2
+It records this run's successful builds; every other node keeps its last good build.
+Open run
+Copy as JSON

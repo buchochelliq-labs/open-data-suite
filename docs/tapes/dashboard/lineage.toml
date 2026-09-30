@@ -1,0 +1,28 @@
+# Lineage with the State overlay: select a node and read why it builds.
+title = "Lineage with the State overlay"
+theme = "light"
+
+[[step]]
+goto = "/lineage"
+caption = "Lineage, coloured by what the next run does with each node"
+expect = ["State overlay", "BUILD", "REUSE"]
+pause = 4000
+still = "lineage"
+
+[[step]]
+click = "rect.hit[aria-label^='customers, model']"
+caption = "Select a node: its decision and the reason chain"
+pause = 2800
+
+[[step]]
+click = "[role=tab]:has-text('Why')"
+caption = "customers builds because orders, which it reads, changed"
+expect = ["upstream code changed"]
+pause = 4200
+still = "lineage-why"
+
+[[step]]
+click = "rect.hit[aria-label^='stg_customers, model']"
+caption = "stg_customers is reused: its code and inputs are unchanged"
+expect = ["unchanged"]
+pause = 4000

@@ -19,3 +19,6 @@ fixtures/**/logs/
 
 # Python bytecode from repo scripts
 __pycache__/
+
+# Dashboard tour videos (scripts/record-dashboard.py --webm): large, not committed
+docs/assets/recordings/dashboard/**/*.webm

@@ -16,6 +16,9 @@ exclude_docs: |
   research/
   design/*/boards/
   adr/0000-template.md
+  tapes/
+  assets/recordings/**/*.txt
+  assets/recordings/**/provenance.json
 
 theme:
   name: material
@@ -74,7 +77,9 @@ nav:
   - CLI reference: cli.md
   - Principles: principles.md
   - Architecture: architecture.md
-  - Testing against Databricks: contributing-databricks.md
+  - Contributing:
+      - Testing against Databricks: contributing-databricks.md
+      - Recording the docs: recordings.md
   - UX designs:
       - design/README.md
       - Dashboard: design/dashboard/README.md

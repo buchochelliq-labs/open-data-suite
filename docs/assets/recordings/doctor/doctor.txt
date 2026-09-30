@@ -1,0 +1,27 @@
+❯ ods doctor --project
+ODS doctor
+
+verdict  healthy
+checks   4 ok, 0 warning, 0 error, 0 unknown, 0 skipped
+options  --project
+
+Project
+├── [ok] project.dbt_project (required): found `./dbt_project.yml`
+│   └── project_dir: . (default)
+├── [ok] project.manifest (required): manifest.json schema v12, written by dbt 1.10.23
+│   ├── target_dir: target (default)
+│   ├── format: manifest.json
+│   ├── schema_version: 12
+│   ├── dbt_version: 1.10.23
+│   └── nodes: 25
+├── [ok] project.name: project `jaffle_ods`
+│   └── project_name: jaffle_ods
+└── [ok] project.freshness: the manifest is newer than every project file
+    ├── manifest: target/manifest.json
+    ├── manifest_modified: <time>
+    ├── newest_project_file: ./dbt_project.yml
+    └── newest_project_file_modified: <time>
+❯
+
+
+

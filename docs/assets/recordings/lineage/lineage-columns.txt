@@ -1,0 +1,44 @@
+❯ ods lineage columns --model customers
+Column lineage
+
+artifacts  target
+dialect    duckdb
+models     9 analyzed, 1 opaque, 6 dependency waves, <n> ms
+
+customers
+├── customer_id
+│   └── stg_customers.customer_id (identity)
+├── first_name
+│   └── stg_customers.first_name (identity)
+├── last_name
+│   └── stg_customers.last_name (identity)
+├── full_name
+│   ├── stg_customers.first_name (transformation)
+│   └── stg_customers.last_name (transformation)
+├── first_order
+│   └── orders.order_date (aggregation)
+├── most_recent_order
+│   └── orders.order_date (aggregation)
+├── number_of_orders
+│   └── orders.order_id (aggregation)
+├── lifetime_value
+│   └── orders.amount (aggregation)
+├── value_tier
+│   └── orders.amount (indirect:conditional)
+└── rows shaped by
+    ├── orders.customer_id (indirect:join)
+    ├── orders.customer_id (indirect:group_by)
+    ├── orders.status (indirect:filter)
+    └── stg_customers.customer_id (indirect:join)
+❯
+
+
+
+
+
+
+
+
+
+
+
