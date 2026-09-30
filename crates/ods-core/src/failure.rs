@@ -792,6 +792,24 @@ impl ErrorExplanation {
         self.engine_message.as_ref()
     }
 
+    /// The explanation without file paths (its source and compiled files, and where
+    /// the engine's full message is), for a reader that mustn't learn the project's
+    /// layout (e.g. a dashboard served beyond loopback). Lines and names are kept.
+    #[must_use]
+    pub fn without_paths(mut self) -> Self {
+        if let Some(location) = &mut self.location {
+            location.file = None;
+            location.compiled_file = None;
+        }
+        if self.location.as_ref().is_some_and(Location::is_empty) {
+            self.location = None;
+        }
+        if let Some(message) = &mut self.engine_message {
+            message.details_at = None;
+        }
+        self
+    }
+
     /// The label of its chip, e.g. `database error · missing column`.
     pub fn chip(&self) -> String {
         match self.symptom {
@@ -1017,13 +1035,7 @@ mod tests {
             ]
         );
         // Token-shaped values (#323 review): a URL with a password, `key=value`, `$`.
-        for value in [
-            "db://u:SENTINEL@h/db",
-            "token=abc",
-            "a+b",
-            "$HOME",
-            "x@y",
-        ] {
+        for value in ["db://u:SENTINEL@h/db", "token=abc", "a+b", "$HOME", "x@y"] {
             assert_eq!(Text::new().code(value).as_str(), "[name hidden]", "{value}");
         }
         let s = Suggestion::new(Text::new().plain("x"))
@@ -1050,6 +1062,26 @@ mod tests {
             .build();
         let json = serde_json::to_string(&e).unwrap();
         assert!(!json.contains("SENTINEL"), "{json}");
+    }
+
+    #[test]
+    fn without_paths_keeps_lines_and_names() {
+        let e = ExplanationBuilder::new("model.a", ErrorCategory::Database)
+            .location(
+                Location::in_file("models/a.sql")
+                    .at_line(Some(3))
+                    .compiled(Some("target/a.sql"), Some(9)),
+            )
+            .engine_message(EngineMessage::new("x", None, "m", Some("logs/x.log")))
+            .build()
+            .without_paths();
+        let at = e.location().unwrap();
+        assert_eq!(
+            (at.file.as_deref(), at.compiled_file.as_deref()),
+            (None, None)
+        );
+        assert_eq!((at.line, at.reported_line), (Some(3), Some(9)));
+        assert_eq!(e.engine_message().unwrap().details_at, None);
     }
 
     #[test]
