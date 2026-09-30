@@ -1,0 +1,99 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+jaffle_ods
+/
+Lineage
+plan against snapshot 3
+Skip to the selected node's details
+search
+Overlay
+State decision
+None
+Resource type (planned)
+Freshness evidence (planned)
+Lineage confidence (planned)
+Latest status (planned)
+Columns
+Indirect edges
+Fit
+Simulate impact
+raw_orders
+REUSE
+raw_payments
+REUSE
+stg_orders
+REUSE
+stg_payments
+REUSE
+raw_customers
+REUSE
+order_events
+REUSE
+orders
+BUILD
+stg_customers
+REUSE
+customer_order_…
+BUILD
+customers
+BUILD
+customer_segmen…
+BUILD
+customers_snaps…
+BUILD
+segment_summary
+BUILD
+BUILD
+will run
+REUSE
+last build kept; relation not checked here
+UNKNOWN
+no evidence: builds
+seed
+model
+opaque
+declared
+13 of 13 nodes · 66 column edges
+Focus on selection
+customers
+Open
+×
+BUILD · upstream code changed
+model
+lineage exact
+Why
+General
+Columns
+Impact
+Last successful build
+<run> · snapshot 2 · target dev
+Fingerprint compared
+config, contract, engine, macros, relation, scheme, sql unchanged
+Decision: BUILD
+Upstream code changed: orders will be rebuilt
+Readers build too: customer_segments, customers_snapshot_view, segment_summary
+Full reason chain and evidence in State · Why →
+WHAT QUALIFIES THE PLAN
+reuse assumes each relation built earlier still exists: this page didn't check the warehouse (ods state build --dry-run does)
+Copy as JSON
+Copy selector

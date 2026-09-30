@@ -1,0 +1,81 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Lineage
+State
+Plan
+Runs
+History
+Planned
+Policies
+Planned
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+State
+/
+Plan for dev
+/
+against snapshot 3 · dry run, nothing built
+TO BUILD
+6
+TO REUSE
+7
+RELATIONS CHECKED
+not checked
+0 of 7 reused relations · planned offline · ods state build --dry-run checks them
+ods state build
+plans again, then builds only what's marked Build, and records the run
+Copy
+All
+13
+Build
+6
+Reuse
+7
+Node	Type	Action	Why
+orders	model	BUILD	code changed since <run>: sql
+customer_order_rank	model	BUILD	upstream code changed: orders will be rebuilt
+customers	model	BUILD	upstream code changed: orders will be rebuilt
+customer_segments	model	BUILD	upstream code changed: customers will be rebuilt
+customers_snapshot_view	model	BUILD	upstream code changed: customers will be rebuilt
+segment_summary	model	BUILD	upstream code changed: customer_segments will be rebuilt
+raw_customers	seed	REUSE	code and inputs unchanged since <run>
+raw_orders	seed	REUSE	code and inputs unchanged since <run>
+raw_payments	seed	REUSE	code and inputs unchanged since <run>
+stg_customers	model	REUSE	code and inputs unchanged since <run>
+stg_orders	model	REUSE	code and inputs unchanged since <run>
+stg_payments	model	REUSE	code and inputs unchanged since <run>
+order_events	model	REUSE	code and inputs unchanged since <run>
+WHY IT'S REUSED
+stg_customers
+Explanation
+JSON
+Lineage · Model page
+Recorded build found
+built by <run> (snapshot 1), still current in snapshot 3, at <time>
+Fingerprint unchanged since its recorded build
+7 unchanged
+What it reads
+raw_customers reuse: unchanged
+Relation check unknown
+not checked: this plan is made offline, so reuse assumes the relation built earlier still exists. `ods state build --dry-run` checks.
+Decision: REUSE
+code and inputs unchanged since <run>
+Reason chain · as ods state explain
+All evidence (3)
+In a terminal

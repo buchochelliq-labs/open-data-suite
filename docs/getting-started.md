@@ -27,8 +27,9 @@ The binary is called `ods`. CI builds and tests it on Linux, macOS and Windows.
 
 ## 2. Compile your dbt project
 
-ODS reads the artifacts dbt writes. It doesn't run dbt, and today's commands don't
-connect to your warehouse.
+ODS reads the artifacts dbt writes. Lineage, ERDs and the MCP server only read them;
+the `ods state` commands of step 6 run dbt for you, and reach the warehouse only
+through dbt's own connection.
 
 ```sh
 cd my-dbt-project
@@ -65,7 +66,63 @@ ods erd generate                  # Mermaid erDiagram on stdout
 ods erd generate --format dot | dot -Tsvg > erd.svg
 ```
 
-## 6. Give an AI agent the same answers
+## 6. Build only what changed
+
+`ods state` runs dbt on only the models whose code or upstream data changed since the
+last successful run, and keeps that state in `.ods/state.db` in the project. Check the
+setup first, then run it where you'd run `dbt build`:
+
+```sh
+ods doctor                     # configuration, project, dbt, target and state store
+ods state plan                 # what would build, what would be reused, and why
+ods state build                # dbt build, on only what needs it; records the run
+```
+
+![ods doctor --project on the demo project](assets/recordings/doctor/doctor.svg)
+
+The first run builds everything. After you edit a model, the plan builds it and what
+reads it, and reuses the rest:
+
+![ods state plan after an edit to stg_orders](assets/recordings/state-plan/state-plan-after-change.svg)
+
+`ods state build` shows dbt's progress and each node's result as it finishes, then a
+report: what it ran, the run's totals (rows read "at least N" when the adapter didn't
+report them for every node) and, per node, its result, time taken, rows and why it ran.
+
+![ods state build after the edit](assets/recordings/state-build/state-build.svg)
+
+Then ask why, or look back:
+
+```sh
+ods state explain customers        # why it builds, traced upstream to the root cause
+ods state history                  # every recorded run, with its time and rows
+ods state history --run <run_id>   # one run's per-node stats, from its journal
+ods state retry --failed           # after a failure: build only what failed or was skipped
+```
+
+![ods state explain customers](assets/recordings/state-explain/state-explain.svg)
+
+A failed node keeps its last good build, and its error is shown with quoted values and
+SQL removed; the nodes that succeeded are recorded:
+
+![ods state build with a failing node](assets/recordings/state-retry/state-build-failed.svg)
+
+`ods state run`, `seed`, `snapshot`, `test` and `compile` work the same way, each named
+after the dbt command it runs. The [CLI reference](cli.md#state-run) has every option.
+
+## 7. Open the dashboard
+
+```sh
+ods serve                      # http://127.0.0.1:8765/
+```
+
+`ods serve` is read-only and listens on loopback. It shows Home, the Catalog and model
+pages, Lineage with the State overlay, the Plan with its Why panel, and every run with
+each node's stats ([more](cli.md#the-dashboard)).
+
+![A tour of ods serve: Home, the Runs page and a partial run's nodes](assets/recordings/dashboard/runs/runs.webp)
+
+## 8. Give an AI agent the same answers
 
 ```sh
 claude mcp add ods -- ods mcp --target-dir target
@@ -82,5 +139,6 @@ are documented in the [CLI reference](cli.md#exit-status).
 ## Next steps
 
 - [Column-level lineage](lineage.md), with a live demo.
+- [State on Databricks](databricks.md), with source table versions.
 - [CLI reference](cli.md), which covers every command and flag.
 - [Roadmap](roadmap.md), for what's coming and when.

@@ -1,0 +1,12 @@
+❯ ods serve --port 18765
+Dashboard
+
+artifacts  target
+dialect    duckdb
+models     9 analyzed, 1 opaque, 6 dependency waves, <n> ms
+
+url     http://127.0.0.1:18765/
+reload  when the dbt artifacts or the state store change
+
+info: press Ctrl-C to stop
+

@@ -1,0 +1,30 @@
+❯ ods state explain customers
+customers would be built
+
+scope          jaffle_ods/default
+compared with  snapshot 1
+last built     <time> in run <run-id>, tested in run
+<run-id>
+
+customers: build
+├── upstream code changed: orders will be rebuilt
+├── evidence: fingerprint of customers = 7a26cbfb1771…
+├── evidence: parent_decision of orders = build: upstream_code_changed
+├── evidence: parent_decision of stg_customers = reuse: unchanged
+└── orders: build
+    ├── upstream code changed: stg_orders will be rebuilt
+    ├── evidence: fingerprint of orders = b3b4f52a1315…
+    ├── evidence: parent_decision of stg_orders = build: code_changed
+    ├── evidence: parent_decision of stg_payments = reuse: unchanged
+    └── stg_orders: build
+        ├── code changed since run <run-id>: sql
+        ├── changed: sql
+        └── evidence: fingerprint of stg_orders = 2a7917be66ee…
+❯
+
+
+
+
+
+
+

@@ -1,0 +1,11 @@
+{
+  "tape": "docs/tapes/state-explain.tape",
+  "tape_fnv1a64": "8afac932fd51404d",
+  "recorder": "rs-rich-record 0.0.1",
+  "rich": "rich (rs-rich-cli) 0.0.13",
+  "commit": "fa3245b6192f78cac5e5bde43c4c177d63f1d106",
+  "screenshots": [
+    "state-explain"
+  ],
+  "note": "Every frame is real output of the program under test on a PTY."
+}
