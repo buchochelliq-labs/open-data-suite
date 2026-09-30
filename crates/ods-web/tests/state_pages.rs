@@ -895,7 +895,8 @@ fn a_run_shows_its_timeline_why_each_node_was_built_and_earlier_runs() {
     for placeholder in ["[wall clock]", "[duration]", "[start time]"] {
         assert!(!page.contains(placeholder), "{placeholder}");
     }
-    assert!(page.contains("No run journal: the run predates run journals"));
+    assert!(page.contains("Not recorded: this run has no journal"));
+    assert!(page.contains("outcome not stored: no run journal"));
     assert!(page.contains("Kept earlier build"));
     assert!(page.contains("3 (replaces 2)"));
     assert!(page.contains("Earlier runs on dev"));
@@ -1132,6 +1133,7 @@ mod journals {
     const RUN_PROD: &str = "0b0b0b0b-0000-4000-8000-00000000000b";
     /// A run whose journal doesn't say it ended.
     const RUN_5: &str = "5e5e5e5e-0000-4000-8000-000000000005";
+    pub(super) const RUN_5_ID: &str = RUN_5;
     const SCOPE: &str = "jaffle_ods/dev";
 
     fn ms(text: &str) -> TimestampMs {
@@ -1423,7 +1425,11 @@ mod journals {
             .map(|n| n.node.as_str())
             .collect();
         assert_eq!(failures, ["model.orders", "model.orders_view"]);
-        assert_eq!(view.failed, 1);
+        assert_eq!(
+            (view.failed, view.partial),
+            (0, 1),
+            "partial is counted apart"
+        );
         assert_eq!(view.recorded_snapshots, 3);
 
         // The outcome filter uses the journals' outcomes.
@@ -1460,7 +1466,18 @@ mod journals {
         let view = dashboard.runs_view(true, now(), &RunFilter::default(), &BTreeMap::new());
         let row = view.runs.iter().find(|r| r.run_id == RUN_5).unwrap();
         assert_eq!(row.outcome, RunOutcome::Unknown);
-        assert!(row.outcome_note.contains("Stopped without finishing"));
+        // A long node writes nothing meanwhile: that it stopped is only inferred.
+        assert!(row.outcome_inferred);
+        assert!(
+            row.outcome_note
+                .starts_with("Probably stopped: no event for over 10 minutes")
+        );
+        let addr = start(dashboard);
+        let (_, page) = get(addr, &format!("/state/runs?run={RUN_5}"));
+        assert!(page.contains("probably stopped: no event for over 10 minutes"));
+        assert!(page.contains(r#"class="st-grade inferred""#));
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_5}"));
+        assert!(page.contains("probably stopped: no event for over 10 minutes"));
     }
 
     #[test]
@@ -1523,8 +1540,16 @@ mod journals {
         assert_eq!(view.run.snapshot, None);
         assert!(
             view.state_rule
-                .contains("snapshot 3 is still the last good state")
+                .contains("Snapshot 3 was the last good state when it ran"),
+            "{}",
+            view.state_rule
         );
+        assert!(
+            view.state_rule
+                .contains("A failed run never replaces the last good state")
+        );
+        // Kept: snapshot 3's nodes the run didn't run; its failed node is counted apart.
+        assert_eq!(view.run.kept, Some(3));
         assert!(view.built.is_empty());
         let names: Vec<&str> = view.timeline.iter().map(|t| t.node.as_str()).collect();
         // Parallel nodes by start; the skipped one never started.
@@ -1632,5 +1657,252 @@ mod journals {
         assert_eq!(remote.nodes[0].error.as_ref().unwrap().details_at, None);
         // It didn't say it ended, but its journal is old: unknown, never success.
         assert_ne!(remote.run.outcome, RunOutcome::Succeeded);
+    }
+
+    /// The demo's snapshots, with only the journals `journals` writes.
+    fn with(journals: impl FnOnce(&Path)) -> Dashboard {
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        std::fs::create_dir_all(&dir).unwrap();
+        journals(&dir);
+        recorded(
+            History::new(snapshots()).with_journals(Journals::in_dir(&dir)),
+            plan(),
+        )
+    }
+
+    fn row_of(
+        dashboard: &Dashboard,
+        run: &str,
+        filter: &RunFilter,
+    ) -> Option<ods_web::dashboard::state::RunRow> {
+        dashboard
+            .runs_view(true, now(), filter, &BTreeMap::new())
+            .runs
+            .into_iter()
+            .find(|r| r.run_id == run)
+    }
+
+    const RUN_6: &str = "6f6f6f6f-0000-4000-8000-000000000006";
+
+    fn success(at: &str) -> NodeRunStats {
+        NodeRunStats::new(NodeRunStatus::Success).with_times(Some(ms(at)), Some(ms(at)))
+    }
+
+    #[test]
+    fn a_reported_success_the_nodes_dont_bear_out_is_never_shown_as_one() {
+        let start = "2026-09-29T00:07:00.000Z";
+        let succeeded = |nodes: Vec<RunEvent>| {
+            let mut events = vec![started(RUN_6, SCOPE, start, &["model.a", "model.b"])];
+            events.extend(nodes);
+            events.push(ended(RUN_6, "2026-09-29T00:07:05.000Z", Ended::Succeeded));
+            events
+        };
+        // One node never finished: its outcome is unknown, so the run's is too.
+        let dashboard = with(|dir| {
+            write(
+                dir,
+                RUN_6,
+                &succeeded(vec![finished(RUN_6, start, "model.a", success(start))]),
+                "",
+            );
+        });
+        let row = row_of(&dashboard, RUN_6, &RunFilter::default()).unwrap();
+        assert_eq!(row.outcome, RunOutcome::Unknown, "{}", row.outcome_note);
+        assert!(row.outcome_note.contains("not read as a success"));
+        let (_, page) = get(start_server(dashboard), "/state/runs");
+        assert!(!page.contains(&format!(r#"data-run="{RUN_6}" data-outcome="succeeded""#)));
+        // A failed node beside a success: partial, whatever the executor said.
+        let dashboard = with(|dir| {
+            write(
+                dir,
+                RUN_6,
+                &succeeded(vec![
+                    finished(RUN_6, start, "model.a", success(start)),
+                    finished(
+                        RUN_6,
+                        start,
+                        "model.b",
+                        NodeRunStats::new(NodeRunStatus::Error),
+                    ),
+                ]),
+                "",
+            );
+        });
+        assert_eq!(
+            row_of(&dashboard, RUN_6, &RunFilter::default())
+                .unwrap()
+                .outcome,
+            RunOutcome::Partial
+        );
+        // Every node succeeded, but a line couldn't be read: unknown.
+        let dashboard = with(|dir| {
+            write(
+                dir,
+                RUN_6,
+                &succeeded(vec![
+                    finished(RUN_6, start, "model.a", success(start)),
+                    finished(RUN_6, start, "model.b", success(start)),
+                ]),
+                "{not json}\n",
+            );
+        });
+        assert_eq!(
+            row_of(&dashboard, RUN_6, &RunFilter::default())
+                .unwrap()
+                .outcome,
+            RunOutcome::Unknown
+        );
+    }
+
+    fn start_server(dashboard: Dashboard) -> SocketAddr {
+        super::start(dashboard)
+    }
+
+    #[test]
+    fn a_failed_run_with_no_failed_node_is_failed_not_partial() {
+        let start = "2026-09-29T00:07:00.000Z";
+        let dashboard = with(|dir| {
+            write(
+                dir,
+                RUN_6,
+                &[
+                    started(RUN_6, SCOPE, start, &["model.a", "model.b"]),
+                    finished(RUN_6, start, "model.a", success(start)),
+                    finished(
+                        RUN_6,
+                        start,
+                        "model.b",
+                        NodeRunStats::new(NodeRunStatus::Skipped),
+                    ),
+                    ended(RUN_6, "2026-09-29T00:07:05.000Z", Ended::Failed),
+                ],
+                "",
+            );
+        });
+        let row = row_of(&dashboard, RUN_6, &RunFilter::default()).unwrap();
+        assert_eq!(row.outcome, RunOutcome::Failed);
+        assert!(
+            row.outcome_note.contains("no node failed itself"),
+            "{}",
+            row.outcome_note
+        );
+    }
+
+    #[test]
+    fn a_run_that_never_said_it_started_has_no_time_and_no_rows_total() {
+        let dashboard = with(|dir| {
+            write(
+                dir,
+                RUN_6,
+                &[finished(
+                    RUN_6,
+                    "2026-09-29T00:07:00.000Z",
+                    "model.a",
+                    NodeRunStats::new(NodeRunStatus::Error),
+                )],
+                "",
+            );
+        });
+        let row = row_of(&dashboard, RUN_6, &RunFilter::default()).unwrap();
+        assert_eq!(row.at, None, "not now: unknown");
+        assert_eq!(row.kept, None);
+        assert_eq!(
+            row.stats.as_ref().unwrap().rows_affected,
+            None,
+            "no total, not 0"
+        );
+        let mut filter = RunFilter::default();
+        filter.date = Some("30d".into());
+        assert!(
+            row_of(&dashboard, RUN_6, &filter).is_none(),
+            "never said to be recent"
+        );
+    }
+
+    #[test]
+    fn a_run_that_ran_nothing_has_no_rows_total() {
+        let dashboard = with(|dir| {
+            write(
+                dir,
+                RUN_6,
+                &[
+                    started(RUN_6, SCOPE, "2026-09-29T00:07:00.000Z", &[]),
+                    ended(RUN_6, "2026-09-29T00:07:01.000Z", Ended::Succeeded),
+                ],
+                "",
+            );
+        });
+        let row = row_of(&dashboard, RUN_6, &RunFilter::default()).unwrap();
+        assert_eq!(row.stats.unwrap().rows_affected, None);
+        // It succeeded, yet recorded nothing: said so, not "a failed run".
+        let view = dashboard.run_view(true, RUN_6, &BTreeMap::new()).unwrap();
+        assert!(
+            view.state_rule.contains("its builds weren't recorded"),
+            "{}",
+            view.state_rule
+        );
+        assert!(!view.state_rule.contains("A failed run"));
+    }
+
+    #[test]
+    fn kept_counts_only_nodes_the_run_didnt_run() {
+        // Snapshot 3's run failed its seed (kept from run 1) and built the rest.
+        let dashboard = with(|dir| {
+            let at = "2026-09-29T00:02:31.000Z";
+            write(
+                dir,
+                RUN_3,
+                &[
+                    started(
+                        RUN_3,
+                        SCOPE,
+                        "2026-09-29T00:02:30.000Z",
+                        &["seed.raw_orders", "model.customers", "model.customers_view"],
+                    ),
+                    finished(
+                        RUN_3,
+                        at,
+                        "seed.raw_orders",
+                        NodeRunStats::new(NodeRunStatus::Error),
+                    ),
+                    finished(RUN_3, at, "model.customers", success(at)),
+                    finished(RUN_3, at, "model.customers_view", success(at)),
+                    ended(RUN_3, "2026-09-29T00:02:36.000Z", Ended::Failed),
+                ],
+                "",
+            );
+        });
+        let row = row_of(&dashboard, RUN_3, &RunFilter::default()).unwrap();
+        assert_eq!(row.outcome, RunOutcome::Partial);
+        assert_eq!((row.built, row.kept, row.failed), (2, Some(0), Some(1)));
+        // Without a journal the snapshot can't tell: the seed would read kept.
+        let without = demo();
+        let row = row_of(&without, RUN_3, &RunFilter::default()).unwrap();
+        assert_eq!((row.built, row.kept), (2, Some(1)));
+        let view = dashboard.run_view(true, RUN_3, &BTreeMap::new()).unwrap();
+        assert!(view.state_rule.contains("some nodes failed"));
+        let (_, page) = get(
+            start_server(dashboard),
+            &format!("/state/runs/{RUN_3}?tab=nodes"),
+        );
+        assert!(page.contains("kept its last good build"));
+        assert!(
+            page.contains(r#"<span class="pill-snap"><span class="dot warn">"#),
+            "partial is amber"
+        );
+    }
+
+    #[test]
+    fn an_unfinished_run_that_recorded_nothing_may_still_be_running() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let view = dashboard
+            .run_view(true, super::journals::RUN_5_ID, &BTreeMap::new())
+            .unwrap();
+        assert!(
+            view.state_rule.contains("It may still be running"),
+            "{}",
+            view.state_rule
+        );
+        assert!(!view.state_rule.contains("A failed run"));
     }
 }

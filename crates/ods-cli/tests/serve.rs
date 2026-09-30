@@ -454,16 +454,7 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert_eq!(status, 200, "{body}");
     let runs: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(runs["runs"].as_array().unwrap().len(), 2, "{runs}");
-    let failed = &runs["runs"][0];
-    assert_eq!(failed["snapshot"], Value::Null, "{failed}");
-    assert_eq!(failed["outcome"], "failed", "{failed}");
-    assert_eq!(failed["from_last_run"], true, "{failed}");
-    assert_eq!(failed["kept_state"], 1, "{failed}");
-    assert_eq!(runs["runs"][1]["built"], 13);
-    assert_eq!(runs["runs"][1]["outcome"], "succeeded");
-    assert_eq!(runs["runs"][1]["outcome_from"], "journal");
-    assert!(runs["runs"][1]["duration"].is_string(), "{runs}");
-    assert_eq!(runs["last_run_listed"], false, "its journal lists it");
+    let failed = journal_rows(&runs);
     orders_failed_in(&server, failed["run_id"].as_str().unwrap());
     let last = &runs["last_run"];
     assert_eq!(
@@ -489,7 +480,10 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("--failed"));
     let (_, page) = get(&server, "state/runs");
     assert!(page.contains("kept 1"), "{page}");
-    assert!(page.contains("Last good state: snapshot 1"));
+    assert!(
+        page.contains("Last good state when it ran: snapshot 1"),
+        "{page}"
+    );
     assert!(
         !page.contains("hunter2") && !page.contains("sekrit"),
         "{page}"
@@ -503,6 +497,22 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert_eq!(status, 200);
     drop(server);
     assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
+}
+
+/// The runs listed from their journals (#322): the failed one first, by itself, then
+/// the recorded one, with their outcomes. Returns the failed run's row.
+fn journal_rows(runs: &Value) -> &Value {
+    let failed = &runs["runs"][0];
+    assert_eq!(failed["snapshot"], Value::Null, "{failed}");
+    assert_eq!(failed["outcome"], "failed", "{failed}");
+    assert_eq!(failed["from_last_run"], true, "{failed}");
+    assert_eq!(failed["kept_state"], 1, "{failed}");
+    assert_eq!(runs["runs"][1]["built"], 13);
+    assert_eq!(runs["runs"][1]["outcome"], "succeeded");
+    assert_eq!(runs["runs"][1]["outcome_from"], "journal");
+    assert!(runs["runs"][1]["duration"].is_string(), "{runs}");
+    assert_eq!(runs["last_run_listed"], false, "its journal lists it");
+    failed
 }
 
 /// The page of `run_id`, a run that recorded nothing, lists `orders` as failed, from

@@ -684,7 +684,12 @@ What the pages claim is what ODS records, and no more:
   than the journal keeps, and reads every line through the same redaction again. A stat
   it doesn't report reads `—` with the reason, never `0`, and a rows total that misses
   some nodes reads *at least N*. A journal with no end is *running or stopped without
-  finishing* while it changed in the last 10 minutes, then *unknown*: never a success.
+  finishing* while it changed in the last 10 minutes, then *unknown*, *probably stopped*
+  (marked *inferred*: a node running longer writes nothing meanwhile); never a success.
+  An executor's "succeeded" is shown only when every node succeeded and every line
+  read; *partial* means some nodes failed and others succeeded. With a journal, *kept*
+  counts only the nodes the run didn't run; its failed and skipped nodes are counted
+  apart (they keep their last good build too).
   A failed run that recorded no snapshot is listed from its journal, with the snapshot
   that stayed the last good state (*inferred*: no listed snapshot has its id). Only
   journals of the page's scope are listed. A run without a journal (from before

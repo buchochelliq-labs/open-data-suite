@@ -159,7 +159,8 @@ impl Journals {
     /// The journal file of `run_id`, if there is one.
     pub fn file(&self, run_id: &str) -> Option<JournalFile> {
         let path = self.path(run_id)?;
-        let meta = std::fs::metadata(&path)
+        // As `list` sees entries: a symbolic link is not followed.
+        let meta = std::fs::symlink_metadata(&path)
             .ok()
             .filter(std::fs::Metadata::is_file)?;
         Some(JournalFile {

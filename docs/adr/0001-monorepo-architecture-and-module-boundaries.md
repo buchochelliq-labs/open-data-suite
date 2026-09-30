@@ -53,7 +53,7 @@ CI enforces this.
 |---|---|---|
 | 0 Core | `ods-core` | Semantic graph, domain types, capability vocabulary, `SchemaVersion`. No I/O, no vendors, no internal deps. |
 | 1 Foundation | `ods-events`, `ods-config`, `ods-policy` | Cross-cutting services: events/tracing (#8), layered config (#7), policy evaluation (#9). |
-| 2 SDK | `ods-sdk` | Versioned provider contracts (traits), capability negotiation (#2, #3), conformance harness (#99). |
+| 2 SDK | `ods-sdk` | Versioned provider contracts (traits), capability negotiation (#2, #3), conformance harness (#99); the run journal's file layout and its one reader (`run_journal`, ADR-0024), until `ods-events` exists. |
 | 3 Modules | `ods-state`, `ods-erd`, `ods-usage`, `ods-ci`, `ods-lsp`, `ods-agent`, `ods-mesh`, `ods-synthetic` | Product logic written only against SDK contracts. |
 | 4 Providers | `ods-provider-*`, `ods-store-*` | Vendor implementations (dbt, Databricks, SQLite, PostgreSQL, fake). |
 | 5 Binaries | `ods-cli` (later `ods-server`) | Composition root: selects providers from config and wires them into modules; presentation. |

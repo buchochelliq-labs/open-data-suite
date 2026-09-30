@@ -71,21 +71,32 @@ impl JournalSource {
         let Some(journals) = &self.journals else {
             return Vec::new();
         };
-        journals.list().unwrap_or_else(|e| {
+        let files = journals.list().unwrap_or_else(|e| {
             tracing::warn!(error = %e, dir = %journals.dir().display(), "dashboard: run journals can't be listed");
             Vec::new()
-        })
+        });
+        // Journals pruned or removed since are forgotten.
+        let listed: std::collections::BTreeSet<&str> =
+            files.iter().map(|f| f.run_id.as_str()).collect();
+        self.read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|run_id, _| listed.contains(run_id.as_str()));
+        files
     }
 
     /// The run in `file`, from the last read if the file hasn't changed since.
     pub(crate) fn run(&self, file: &JournalFile) -> Option<Arc<JournalRun>> {
         let key = (file.modified, file.len);
-        let mut read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((at, run)) = read.get(&file.run_id)
-            && *at == key
         {
-            return Some(Arc::clone(run));
+            let read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((at, run)) = read.get(&file.run_id)
+                && *at == key
+            {
+                return Some(Arc::clone(run));
+            }
         }
+        // Read without the lock held: other requests needn't wait on this file.
         let journal = match ods_sdk::run_journal::read(&file.path) {
             Ok(Some(journal)) => journal,
             Ok(None) => return None,
@@ -99,7 +110,10 @@ impl JournalSource {
             unreadable: journal.unreadable,
             modified: file.modified,
         });
-        read.insert(file.run_id.clone(), (key, Arc::clone(&run)));
+        self.read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(file.run_id.clone(), (key, Arc::clone(&run)));
         Some(run)
     }
 
@@ -230,44 +244,120 @@ pub fn duration(ms: u64) -> String {
     }
 }
 
-/// How a run's journal says it ended, for the Runs page: with whether it is recent
-/// enough to be still going.
+/// How a run ended, from its journal, for the Runs page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ended {
     Succeeded,
-    /// Failed, though some nodes succeeded.
+    /// Some nodes failed, others succeeded.
     Partial,
     Failed,
-    /// It said it ended, but not how.
+    /// Not known how it ended; never read as a success.
     Unknown,
     /// No `run_finished`, and the journal changed recently: running, or stopped.
     Unfinished,
-    /// No `run_finished`, and the journal hasn't changed for a while: it stopped.
-    Stopped,
+}
+
+/// How a run ended, why that is said, and whether it is only inferred.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Verdict {
+    pub(crate) ended: Ended,
+    pub(crate) note: String,
+    pub(crate) inferred: bool,
 }
 
 impl JournalRun {
-    /// How it ended, as of `now`.
-    pub(crate) fn ended(&self, now: Timestamp) -> Ended {
+    /// How it ended, as of `now`. The executor's own outcome is taken only when the
+    /// nodes agree: a "success" with a failed node, a node whose outcome isn't known,
+    /// or lines that couldn't be read is not shown as a success (AGENTS rule 3).
+    pub(crate) fn ended(&self, now: Timestamp) -> Verdict {
         let run = &self.summary;
-        match run.outcome {
-            Some(JournalOutcome::Succeeded) => Ended::Succeeded,
-            Some(JournalOutcome::Failed) if run.totals.count(NodeRunStatus::Success) > 0 => {
-                Ended::Partial
+        let count = |s| run.totals.count(s);
+        let errors = count(NodeRunStatus::Error);
+        let successes = count(NodeRunStatus::Success);
+        let unsettled = count(NodeRunStatus::Unknown)
+            + count(NodeRunStatus::Running)
+            + count(NodeRunStatus::Queued);
+        let verdict = |ended, note: String| Verdict {
+            ended,
+            note,
+            inferred: false,
+        };
+        let failed_nodes = |said: &str| {
+            if successes > 0 {
+                verdict(
+                    Ended::Partial,
+                    format!("{said} {errors} failed, {successes} succeeded."),
+                )
+            } else {
+                verdict(
+                    Ended::Failed,
+                    format!("{said} {errors} failed, and no node succeeded."),
+                )
             }
-            Some(JournalOutcome::Failed) => Ended::Failed,
-            Some(_) => Ended::Unknown,
+        };
+        match run.outcome {
+            Some(_) if errors > 0 => failed_nodes(match run.outcome {
+                Some(JournalOutcome::Succeeded) => {
+                    "The executor said the run succeeded, but its journal has failed nodes:"
+                }
+                _ => "Its journal says the run failed:",
+            }),
+            Some(JournalOutcome::Succeeded) if unsettled > 0 || self.unreadable > 0 => verdict(
+                Ended::Unknown,
+                format!(
+                    "The executor said the run succeeded, but {}{}{} its journal: not read as a success.",
+                    if unsettled > 0 {
+                        format!("{unsettled} node(s) have no outcome in")
+                    } else {
+                        String::new()
+                    },
+                    if unsettled > 0 && self.unreadable > 0 {
+                        " and "
+                    } else {
+                        ""
+                    },
+                    if self.unreadable > 0 {
+                        format!("{} line(s) couldn't be read from", self.unreadable)
+                    } else {
+                        String::new()
+                    },
+                ),
+            ),
+            Some(JournalOutcome::Succeeded) => verdict(
+                Ended::Succeeded,
+                "Its journal says the run succeeded, and every node did.".to_owned(),
+            ),
+            Some(JournalOutcome::Failed) => verdict(
+                Ended::Failed,
+                format!(
+                    "Its journal says the run failed, though no node failed itself: {} skipped, or a test failed.",
+                    count(NodeRunStatus::Skipped)
+                ),
+            ),
+            Some(_) => verdict(
+                Ended::Unknown,
+                "Its journal says the run ended, but not how: it isn't read as a success."
+                    .to_owned(),
+            ),
             None => {
                 let changed = self
                     .modified
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
                 let recent = i64::try_from(RECENT.as_secs()).unwrap_or(i64::MAX);
-                // A clock that went back counts as recent: never "stopped" on a guess.
+                // A clock that went back counts as recent.
                 if now.unix().saturating_sub(changed) < recent {
-                    Ended::Unfinished
+                    verdict(
+                        Ended::Unfinished,
+                        "Running or stopped without finishing: its journal doesn't say it finished, and it changed in the last 10 minutes.".to_owned(),
+                    )
                 } else {
-                    Ended::Stopped
+                    // A single long node writes nothing while it runs: only inferred.
+                    Verdict {
+                        ended: Ended::Unknown,
+                        note: "Probably stopped: no event for over 10 minutes, and its journal doesn't say it finished. A node that runs longer than that writes nothing meanwhile, so it may still be running.".to_owned(),
+                        inferred: true,
+                    }
                 }
             }
         }
@@ -287,7 +377,11 @@ impl JournalRun {
             .filter_map(|n| n.stats.rows_affected)
             .collect();
         let totals = &run.totals;
-        let rows_affected = if reported.is_empty() && totals.rows_unreported > 0 {
+        // Nothing ran, or it never said it started: no total, not a made-up 0.
+        let rows_affected = if (reported.is_empty() && totals.rows_unreported > 0)
+            || run.nodes.is_empty()
+            || run.started_at.is_none()
+        {
             None
         } else {
             Some(totals.rows_affected)

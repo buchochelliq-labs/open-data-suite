@@ -18,8 +18,8 @@ use serde::Deserialize;
 
 use crate::dashboard::journal::{MISSING, NodeStatsView};
 use crate::dashboard::state::{
-    ChainLine, LastRunView, NO_JOURNAL, PlanRow, PlanView, RunFilter, RunOutcome, RunPageView,
-    RunRow, RunsView, TimelineRow, WhyView, count, date_and_time,
+    ChainLine, LastRunView, NO_JOURNAL, OutcomeFrom, PlanRow, PlanView, RunFilter, RunOutcome,
+    RunPageView, RunRow, RunsView, TimelineRow, WhyView, count, date_and_time,
 };
 use crate::dashboard::{CommandHint, EmptyState, ShellView, StateStatus};
 use crate::home::{Frame, framed};
@@ -277,6 +277,17 @@ const RECORDED_ICON: &str = r#"<svg width="22" height="22" viewBox="0 0 24 24" f
 
 /// What a recorded run's outcome does and doesn't say (as on Home).
 const RECORDED_NOTE: &str = "Recorded: its successful builds are the new state. Whether other nodes failed isn't stored for this run.";
+/// The row tint of an outcome: red when it failed, amber when it partly did.
+fn row_tint(outcome: RunOutcome) -> &'static str {
+    match outcome {
+        RunOutcome::Failed => " failed",
+        RunOutcome::Partial => " partial",
+        _ => "",
+    }
+}
+
+/// What "kept earlier build" counts when the run's journal says which nodes it ran.
+const KEPT_JOURNAL_NOTE: &str = "Not in this run: reused or not selected. Its failed and skipped nodes are counted apart; they keep their last good build too.";
 /// What "kept earlier build" covers (as on Home).
 const KEPT_NOTE: &str = "Not rebuilt by this run: reused, not selected, or failed. The snapshot keeps the last good build either way.";
 /// Where a run's command and outcome come from when known.
@@ -920,7 +931,10 @@ fn outcome_label(row: &RunRow) -> String {
     match (row.outcome, row.outcome_from) {
         (RunOutcome::Recorded, _) => "recorded: outcome not stored, no run journal".to_owned(),
         (RunOutcome::Unfinished, _) => "running or stopped without finishing".to_owned(),
-        (o, "last_run") => format!("{} (from the last run's record)", outcome_word(o)),
+        (_, _) if row.outcome_inferred => {
+            "unknown: probably stopped (inferred), no event for over 10 minutes".to_owned()
+        }
+        (o, OutcomeFrom::LastRun) => format!("{} (from the last run's record)", outcome_word(o)),
         (o, _) => outcome_word(o).to_owned(),
     }
 }
@@ -945,14 +959,39 @@ fn glyph(outcome: RunOutcome, label: &str) -> String {
     )
 }
 
+/// A count as a pill; zero as a plain `0` (it is known to be none), and an unknown
+/// count as `—`.
 fn num_pill(n: Option<usize>, class: &str) -> String {
     match n {
-        Some(0) if class == "failed" || class == "skipped" => {
-            r#"<span class="st-num zero">0</span>"#.to_owned()
-        }
+        Some(0) => r#"<span class="st-num zero">0</span>"#.to_owned(),
         Some(n) => format!(r#"<span class="st-num {class}">{n}</span>"#),
         None => NOT_RECORDED.to_owned(),
     }
+}
+
+/// A count as a pill, or `—` with why it isn't known.
+fn num_pill_or(n: Option<usize>, class: &str, why: &str) -> String {
+    n.map_or_else(|| missing(why), |n| num_pill(Some(n), class))
+}
+
+/// A missing stat with its reason written beside it, where there is room.
+fn missing_said(why: &str) -> String {
+    format!(
+        r#"{}<span class="st-why">{}</span>"#,
+        missing(why),
+        text(why)
+    )
+}
+
+/// A command line, token by token: lines break between tokens, never inside one
+/// (`--profiles-dir` stays whole).
+fn command_tokens(command: &str) -> String {
+    command
+        .split(' ')
+        .filter(|t| !t.is_empty())
+        .map(|t| format!(r#"<span class="tok">{}</span>"#, text(t)))
+        .collect::<Vec<_>>()
+        .join(" <wbr>")
 }
 
 /// A missing stat: `—`, with why.
@@ -992,7 +1031,7 @@ fn rows_cell(row: &RunRow) -> String {
         Some(n) if stats.rows_at_least => format!(
             r#"<span class="mono" title="{}">≥&#8201;{n}</span>"#,
             attr(&format!(
-                "at least {n}: {} didn't report rows",
+                "at least {n} rows ({} didn't report)",
                 count(stats.rows_unreported, "node")
             ))
         ),
@@ -1052,7 +1091,7 @@ fn runs_html(shell: &ShellView, view: &RunsView, generation: u64) -> String {
     }
     let _ = write!(
         b,
-        r#"<div class="st-legend"><span><span class="st-num built">n</span>built</span><span title="{kept}"><span class="st-num kept">n</span>kept earlier build: reused, not selected, or failed</span><span><span class="st-num failed">n</span>failed</span><span><span class="st-num skipped">n</span>skipped: waited on a failed node</span><span><span class="st-glyph warn" aria-hidden="true">!</span>partial: some nodes failed</span><span><span class="st-glyph rec" aria-hidden="true"></span>no journal: outcome not stored</span><span>{NOT_RECORDED} not recorded or not reported</span><span class="st-right">Who ran each run isn't recorded yet.</span></div>"#,
+        r#"<div class="st-legend"><span><span class="st-num built">n</span>built</span><span title="{kept}"><span class="st-num kept">n</span>kept earlier build: not in the run (reused or not selected); without a journal, also its failed nodes</span><span><span class="st-num failed">n</span>failed: kept its last good build</span><span><span class="st-num skipped">n</span>skipped: waited on a failed node</span><span><span class="st-glyph warn" aria-hidden="true">!</span>partial: some nodes failed, others succeeded</span><span><span class="st-glyph rec" aria-hidden="true"></span>no journal: outcome not stored</span><span>{NOT_RECORDED} not recorded or not reported</span><span class="st-right">Who ran each run isn't recorded yet.</span></div>"#,
         kept = attr(KEPT_NOTE),
     );
     if more {
@@ -1131,15 +1170,21 @@ fn failed_names(last: &LastRunView) -> String {
 fn run_rows(b: &mut String, view: &RunsView) {
     let mut day = String::new();
     for row in &view.runs {
-        let (date, time) = date_and_time(row.at);
+        let (date, time) = row
+            .at
+            .map_or_else(|| ("Date unknown".to_owned(), String::new()), date_and_time);
         if date != day {
             if !day.is_empty() {
                 b.push_str("</tbody>");
             }
             let _ = write!(
                 b,
-                r#"<tbody><tr class="st-rgroup"><th scope="rowgroup" colspan="13">{} · UTC</th></tr>"#,
-                text(&date)
+                r#"<tbody><tr class="st-rgroup"><th scope="rowgroup" colspan="13">{}</th></tr>"#,
+                text(&if row.at.is_some() {
+                    format!("{date} · UTC")
+                } else {
+                    date.clone()
+                })
             );
             day = date;
         }
@@ -1156,11 +1201,16 @@ fn run_rows(b: &mut String, view: &RunsView) {
                 inferred_chip(NOTHING_NOTE)
             ),
         };
+        let kept_note = if row.stats.is_some() {
+            KEPT_JOURNAL_NOTE
+        } else {
+            KEPT_NOTE
+        };
         let _ = write!(
             b,
             r#"<tr class="{sel}{bad}"{current} data-run="{id}" data-outcome="{outcome}"><td><a href="{select}" aria-label="{select_label}">{glyph}</a></td><td><a class="mono st-runid" href="runs/{href}" title="run {id}">{short}</a></td><td>{command}</td><td class="st-dim">{target}</td><td class="st-snap{snap_class}">{snap}</td><td>{built}</td><td title="{kept_note}">{kept}</td><td>{failed}</td><td>{skipped}</td><td>{rows}</td><td class="mono st-ts" title="{time_note}">{time}</td><td class="st-dim">{duration}</td><td class="st-dim">[user]</td></tr>"#,
             sel = if selected { "selected" } else { "" },
-            bad = if row.outcome.failed() { " failed" } else { "" },
+            bad = row_tint(row.outcome),
             current = if selected {
                 r#" aria-current="true""#
             } else {
@@ -1178,22 +1228,28 @@ fn run_rows(b: &mut String, view: &RunsView) {
             short = text(&row.short_run_id),
             command = row.command.as_deref().map_or_else(
                 || r#"<span class="st-na" aria-label="not recorded" title="Runs don't record their command yet">—</span>"#.to_owned(),
-                |c| format!(r#"<code title="{}">{}</code>"#, attr(LAST_RUN_NOTE), text(c)),
+                |c| format!(
+                    r#"<code title="{}">{}</code>"#,
+                    attr(&format!("{c}\n\n{LAST_RUN_NOTE}")),
+                    command_tokens(c)
+                ),
             ),
             target = text(&target_text(row)),
             snap_class = if row.snapshot.is_none() { " bad" } else { "" },
             built = num_pill(Some(row.built), "built"),
-            kept_note = attr(KEPT_NOTE),
-            kept = num_pill(row.kept, "kept"),
-            failed = num_pill(row.failed, "failed"),
-            skipped = num_pill(row.skipped, "skipped"),
+            kept_note = attr(kept_note),
+            kept = num_pill_or(row.kept, "kept", "not known: when it started isn't recorded"),
+            failed = num_pill_or(row.failed, "failed", row.no_journal.as_deref().unwrap_or("not recorded")),
+            skipped = num_pill_or(row.skipped, "skipped", row.no_journal.as_deref().unwrap_or("not recorded")),
             rows = rows_cell(row),
             time_note = if row.stats.as_ref().is_some_and(|s| s.started_at.is_some()) {
                 "When it started, from its journal"
-            } else {
+            } else if row.at.is_some() {
                 "When its snapshot was recorded: it has no journal to say when it started"
+            } else {
+                "Not recorded: its journal never said when it started"
             },
-            time = text(&time),
+            time = if row.at.is_some() { text(&time).into_owned() } else { missing("not recorded: its journal never said when it started") },
             duration = duration_cell(row),
         );
     }
@@ -1310,6 +1366,9 @@ fn facets(b: &mut String, view: &RunsView) {
         if view.failed > 0 {
             parts.push(format!("{} failed", view.failed));
         }
+        if view.partial > 0 {
+            parts.push(format!("{} partial", view.partial));
+        }
         parts.join(" · ")
     };
     let _ = write!(
@@ -1366,6 +1425,7 @@ fn last_run_row(b: &mut String, last: &LastRunView, view: &RunsView) {
     );
 }
 
+#[allow(clippy::too_many_lines, reason = "one panel, built top to bottom")]
 fn runs_side(b: &mut String, view: &RunsView) {
     let row = view
         .selected
@@ -1374,20 +1434,30 @@ fn runs_side(b: &mut String, view: &RunsView) {
     let last = view.last_run.as_ref();
     b.push_str(r#"<aside class="st-side w320" aria-label="Selected run">"#);
     if let Some(row) = row {
-        let (_, time) = date_and_time(row.at);
+        let time = row
+            .at
+            .map_or_else(|| "start not recorded".to_owned(), |at| date_and_time(at).1);
         let label = outcome_label(row);
         let _ = write!(
             b,
-            r#"<div class="st-side-head"><div class="st-head-line">{glyph}<h2 class="mono">run {short}</h2><span class="st-outcome {outcome}" title="{note}">{outcome_upper}</span></div>{source}<span class="muted">{command} · {target} · <span class="mono st-ts">{time}</span></span><span>{counts}</span>{totals}</div>"#,
+            r#"<div class="st-side-head"><div class="st-head-line">{glyph}<h2 class="mono">run {short}</h2><span class="st-outcome {outcome}" title="{note}">{outcome_upper}</span></div>{source}{inferred}<span class="muted">{command} · {target} · <span class="mono st-ts">{time}</span></span><span>{counts}</span>{totals}</div>"#,
             glyph = glyph(row.outcome, &label),
             short = text(&row.short_run_id),
             outcome = row.outcome.word(),
             note = attr(&row.outcome_note),
             outcome_upper = outcome_word(row.outcome).to_uppercase(),
             source = outcome_source(row),
+            inferred = if row.outcome_inferred {
+                format!(
+                    r#"<span class="st-small">probably stopped: no event for over 10 minutes {}</span>"#,
+                    inferred_chip(&row.outcome_note)
+                )
+            } else {
+                String::new()
+            },
             command = row.command.as_deref().map_or_else(
                 || r#"<span title="Runs don't record their command yet">command not recorded</span>"#.to_owned(),
-                |c| format!("<code>{}</code>", text(c))
+                |c| format!("<code>{}</code>", command_tokens(c))
             ),
             target = text(&target_text(row)),
             time = text(&time),
@@ -1400,6 +1470,11 @@ fn runs_side(b: &mut String, view: &RunsView) {
             None => view.selected.as_deref() == Some(row.run_id.as_str()) && row.from_last_run,
         });
         match ours {
+            // A run listed from its journal: what its journal says, then what to run.
+            Some(last) if row.snapshot.is_none() && row.stats.is_some() => {
+                state_panel(b, row);
+                next_steps(b, last);
+            }
             Some(last) => last_run_panels(
                 b,
                 last,
@@ -1460,8 +1535,8 @@ fn runs_side(b: &mut String, view: &RunsView) {
 /// Where a run's outcome comes from, as a small line.
 fn outcome_source(row: &RunRow) -> String {
     let (words, title) = match (row.outcome_from, &row.no_journal) {
-        ("journal", _) => ("from its run journal", row.outcome_note.as_str()),
-        ("last_run", _) => ("from the last run's record", LAST_RUN_NOTE),
+        (OutcomeFrom::Journal, _) => ("from its run journal", row.outcome_note.as_str()),
+        (OutcomeFrom::LastRun, _) => ("from the last run's record", LAST_RUN_NOTE),
         (_, Some(why)) => ("no run journal", why.as_str()),
         _ => ("outcome not stored", RECORDED_NOTE),
     };
@@ -1546,15 +1621,19 @@ fn state_panel(b: &mut String, row: &RunRow) {
             String::new(),
         ),
         (None, Some(good)) => (
-            format!("Last good state: snapshot {good}"),
+            format!("Last good state when it ran: snapshot {good}"),
             format!(
-                "Snapshot {good} kept: this run recorded no snapshot, and a failed run never replaces the last good state."
+                "This run recorded no snapshot. {}",
+                no_snapshot_why(row.outcome)
             ),
             inferred_chip(NOTHING_NOTE),
         ),
         (None, None) => (
-            "No good state yet".to_owned(),
-            "This run recorded no snapshot, and none was recorded before it.".to_owned(),
+            "No good state before it".to_owned(),
+            format!(
+                "This run recorded no snapshot, and none was recorded before it. {}",
+                no_snapshot_why(row.outcome)
+            ),
             inferred_chip(NOTHING_NOTE),
         ),
     };
@@ -1564,6 +1643,22 @@ fn state_panel(b: &mut String, row: &RunRow) {
         title = text(&title),
         note = text(&note),
     );
+}
+
+/// Why a run recorded no snapshot, as far as its outcome says.
+fn no_snapshot_why(outcome: RunOutcome) -> &'static str {
+    match outcome {
+        RunOutcome::Failed | RunOutcome::Partial => {
+            "A failed run never replaces the last good state."
+        }
+        RunOutcome::Unfinished => {
+            "It may still be running: a run records its snapshot only when it ends."
+        }
+        RunOutcome::Succeeded => {
+            "Its journal says it succeeded, but no listed snapshot has its id: its builds weren't recorded."
+        }
+        _ => "How it ended isn't known.",
+    }
 }
 
 /// Failed and skipped nodes from a run's journal: each failed node's error as the
@@ -1706,9 +1801,13 @@ fn last_run_panels(
         ),
         (None, Some(good)) => (
             format!("Last good state: snapshot {good}"),
-            format!(
-                "Snapshot {good} kept: this run seems to have recorded nothing, and a failed run never replaces the last good state."
-            ),
+            if last.has_failures() {
+                format!(
+                    "Snapshot {good} kept: this run seems to have recorded nothing, and a failed run never replaces the last good state."
+                )
+            } else {
+                format!("Snapshot {good} kept: this run seems to have recorded nothing.")
+            },
             inferred_chip(NOTHING_NOTE),
         ),
         (None, None) => (
@@ -1723,6 +1822,11 @@ fn last_run_panels(
         title = text(&title),
         state = text(&state),
     );
+    next_steps(b, last);
+}
+
+/// What to run next, from the last run's record.
+fn next_steps(b: &mut String, last: &LastRunView) {
     if !last.next.is_empty() {
         b.push_str(r#"<div class="st-side-sec"><h3 class="st-label">Suggested next step</h3>"#);
         for command in &last.next {
@@ -1741,13 +1845,22 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
     b.push_str(r#"<div class="st-split"><section class="st-main">"#);
     let _ = write!(
         b,
-        r##"<div class="st-run-title"><h1 class="mono">run {short}</h1>{command}{target}<span class="st-right st-actions">{copy}<a class="st-btn" href="#built">Why these decisions</a></span></div>"##,
+        r#"<div class="st-run-title"><h1 class="mono">run {short}</h1>{command}{target}<span class="st-right st-actions">{copy}{why}</span></div>"#,
         short = text(&run.short_run_id),
+        // Long commands are cut to one line; the whole command is in the title.
         command = run.command.as_deref().map_or_else(String::new, |c| format!(
             r#"<code class="st-chip-cmd" title="{}">{}</code>"#,
-            attr(LAST_RUN_NOTE),
+            attr(&format!(
+                "{c}\n\nThis run's command, from the last run's record."
+            )),
             text(c)
         )),
+        // Why builds were decided is only kept for runs that recorded a snapshot.
+        why = if run.snapshot.is_some() {
+            r##"<a class="st-btn" href="#built">Why these decisions</a>"##
+        } else {
+            ""
+        },
         target = if run.target.is_some() {
             format!(
                 r#"<span class="st-chip-target">{}</span>"#,
@@ -1769,10 +1882,16 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
         _ => RECORDED_ICON,
     };
     let source = match (run.outcome_from, run.outcome) {
-        ("journal", RunOutcome::Unfinished) => "no end in its journal",
-        ("journal", _) => "from its run journal",
-        ("last_run", _) => "from the last run's record",
-        _ => "outcome not stored",
+        (OutcomeFrom::Journal, _) if run.outcome_inferred => {
+            format!(
+                "probably stopped: no event for over 10 minutes {}",
+                inferred_chip(&run.outcome_note)
+            )
+        }
+        (OutcomeFrom::Journal, RunOutcome::Unfinished) => "no end in its journal yet".to_owned(),
+        (OutcomeFrom::Journal, _) => "from its run journal".to_owned(),
+        (OutcomeFrom::LastRun, _) => "from the last run's record".to_owned(),
+        _ => "outcome not stored: no run journal".to_owned(),
     };
     let (wall, wall_note) = match (&run.duration, &run.stats) {
         (Some(d), _) => (
@@ -1787,11 +1906,14 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
             MISSING.to_owned(),
             "Not recorded: its journal doesn't give both its start and its finish".to_owned(),
         ),
-        (None, None) => (MISSING.to_owned(), sentence_case(NO_JOURNAL)),
+        (None, None) => (
+            MISSING.to_owned(),
+            "Not recorded: this run has no journal".to_owned(),
+        ),
     };
     let _ = write!(
         b,
-        r#"<div class="st-tiles4"><div class="st-tile" data-tile="outcome" title="{onote}"><span class="st-label">Outcome</span><span class="st-outcome-value {class}">{icon}{outcome}</span><span class="st-note">{source}</span></div><div class="st-tile" data-tile="built"><span class="st-label">Built</span><span class="st-value build">{built}</span>{built_note}</div><div class="st-tile" data-tile="kept" title="{knote}"><span class="st-label">Kept earlier build</span><span class="st-value">{kept}</span></div><div class="st-tile" data-tile="wall_clock" title="{wall_note}"><span class="st-label">Wall clock</span><span class="st-value{wall_class}">{wall}</span></div></div>"#,
+        r#"<div class="st-tiles4"><div class="st-tile" data-tile="outcome" title="{onote}"><span class="st-label">Outcome</span><span class="st-outcome-value {class}">{icon}{outcome}</span><span class="st-note">{source}</span></div><div class="st-tile" data-tile="built"><span class="st-label">Built</span><span class="st-value build">{built}</span>{built_note}</div><div class="st-tile" data-tile="kept" title="{knote}"><span class="st-label">Kept earlier build</span><span class="st-value">{kept}</span><span class="st-note">{kept_note}</span></div><div class="st-tile" data-tile="wall_clock" title="{wall_note}"><span class="st-label">Wall clock</span><span class="st-value{wall_class}">{wall}</span>{wall_why}</div></div>"#,
         onote = attr(&run.outcome_note),
         class = outcome_class(run.outcome),
         outcome = text(outcome_word(run.outcome)),
@@ -1801,11 +1923,28 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
         } else {
             ""
         },
-        knote = attr(KEPT_NOTE),
+        knote = attr(if run.stats.is_some() {
+            KEPT_JOURNAL_NOTE
+        } else {
+            KEPT_NOTE
+        }),
         kept = run.kept.map_or_else(
-            || missing("no snapshot: nothing recorded"),
+            || missing("not known: its journal never said when it started"),
             |k| k.to_string()
         ),
+        kept_note = match (run.kept, run.stats.is_some(), run.kept_state) {
+            (None, _, _) => "not known: when it started isn't recorded".to_owned(),
+            (Some(_), true, Some(k)) if run.snapshot.is_none() => {
+                format!("not in this run: kept from snapshot {k}")
+            }
+            (Some(_), true, _) => "not in this run: reused or not selected".to_owned(),
+            (Some(_), false, _) => "reused, not selected, or failed".to_owned(),
+        },
+        wall_why = if run.duration.is_none() {
+            format!(r#"<span class="st-note">{}</span>"#, text(&wall_note))
+        } else {
+            String::new()
+        },
         wall_note = attr(&wall_note),
         wall_class = if run.duration.is_some() {
             " mono"
@@ -1848,8 +1987,10 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
     b.push_str(LIVE);
     // The dot says the outcome only when the journal or the last run's record gives it.
     let dot = match (run.outcome, run.outcome_from) {
-        (RunOutcome::Succeeded, "journal" | "last_run") => "dot",
-        (RunOutcome::Failed | RunOutcome::Partial, "journal" | "last_run") => "dot bad",
+        (_, OutcomeFrom::Snapshot) => "dot none",
+        (RunOutcome::Succeeded, _) => "dot",
+        (RunOutcome::Failed, _) => "dot bad",
+        (RunOutcome::Partial, _) => "dot warn",
         _ => "dot none",
     };
     let status = match (run.snapshot, run.recorded_at) {
@@ -1859,7 +2000,10 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
         ),
         _ => format!(
             r#"<span class="pill-snap"><span class="{dot}"></span>no snapshot · started {}</span>"#,
-            text(&run.at.to_string())
+            text(
+                &run.at
+                    .map_or_else(|| "at a time not recorded".to_owned(), |at| at.to_string())
+            )
         ),
     };
     let title = format!("run {}", run.short_run_id);
@@ -1937,9 +2081,9 @@ fn run_totals_line(
     parts.push(format!(
         r#"<span class="st-right muted">{}</span>"#,
         if stats.live {
-            "reported as it ran"
+            "live stats: yes, each node's reported as it ran"
         } else {
-            "rebuilt from its final results: no live timing, rows or threads"
+            "live stats: no, rebuilt from the final results (no times, rows or threads)"
         }
     ));
     if stats.unreadable_lines > 0 {
@@ -1958,12 +2102,14 @@ fn run_totals_line(
 /// The x of a time offset on the timeline.
 fn tl_x(offset: u64, span: u64) -> usize {
     const T0: usize = 200;
-    const T1: usize = 700;
+    // Room is left on the right for every label, so all sit after their bars.
+    const T1: usize = 640;
     let span = span.max(1);
     let x = u128::from(offset.min(span)) * (T1 - T0) as u128 / u128::from(span);
     T0 + usize::try_from(x).unwrap_or(0)
 }
 
+#[allow(clippy::too_many_lines, reason = "one chart, built top to bottom")]
 fn timeline(b: &mut String, view: &RunPageView) {
     const ROW: usize = 28;
     const TOP: usize = 30;
@@ -2017,7 +2163,12 @@ fn timeline(b: &mut String, view: &RunPageView) {
         if r.built || r.status.is_some() {
             let _ = write!(
                 b,
-                r#"<rect class="tl-sel" x="0" y="{y}" width="796" height="{ROW}"></rect>"#
+                r#"<rect class="tl-sel{tint}" x="0" y="{y}" width="796" height="{ROW}"></rect>"#,
+                tint = if r.status == Some(NodeRunStatus::Error) {
+                    " failed"
+                } else {
+                    ""
+                },
             );
         }
         let _ = write!(
@@ -2034,7 +2185,7 @@ fn timeline(b: &mut String, view: &RunPageView) {
         ),
         (None, false) => MISSING.to_owned(),
     };
-    let end_x = if timed { 700 } else { RIGHT };
+    let end_x = if timed { 640 } else { RIGHT };
     let _ = write!(
         b,
         r#"<g class="tl-head"><text x="0" y="18">Node</text><text x="{START}" y="18">start</text><text x="{end_x}" y="18" text-anchor="end">{end}</text></g><g class="tl-guide"><path d="M{START} 24V{height}"></path><path d="M{end_x} 24V{height}"></path></g>"#,
@@ -2053,7 +2204,10 @@ fn timeline(b: &mut String, view: &RunPageView) {
         }
     }
     b.push_str("</svg>");
-    let note = if timed {
+    let journal_only = view.run.snapshot.is_none() && view.run.stats.is_some();
+    let note = if journal_only {
+        "Only the nodes this run selected are shown; the others kept their earlier build (counted under Kept earlier build)."
+    } else if timed {
         "Bars: when each node started and finished, from the run's journal."
     } else if view.run.stats.is_some() {
         "Its journal has no times: order and waits come from lineage (inferred)."
@@ -2062,7 +2216,22 @@ fn timeline(b: &mut String, view: &RunPageView) {
     };
     let _ = write!(
         b,
-        r#"<div class="st-legend"><span><span class="st-sw built"></span>Built</span><span><span class="st-sw failed"></span>Failed</span><span title="{KEPT_NOTE}"><span class="st-sw tick"></span>Kept earlier build: reused, not selected, or failed</span><span><span class="st-sw wait"></span>waits on upstream</span><span class="st-right">{note}</span></div></section>"#
+        r#"<div class="st-legend"><span><span class="st-sw seed" aria-hidden="true"></span>seed</span><span><span class="st-sw kind" aria-hidden="true"></span>model or other node</span><span><span class="st-sw built"></span>Built</span><span><span class="st-sw failed"></span>Failed: kept its last good build</span><span><span class="st-sw skip"></span>Skipped: waited on a failed node</span><span title="{kept_title}"><span class="st-sw tick"></span>{kept_words}</span>{wait}<span class="st-right">{note}</span></div></section>"#,
+        kept_title = if view.run.stats.is_some() {
+            KEPT_JOURNAL_NOTE
+        } else {
+            KEPT_NOTE
+        },
+        kept_words = if view.run.stats.is_some() {
+            "Kept earlier build: not in this run"
+        } else {
+            "Kept earlier build: reused, not selected, or failed"
+        },
+        wait = if timed {
+            ""
+        } else {
+            r#"<span><span class="st-sw wait"></span>waits on upstream</span>"#
+        },
     );
 }
 
@@ -2128,17 +2297,11 @@ fn timeline_bar(b: &mut String, y: usize, r: &TimelineRow, start: u64, end: u64,
         NodeRunStatus::Success => took.clone(),
         _ => format!("{word} · {took}"),
     };
-    // The label goes after the bar, or before it when it would run off the right.
-    let room = 796usize.saturating_sub(bar_x + bar_w + 8);
-    let (tx, anchor) = if label.chars().count() * 7 <= room {
-        (bar_x + bar_w + 8, "start")
-    } else {
-        (bar_x.saturating_sub(8), "end")
-    };
     let _ = write!(
         b,
-        r#"<rect class="tl-bar{class}" x="{bar_x}" y="{by}" width="{bar_w}" height="14" rx="3"><title>{title}</title></rect><text class="tl-dur" x="{tx}" y="{ty}" text-anchor="{anchor}">{label}</text>"#,
+        r#"<rect class="tl-bar{class}" x="{bar_x}" y="{by}" width="{bar_w}" height="14" rx="3"><title>{title}</title></rect><text class="tl-dur" x="{tx}" y="{ty}">{label}</text>"#,
         by = y + 7,
+        tx = bar_x + bar_w + 8,
         ty = y + 18,
         title = text(&format!(
             "{}: {word}, started +{}, took {took}",
@@ -2188,7 +2351,15 @@ fn timeline_row(b: &mut String, y: usize, r: &TimelineRow, width: usize) {
     } else {
         let (word, title) = match status {
             Some(NodeRunStatus::Skipped) => {
-                ("skipped", "skipped: waited on a failed node".to_owned())
+                // Its own mark: a dashed box, not the kept tick.
+                let _ = write!(
+                    b,
+                    r#"<rect class="tl-skip" x="{START}" y="{ky}" width="12" height="12" rx="2"></rect><text class="tl-kept-text" x="{tx}" y="{ty}"><title>skipped: waited on a failed node; kept its last good build</title>skipped</text>"#,
+                    ky = y + 8,
+                    tx = START + 18,
+                    ty = y + 18,
+                );
+                return;
             }
             Some(s) if s != NodeRunStatus::Success => (
                 crate::dashboard::journal::status_label(s, None),
@@ -2256,7 +2427,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
         .iter()
         .map(|w| (w.node.as_str(), w.why.as_str()))
         .collect();
-    b.push_str(r#"<section class="st-timeline" aria-label="Nodes"><table class="st-nodes st-stats"><colgroup><col style="width:24%"><col style="width:9%"><col style="width:10%"><col style="width:13%"><col style="width:12%"><col style="width:11%"><col style="width:8%"><col></colgroup><thead><tr><th scope="col">Node</th><th scope="col">Status</th><th scope="col">Started</th><th scope="col">Took</th><th scope="col" title="Rows affected, as the adapter reported them">Rows</th><th scope="col">Thread</th><th scope="col">Tests</th><th scope="col">Why it ran</th></tr></thead><tbody>"#);
+    b.push_str(r#"<section class="st-timeline" aria-label="Nodes"><table class="st-nodes st-stats"><colgroup><col style="width:21%"><col style="width:12%"><col style="width:10%"><col style="width:12%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col></colgroup><thead><tr><th scope="col">Node</th><th scope="col">Status</th><th scope="col">Started</th><th scope="col">Took</th><th scope="col" title="Rows affected, as the adapter reported them">Rows</th><th scope="col">Thread</th><th scope="col">Tests</th><th scope="col">Why it ran</th></tr></thead><tbody>"#);
     for n in &view.nodes {
         let status_class = match n.status {
             NodeRunStatus::Success => "built",
@@ -2271,11 +2442,11 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
                 text(e)
             ),
             (Some(t), _, _) => format!(r#"<span class="mono">{}</span>"#, text(t)),
-            (None, _, _) if n.status == NodeRunStatus::Running => missing("still running"),
+            (None, _, _) if n.status == NodeRunStatus::Running => missing_said("still running"),
             (None, _, _) if matches!(n.status, NodeRunStatus::Skipped | NodeRunStatus::Queued) => {
-                missing("didn't run")
+                missing_said("didn't run")
             }
-            (None, _, _) => missing("not timed"),
+            (None, _, _) => missing_said("not timed"),
         };
         let rows = match (n.rows_affected, n.rows_missing) {
             (Some(r), _) => format!(r#"<span class="mono">{r}</span>"#),
@@ -2290,7 +2461,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
                     why
                 };
                 format!(
-                    r#"{}<span class="st-small" title="{}">{}</span>"#,
+                    r#"{}<span class="st-why" title="{}">{}</span>"#,
                     missing(why),
                     attr(why),
                     text(brief)
@@ -2299,7 +2470,13 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
         };
         let extras: Vec<String> = n.adapter.iter().map(|(k, v)| format!("{k} {v}")).collect();
         let tests = n.tests.map_or_else(
-            || missing("not run: no test covers it in this run"),
+            || {
+                if matches!(n.status, NodeRunStatus::Skipped | NodeRunStatus::Queued) {
+                    missing_said("didn't run")
+                } else {
+                    missing_said("none ran on it")
+                }
+            },
             |t| {
                 let mut parts = vec![format!("{} passed", t.passed)];
                 if t.failed > 0 {
@@ -2316,7 +2493,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
         );
         let _ = write!(
             b,
-            r#"<tr class="{row_class}" data-node="{id}" data-status="{status}"><th scope="row">{name}<span class="st-small">{kind}</span></th><td><span class="st-num {status_class}">{label}</span></td><td class="mono st-dim" title="{started_full}">{started}</td><td>{took}</td><td>{rows}{extras}</td><td class="st-dim">{thread}</td><td class="st-dim">{tests}</td><td class="st-small">{why}</td></tr>"#,
+            r#"<tr class="{row_class}" data-node="{id}" data-status="{status}"><th scope="row">{name}<span class="st-small">{kind}</span></th><td><span class="st-num {status_class}">{label}</span>{kept_note}</td><td class="mono" title="{started_full}">{started}</td><td>{took}</td><td>{rows}{extras}</td><td>{thread}</td><td>{tests}</td><td><span class="st-why-ran">{why}</span></td></tr>"#,
             row_class = if n.status == NodeRunStatus::Error {
                 "failed"
             } else {
@@ -2327,13 +2504,34 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
             name = node_name(&n.node, &n.name, "../../"),
             kind = text(n.kind.as_deref().unwrap_or("")),
             label = text(n.status_label),
+            // Failed and skipped nodes keep their last good build (AGENTS rule 5).
+            kept_note = match n.status {
+                NodeRunStatus::Error => {
+                    r#"<span class="st-why">kept its last good build</span>"#.to_owned()
+                }
+                NodeRunStatus::Skipped => {
+                    let names: Vec<&str> = n.blocked_by.iter().map(|r| r.name.as_str()).collect();
+                    format!(
+                        r#"<span class="st-why">{}; kept its last good build</span>"#,
+                        text(&if names.is_empty() {
+                            "waited on a failed node".to_owned()
+                        } else {
+                            format!("waited on {}", names.join(", "))
+                        })
+                    )
+                }
+                _ => String::new(),
+            },
             started_full = attr(
                 &n.started_at
                     .map_or_else(|| "not recorded".to_owned(), |t| t.to_string())
             ),
-            started = n
-                .started_at
-                .map_or_else(|| missing("not recorded"), |t| text(&clock(t)).into_owned()),
+            // A skipped node didn't run, whatever time its engine gave it.
+            started = match (n.status, n.started_at) {
+                (NodeRunStatus::Skipped | NodeRunStatus::Queued, _) => missing_said("didn't run"),
+                (_, Some(t)) => text(&clock(t)).into_owned(),
+                (_, None) => missing_said("not recorded"),
+            },
             extras = if extras.is_empty() {
                 String::new()
             } else {
@@ -2342,25 +2540,17 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
                     text(&extras.join(" · "))
                 )
             },
-            thread = n
-                .thread
-                .as_deref()
-                .map_or_else(|| missing("not said"), |t| text(t).into_owned()),
-            why = why.get(n.node.as_str()).map_or_else(
-                || match n.status {
-                    NodeRunStatus::Error => text("failed: kept its last good build").into_owned(),
-                    NodeRunStatus::Skipped => {
-                        let names: Vec<&str> =
-                            n.blocked_by.iter().map(|r| r.name.as_str()).collect();
-                        text(&if names.is_empty() {
-                            "skipped: waited on a failed node".to_owned()
-                        } else {
-                            format!("skipped: waited on {}", names.join(", "))
-                        })
-                        .into_owned()
-                    }
-                    _ => missing("snapshots record why only for builds they keep"),
+            thread = n.thread.as_deref().map_or_else(
+                || if matches!(n.status, NodeRunStatus::Skipped | NodeRunStatus::Queued) {
+                    missing_said("didn't run")
+                } else {
+                    missing_said("not said")
                 },
+                |t| text(t).into_owned(),
+            ),
+            // Why it was selected, from the snapshots; its outcome is in Status.
+            why = why.get(n.node.as_str()).map_or_else(
+                || missing_said("not recorded: snapshots keep why only for the builds they record"),
                 |w| text(w).into_owned(),
             ),
         );
@@ -2403,9 +2593,10 @@ fn run_side(b: &mut String, view: &RunPageView) {
         r#"<aside class="st-side w340" aria-label="Run details"><div class="st-side-sec"><h2>Run details</h2><dl class="st-dl"><dt>Command</dt><dd>{command}</dd><dt>Target</dt><dd>{target}</dd><dt>Snapshot</dt><dd>{snap}</dd><dt>Compared with</dt><dd>{compared}</dd><dt>Recorded</dt><dd class="mono st-ts">{recorded}</dd><dt>Started</dt><dd class="mono st-ts">{started}</dd><dt>Finished</dt><dd class="mono st-ts">{finished}</dd><dt>Run journal</dt><dd>{journal}</dd><dt>Triggered by</dt><dd class="st-dim">[user]</dd></dl></div>"#,
         command = run.command.as_deref().map_or_else(
             || r#"<span class="st-dim" title="Runs don't record their command yet">not recorded</span>"#.to_owned(),
+            // Only ever the run whose id the last run's record has.
             |c| format!(
-                r#"<code>{}</code> <span class="st-small" title="{}">from the last run's record</span>"#,
-                text(c),
+                r#"<code>{}</code> <span class="st-small" title="{}">this run's command, from the last run's record</span>"#,
+                command_tokens(c),
                 attr(LAST_RUN_NOTE)
             ),
         ),
@@ -2433,23 +2624,26 @@ fn run_side(b: &mut String, view: &RunPageView) {
                 text(&c.short_run_id)
             ),
         ),
-        recorded = run.recorded_at.map_or_else(|| missing("it recorded no snapshot"), |t| text(&t.to_string()).into_owned()),
+        recorded = run.recorded_at.map_or_else(|| missing_said("it recorded no snapshot"), |t| text(&t.to_string()).into_owned()),
+        // To the second, as Recorded is.
         started = run.stats.as_ref().and_then(|s| s.started_at).map_or_else(
-            || missing(run.no_journal.as_deref().unwrap_or("not recorded")),
-            |t| text(&t.to_string()).into_owned()
+            || missing_said(if run.stats.is_some() { "its journal doesn't say" } else { "no run journal" }),
+            |t| text(&t.to_seconds().to_string()).into_owned()
         ),
         finished = run.stats.as_ref().and_then(|s| s.finished_at).map_or_else(
-            || missing(if run.outcome == RunOutcome::Unfinished {
+            || missing_said(if run.outcome == RunOutcome::Unfinished {
                 "running, or stopped without finishing"
+            } else if run.stats.is_some() {
+                "its journal doesn't say"
             } else {
-                run.no_journal.as_deref().unwrap_or("its journal doesn't say")
+                "no run journal"
             }),
-            |t| text(&t.to_string()).into_owned()
+            |t| text(&t.to_seconds().to_string()).into_owned()
         ),
         journal = match &run.stats {
-            Some(s) if s.live => "kept · reported as it ran".to_owned(),
-            Some(_) => "kept · rebuilt from final results".to_owned(),
-            None => format!(r#"<span class="st-dim" title="{}">none</span>"#, attr(run.no_journal.as_deref().unwrap_or(NO_JOURNAL))),
+            Some(s) if s.live => "kept · live stats: yes".to_owned(),
+            Some(_) => "kept · live stats: no (rebuilt from final results)".to_owned(),
+            None => format!(r#"<span title="{}">none</span>"#, attr(run.no_journal.as_deref().unwrap_or(NO_JOURNAL))),
         },
     );
     failed_nodes(b, &view.nodes, "../../");
@@ -2471,11 +2665,16 @@ fn run_side(b: &mut String, view: &RunPageView) {
     }
     b.push_str("</div>");
     if let Some(last) = &view.last_run {
-        let journaled = view
-            .nodes
-            .iter()
-            .any(|n| matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped));
-        last_run_panels(b, last, run.snapshot, journaled, "../../");
+        if run.snapshot.is_none() && run.stats.is_some() {
+            // The state rule above says what its journal says; only what to run next.
+            next_steps(b, last);
+        } else {
+            let journaled = view
+                .nodes
+                .iter()
+                .any(|n| matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped));
+            last_run_panels(b, last, run.snapshot, journaled, "../../");
+        }
     }
     let _ = write!(
         b,
@@ -2489,7 +2688,8 @@ fn run_side(b: &mut String, view: &RunPageView) {
         b.push_str(r#"<span class="st-small">None: this is the first listed run.</span>"#);
     }
     for e in &view.earlier {
-        let (_, time) = date_and_time(e.at);
+        let time =
+            e.at.map_or_else(|| "time not recorded".to_owned(), |at| date_and_time(at).1);
         let head = e
             .snapshot
             .map_or_else(|| "no snapshot".to_owned(), |s| format!("snapshot {s}"));

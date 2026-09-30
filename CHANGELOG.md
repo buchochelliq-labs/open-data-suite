@@ -42,7 +42,9 @@ the changelog was introduced.
 - The dashboard's Runs and Run pages (`ods serve`) show each run's outcome, duration,
   node counts and rows from its run journal (#322, ADR-0024): *succeeded*, *partial*,
   *failed*, or *unknown* / *running or stopped without finishing* when the journal
-  doesn't say it ended, never a success. A failed run that recorded no snapshot is
+  doesn't say it ended (*probably stopped*, marked inferred, after 10 quiet minutes),
+  never a success; an executor's "succeeded" with a node whose outcome isn't known
+  reads *unknown*. A failed run that recorded no snapshot is
   listed too. The Run page's timeline draws when each node started and finished, its
   Nodes tab lists each node's status, start, time taken (compile and execute), rows,
   thread, tests and why it ran, and a failed node shows its redacted error summary.

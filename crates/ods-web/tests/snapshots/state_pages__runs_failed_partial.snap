@@ -139,7 +139,7 @@ expression: pretty(&body)
     "next": [
       {
         "command": "ods state retry --failed",
-        "does": "builds only what failed or was skipped because of it, still planned; what succeeded isn't repeated"
+        "does": "rebuilds only the nodes that failed and those skipped because of them; what succeeded isn't repeated"
       },
       {
         "command": "ods state retry",
@@ -161,6 +161,7 @@ expression: pretty(&body)
   "last_run_listed": false,
   "limit": 50,
   "listed": 3,
+  "partial": 0,
   "project": "jaffle_ods",
   "recorded": [
     "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
@@ -183,6 +184,7 @@ expression: pretty(&body)
       "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
       "outcome": "failed",
       "outcome_from": "last_run",
+      "outcome_inferred": false,
       "outcome_note": "From the last run's record, kept beside the store for `ods state retry`: it has this run's id. The run has no journal.",
       "recorded_at": "2026-09-29T00:02:37Z",
       "replaces": 2,
@@ -209,6 +211,7 @@ expression: pretty(&body)
       "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
       "outcome": "recorded",
       "outcome_from": "snapshot",
+      "outcome_inferred": false,
       "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
       "recorded_at": "2026-09-29T00:01:03Z",
       "replaces": 1,
@@ -235,6 +238,7 @@ expression: pretty(&body)
       "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
       "outcome": "recorded",
       "outcome_from": "snapshot",
+      "outcome_inferred": false,
       "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
       "recorded_at": "2026-09-29T00:00:15Z",
       "replaces": null,

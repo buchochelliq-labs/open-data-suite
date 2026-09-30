@@ -143,6 +143,11 @@ no font files, so it falls back to the system fonts.
 - **Failed run:** shows that the last good snapshot was kept, the failed node with its
   redacted error summary, and the next command (`ods state retry --failed`). A failed
   run that recorded nothing is listed from its journal.
+- **Partial run:** some nodes failed and others succeeded. As before #322, its
+  snapshot records the successful builds only
+  ([ADR-0013](../../adr/0013-state-snapshots-fingerprints-and-store.md): `record()`
+  advances only nodes whose status is success); failed and skipped nodes keep their
+  last good build (AGENTS rule 5). It is amber, not red or green.
 - **CI runs:** a placeholder tab until server mode.
 
 ### State: one run

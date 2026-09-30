@@ -212,7 +212,9 @@ snapshot the run commits.
 - **Reading:** hosts read journals through one reader, `ods_sdk::run_journal` (the
   names, the listing, and the parsing above), so `ods state history` and `ods serve`
   can't differ; it applies `RunEvent::sanitized` to every line it reads, whatever wrote
-  the file.
+  the file. ods-sdk owns the journal's file layout (where it is, how a run id names it)
+  and this reader, beside the event types; they move to `ods-events` (#8) when that
+  crate exists. Writing and pruning stay with the host that runs the executor.
 - **Retention:** the 50 most recent journals per state database are kept (by
   modification time); older ones are deleted when a new run starts. The journal of the
   run starting is never deleted. The number becomes a configuration setting when
