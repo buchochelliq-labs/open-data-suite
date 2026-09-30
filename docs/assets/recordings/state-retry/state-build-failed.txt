@@ -1,3 +1,4 @@
+fqn:jaffle_ods.marts.segment_summary,resource_type:model --target-path /tmp/ods-demo/jaffle_shop/target --write-json
 --partial-parse-file-diff --indirect-selection eager --log-format json --log-level debug
 outcome        failed
 totals         <took> · 2 built · 1 failed · 1 skipped
@@ -29,8 +30,7 @@ confidence  known pattern
 
 why ODS thinks so
 ├── It failed after 250ms, during execution (compile succeeded).  [run stats]
-├── Its code didn't change since its last successful build, in run <run>.  [fingerprints]
-└── It built fine in its last 1 run.  [run history]
+└── Its code didn't change since its last successful build, in run <run>.  [fingerprints]
 
 where   models/marts/customer_segments.py  compiled: target/compiled/jaffle_ods/models/marts/customer_segments.py
 impact  blocks 1 downstream node (segment_summary was skipped). Its last good build is kept.
@@ -40,8 +40,8 @@ what to try
 └── 2. Then retry what failed:
     └── $ ods state retry --failed
 
-dbt said  KeyError: [value removed]  (values and SQL removed; full text: dbt's log file (logs/dbt.log in the project,
-unless --log-path))
+dbt said   KeyError: [value removed]  Literal values and SQL removed.
+full text  dbt's log file (logs/dbt.log in the project, unless --log-path)
 
 info: 2 nodes kept their last successful state and will be built next run
 error[ODS-E0404]: the run didn't fully succeed (2 nodes failed, were skipped or failed their tests; 0 checks failed)
