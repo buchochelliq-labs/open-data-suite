@@ -1,0 +1,62 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: "serde_json::to_string_pretty(&customers).unwrap()"
+---
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0
+  },
+  "node": "model.customers",
+  "category": "database",
+  "symptom": "missing_column",
+  "confidence": "known_pattern_with_evidence",
+  "pattern": {
+    "catalogue": "fake",
+    "version": "1",
+    "id": "no-such-column"
+  },
+  "headline": "A column this model reads no longer exists upstream",
+  "detail": "`customers` reads `first_name` from `raw_orders`, but that model no longer produces it.",
+  "evidence": [
+    {
+      "source": "column_lineage",
+      "text": "Column lineage: `raw_orders` now outputs `given_name`, not `first_name`, from the same input column.",
+      "confirms": true
+    },
+    {
+      "source": "run_history",
+      "text": "`customers` last built fine in run `4c0b5c8f`.",
+      "confirms": false
+    },
+    {
+      "source": "run_stats",
+      "text": "It failed after 1.5s.",
+      "confirms": false
+    }
+  ],
+  "suggestions": [
+    {
+      "text": "Use `given_name` in `customers`, or restore `first_name` in `raw_orders`."
+    },
+    {
+      "text": "Check what else reads it:",
+      "commands": [
+        "ods lineage impact --column raw_orders.first_name=removed"
+      ]
+    }
+  ],
+  "impact": {
+    "blocked": [
+      "model.customers_view"
+    ],
+    "kept": [
+      "model.customers_view"
+    ]
+  },
+  "engine_message": {
+    "engine": "the fake engine",
+    "kind": "Query Error",
+    "message": "Query Error: no such column [value removed] in the [SQL removed]"
+  }
+}

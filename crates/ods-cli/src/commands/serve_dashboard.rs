@@ -15,6 +15,7 @@ use ods_lineage::GraphFilter;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
 use ods_web::catalog::LastBuild;
+use ods_web::dashboard::explain::Explainer;
 use ods_web::dashboard::state::{History, LastOutcome, LastRun, RUNS_LISTED};
 use ods_web::dashboard::{
     ModuleState, ModuleStatus, OpaqueNode, Planner, RECENT_RUNS, Recorded, RunRecord, StateInput,
@@ -102,12 +103,16 @@ impl DashboardSource {
             .filter(|n| n.opaque)
             .map(|n| (n.id.clone(), n.name.clone(), n.diagnostics.first().cloned()))
             .collect();
-        let dashboard = self.dashboard(&opaque_ids);
+        let dashboard = self.dashboard(&opaque_ids, &loaded.graph);
         Snapshot::new(document, loaded.graph.clone(), source).with_dashboard(dashboard)
     }
 
     /// Never fails: what can't be read is shown as such.
-    fn dashboard(&self, opaque: &[(String, String, Option<String>)]) -> Dashboard {
+    fn dashboard(
+        &self,
+        opaque: &[(String, String, Option<String>)],
+        graph: &ods_lineage::ColumnGraph,
+    ) -> Dashboard {
         let environment = self.settings.environment.value.clone();
         let ws = match Workspace::load(&self.args, &self.settings, Sources::AsGiven) {
             Ok(ws) => ws,
@@ -151,7 +156,8 @@ impl DashboardSource {
                 OpaqueNode::new(id, name, why)
             })
             .collect();
-        let (state, last_builds) = self.state(Arc::clone(&ws));
+        let explainer = explainer(&ws, &self.settings, graph);
+        let (state, last_builds) = self.state(Arc::clone(&ws), explainer);
         // The Catalog (#313): the project's nodes, and their last builds from the
         // snapshot the plan is made against.
         let catalog = super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds);
@@ -173,7 +179,11 @@ impl DashboardSource {
 
     /// What the store holds, and each node's last build (#313), from one read, so
     /// the plan and the builds shown with it rest on the same snapshot.
-    fn state(&self, ws: Arc<Workspace>) -> (StateInput, BTreeMap<String, LastBuild>) {
+    fn state(
+        &self,
+        ws: Arc<Workspace>,
+        explainer: Explainer,
+    ) -> (StateInput, BTreeMap<String, LastBuild>) {
         let store = store_location(&ws.state_db);
         // Never created here: the dashboard only reads (AGENTS rule 5, #310).
         if !ws.state_db.is_file() {
@@ -245,11 +255,49 @@ impl DashboardSource {
                         .with_last_run(last_run)
                         // Each run's outcome, times and per-node stats (#322): read by
                         // the pages when asked, through ods-sdk's journal reader.
-                        .with_journals(journals),
+                        .with_journals(journals)
+                        // Failed nodes explained with dbt's error catalogue (#323).
+                        .with_explainer(explainer),
                 ),
         ));
         (state, last_builds)
     }
+}
+
+/// What explains failed nodes on the Run pages (#323, ADR-0025): dbt's error
+/// catalogue, the project index from the manifest, each node's parents, and the
+/// columns each node reads that its upstreams don't produce (column lineage).
+fn explainer(
+    ws: &Workspace,
+    settings: &StateSettings,
+    graph: &ods_lineage::ColumnGraph,
+) -> Explainer {
+    let project_dir = super::failures::project_dir(settings);
+    let files = super::failures::ProjectFiles {
+        project_dir: &project_dir,
+        target_dir: &ws.target_dir,
+        manifest: Some(&ws.manifest),
+    };
+    let missing = graph
+        .nodes()
+        .map(|n| (n.id.clone(), graph.missing_columns(&n.id)))
+        .filter(|(_, m)| !m.is_empty())
+        .collect();
+    let parents = ws
+        .project
+        .nodes
+        .iter()
+        .map(|n| (n.id.clone(), n.parents.clone()))
+        .collect();
+    let mut explainer = Explainer::new(Arc::new(
+        ods_provider_dbt::error_catalogue::DbtErrorCatalogue::new(),
+    ))
+    .with_missing_columns(missing)
+    .with_parents(parents);
+    if let Some(index) = files.index() {
+        explainer = explainer.with_index(index);
+    }
+    explainer
 }
 
 /// The last run kept beside the store for `ods state retry`, if any: the only record

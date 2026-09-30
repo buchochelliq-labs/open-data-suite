@@ -227,6 +227,9 @@ pub struct NodeStatsView {
     pub tests: Option<TestCounts>,
     /// The failed nodes that stopped it, when it was skipped.
     pub blocked_by: Vec<super::state::NodeRef>,
+    /// Why it failed, explained (#323, ADR-0025), when the binary gave an explainer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<ods_core::failure::ErrorExplanation>,
 }
 
 /// A duration, for people: `850ms`, `4.2s`, `2m 05s` (as `ods state run` says it).
@@ -463,6 +466,7 @@ impl JournalRun {
                             name: name(b),
                         })
                         .collect(),
+                    explanation: None,
                 }
             })
             .collect()

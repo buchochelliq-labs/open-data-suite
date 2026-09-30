@@ -15,11 +15,14 @@
 //! how long it ran, earlier runs) is context. An unrecognised error gets context only,
 //! and its category's neutral headline (rule 3).
 
+use ods_core::FreshnessPolicy;
 use ods_core::failure::{
     EngineMessage, ErrorExplanation, EvidenceItem, EvidenceSource, ExplanationBuilder, Location,
     MissingColumn, PatternRef, Suggestion, Symptom, Text,
 };
-use ods_core::state::{ExecutionPlan, NodeState, PlanAction, PlanEntry, ReasonCode, StateSnapshot};
+use ods_core::state::{
+    ExecutionPlan, NodeState, PlanAction, PlanEntry, Reason, ReasonCode, StateSnapshot, Timestamp,
+};
 use ods_sdk::contracts::error_catalogue::{
     CatalogueInfo, Classification, IndexedNode, NameAt, ProjectIndex,
 };
@@ -647,6 +650,58 @@ fn impact(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> ExplanationB
     builder.impact(blocked, kept)
 }
 
+/// A plan rebuilt from state, for a run whose plan wasn't kept (e.g. a past run shown
+/// from its journal): every node the run finished, with its `parents` (as the project
+/// has them now), built for a change of its own code when the state the run committed
+/// has another fingerprint than the state before it, with the components that differ.
+/// Nothing else is claimed: no reasons beyond what the two states show.
+pub fn plan_from_states(
+    run: &RunSummary,
+    before: Option<&StateSnapshot>,
+    after: Option<&StateSnapshot>,
+    parents: &dyn Fn(&str) -> Vec<String>,
+) -> ExecutionPlan {
+    let entries = run
+        .nodes
+        .iter()
+        .map(|n| {
+            let was = before.and_then(|s| s.nodes.get(&n.node));
+            let now = after
+                .and_then(|s| s.nodes.get(&n.node))
+                .filter(|state| run.run_id.as_deref() == Some(state.run_id.as_str()));
+            let name = n.node.rsplit('.').next().unwrap_or(&n.node).to_owned();
+            let mut entry = PlanEntry::new(
+                n.node.clone(),
+                name,
+                "node",
+                PlanAction::Build,
+                Vec::new(),
+                FreshnessPolicy::conservative(),
+                0,
+            );
+            entry.depends_on = parents(&n.node);
+            if let (Some(was), Some(now)) = (was, now)
+                && was.fingerprint.digest != now.fingerprint.digest
+            {
+                let (a, b) = (&was.fingerprint.components, &now.fingerprint.components);
+                let mut changed: Vec<String> = b
+                    .iter()
+                    .filter(|(k, v)| a.get(*k) != Some(*v))
+                    .map(|(k, _)| k.clone())
+                    .chain(a.keys().filter(|k| !b.contains_key(*k)).cloned())
+                    .collect();
+                changed.sort();
+                entry.reasons = vec![Reason::new(ReasonCode::CodeChanged, "code changed")];
+                entry.changed_components = changed;
+                entry.before = Some(was.fingerprint.digest.clone());
+                entry.after = Some(now.fingerprint.digest.clone());
+            }
+            entry
+        })
+        .collect();
+    ExecutionPlan::new(None, Timestamp::from_unix(0), entries)
+}
+
 /// Every node the plan puts downstream of the failed node.
 fn downstream_in_plan<'a>(facts: &FailureFacts<'a>) -> std::collections::BTreeSet<&'a str> {
     let mut found = std::collections::BTreeSet::new();
@@ -1111,6 +1166,43 @@ mod tests {
             e.evidence()[0].text.as_str(),
             "Upstream `stg_customers` has never been built, and didn't build in this run."
         );
+    }
+
+    #[test]
+    fn a_plan_rebuilt_from_states_says_only_what_they_show() {
+        let run = run(&[
+            (STG, NodeRunStats::new(NodeRunStatus::Success)),
+            (CUSTOMERS, NodeRunStats::new(NodeRunStatus::Error)),
+        ]);
+        let before = before();
+        let mut after = before.clone();
+        after.run_id = "run-2".into();
+        after.nodes.insert(
+            STG.into(),
+            NodeState::new(
+                Fingerprint::from_content([("sql", "y")]),
+                Timestamp::from_unix(1),
+                "run-2",
+                BTreeMap::new(),
+            ),
+        );
+        let parents = |id: &str| {
+            if id == CUSTOMERS {
+                vec![STG.to_owned()]
+            } else {
+                Vec::new()
+            }
+        };
+        let plan = plan_from_states(&run, Some(&before), Some(&after), &parents);
+        let stg = plan.entries.iter().find(|e| e.node == STG).unwrap();
+        assert_eq!(stg.changed_components, ["sql"]);
+        assert_eq!(stg.reasons[0].code, ReasonCode::CodeChanged);
+        let customers = plan.entries.iter().find(|e| e.node == CUSTOMERS).unwrap();
+        assert!(
+            customers.reasons.is_empty(),
+            "it built nothing: nothing to say"
+        );
+        assert_eq!(customers.depends_on, [STG]);
     }
 
     #[test]

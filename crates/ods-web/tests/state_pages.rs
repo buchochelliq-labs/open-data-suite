@@ -1659,6 +1659,156 @@ mod journals {
         assert_ne!(remote.run.outcome, RunOutcome::Succeeded);
     }
 
+    const RUN_7: &str = "7e7e7e7e-0000-4000-8000-000000000007";
+
+    /// #323: a failed node is explained on the Run page's Nodes tab and in the Runs
+    /// side panel, from the catalogue the binary gives, the journal and ODS's
+    /// evidence: a missing column confirmed by lineage, with the commands to copy. An
+    /// unrecognised error gets no cause. No value from the error gets through.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one journal, then the view model, the pages and the API, top to bottom"
+    )]
+    fn a_failed_node_is_explained_on_the_run_pages() {
+        use ods_core::failure::{Confidence, MissingColumn};
+        use ods_web::dashboard::explain::Explainer;
+
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        let error = |message: &str| {
+            let mut stats = NodeRunStats::new(NodeRunStatus::Error)
+                .with_times(
+                    Some(ms("2026-09-29T00:08:01.000Z")),
+                    Some(ms("2026-09-29T00:08:02.500Z")),
+                )
+                .with_error(ErrorSummary::from_message(message));
+            stats.thread = Some("Thread-1".into());
+            stats
+        };
+        write(
+            &dir,
+            RUN_7,
+            &[
+                started(
+                    RUN_7,
+                    SCOPE,
+                    "2026-09-29T00:08:00.000Z",
+                    &["model.customers", "model.orders", "model.customers_view"],
+                ),
+                node_started(
+                    RUN_7,
+                    "2026-09-29T00:08:01.000Z",
+                    "model.customers",
+                    "Thread-1",
+                ),
+                finished(
+                    RUN_7,
+                    "2026-09-29T00:08:02.500Z",
+                    "model.customers",
+                    error("Query Error: no such column 'SENTINEL-7777' in the select list"),
+                ),
+                finished(
+                    RUN_7,
+                    "2026-09-29T00:08:02.600Z",
+                    "model.orders",
+                    error("Query Error: the disk said 'SENTINEL-7777'"),
+                ),
+                finished(
+                    RUN_7,
+                    "2026-09-29T00:08:02.700Z",
+                    "model.customers_view",
+                    NodeRunStats::new(NodeRunStatus::Skipped)
+                        .with_blocked_by(vec!["model.customers".into()]),
+                ),
+                ended(RUN_7, "2026-09-29T00:08:03.000Z", Ended::Failed),
+            ],
+            "",
+        );
+        let explainer = Explainer::new(std::sync::Arc::new(
+            ods_provider_fake::FakeErrorCatalogue::new(),
+        ))
+        .with_missing_columns(BTreeMap::from([(
+            "model.customers".to_owned(),
+            vec![MissingColumn::new(
+                "seed.raw_orders",
+                "first_name",
+                vec!["given_name".into()],
+            )],
+        )]));
+        let dashboard = recorded(
+            History::new(snapshots())
+                .with_journals(Journals::in_dir(&dir))
+                .with_explainer(explainer),
+            plan(),
+        );
+        let view = dashboard.run_view(true, RUN_7, &BTreeMap::new()).unwrap();
+        let explanation_of = |node: &str| {
+            view.nodes
+                .iter()
+                .find(|n| n.node == node)
+                .unwrap()
+                .explanation
+                .clone()
+                .unwrap()
+        };
+        let customers = explanation_of("model.customers");
+        assert_eq!(customers.confidence(), Confidence::KnownPatternWithEvidence);
+        assert_eq!(
+            customers.impact().unwrap().blocked,
+            ["model.customers_view"]
+        );
+        let orders = explanation_of("model.orders");
+        assert_eq!(orders.confidence(), Confidence::NotRecognised);
+        assert_eq!(orders.symptom(), None);
+        assert!(
+            view.nodes
+                .iter()
+                .all(|n| n.status == NodeRunStatus::Error || n.explanation.is_none())
+        );
+        insta::assert_snapshot!(
+            "run_failure_explained",
+            serde_json::to_string_pretty(&customers).unwrap()
+        );
+
+        let addr = start(dashboard);
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_7}?tab=nodes"));
+        assert!(
+            page.contains(
+                r#"<div class="st-explain" data-confidence="known_pattern_with_evidence">"#
+            ),
+            "{page}"
+        );
+        assert!(page.contains("database error · missing column"));
+        assert!(page.contains("Why ODS thinks so"));
+        assert!(page.contains("now outputs <code>given_name</code>, not <code>first_name</code>"));
+        assert!(
+            page.contains(
+                r#"data-copy="ods lineage impact --column raw_orders.first_name=removed""#
+            )
+        );
+        assert!(page.contains("What the fake engine said"));
+        // Not recognised: facts, no cause, the engine's words shown open.
+        assert!(page.contains(r#"data-confidence="not_recognised""#));
+        assert!(page.contains("What ODS knows"));
+        assert!(page.contains("Ask the ODS agent to investigate"));
+        assert!(page.contains(r#"<details class="st-explain-said" open>"#));
+        let (_, panel) = get(addr, &format!("/state/runs?run={RUN_7}"));
+        assert!(
+            panel.contains("A column this model reads no longer exists upstream"),
+            "{panel}"
+        );
+        for path in [
+            format!("/state/runs/{RUN_7}?tab=nodes"),
+            format!("/state/runs?run={RUN_7}"),
+            format!("/api/state/runs/{RUN_7}"),
+            format!("/api/state/runs?run={RUN_7}"),
+        ] {
+            let (status, body) = get(addr, &path);
+            assert_eq!(status, 200, "{path}");
+            assert!(!body.contains("SENTINEL"), "{path}: {body}");
+        }
+    }
+
     /// The demo's snapshots, with only the journals `journals` writes.
     fn with(journals: impl FnOnce(&Path)) -> Dashboard {
         let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
