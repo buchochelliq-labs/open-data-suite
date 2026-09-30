@@ -47,6 +47,10 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
       "confirms": false
     }
   ],
+  "location": {
+    "file": "models/marts/customers.sql",
+    "compiled_file": "target/compiled/shop/models/marts/customers.sql"
+  },
   "suggestions": [
     {
       "text": "Use `given_name` in `customers`, or restore `first_name` in `raw_orders`."
@@ -69,6 +73,7 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
   "engine_message": {
     "engine": "the fake engine",
     "kind": "Query Error",
-    "message": "Query Error: no such column [value removed] in the [SQL removed]"
+    "message": "Query Error: no such column [value removed] in the [SQL removed]",
+    "details_at": "logs/x.log"
   }
 }

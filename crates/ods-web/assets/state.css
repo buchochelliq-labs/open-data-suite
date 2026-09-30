@@ -289,7 +289,7 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-dl .st-why { display: inline; margin-left: 4px; }
 
 /* ---- A failed node, explained (#323, board 9 of the live-run canvas). */
-.st-explain { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; overflow-wrap: anywhere; border: 1px solid var(--err-border); border-radius: 10px; background: var(--surface); font-size: 13px; line-height: 1.45; white-space: normal; }
+.st-explain { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; overflow-wrap: break-word; border: 1px solid var(--err-border); border-radius: 10px; background: var(--surface); font-size: 13px; line-height: 1.45; white-space: normal; }
 .st-explain-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .st-chip-kind { padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); }
 .st-conf { padding: 2px 7px; border-radius: 999px; font-size: 11px; background: var(--conf-bg); color: var(--conf); }
@@ -307,6 +307,12 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-explain-cmd .st-btn { margin-left: auto; flex-shrink: 0; }
 .st-agent { width: 100%; box-sizing: border-box; border-style: dashed; justify-content: flex-start; gap: 8px; background: var(--bg); color: var(--muted); font: inherit; font-size: 13px; cursor: not-allowed; }
 .st-agent .chip { margin-left: auto; font-size: 10px; padding: 1px 6px; }
+.st-side .st-agent { height: auto; min-height: 32px; padding: 6px 10px; flex-wrap: wrap; text-align: left; }
+.st-explain-cmd .st-btn { height: 26px; font-size: 12px; padding: 0 8px; }
+.st-explain .st-src { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.st-explain-where .mono, .st-explain-where code { overflow-wrap: normal; word-break: normal; }
+.st-explain-brief { margin: 4px 0 0; font-size: 13px; }
+.st-explain-brief code { font-family: var(--mono); font-size: 12px; }
 .st-explain-impact { padding: 10px 12px; background: var(--impact-bg); border-radius: 8px; }
 .st-explain-said { border-top: 1px solid var(--border); padding-top: 10px; }
 .st-explain-said summary { color: var(--accent); }

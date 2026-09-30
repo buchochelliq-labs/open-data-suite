@@ -1545,27 +1545,39 @@ impl Dashboard {
         &self,
         run: &ods_sdk::contracts::run_events::RunSummary,
     ) -> Vec<ods_sdk::contracts::run_events::RunSummary> {
-        /// How many journals are read for it.
-        const READ: usize = 20;
+        /// How many earlier runs are kept for it.
+        const KEEP: usize = 20;
         let Some(source) = self.journals() else {
             return Vec::new();
         };
+        // Earlier by time first, then the newest of them: journals are read once and
+        // cached, so filtering all the kept ones is cheap.
         let mut runs: Vec<_> = source
             .list()
             .iter()
             .filter(|f| Some(&f.run_id) != run.run_id.as_ref())
-            .take(READ)
             .filter_map(|f| source.run(f))
+            .filter(
+                |j| matches!((j.summary.started_at, run.started_at), (Some(a), Some(b)) if a < b),
+            )
             .map(|j| j.summary.clone())
-            .filter(|r| matches!((r.started_at, run.started_at), (Some(a), Some(b)) if a < b))
             .collect();
         runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
+        runs.truncate(KEEP);
         runs
     }
 
     /// Adds its explanation to each failed node of the run `row` (#323), when the
     /// binary gave an explainer.
-    fn explain_nodes(&self, row: &RunRow, journal: &JournalRun, nodes: &mut [NodeStatsView]) {
+    /// Beyond loopback (`details` false), explanations carry no file paths, as the
+    /// Catalog shows none (rule 9).
+    fn explain_nodes(
+        &self,
+        row: &RunRow,
+        journal: &JournalRun,
+        nodes: &mut [NodeStatsView],
+        details: bool,
+    ) {
         let Some(explainer) = self.history().and_then(|h| h.explainer.as_ref()) else {
             return;
         };
@@ -1588,7 +1600,10 @@ impl Dashboard {
             last,
         );
         for node in nodes {
-            node.explanation = by_node.get(&node.node).cloned();
+            node.explanation = by_node
+                .get(&node.node)
+                .cloned()
+                .map(|e| if details { e } else { e.without_paths() });
         }
     }
 
@@ -1890,7 +1905,7 @@ impl Dashboard {
                     .into_iter()
                     .filter(|n| matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped))
                     .collect();
-                self.explain_nodes(row, &journal, &mut nodes);
+                self.explain_nodes(row, &journal, &mut nodes, details);
                 nodes
             })
             .unwrap_or_default();
@@ -2005,7 +2020,7 @@ impl Dashboard {
             .map(|j| j.nodes(&|id| name_in(&names, id), &kind, details))
             .unwrap_or_default();
         if let Some(j) = &journal {
-            self.explain_nodes(&this, j, &mut nodes);
+            self.explain_nodes(&this, j, &mut nodes, details);
         }
         let stats_of = |id: &str| nodes.iter().find(|n| n.node == id);
         let mut timeline: Vec<TimelineRow> = snapshot
