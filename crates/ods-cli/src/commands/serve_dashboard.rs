@@ -180,6 +180,9 @@ impl DashboardSource {
             .with_state(state)
             .with_modules(modules(recorded))
             .with_catalog(catalog)
+            // The live run view (#322): journals are read even before the store
+            // exists, since a first run writes its journal before its first snapshot.
+            .with_journals(ods_sdk::run_journal::Journals::beside(&ws.state_db))
     }
 
     /// What the store holds, and each node's last build (#313), from one read, so

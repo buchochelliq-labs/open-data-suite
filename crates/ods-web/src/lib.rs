@@ -25,6 +25,7 @@ mod catalog_page;
 pub mod dashboard;
 mod fonts;
 mod home;
+pub mod live;
 mod model_page;
 mod page;
 mod search;
@@ -35,6 +36,7 @@ mod state_pages;
 pub mod lineage;
 
 pub use dashboard::Dashboard;
+pub use live::StreamLimits;
 pub use page::{export_site, standalone_page};
 pub use search::{SearchHit, search};
 pub use server::{Loader, ServeOptions, Snapshot, WebError, router, serve, serve_blocking};

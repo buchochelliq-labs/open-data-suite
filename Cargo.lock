@@ -1448,6 +1448,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "form_urlencoded",
+ "futures-util",
  "html-escape",
  "insta",
  "ods-core",

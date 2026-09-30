@@ -88,6 +88,11 @@ impl History {
         self
     }
 
+    /// The runs' journals, as read for the State pages.
+    pub(crate) fn journal_source(&self) -> &JournalSource {
+        &self.journals
+    }
+
     /// Adds the last run.
     #[must_use]
     pub fn with_last_run(mut self, last_run: Option<LastRun>) -> Self {

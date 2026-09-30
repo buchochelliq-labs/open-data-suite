@@ -52,6 +52,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   With `--log-format json`, it prints its output as dbt's structured events: a `Note`
   per command, and `NodeStart` and `NodeFinished` (with `run_result`) per node, at
   debug level, as dbt 1.10 prints them (#322).
+  FAKE_DBT_NODE_DELAY  seconds to wait before each node's `NodeStart` and `NodeFinished`,
+                 so a run takes long enough to be watched while it goes (#322)
   FAKE_DBT_LOADED_AT  `source freshness` results: comma-separated
                       `raw.orders=2026-01-01T00:00:00Z`; a source not listed isn't
                       measured. When the project has sources, `source freshness` takes
@@ -146,11 +148,14 @@ def log(json_logs, invocation, name, level, msg, data=None):
 
 def log_results(json_logs, invocation, results):
     """`NodeStart` and `NodeFinished` for each result, in order, as dbt logs them."""
+    delay = float(os.environ.get("FAKE_DBT_NODE_DELAY") or 0)
     for r in results:
         node_info = {"unique_id": r["unique_id"]}
+        time.sleep(delay)
         if r["status"] != "skipped":
             log(json_logs, invocation, "NodeStart", "debug", f"Began running node {r['unique_id']}",
                 {"node_info": node_info})
+        time.sleep(delay)
         run_result = {"status": r["status"], "message": r["message"], "thread": r["thread_id"],
                       "execution_time": float(r["execution_time"]),
                       "timing_info": [{"name": t["name"], "started_at": t["started_at"],

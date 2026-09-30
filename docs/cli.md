@@ -560,7 +560,9 @@ fetch `graph.json` from a `file://` page, so use `ods lineage view` for local fi
   [State overlay](#the-lineage-page) and an *Impact* tab that runs impact on the server;
 - a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
   `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home`,
-  `/api/lineage/overlay` and `/healthz`.
+  `/api/lineage/overlay` and `/healthz`;
+- a run's events as it runs ([live runs](#live-runs)): `/api/runs/live` and
+  `/api/runs/<run_id>/events`.
 
 It checks `manifest.json`, `catalog.json`, the Information Schema and the state
 database and the source freshness results (`--sources`, else
@@ -744,6 +746,41 @@ The same view models are served as JSON at `schema_version` 2, `GET` only:
 paths (including where an error's full message is), error text and the last run's
 options. The Why panel links to the node in
 the lineage explorer (`/lineage?node=<id>`) and to its model page (`/catalog/<id>`).
+
+### Live runs
+
+While `ods state run`, `build` or `test` runs, `ods serve` can show it as it goes
+(#322, [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md)). It reads the
+run's journal, `<state-db>.runs/<run_id>.jsonl`, which the command writes and flushes
+an event at a time; nothing else is needed, and the dashboard still only reads.
+
+| Route | Returns |
+|---|---|
+| `/api/runs/live` | the runs that are *probably* running: their journal doesn't say they finished and changed in the last 10 minutes (`status: probably_running`, `inferred: true`, since a journal changing is the only sign), with the command, when each started, how many nodes finished, run or failed so far, and links to the live view and the Run page. Only runs of the dashboard's scope, at `schema_version` 1 |
+| `/api/runs/<run_id>/events` | the run's journal as [Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html): every line from the start, then each new line as it is written, then `end` |
+| `/api/runs/<run_id>/events?since=<n>` | the same messages after line `n`, once, as JSON lines (`application/x-ndjson`), for clients without `EventSource`; at most 2,000 per answer, then ask again from the last `id` |
+
+The stream's messages:
+
+| `event` | `id` | `data` |
+|---|---|---|
+| `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it |
+| `unreadable` | the line's number | `{"line": n}`: a line of a newer version, or one longer than 256 KiB |
+| `end` | none | `{"reason", "outcome", "inferred", "note"}`: `finished` after `run_finished`; `stopped` (inferred) when the journal doesn't say it finished and hasn't changed for 10 minutes; `truncated` when the file got shorter |
+
+A client that reconnects with `Last-Event-ID` (browsers do it on their own) gets only
+the lines after it; without one, the stream replays from the start, so a page opened
+mid-run is complete. A line still being written is sent once it is whole. A comment is
+sent every 15 seconds when nothing else is (a heartbeat for proxies), and the response
+asks proxies not to buffer it (`X-Accel-Buffering: no`). At most 16 streams are open at
+once; one more gets `503` with `Retry-After` (polling with `?since=` still answers).
+The journal is checked every 300 ms, a bounded chunk at a time.
+
+Every line is read through the same reader as the Run pages, which removes values and
+SQL from each event again, whatever wrote the file: the stream carries no SQL, no
+`--vars` values and no secrets. Beyond loopback, where an error's full message is (a
+local path) is left out. A run id must be a plain file name (letters, digits, `-`, `_`
+and `.`); anything else is `400`, and a run without a journal `404`.
 
 ### The Catalog and model pages
 

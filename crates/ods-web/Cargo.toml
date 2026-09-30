@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 form_urlencoded.workspace = true
+futures-util.workspace = true
 html-escape.workspace = true
 ods-core.workspace = true
 ods-lineage.workspace = true

@@ -95,6 +95,7 @@ pub struct ServeOptions {
     pub watch: Option<(Vec<PathBuf>, Duration)>,
     base_path: String,
     allowed_hosts: Vec<String>,
+    streams: crate::live::StreamLimits,
 }
 
 impl ServeOptions {
@@ -105,7 +106,16 @@ impl ServeOptions {
             watch: None,
             base_path: String::new(),
             allowed_hosts: Vec::new(),
+            streams: crate::live::StreamLimits::default(),
         }
+    }
+
+    /// How the live run streams behave (#322): how many may be open at once, how often
+    /// a journal is checked, and the heartbeat. The defaults suit a local server.
+    #[must_use]
+    pub fn with_stream_limits(mut self, limits: crate::live::StreamLimits) -> Self {
+        self.streams = limits;
+        self
     }
 
     /// Serves under a URL prefix such as `/ods` or `/tools/ods`.
@@ -207,6 +217,8 @@ pub(crate) struct AppState {
     /// Whether `/api/version` may show local paths and error text. Only on loopback:
     /// beyond it, those go to the server log.
     pub(crate) details: bool,
+    /// The live run streams open now, and their limits (#322).
+    pub(crate) streams: crate::live::Streams,
 }
 
 impl AppState {
@@ -232,6 +244,7 @@ fn new_state(snapshot: Snapshot, options: &ServeOptions) -> Shared {
         generation: AtomicU64::new(1),
         last_error: Mutex::new(None),
         details: options.addr.ip().is_loopback(),
+        streams: crate::live::Streams::new(options.streams),
     })
 }
 
@@ -257,6 +270,9 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         .route(&at("/api/search"), get(search_handler))
         .route(&at("/api/node"), get(node))
         .route(&at("/api/impact"), get(impact))
+        // The live run view (#322): runs going on now, and a run's events as written.
+        .route(&at("/api/runs/live"), get(crate::live::live))
+        .route(&at("/api/runs/{run}/events"), get(crate::live::events))
         // The Catalog and the model pages (#313).
         .route(&at("/catalog"), get(catalog_routes::page))
         .route(&at("/catalog/{id}"), get(catalog_routes::model))

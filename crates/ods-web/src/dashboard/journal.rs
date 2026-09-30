@@ -61,6 +61,11 @@ impl JournalSource {
         }
     }
 
+    /// The journals, if the binary named where they are.
+    pub(crate) fn journals(&self) -> Option<&Journals> {
+        self.journals.as_ref()
+    }
+
     /// Whether the binary named a journals directory at all.
     pub(crate) fn is_set(&self) -> bool {
         self.journals.is_some()
