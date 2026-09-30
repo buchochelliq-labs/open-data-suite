@@ -34,6 +34,9 @@ use ods_sdk::contracts::executor::{
     PrepareRequest, RequestedNode,
 };
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
+use ods_sdk::contracts::run_events::{
+    CollectedEvents, RunEvent, RunEventKind, RunEventSink, RunSummary,
+};
 use ods_sdk::contracts::state_store::{StateStore, StoredSnapshot};
 use ods_state::{
     Outcome, Recorded, RecordedSources, RelationFact, RunResult, SourceCheck, SourceCheckAction,
@@ -42,6 +45,7 @@ use ods_state::{
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
+use super::run_journal::JournalSink;
 use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, plan_against, select_specs, store_error,
 };
@@ -358,10 +362,11 @@ pub(super) fn dbt_settings(args: &ArgMatches, settings: &StateSettings) -> Vec<D
             out.push(from(name, setting));
         }
     }
-    if let Some(value) = args.try_get_one::<String>("vars").ok().flatten() {
+    // Given, but never shown: vars can hold credentials (rule 9, #321).
+    if args.try_get_one::<String>("vars").ok().flatten().is_some() {
         out.push(DbtSetting {
             name: "vars",
-            value: value.clone(),
+            value: "[value removed]".to_owned(),
             source: "flag".to_owned(),
         });
     }
@@ -439,13 +444,19 @@ pub(super) fn dbt_args(args: &ArgMatches) -> Vec<String> {
 }
 
 pub(super) fn executor(args: &ArgMatches, settings: &StateSettings) -> DbtExecutor {
-    let mut executor = DbtExecutor::new(&settings.program.value, settings.target_dir()).output(
-        if args.get_one::<String>("dbt-output").map(String::as_str) == Some("capture") {
+    let capture = args.get_one::<String>("dbt-output").map(String::as_str) == Some("capture");
+    let mut executor = DbtExecutor::new(&settings.program.value, settings.target_dir())
+        .output(if capture {
             DbtOutput::Capture
         } else {
             DbtOutput::Stderr
-        },
-    );
+        })
+        // dbt's lines, read from its structured log, rendered here (#322, rule 7).
+        .on_output(|line| {
+            let text = crate::present::engine_line(line.time.as_deref(), &line.text);
+            // Best effort: showing dbt's output must never fail the run.
+            let _ = writeln!(std::io::stderr(), "{text}");
+        });
     if let Some(dir) = &settings.project_dir {
         executor = executor.project_dir(&dir.value);
     }
@@ -551,6 +562,62 @@ impl Steps {
     pub(super) fn attach(&self, executor: DbtExecutor) -> DbtExecutor {
         let steps = self.clone();
         executor.on_step(move |step| steps.step(step))
+    }
+}
+
+/// Where a run's events go (#322): its journal, a copy kept for the report, and a
+/// progress line per finished node on stderr.
+pub(super) struct Observed<'s> {
+    journal: JournalSink,
+    collected: CollectedEvents,
+    steps: &'s Steps,
+    mode: ExecutionMode,
+}
+
+impl<'s> Observed<'s> {
+    /// For a run in `mode` recorded beside `state_db`, with progress through `steps`.
+    pub(super) fn new(state_db: &Path, steps: &'s Steps, mode: ExecutionMode) -> Self {
+        Self {
+            journal: JournalSink::new(state_db),
+            collected: CollectedEvents::new(),
+            steps,
+            mode,
+        }
+    }
+
+    /// The run as its events tell it (if it started), its journal (if written), and
+    /// why the journal couldn't be written (if it couldn't).
+    pub(super) fn finish(self) -> (Option<RunSummary>, Option<PathBuf>, Option<String>) {
+        let events = self.collected.events();
+        let run = (!events.is_empty()).then(|| RunSummary::from_events(&events));
+        (run, self.journal.path(), self.journal.warning())
+    }
+}
+
+impl RunEventSink for Observed<'_> {
+    fn emit(&self, event: RunEvent) {
+        // Whatever the executor filled in, only redacted text is kept or shown (rule 9).
+        let event = event.sanitized();
+        if let RunEventKind::NodeFinished { node, stats } = &event.kind {
+            let mut line = format!(
+                "{} {}",
+                display_name(node),
+                super::run_stats::status(stats, Some(self.mode)).text
+            );
+            if stats.took_ms().is_some() {
+                let _ = write!(line, " in {}", super::run_stats::took(stats));
+            }
+            if let Some(rows) = stats.rows_affected {
+                let _ = write!(line, ", {rows} rows");
+            }
+            let detail = super::run_stats::detail(stats);
+            if !detail.is_empty() {
+                let _ = write!(line, " ({detail})");
+            }
+            self.steps.note(&line);
+        }
+        self.journal.emit(event.clone());
+        self.collected.emit(event);
     }
 }
 
@@ -721,12 +788,14 @@ fn vars_mismatch(args: &ArgMatches, target_dir: &Path) -> Option<String> {
             serde_json::from_str::<serde_json::Value>(given).is_ok_and(|g| &g != compiled)
         }
     };
+    // Which vars, but not their values: they can hold credentials (rule 9, #321).
+    let shown = |given: bool| if given { "other vars" } else { "none" };
     differs.then(|| {
         format!(
-            "the artifacts in {} were compiled with vars {}, but this run has {}: the plan may not match what dbt builds. Drop --no-compile, or pass the same --vars",
+            "the artifacts in {} were compiled with vars ({}), but this run has {}: the plan may not match what dbt builds. Drop --no-compile, or pass the same --vars",
             target_dir.display(),
-            compiled.map_or_else(|| "none".to_owned(), |v| v.to_string()),
-            given.map_or_else(|| "none".to_owned(), |v| format!("`{v}`")),
+            if compiled.is_some() { "some" } else { "none" },
+            shown(given.is_some()),
         )
     })
 }
@@ -1405,6 +1474,36 @@ pub(super) struct RunReport {
     /// With `ods state retry --failed` (#292): what is retried, and what isn't.
     #[serde(skip_serializing_if = "Option::is_none")]
     retry: Option<RetryReport>,
+    #[serde(flatten)]
+    observed: RunObserved,
+}
+
+/// What a run's events said (#322, ADR-0024).
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct RunObserved {
+    /// Each node's stats, and the totals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) run_stats: Option<RunSummary>,
+    /// The run's journal, beside the state database.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) journal: Option<PathBuf>,
+}
+
+/// Runs `request` through `executor`, keeping its events in the journal beside
+/// `state_db` and showing each node's result through `steps` as it finishes. A journal
+/// that couldn't be written adds a warning.
+pub(super) fn execute_observed(
+    executor: &DbtExecutor,
+    request: &ExecutionRequest,
+    (state_db, steps): (&Path, &Steps),
+    warnings: &mut Vec<String>,
+) -> Result<(Result<ExecutionReport, ProviderError>, RunObserved), CliError> {
+    let observed = Observed::new(state_db, steps, request.mode);
+    let executed = block_on(executor.execute_with_events(request, &observed))?;
+    let (run_stats, journal, warning) = observed.finish();
+    warnings.extend(warning);
+    Ok((executed, RunObserved { run_stats, journal }))
 }
 
 /// A node and why, e.g. why a retry leaves it as it is.
@@ -1738,6 +1837,7 @@ impl RunReport {
             planned_checks: checks_by_node(&ws.project),
             requested: requested.iter().map(|n| n.id.clone()).collect(),
             retry,
+            observed: RunObserved::default(),
         };
         for note in plan_notes(&report) {
             steps.note(&note);
@@ -1761,7 +1861,7 @@ impl RunReport {
 
         report.execute(
             (args, settings),
-            &executor,
+            (&executor, &steps),
             (requested, checked_sources),
             (sources, table_versions.as_ref()),
             latest.as_ref(),
@@ -1775,7 +1875,7 @@ impl RunReport {
     fn execute(
         mut self,
         (args, settings): (&ArgMatches, &StateSettings),
-        executor: &DbtExecutor,
+        (executor, steps): (&DbtExecutor, &Steps),
         (requested, checked_sources): (Vec<RequestedNode>, Vec<RequestedNode>),
         sources: (Sources, Option<&VersionReading>),
         latest: Option<&StoredSnapshot>,
@@ -1790,8 +1890,16 @@ impl RunReport {
         let request = ExecutionRequest::new(requested, mode)
             .with_sources(checked_sources)
             .with_full_refresh(full_refresh(args))
-            .with_engine_args(dbt_args(args));
-        let execution = block_on(executor.execute(&request))?.map_err(|e| {
+            .with_engine_args(dbt_args(args))
+            .with_scope(self.scope.clone());
+        let (executed, observed) = execute_observed(
+            executor,
+            &request,
+            (&self.state_db, steps),
+            &mut self.warnings,
+        )?;
+        self.observed = observed;
+        let execution = executed.map_err(|e| {
             execution_error(&e)
                 .with_hint("nothing was recorded; the last successful state is unchanged")
         })?;
@@ -1902,6 +2010,15 @@ impl RunReport {
                 }
             }],
         ));
+        if let Some(run) = &self.observed.run_stats {
+            summary.extend(super::run_stats::totals(run));
+        }
+        if let Some(journal) = &self.observed.journal {
+            summary.push((
+                "journal".into(),
+                vec![Span::toned(journal.display().to_string(), Tone::Code)],
+            ));
+        }
         if let Some(record) = &self.record {
             summary.push((
                 "recorded".into(),
@@ -1922,7 +2039,13 @@ impl RunReport {
         match &self.execution {
             Some(execution) => ViewNode::Table {
                 title: None,
-                columns: vec!["node".into(), "result".into(), "why it ran".into()],
+                columns: vec![
+                    "node".into(),
+                    "result".into(),
+                    "took".into(),
+                    "rows".into(),
+                    "why it ran".into(),
+                ],
                 rows: execution
                     .nodes
                     .iter()
@@ -1934,19 +2057,41 @@ impl RunReport {
                             .find(|e| e.node == n.node)
                             .and_then(|e| e.reasons.first())
                             .map_or("", |r| r.message.as_str());
+                        let stats = self
+                            .observed
+                            .run_stats
+                            .as_ref()
+                            .and_then(|r| r.get(&n.node))
+                            .map(|s| &s.stats);
+                        let detail = stats.map(super::run_stats::detail).unwrap_or_default();
+                        let result = match n.status {
+                            ExecutionStatus::Success if !n.checks_failed.is_empty() => {
+                                Span::toned("built, tests failed", Tone::Error)
+                            }
+                            ExecutionStatus::Success => Span::toned("success", Tone::Success),
+                            ExecutionStatus::Skipped if detail.is_empty() => {
+                                Span::toned("skipped", Tone::Warning)
+                            }
+                            ExecutionStatus::Skipped => {
+                                Span::toned(format!("skipped: {detail}"), Tone::Warning)
+                            }
+                            // dbt's word, or the redacted summary of why it failed.
+                            _ if detail.is_empty() => Span::toned(
+                                n.message.clone().unwrap_or_else(|| "failed".to_owned()),
+                                Tone::Error,
+                            ),
+                            _ => Span::toned(format!("failed: {detail}"), Tone::Error),
+                        };
+                        let missing = || super::run_stats::MISSING.to_owned();
                         vec![
                             vec![Span::toned(display_name(&n.node), Tone::Code)],
-                            vec![match n.status {
-                                ExecutionStatus::Success if !n.checks_failed.is_empty() => {
-                                    Span::toned("built, tests failed", Tone::Error)
-                                }
-                                ExecutionStatus::Success => Span::toned("success", Tone::Success),
-                                ExecutionStatus::Skipped => Span::toned("skipped", Tone::Warning),
-                                _ => Span::toned(
-                                    n.message.clone().unwrap_or_else(|| "failed".to_owned()),
-                                    Tone::Error,
-                                ),
-                            }],
+                            vec![result],
+                            vec![Span::plain(
+                                stats.map_or_else(missing, super::run_stats::took),
+                            )],
+                            vec![Span::plain(
+                                stats.map_or_else(missing, super::run_stats::rows),
+                            )],
                             vec![Span::plain(why)],
                         ]
                     })

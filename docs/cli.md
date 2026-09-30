@@ -122,7 +122,7 @@ meanings get new numbers.
 | `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
 | `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
 | `ODS-E0402` | Another run recorded state first; plan again and retry. |
-| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. `ods state export`: the upstream manifest can't be read, is another project's or an unsupported version, or `--dbt-state` names the upstream or dbt's target directory. |
+| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. `ods state export`: the upstream manifest can't be read, is another project's or an unsupported version, or `--dbt-state` names the upstream or dbt's target directory. `ods state history --run`: the run has no journal (never ran dbt, or its journal was pruned). |
 | `ODS-E0405` | The state database is damaged: it can't be read, or holds a record that can't be decoded. Nothing was changed; `ods state doctor` says what is wrong. |
 | `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
 | `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
@@ -1103,11 +1103,32 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   When nothing needs building, the last line is `ods ▸ nothing to build, so dbt
   doesn't run again`. `-q` turns them off.
 - **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
-  streams to **stderr** as dbt writes it, exactly as dbt prints it: ODS doesn't
-  reformat it. With `--dbt-output capture` it is hidden, and the last lines are quoted
-  in the error if dbt fails.
-- **ODS's report** (the plan, the exact dbt command it ran, the outcome, what was
-  recorded, and a table with each node's result and why it ran) is printed to
+  streams to **stderr** as dbt writes it. For the build or test itself, ODS asks dbt
+  for its structured log (`--log-format json --log-level debug`) to read each node's
+  progress (#322), and prints dbt's lines as `HH:MM:SS  message`, with the time in
+  UTC and dbt's colours dropped, from the level dbt would show: `info`, or what
+  `DBT_LOG_LEVEL`, `-- --log-level` or `-- --quiet` ask for. Those only filter what is
+  shown: dbt is always asked for `--log-level debug`, so the node progress keeps
+  coming. dbt's debug lines, which hold the SQL it runs and the options it was given,
+  are never shown: `debug`, `-- --debug` and `-- -d` show `info` and above (the full
+  debug log is in `logs/dbt.log`). A line that should be one of dbt's JSON lines but can't be read (cut short,
+  or merged with other output), or one with no level, shows as `[an unreadable dbt log
+  line is hidden]`; other lines, such as a Python model's `print`, show as they are
+  unless they hold a `{`. dbt's own error lines are shown as dbt shows them, and can
+  quote values; ODS's report, `--json`, and the run journal only ever hold the redacted
+  summary. Pass `-- --log-format text` to have dbt print as usual:
+  the run's stats then come from `run_results.json` at the end, not live. With
+  `--dbt-output capture` dbt's output is hidden, and the last lines are quoted in the
+  error if dbt fails.
+- **Each node's result**, as it finishes, is a step line too: `ods ▸ orders built in
+  4.2s, 99 rows`, `ods ▸ customers failed in 3.6s (KeyError: [value removed])`,
+  `ods ▸ segment_summary skipped`.
+- **`--vars` values** never appear in what ODS prints, logs or reports: the command
+  lines it logs (`-v`), the report's `dbt` and `ran` lines, and `execution.command` in
+  `--json` show `--vars '[value removed]'`. dbt still gets them.
+- **ODS's report** (the plan, the exact dbt command it ran, the outcome, the run's
+  totals, what was recorded, and a table with each node's result, time taken, rows and
+  why it ran) is printed to
   **stdout** once dbt has finished, or as one JSON document with `--json`. So
   `ods state run --json > run.json` keeps dbt's progress on the terminal and the
   report in the file.
@@ -1126,8 +1147,40 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   | `trace` (`-vvv`) | also libraries' logs, e.g. every statement the state store runs |
   | `error` (`-q`), `off` | errors only (or nothing): no step lines |
 
-  dbt's own verbosity is dbt's: pass it through, e.g. `-- --debug` or
-  `-- --log-level debug`. dbt also writes its debug log to `logs/dbt.log`.
+  dbt's own console level can be passed through (`-- --log-level warn`, `-- -q`): it
+  filters what is shown, as above. Its debug lines are never shown; dbt writes its
+  debug log to `logs/dbt.log`.
+
+### Run stats and the run journal
+
+Every `run`, `seed`, `snapshot`, `build` and `test` that runs dbt reports each node's
+stats (#322, [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md)):
+
+| Stat | From dbt | When dbt doesn't say |
+|---|---|---|
+| result | the node's status | `unknown`, never success |
+| time taken | `execution_time`; compile and execute times from `timing` | `—` |
+| rows | `adapter_response.rows_affected` | `—`: many adapters report none for views, tables built with `create table as`, or merges (DuckDB reports rows only for seeds) |
+| thread | the thread that ran it | `—` |
+| other values | the rest of `adapter_response` (e.g. `code`, a query id), never its `_message` | not shown |
+| error | the error's kind and first line, with quoted values, numbers and SQL removed; the full text stays in `logs/dbt.log` | — |
+| tests | how many of its tests passed, failed, warned or didn't run | not run |
+
+The report's totals give the run's time, how many nodes built, failed or were skipped,
+and the rows written: `at least 17 (6 nodes didn't report rows)` when some didn't
+report. `--json` has it all under `run_stats`: `nodes` (each with its `stats`) and
+`totals`. A stat that isn't reported is `null`, never `0`.
+
+The run's events are also appended, as they happen, to a **journal** beside the state
+database, `<state-db>.runs/<run_id>.jsonl` (`journal` in the report), under the same
+run id as `.last-run.json` and the snapshot the run records. It is one JSON event per
+line (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`,
+`run_finished`), each with its `schema_version`, and is flushed line by line, so it can
+be followed while the run goes. It is evidence, not state: a failed run keeps its
+journal, and nothing ODS decides reads it. It holds no SQL, no `--vars` values and no
+secrets: no options at all, and errors only as the redacted summary above. The 50 most
+recent journals are kept; older ones are deleted when a run starts. `ods state history
+--run <run_id>` shows a run from its journal.
 
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.
@@ -1239,6 +1292,7 @@ it ran.
 | `--select SPEC` | (`plan`) only these nodes: `name`, `+name`, `name+`, `+name+`; repeatable. Decisions don't change, only what's shown |
 | `--run-results PATH` | (`record`) default `<target-dir>/run_results.json` |
 | `--limit N` | (`history`) default 20; `history` reads the target directory for the project name |
+| `--run RUN_ID` | (`history`) one run, from its journal: each node's result, time taken, rows, thread and error, and the totals (#322); also for a run that failed and recorded nothing. The list shows each snapshot's run time and rows where its journal is kept |
 
 State is kept per project and environment as immutable snapshots. A record that races
 another fails with `ODS-E0402` and writes nothing.

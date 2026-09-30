@@ -150,6 +150,45 @@ dbt to log in another format), and says `live: false` then; without the capabili
 `live` is never true. The run is still recorded either way. If the execution fails to
 start, there are no events.
 
+### The dbt bridge
+The dbt executor has `run_events`. For the build or test it passes `--log-format json
+--log-level debug`, reads dbt's standard output line by line, and turns two of dbt's
+public structured events into run events: `NodeStart` (the node and `info.thread`) and
+`NodeFinished` (`data.run_result`: `status`, `message`, `timing_info`, `thread`,
+`execution_time`, `adapter_response`). Both are debug-level, hence the log level. Of
+every other line it reads only `info.level`, `info.ts`, `info.msg` and
+`info.invocation_id` (the run id).
+
+What people see is decided failing closed, because dbt's debug lines carry the SQL it
+runs and the options it was given: a JSON line shows its `msg` only when its `level`
+is known and at least the level dbt would have shown (`info`, or what
+`DBT_LOG_LEVEL`, the caller's `--log-level` or `--quiet` ask for, but never below
+`info`: debug lines are never shown, and `--debug` shows `info` and above). The
+caller's `--log-level`, `--quiet` and `-q` are taken out of dbt's arguments and
+`--log-level debug` is always passed, which also beats `DBT_LOG_LEVEL`, so dbt keeps
+sending node events whatever is shown. The run starts as `live` only when the log
+reports a node; a log with no node event leaves the run to `run_results.json`, not
+live. A line
+without a level shows nothing; a line that starts with `{` but can't be read (cut
+short, merged with other output, a number out of range) or has no `info` shows as a
+placeholder; any other line (e.g. a Python model's `print`) is shown as it is unless it
+holds a `{`. The provider doesn't write to the terminal: it hands these lines to a
+hook the host sets (`DbtExecutor::on_output`), and `ods-cli` renders them (rule 7).
+If reading dbt's output fails, dbt is stopped, so the run can't hang on a full pipe.
+
+A log event's missing or unknown status is `unknown`. After dbt exits,
+`run_results.json` fills in any requested node the log didn't finish (every node, in a
+test run) and checks it didn't show; and the report's status wins: a node the log
+finished with another status finishes again, with the log's stats and the report's
+status. If the caller passes its own `--log-format` to dbt, the log isn't read: the
+events come from `run_results.json` afterwards, with `live: false`. dbt reports rows in
+`adapter_response.rows_affected` (a float in log events); `_message` is free text and
+never kept. dbt starts an error message with a header, `<Runtime|Database|Compilation|
+Dependency|Parsing|Python> Error in <type> <name> (<path>)`; only a line of exactly that
+form counts as one, the summary takes the kind from it and the message from the next
+line, and SQL echo lines (`LINE 35: …`) are never used. The shapes were checked against
+dbt 1.10 with DuckDB, and a captured log is a test fixture.
+
 ### The run journal
 `ods state run`, `seed`, `snapshot`, `build` and `test` append every event of a run
 that executes to a journal beside the state database:
@@ -178,14 +217,21 @@ snapshot the run commits.
 
 ### Privacy
 Events have no field for SQL, the command line, variables or the environment. Error
-summaries and adapter extras are redacted and cut as above. `.last-run.json` keeps
-redacting `--vars` values (#321); the journal never holds options at all. The dbt bridge
-(#322 part 2) reads dbt's structured log events and `run_results.json` only for the
-fields listed here, and never copies a log line's text except through
-`ErrorSummary` (dbt's own lines are still shown on the terminal, as dbt shows them).
-A test runs a build with a sentinel in `--vars`, and a value in dbt's error message,
-and checks neither reaches the journal or the run's stats. (The report's `dbt` and
-`ran` lines still show the `--vars` given, as before this ADR: that is #321's.)
+summaries and adapter extras are redacted and cut as above, and hosts re-redact every
+event (`RunEvent::sanitized`) before keeping or showing it. The journal never holds
+options at all. The dbt executor shows `--vars` values as `[value removed]` in every
+command line it logs or reports (`-v` logs, the report's `ran` line and
+`execution.command`), and `ods state` does the same in its `dbt` settings and warnings;
+dbt still gets them. `.last-run.json` still keeps the options as typed, for `ods state
+retry` (#321).
+
+**The console is deliberately different:** it shows what dbt itself would show, at the
+level dbt would show it. dbt's own error lines (e.g. `RunResultError`) can quote values
+from the failing query, as they do in dbt's text output; they reach only the terminal.
+The journal, the report and `--json`, and anything served from them only ever hold
+the redacted summaries. Tests run builds with a sentinel in `--vars` and values in dbt's
+error message, and check neither reaches the journal, the stats, the `--json` output or
+ODS's own logs.
 
 ```mermaid
 graph LR

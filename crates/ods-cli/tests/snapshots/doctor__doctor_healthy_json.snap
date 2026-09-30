@@ -300,7 +300,7 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           },
           {
             "key": "capabilities",
-            "value": "relation_existence, relation_probe"
+            "value": "relation_existence, relation_probe, run_events"
           }
         ]
       },

@@ -34,6 +34,22 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- `ods state run`, `seed`, `snapshot`, `build` and `test` show each node's stats
+  (#322, ADR-0024): result, time taken, rows affected (`—` when dbt's adapter doesn't
+  report them, never `0`), and a failed node's error with quoted values, numbers and
+  SQL removed. Each node's result is a step line on stderr as it finishes, the report's
+  table has *took* and *rows* columns, and the summary gives the run's totals, with
+  "at least N" rows when some nodes didn't report. `--json` includes them under
+  `run_stats`. The dbt executor reads them from dbt's structured log
+  (`--log-format json --log-level debug`) as dbt runs, and from `run_results.json`.
+- Every run that runs dbt appends its events to a journal,
+  `<state-db>.runs/<run_id>.jsonl`, as they happen: one JSON event per line, with
+  its `schema_version`, under the run id `.last-run.json` keeps (`journal` in the
+  report). A failed run keeps its journal. It holds no SQL, `--vars` values or
+  secrets. The 50 most recent journals are kept.
+- `ods state history --run <run_id>` shows one run's per-node stats from its journal,
+  also for a failed run that recorded nothing; `ods state history` shows each
+  snapshot's run time and rows where its journal is kept (`run_stats` in JSON) (#322).
 - Run events and per-node run stats in the SDK (#322, ADR-0024): an executor reports
   `run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished` and
   `run_finished` as a run goes, each with the run id, scope and a millisecond
@@ -208,6 +224,17 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- `ods state run`, `build` and `test` show dbt's output from its structured log, as
+  `HH:MM:SS  message` with the time in UTC, from the level dbt would show (`info`, or
+  `DBT_LOG_LEVEL`, `-- --log-level` or `-- --quiet`, which only filter what is shown:
+  dbt always streams at debug so node progress keeps coming), never its debug lines,
+  which hold SQL and options (`--debug` shows `info` and above). A structured line that can't be read, or has no level, shows as a
+  placeholder rather than its text. Pass `-- --log-format text` for dbt's own output,
+  without live stats (#322).
+- `--vars` values no longer appear in what `ods state` prints, logs or reports: the
+  command lines logged with `-v`, the report's `dbt` and `ran` lines, `execution.command`
+  and the `dbt` settings in `--json`, and the "compiled with vars" warning show them as
+  `[value removed]`. dbt still receives them (Part of #321, #322).
 - The release plan: the first public release is 0.0.1 (the State MVP and the first
   dashboard screens), and 0.1.0 ships once every dashboard screen is built. `ods state`
   help and "not implemented yet" hints now name "M1 State MVP (v0.0.1)" (#309).

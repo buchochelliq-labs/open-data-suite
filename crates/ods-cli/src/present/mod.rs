@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use ods_core::SchemaVersion;
 use serde::Serialize;
 
-pub use view::{Level, Line, Span, Tone, TreeItem, ViewNode};
+pub use view::{Level, Line, Span, Tone, TreeItem, ViewNode, engine_line};
 
 use crate::exit::CliError;
 use crate::output::{Mode, OutputSettings};

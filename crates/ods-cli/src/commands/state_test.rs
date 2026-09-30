@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::SnapshotId;
 use ods_sdk::contracts::executor::{
-    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
+    ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, NodeExecution,
 };
 use ods_sdk::contracts::state_store::StateStore;
 use ods_state::{RecordedSources, RecordedTests, SourceCheck, TestResult};
@@ -88,6 +88,9 @@ pub(super) struct TestReport {
     target: ods_core::state::TargetIdentity,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
+    /// Each node's stats and the run's journal (#322, ADR-0024).
+    #[serde(flatten)]
+    observed: super::state_run::RunObserved,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,6 +269,7 @@ impl TestReport {
             dbt,
             target,
             warnings,
+            observed: super::state_run::RunObserved::default(),
         };
         if requested.is_empty() && checked_sources.is_empty() {
             steps.note("nothing to test, so dbt doesn't run again");
@@ -274,11 +278,9 @@ impl TestReport {
 
         let request = ExecutionRequest::new(requested, ExecutionMode::Test)
             .with_sources(checked_sources)
-            .with_engine_args(dbt_args(args));
-        let execution = block_on(executor.execute(&request))?.map_err(|e| {
-            CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
-                .with_hint("nothing was recorded")
-        })?;
+            .with_engine_args(dbt_args(args))
+            .with_scope(report.scope.clone());
+        let execution = report.execute(&executor, &request, &steps)?;
         let store = match store {
             Some(store) => store,
             None => ws.open_store()?,
@@ -293,6 +295,26 @@ impl TestReport {
 }
 
 impl TestReport {
+    /// Runs the tests, keeping the run's events in its journal (#322).
+    fn execute(
+        &mut self,
+        executor: &ods_provider_dbt::executor::DbtExecutor,
+        request: &ExecutionRequest,
+        steps: &super::state_run::Steps,
+    ) -> Result<ExecutionReport, CliError> {
+        let (executed, observed) = super::state_run::execute_observed(
+            executor,
+            request,
+            (&self.state_db, steps),
+            &mut self.warnings,
+        )?;
+        self.observed = observed;
+        executed.map_err(|e| {
+            CliError::new(ExitStatus::Failure, codes::STATE_EXECUTION, e.to_string())
+                .with_hint("nothing was recorded")
+        })
+    }
+
     /// How it ended, for people.
     fn outcome_span(&self) -> Span {
         match self.outcome {

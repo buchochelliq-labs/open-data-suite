@@ -1,0 +1,7 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "table.join(\"\\n\")"
+---
+node	result	took	rows	why it ran
+raw_orders	success	250ms	6	no successful build recorded by ODS
+stg_orders	success	250ms	—	no successful build recorded by ODS

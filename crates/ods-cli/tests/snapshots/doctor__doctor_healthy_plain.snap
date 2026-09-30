@@ -65,7 +65,7 @@ State store
 Capabilities
   [ok] capabilities.relation_existence: a build is reused only after checking its relation still exists
     provider: dbt (dbt)
-    capabilities: relation_existence, relation_probe
+    capabilities: relation_existence, relation_probe, run_events
   [ok] capabilities.relation_versions: no table versions, and none needed: the project has no sources
     adapter: duckdb (manifest)
     missing_capability: relation_versions

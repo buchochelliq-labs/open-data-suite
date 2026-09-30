@@ -133,7 +133,14 @@ pub(super) fn history_command() -> Command {
     .arg(
         Arg::new("node")
             .value_name("NODE")
+            .conflicts_with("run")
             .help("A model, seed or snapshot (name or unique id): its builds, tests, and what changed before each build"),
+    )
+    .arg(
+        Arg::new("run")
+            .long("run")
+            .value_name("RUN_ID")
+            .help("A run's id (as the list shows it): each node's status, time taken, rows and error, from the run's journal, also for a run that failed and recorded nothing"),
     )
 }
 
@@ -939,12 +946,23 @@ impl Present for RecordReport {
 
 // ---------------------------------------------------------------------------- history
 
+/// A snapshot, with what its run's journal says, when it has one (#322).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct HistoryEntry {
+    #[serde(flatten)]
+    snapshot: SnapshotSummary,
+    /// The run's totals, from its journal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_stats: Option<super::run_stats::RunBrief>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) struct HistoryReport {
     state_db: PathBuf,
     scope: String,
-    snapshots: Vec<SnapshotSummary>,
+    snapshots: Vec<HistoryEntry>,
 }
 
 impl HistoryReport {
@@ -959,6 +977,13 @@ impl HistoryReport {
         } else {
             Vec::new()
         };
+        let snapshots = snapshots
+            .into_iter()
+            .map(|snapshot| HistoryEntry {
+                run_stats: super::run_stats::RunBrief::of_run(&state_db, &snapshot.run_id),
+                snapshot,
+            })
+            .collect();
         Ok(Self {
             state_db,
             scope: ws.scope.to_string(),
@@ -971,6 +996,7 @@ impl Present for HistoryReport {
     const COMMAND: &'static str = "state.history";
 
     fn view(&self) -> ViewNode {
+        let missing = || super::run_stats::MISSING.to_owned();
         ViewNode::Group(vec![
             ViewNode::Heading(format!("State history of {}", self.scope)),
             ViewNode::Table {
@@ -981,11 +1007,15 @@ impl Present for HistoryReport {
                     "recorded".into(),
                     "run".into(),
                     "nodes".into(),
+                    "took".into(),
+                    "rows".into(),
                 ],
                 rows: self
                     .snapshots
                     .iter()
-                    .map(|s| {
+                    .map(|e| {
+                        let s = &e.snapshot;
+                        let brief = e.run_stats.as_ref();
                         vec![
                             vec![Span::plain(s.id.to_string())],
                             vec![Span::plain(
@@ -994,11 +1024,131 @@ impl Present for HistoryReport {
                             vec![Span::plain(s.created_at.to_string())],
                             vec![Span::toned(s.run_id.as_str(), Tone::Code)],
                             vec![Span::plain(s.nodes.to_string())],
+                            vec![Span::plain(
+                                brief
+                                    .and_then(|b| b.duration_ms)
+                                    .map_or_else(missing, super::run_stats::duration),
+                            )],
+                            vec![Span::plain(brief.map_or_else(missing, |b| {
+                                super::run_stats::rows_line(&b.totals)
+                            }))],
                         ]
                     })
                     .collect(),
             },
         ])
+    }
+}
+
+/// `ods state history --run <id>` (#322): one run's per-node stats, from its journal.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct RunHistoryReport {
+    state_db: PathBuf,
+    journal: PathBuf,
+    /// Lines of the journal that couldn't be read (a newer version, or a last line cut
+    /// short).
+    #[serde(skip_serializing_if = "is_zero")]
+    unreadable_lines: usize,
+    run: ods_sdk::contracts::run_events::RunSummary,
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+impl RunHistoryReport {
+    pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
+        let settings = StateSettings::resolve(args, config)?;
+        let state_db = settings.state_db();
+        let run_id = args.get_one::<String>("run").map_or("", String::as_str);
+        let no_journal = |why: String| {
+            CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why).with_hint(format!(
+                "journals are kept beside the state database, in {}, for the {} most recent runs that ran dbt",
+                super::run_journal::dir_for(&state_db).display(),
+                super::run_journal::KEEP
+            ))
+        };
+        let Some(journal) = super::run_journal::path_for(&state_db, run_id) else {
+            return Err(no_journal(format!(
+                "`{}` isn't a run id",
+                run_id.escape_debug()
+            )));
+        };
+        let read = super::run_journal::read(&journal)
+            .map_err(|why| CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why))?
+            .ok_or_else(|| no_journal(format!("run {run_id} has no journal")))?;
+        Ok(Self {
+            run: ods_sdk::contracts::run_events::RunSummary::from_events(&read.events),
+            unreadable_lines: read.unreadable,
+            journal,
+            state_db,
+        })
+    }
+}
+
+impl Present for RunHistoryReport {
+    const COMMAND: &'static str = "state.history";
+
+    fn view(&self) -> ViewNode {
+        let run = &self.run;
+        let mut summary = vec![(
+            "run".into(),
+            vec![Span::toned(
+                run.run_id.as_deref().unwrap_or("?"),
+                Tone::Code,
+            )],
+        )];
+        if let Some(scope) = &run.scope {
+            summary.push((
+                "scope".into(),
+                vec![Span::toned(scope.as_str(), Tone::Code)],
+            ));
+        }
+        summary.push((
+            "started".into(),
+            vec![Span::plain(run.started_at.map_or_else(
+                || super::run_stats::MISSING.to_owned(),
+                |t| t.to_seconds().to_string(),
+            ))],
+        ));
+        summary.push((
+            "outcome".into(),
+            vec![match run.outcome {
+                Some(ods_sdk::contracts::run_events::RunOutcome::Succeeded) => {
+                    Span::toned("succeeded", Tone::Success)
+                }
+                Some(ods_sdk::contracts::run_events::RunOutcome::Failed) => {
+                    Span::toned("failed", Tone::Error)
+                }
+                Some(_) => Span::toned("unknown: dbt's results couldn't be read", Tone::Warning),
+                None => Span::toned("still running, or stopped without finishing", Tone::Warning),
+            }],
+        ));
+        summary.extend(super::run_stats::totals(run));
+        summary.push((
+            "journal".into(),
+            vec![Span::toned(self.journal.display().to_string(), Tone::Code)],
+        ));
+        let mut blocks = vec![
+            ViewNode::Heading("Run".into()),
+            ViewNode::KeyValue(summary),
+            super::run_stats::nodes_table(run),
+        ];
+        if self.unreadable_lines > 0 {
+            blocks.push(ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(format!(
+                    "{} line(s) of the journal couldn't be read: written by a newer ODS, or cut short when the run stopped",
+                    self.unreadable_lines
+                ))],
+            });
+        }
+        ViewNode::Group(blocks)
     }
 }
 

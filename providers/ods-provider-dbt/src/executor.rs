@@ -36,6 +36,9 @@ use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, Relation
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
+use ods_sdk::contracts::run_events::RunEventSink;
+
+use crate::events::Bridge;
 use crate::runs::{RunResults, RunStatus, SourceFreshness};
 
 /// The provider kind, as written in configuration.
@@ -99,6 +102,13 @@ pub enum DbtStep {
 /// Called before each dbt command runs.
 pub type StepHook = Arc<dyn Fn(DbtStep) + Send + Sync>;
 
+/// Called with each line of dbt's output people should see, while a build or test
+/// reports its progress (#322). The caller renders it.
+pub type OutputHook = Arc<dyn Fn(crate::events::DbtLine) + Send + Sync>;
+
+/// What a redacted `--vars` value reads as.
+const VARS_REMOVED: &str = "[value removed]";
+
 /// Runs the dbt CLI.
 #[derive(Clone)]
 pub struct DbtExecutor {
@@ -112,6 +122,7 @@ pub struct DbtExecutor {
     output: DbtOutput,
     vars: Option<String>,
     on_step: Option<StepHook>,
+    on_output: Option<OutputHook>,
 }
 
 // Environment values can be credentials: show only their names.
@@ -126,8 +137,9 @@ impl std::fmt::Debug for DbtExecutor {
             .field("profile", &self.profile)
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("output", &self.output)
-            .field("vars", &self.vars)
+            .field("vars", &self.vars.as_ref().map(|_| VARS_REMOVED))
             .field("on_step", &self.on_step.is_some())
+            .field("on_output", &self.on_output.is_some())
             .finish()
     }
 }
@@ -146,6 +158,7 @@ impl DbtExecutor {
             output: DbtOutput::default(),
             vars: None,
             on_step: None,
+            on_output: None,
         }
     }
 
@@ -207,6 +220,18 @@ impl DbtExecutor {
         self
     }
 
+    /// Calls `hook` with each line of dbt's output people should see, while a build or
+    /// test reads dbt's structured log (#322). With [`DbtOutput::Stderr`] and no hook,
+    /// those lines aren't shown: the provider doesn't write to the terminal itself.
+    #[must_use]
+    pub fn on_output(
+        mut self,
+        hook: impl Fn(crate::events::DbtLine) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_output = Some(Arc::new(hook));
+        self
+    }
+
     fn step(&self, step: DbtStep) {
         if let Some(hook) = &self.on_step {
             hook(step);
@@ -265,17 +290,31 @@ impl DbtExecutor {
     }
 
     /// The command line, for people.
+    /// The command line, for people and logs: `--vars` values are replaced (they can
+    /// hold credentials; AGENTS.md rule 9).
     fn display(&self, args: &[String]) -> String {
-        std::iter::once(self.program.display().to_string())
-            .chain(args.iter().map(|a| {
-                if a.is_empty() || a.contains(char::is_whitespace) {
-                    format!("'{a}'")
-                } else {
-                    a.clone()
-                }
-            }))
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut shown = Vec::with_capacity(args.len() + 1);
+        shown.push(self.program.display().to_string());
+        let mut value_of_vars = false;
+        for a in args {
+            let a = if value_of_vars {
+                value_of_vars = false;
+                VARS_REMOVED.to_owned()
+            } else if a == "--vars" {
+                value_of_vars = true;
+                a.clone()
+            } else if a.starts_with("--vars=") {
+                format!("--vars={VARS_REMOVED}")
+            } else {
+                a.clone()
+            };
+            shown.push(if a.is_empty() || a.contains(char::is_whitespace) {
+                format!("'{a}'")
+            } else {
+                a
+            });
+        }
+        shown.join(" ")
     }
 
     /// Runs dbt with `args`; returns whether it exited successfully and, if captured,
@@ -292,19 +331,7 @@ impl DbtExecutor {
         args: &[String],
         read_stdout: bool,
     ) -> Result<(bool, String, String), ProviderError> {
-        let mut command = tokio::process::Command::new(&self.program);
-        // ODS passes these settings as flags; their variables would only compete.
-        for name in crate::settings::owned() {
-            command.env_remove(name);
-        }
-        command
-            .args(args)
-            .envs(self.env.iter().filter(|(k, _)| {
-                crate::settings::class(k)
-                    .is_none_or(|c| !matches!(c, crate::settings::EnvClass::Owned { .. }))
-            }))
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
+        let mut command = self.command(args);
         match self.output {
             DbtOutput::Stderr => {
                 command
@@ -345,6 +372,108 @@ impl DbtExecutor {
         let lines: Vec<&str> = text.lines().collect();
         let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
         Ok((output.status.success(), tail, stdout))
+    }
+
+    /// dbt with `args`, in the environment ODS gives it.
+    fn command(&self, args: &[String]) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(&self.program);
+        // ODS passes these settings as flags; their variables would only compete.
+        for name in crate::settings::owned() {
+            command.env_remove(name);
+        }
+        command
+            .args(args)
+            .envs(self.env.iter().filter(|(k, _)| {
+                crate::settings::class(k)
+                    .is_none_or(|c| !matches!(c, crate::settings::EnvClass::Owned { .. }))
+            }))
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        command
+    }
+
+    /// Runs dbt with `args`, reading its standard output line by line through
+    /// `bridge` as it comes (#322): what the bridge says people should see goes to
+    /// ODS's stderr, or into the captured tail. Returns whether dbt exited successfully
+    /// and, if captured, the tail of what it showed.
+    async fn invoke_streaming(
+        &self,
+        args: &[String],
+        bridge: &mut Bridge<'_>,
+    ) -> Result<(bool, String), ProviderError> {
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+
+        let mut command = self.command(args);
+        command.stdout(Stdio::piped());
+        match self.output {
+            DbtOutput::Stderr => command.stderr(Stdio::from(std::io::stderr())),
+            DbtOutput::Capture => command.stderr(Stdio::piped()),
+        };
+        // Names only: values can be credentials (AGENTS.md rule 9).
+        tracing::info!(command = %self.display(args), "running dbt");
+        let started = std::time::Instant::now();
+        let mut child = command.spawn().map_err(|e| {
+            ProviderError::Other(format!("couldn't start `{}`: {e}", self.program.display()))
+        })?;
+        let (Some(stdout), stderr) = (child.stdout.take(), child.stderr.take()) else {
+            return Err(ProviderError::Other(
+                "dbt's output couldn't be read".to_owned(),
+            ));
+        };
+        let capture = self.output == DbtOutput::Capture;
+        let mut shown: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        let child_ref = &mut child;
+        let read_out = async {
+            let mut reader = BufReader::new(stdout);
+            let mut buffer = Vec::new();
+            // Bytes, not `lines()`: a line that isn't UTF-8 mustn't stop the reading,
+            // or dbt would block on a full pipe.
+            loop {
+                match reader.read_until(b'\n', &mut buffer).await {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        // dbt could block on a pipe no one reads: stop it, so the wait
+                        // below ends. Its results, if any, are still read.
+                        tracing::warn!("reading dbt's output failed: {e}");
+                        let _ = child_ref.start_kill();
+                        break;
+                    }
+                }
+                let line = String::from_utf8_lossy(&buffer);
+                if let Some(line) = bridge.line(line.trim_end_matches(['\n', '\r'])) {
+                    if capture {
+                        shown.push_back(line.text);
+                        if shown.len() > OUTPUT_TAIL {
+                            shown.pop_front();
+                        }
+                    } else if let Some(hook) = &self.on_output {
+                        hook(line);
+                    }
+                }
+                buffer.clear();
+            }
+        };
+        let read_err = async {
+            let mut text = Vec::new();
+            if let Some(mut stderr) = stderr {
+                let _ = stderr.read_to_end(&mut text).await;
+            }
+            String::from_utf8_lossy(&text).into_owned()
+        };
+        let ((), errors) = tokio::join!(read_out, read_err);
+        let status = child.wait().await.map_err(|e| {
+            ProviderError::Other(format!("`{}` failed: {e}", self.program.display()))
+        })?;
+        tracing::info!(
+            exit = ?status.code(),
+            seconds = started.elapsed().as_secs_f64(),
+            "dbt finished"
+        );
+        let mut lines: Vec<String> = shown.into_iter().collect();
+        lines.extend(errors.lines().map(str::to_owned));
+        let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
+        Ok((status.success(), tail))
     }
 
     fn failure(what: &str, tail: &str) -> ProviderError {
@@ -869,7 +998,11 @@ impl Provider for DbtExecutor {
             KIND,
             "dbt",
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::from([Capability::RelationExistence, Capability::RelationProbe]),
+            CapabilitySet::from([
+                Capability::RelationExistence,
+                Capability::RelationProbe,
+                Capability::RunEvents,
+            ]),
         )
     }
 }
@@ -1058,6 +1191,151 @@ impl Executor for DbtExecutor {
     }
 
     async fn execute(&self, request: &ExecutionRequest) -> Result<ExecutionReport, ProviderError> {
+        let invocation = self.invocation(request)?;
+        let command = self.display(&invocation.args);
+        self.step(invocation.step);
+        let (ok, tail) = self.invoke(&invocation.args).await?;
+        self.outcome(request, &invocation, &command, ok, &tail)
+            .map(|(report, _)| report)
+    }
+
+    /// Runs dbt with `--log-format json --log-level debug` and turns its structured
+    /// events into run events as they come ([`crate::events`]). If the caller passed
+    /// `--log-format` to dbt, its logs can't be read: the events come from
+    /// `run_results.json` afterwards, not live.
+    async fn execute_with_events(
+        &self,
+        request: &ExecutionRequest,
+        events: &dyn RunEventSink,
+    ) -> Result<ExecutionReport, ProviderError> {
+        let mut invocation = self.invocation(request)?;
+        let own_format = passes(&request.engine_args, "--log-format");
+        let show_from = self.console_level(&request.engine_args);
+        if !own_format {
+            // dbt's structured stream stays at debug, whatever the caller asked for:
+            // the node events are debug-level. The caller's console level (or
+            // `DBT_LOG_LEVEL`) only decides what is shown; `--log-level debug` is passed
+            // explicitly, so it also beats `DBT_LOG_LEVEL`.
+            let at = invocation.args.len() - request.engine_args.len();
+            let mut kept = console_free(&request.engine_args);
+            kept.splice(
+                0..0,
+                ["--log-format", "json", "--log-level", "debug"].map(str::to_owned),
+            );
+            invocation.args.splice(at.., kept);
+        }
+        let command = self.display(&invocation.args);
+        let mut bridge = Bridge::new(events, request, invocation.coverage.clone(), show_from);
+        self.step(invocation.step);
+        let invoked = if own_format {
+            self.invoke(&invocation.args).await
+        } else {
+            self.invoke_streaming(&invocation.args, &mut bridge).await
+        };
+        let outcome =
+            invoked.and_then(|(ok, tail)| self.outcome(request, &invocation, &command, ok, &tail));
+        match outcome {
+            Ok((report, run)) => {
+                bridge.finish(&report, &run);
+                Ok(report)
+            }
+            Err(error) => {
+                bridge.abort();
+                Err(error)
+            }
+        }
+    }
+}
+
+impl DbtExecutor {
+    /// The least severe of dbt's lines a person sees, as dbt would pick it without
+    /// ODS's `--log-level debug`: the caller's `--log-level` (`debug` reads as `info`:
+    /// debug lines hold SQL and options, and are never shown), else `--quiet`/`-q`
+    /// (errors only), else `DBT_LOG_LEVEL` (the same), else `info`. `--debug`/`-d`
+    /// shows `info` and above for the same reason.
+    fn console_level(&self, engine_args: &[String]) -> crate::events::LogLevel {
+        use crate::events::LogLevel;
+        let at_least_info = |level: LogLevel| level.max(LogLevel::Info);
+        let given = engine_args.iter().enumerate().find_map(|(i, a)| {
+            a.strip_prefix("--log-level=").or_else(|| {
+                (a == "--log-level")
+                    .then(|| engine_args.get(i + 1).map(String::as_str))
+                    .flatten()
+            })
+        });
+        if let Some(level) = given {
+            return at_least_info(LogLevel::parse(level).unwrap_or(LogLevel::Info));
+        }
+        let quiet = engine_args
+            .iter()
+            .any(|a| a == "--quiet" || short_flags(a).is_some_and(|f| f.contains('q')));
+        if quiet {
+            return LogLevel::Error;
+        }
+        self.env_value("DBT_LOG_LEVEL")
+            .and_then(|l| LogLevel::parse(&l))
+            .map_or(LogLevel::Info, at_least_info)
+    }
+}
+
+/// The short pass-through flags in `arg` (`-xq` → `xq`), if it is a bundle of them.
+fn short_flags(arg: &str) -> Option<&str> {
+    arg.strip_prefix('-').filter(|c| {
+        !c.starts_with('-') && !c.is_empty() && c.chars().all(|c| PASSTHROUGH_SHORT.contains(&c))
+    })
+}
+
+/// `args` without the options that set dbt's console level (`--log-level`, `--quiet`,
+/// `-q`, `--no-quiet`): with them dbt would drop the debug-level node events. What
+/// they ask for is still honoured, by what is shown ([`DbtExecutor::console_level`]).
+fn console_free(args: &[String]) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--log-level" {
+            args.next();
+            continue;
+        }
+        if arg.starts_with("--log-level=") || arg == "--quiet" || arg == "--no-quiet" {
+            continue;
+        }
+        if let Some(flags) = short_flags(arg).filter(|f| f.contains('q')) {
+            let rest: String = flags.chars().filter(|c| *c != 'q').collect();
+            if !rest.is_empty() {
+                kept.push(format!("-{rest}"));
+            }
+            continue;
+        }
+        kept.push(arg.clone());
+    }
+    kept
+}
+
+/// Whether `args` pass the dbt option `name`, as `name value` or `name=value`.
+fn passes(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| {
+        a == name
+            || a.strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('='))
+    })
+}
+
+/// A dbt command about to build or test, and how to tell its results from an earlier
+/// invocation's.
+struct Invocation {
+    args: Vec<String>,
+    results_path: PathBuf,
+    /// The invocation id in `run_results.json` before this one ran.
+    before: Option<String>,
+    step: DbtStep,
+    /// Each check (test) and the nodes it reads, from the manifest.
+    coverage: BTreeMap<String, Vec<String>>,
+}
+
+impl DbtExecutor {
+    /// The dbt command for `request`, selecting exactly its nodes; refuses what it
+    /// can't run as asked.
+    fn invocation(&self, request: &ExecutionRequest) -> Result<Invocation, ProviderError> {
         // dbt reads an empty selection as "everything". Run mode runs no checks, so
         // sources alone are nothing to run either.
         if request.is_empty() || (request.mode == ExecutionMode::Run && request.nodes.is_empty()) {
@@ -1111,7 +1389,6 @@ impl Executor for DbtExecutor {
         }
         args.extend(self.common_args(dbt_command));
         args.extend(request.engine_args.iter().cloned());
-        let command = self.display(&args);
         let results_path = self.artifact("run_results.json");
         let before = invocation_of(&results_path);
         let sources = if tests.is_empty() {
@@ -1119,7 +1396,7 @@ impl Executor for DbtExecutor {
         } else {
             request.sources.len()
         };
-        self.step(if request.mode == ExecutionMode::Test {
+        let step = if request.mode == ExecutionMode::Test {
             DbtStep::Test {
                 nodes: request.nodes.len(),
                 sources,
@@ -1131,14 +1408,33 @@ impl Executor for DbtExecutor {
                 tests: request.mode == ExecutionMode::Build,
                 sources,
             }
-        });
-        let (ok, tail) = self.invoke(&args).await?;
-        let run = match RunResults::read(&results_path) {
-            Ok(run) if run.invocation_id.is_some() && run.invocation_id != before => run,
+        };
+        let coverage = crate::events::coverage(&manifest);
+        Ok(Invocation {
+            args,
+            results_path,
+            before,
+            step,
+            coverage,
+        })
+    }
+
+    /// The report of the invocation that just ran, from the `run_results.json` it
+    /// wrote, and those results.
+    fn outcome(
+        &self,
+        request: &ExecutionRequest,
+        invocation: &Invocation,
+        command: &str,
+        ok: bool,
+        tail: &str,
+    ) -> Result<(ExecutionReport, RunResults), ProviderError> {
+        let run = match RunResults::read(&invocation.results_path) {
+            Ok(run) if run.invocation_id.is_some() && run.invocation_id != invocation.before => run,
             _ => {
                 return Err(Self::failure(
                     &format!("`{command}` wrote no run results"),
-                    &tail,
+                    tail,
                 ));
             }
         };
@@ -1160,7 +1456,7 @@ impl Executor for DbtExecutor {
         .with_sources(outcomes.sources)
         .with_unrequested(outcomes.unrequested)
         .with_command(command);
-        Ok(if ok { report } else { report.failed() })
+        Ok((if ok { report } else { report.failed() }, run))
     }
 }
 
@@ -1310,6 +1606,43 @@ mod tests {
     fn refused(args: &[&str]) -> bool {
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
         refuse_engine_args(&args).is_err()
+    }
+
+    /// Codex review on #327: the caller's console level never reaches dbt's argv, so
+    /// the debug-level node events always come; it only decides what is shown.
+    #[test]
+    fn the_callers_console_level_only_filters_what_is_shown() {
+        use crate::events::LogLevel;
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            console_free(&args(&[
+                "--log-level",
+                "warn",
+                "--threads",
+                "4",
+                "--log-level=error",
+                "-xq",
+                "-q",
+                "--quiet",
+                "--log-level-file",
+                "debug",
+                "-d",
+            ])),
+            args(&["--threads", "4", "-x", "--log-level-file", "debug", "-d"])
+        );
+        let dbt = DbtExecutor::new("dbt", "target");
+        assert_eq!(
+            dbt.console_level(&args(&["--log-level", "warn"])),
+            LogLevel::Warn
+        );
+        assert_eq!(
+            dbt.console_level(&args(&["--log-level=debug"])),
+            LogLevel::Info
+        );
+        assert_eq!(dbt.console_level(&args(&["-xq"])), LogLevel::Error);
+        assert_eq!(dbt.console_level(&args(&["--debug"])), LogLevel::Info);
+        let env = DbtExecutor::new("dbt", "target").env("DBT_LOG_LEVEL", "WARN");
+        assert_eq!(env.console_level(&[]), LogLevel::Warn);
     }
 
     #[test]
