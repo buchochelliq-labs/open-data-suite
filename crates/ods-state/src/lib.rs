@@ -39,7 +39,7 @@ pub use explain::{
     Change, Explanation, NodeDiff, NodeEvent, StateDiff, changes, diff_project, diff_states,
     explain, node_history,
 };
-pub use failure::{FailureFacts, FailureStage, HISTORY_RUNS, RETRY_FAILED, explain_failure};
+pub use failure::{FailureFacts, FailureStage, HISTORY_RUNS, Retry, explain_failure};
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use retry::{HeldBack, RetrySplit, split_retry};

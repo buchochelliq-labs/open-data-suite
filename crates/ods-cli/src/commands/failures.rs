@@ -66,7 +66,10 @@ pub(super) struct Evidence<'a> {
     /// The state database, beside which the journals are.
     pub(super) state_db: &'a Path,
     /// The command that retries what failed, when this run can be retried.
-    pub(super) retry: Option<&'a str>,
+    pub(super) retry: Option<ods_state::Retry<'a>>,
+    /// Whether the manifest and lineage describe the code the run ran: right after it,
+    /// or when the manifest was written by that run (its invocation is the run id).
+    pub(super) project_is_run: bool,
 }
 
 /// Earlier runs than `run`, from their journals, newest first.
@@ -150,6 +153,7 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
         facts.index = index.as_ref();
         facts.missing_columns = &missing;
         facts.retry = evidence.retry;
+        facts.project_is_run = evidence.project_is_run;
         explanations.push(explain_failure(&facts));
     }
     explanations
@@ -245,6 +249,9 @@ pub(super) fn plan_from_states(
         .collect();
     ExecutionPlan::new(None, ods_core::state::Timestamp::from_unix(0), entries)
 }
+
+/// What was removed from the engine's message, said the same way everywhere.
+pub(super) const REDACTED_NOTE: &str = "Literal values and SQL removed.";
 
 /// Text with code spans, as a line.
 fn line(text: &Text) -> Line {
@@ -424,17 +431,20 @@ pub(super) fn view(explanation: &ErrorExplanation) -> ViewNode {
     }
     blocks.extend(suggestions_tree(explanation));
     if let Some(message) = explanation.engine_message() {
-        let mut said = vec![Span::plain(message.message.clone())];
+        let mut lines = vec![(
+            format!("{} said", message.engine),
+            vec![
+                Span::plain(message.message.clone()),
+                Span::toned(format!("  {REDACTED_NOTE}"), Tone::Muted),
+            ],
+        )];
         if let Some(at) = &message.details_at {
-            said.push(Span::toned(
-                format!("  (values and SQL removed; full text: {at})"),
-                Tone::Muted,
+            lines.push((
+                "full text".to_owned(),
+                vec![Span::toned(at.clone(), Tone::Code)],
             ));
         }
-        blocks.push(ViewNode::KeyValue(vec![(
-            format!("{} said", message.engine),
-            said,
-        )]));
+        blocks.push(ViewNode::KeyValue(lines));
     }
     ViewNode::Group(blocks)
 }
@@ -451,6 +461,14 @@ pub(super) fn section(explanations: &[ErrorExplanation]) -> Vec<ViewNode> {
     })];
     blocks.extend(explanations.iter().map(view));
     blocks
+}
+
+/// How to retry the last run: with `--state-db` when it came from a flag or the
+/// environment, which a retry wouldn't see otherwise.
+pub(super) fn retry_state_db(settings: &super::state_settings::StateSettings) -> Option<&str> {
+    use super::state_settings::Origin;
+    matches!(settings.state_db.origin, Origin::Flag | Origin::Env(_))
+        .then_some(settings.state_db.value.as_str())
 }
 
 /// The files of a project, from the state settings.

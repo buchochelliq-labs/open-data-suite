@@ -133,6 +133,26 @@ fn nothing_quoted_comes_back(harness: &dyn ErrorCatalogueHarness) {
     }
 }
 
+fn token_shaped_values_never_come_back(harness: &dyn ErrorCatalogueHarness) {
+    let case = "token_shaped_values_never_come_back";
+    // Unquoted values survive an error summary's redaction; a classification (its
+    // subject in particular) must not repeat them.
+    for text in [
+        "KeyError: ghp_SENTINEL123",
+        "Database Error: could not connect to db://u:SENTINEL@h/db",
+        "ValueError: token=SENTINEL sk_live_SENTINEL",
+        "SENTINELError: boom",
+    ] {
+        let summary = ErrorSummary::from_message(text).unwrap_or_else(|| panic!("{case}: {text}"));
+        let got = harness.catalogue().classify(&summary);
+        let json = serde_json::to_string(&got).unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert!(
+            !json.contains("SENTINEL"),
+            "{case}: `{text}` came back: {json}"
+        );
+    }
+}
+
 /// Runs every case against the harness's catalogue. Panics on the first failure.
 pub fn run(harness: &dyn ErrorCatalogueHarness) -> Report {
     let mut report = Report::default();
@@ -146,5 +166,7 @@ pub fn run(harness: &dyn ErrorCatalogueHarness) -> Report {
     report.passed.push("unknown_text_is_not_recognised");
     nothing_quoted_comes_back(harness);
     report.passed.push("nothing_quoted_comes_back");
+    token_shaped_values_never_come_back(harness);
+    report.passed.push("token_shaped_values_never_come_back");
     report
 }
