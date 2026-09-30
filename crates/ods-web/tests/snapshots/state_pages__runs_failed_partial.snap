@@ -17,22 +17,40 @@ expression: pretty(&body)
           "value": ""
         },
         {
-          "count": 2,
-          "label": "Recorded",
-          "selected": false,
-          "value": "recorded"
-        },
-        {
           "count": 0,
           "label": "Succeeded",
           "selected": false,
           "value": "succeeded"
         },
         {
+          "count": 0,
+          "label": "Partial",
+          "selected": false,
+          "value": "partial"
+        },
+        {
           "count": 1,
           "label": "Failed",
           "selected": false,
           "value": "failed"
+        },
+        {
+          "count": 0,
+          "label": "Running or stopped",
+          "selected": false,
+          "value": "unfinished"
+        },
+        {
+          "count": 0,
+          "label": "Unknown",
+          "selected": false,
+          "value": "unknown"
+        },
+        {
+          "count": 2,
+          "label": "No journal",
+          "selected": false,
+          "value": "recorded"
         }
       ],
       "unavailable": null
@@ -48,7 +66,7 @@ expression: pretty(&body)
           "value": ""
         }
       ],
-      "unavailable": "Snapshots don't record their command yet"
+      "unavailable": "Runs don't record their command yet"
     },
     {
       "key": "target",
@@ -80,7 +98,7 @@ expression: pretty(&body)
           "value": ""
         },
         {
-          "count": 3,
+          "count": 0,
           "label": "Last day",
           "selected": false,
           "value": "1d"
@@ -121,7 +139,7 @@ expression: pretty(&body)
     "next": [
       {
         "command": "ods state retry --failed",
-        "does": "builds only what failed or was skipped because of it, still planned; what succeeded isn't repeated"
+        "does": "rebuilds only the nodes that failed and those skipped because of them; what succeeded isn't repeated"
       },
       {
         "command": "ods state retry",
@@ -143,29 +161,38 @@ expression: pretty(&body)
   "last_run_listed": false,
   "limit": 50,
   "listed": 3,
+  "partial": 0,
   "project": "jaffle_ods",
   "recorded": [
     "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
-    "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build.",
-    "Failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the snapshot that records its run id; that it recorded nothing is inferred.",
-    "Durations, start times, commands of earlier runs and who ran them aren't recorded yet."
+    "Each run ODS executed also keeps a journal beside the store (the newest 50): how it ended, when each node started and finished, the rows it wrote where the adapter reported them, and each error as a one-line summary with values and SQL removed. A run that recorded no snapshot, e.g. a failed one, is listed from its journal.",
+    "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build; the journal, when kept, says which failed.",
+    "Without a journal, failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the run that has its run id; that it recorded nothing is inferred.",
+    "Who ran each run isn't recorded yet."
   ],
   "recorded_snapshots": 3,
   "runs": [
     {
+      "at": "2026-09-29T00:02:37Z",
       "built": 2,
       "command": "ods state build --select +customers_view",
       "duration": null,
       "failed": 1,
       "from_last_run": true,
       "kept": 1,
+      "kept_state": null,
+      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
       "outcome": "failed",
+      "outcome_from": "last_run",
+      "outcome_inferred": false,
+      "outcome_note": "From the last run's record, kept beside the store for `ods state retry`: it has this run's id. The run has no journal.",
       "recorded_at": "2026-09-29T00:02:37Z",
       "replaces": 2,
       "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
       "short_run_id": "4c0b5c8f",
       "skipped": 1,
       "snapshot": 3,
+      "stats": null,
       "target": {
         "kind": "warehouse",
         "name": "dev"
@@ -173,19 +200,26 @@ expression: pretty(&body)
       "triggered_by": null
     },
     {
+      "at": "2026-09-29T00:01:03Z",
       "built": 2,
       "command": null,
       "duration": null,
       "failed": null,
       "from_last_run": false,
       "kept": 1,
+      "kept_state": null,
+      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
       "outcome": "recorded",
+      "outcome_from": "snapshot",
+      "outcome_inferred": false,
+      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
       "recorded_at": "2026-09-29T00:01:03Z",
       "replaces": 1,
       "run_id": "9ea38bd5-0000-4000-8000-000000000002",
       "short_run_id": "9ea38bd5",
       "skipped": null,
       "snapshot": 2,
+      "stats": null,
       "target": {
         "kind": "warehouse",
         "name": "dev"
@@ -193,19 +227,26 @@ expression: pretty(&body)
       "triggered_by": null
     },
     {
+      "at": "2026-09-29T00:00:15Z",
       "built": 1,
       "command": null,
       "duration": null,
       "failed": null,
       "from_last_run": false,
       "kept": 0,
+      "kept_state": null,
+      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
       "outcome": "recorded",
+      "outcome_from": "snapshot",
+      "outcome_inferred": false,
+      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
       "recorded_at": "2026-09-29T00:00:15Z",
       "replaces": null,
       "run_id": "e6f54fe3-0000-4000-8000-000000000001",
       "short_run_id": "e6f54fe3",
       "skipped": null,
       "snapshot": 1,
+      "stats": null,
       "target": {
         "kind": "warehouse",
         "name": "dev"
@@ -213,9 +254,10 @@ expression: pretty(&body)
       "triggered_by": null
     }
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "scope": "jaffle_ods/dev",
   "selected": "4c0b5c8f-0000-4000-8000-000000000003",
+  "selected_nodes": [],
   "state": "recorded",
   "store": {
     "full": ".ods/state.db",

@@ -1,0 +1,270 @@
+---
+source: crates/ods-web/tests/state_pages.rs
+expression: pretty(&body)
+---
+{
+  "built": [],
+  "compared_with": null,
+  "earlier": [
+    {
+      "at": "2026-09-29T00:02:30Z",
+      "built": 2,
+      "command": null,
+      "duration": "6.0s",
+      "failed": 0,
+      "from_last_run": false,
+      "kept": 1,
+      "kept_state": null,
+      "no_journal": null,
+      "outcome": "succeeded",
+      "outcome_from": "journal",
+      "outcome_inferred": false,
+      "outcome_note": "Its journal says the run succeeded, and every node did.",
+      "recorded_at": "2026-09-29T00:02:37Z",
+      "replaces": 2,
+      "run_id": "4c0b5c8f-0000-4000-8000-000000000003",
+      "short_run_id": "4c0b5c8f",
+      "skipped": 0,
+      "snapshot": 3,
+      "stats": {
+        "by_status": {
+          "success": 2
+        },
+        "duration": "6.0s",
+        "duration_ms": 6000,
+        "finished_at": "2026-09-29T00:02:36.000Z",
+        "live": true,
+        "nodes": 2,
+        "rows": "at least 99",
+        "rows_affected": 99,
+        "rows_at_least": true,
+        "rows_unreported": 1,
+        "started_at": "2026-09-29T00:02:30.000Z",
+        "unreadable_lines": 0
+      },
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    },
+    {
+      "at": "2026-09-29T00:01:03Z",
+      "built": 2,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "from_last_run": false,
+      "kept": 1,
+      "kept_state": null,
+      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
+      "outcome": "recorded",
+      "outcome_from": "snapshot",
+      "outcome_inferred": false,
+      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
+      "recorded_at": "2026-09-29T00:01:03Z",
+      "replaces": 1,
+      "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+      "short_run_id": "9ea38bd5",
+      "skipped": null,
+      "snapshot": 2,
+      "stats": null,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    },
+    {
+      "at": "2026-09-29T00:00:15Z",
+      "built": 1,
+      "command": null,
+      "duration": null,
+      "failed": null,
+      "from_last_run": false,
+      "kept": 0,
+      "kept_state": null,
+      "no_journal": "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)",
+      "outcome": "recorded",
+      "outcome_from": "snapshot",
+      "outcome_inferred": false,
+      "outcome_note": "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.",
+      "recorded_at": "2026-09-29T00:00:15Z",
+      "replaces": null,
+      "run_id": "e6f54fe3-0000-4000-8000-000000000001",
+      "short_run_id": "e6f54fe3",
+      "skipped": null,
+      "snapshot": 1,
+      "stats": null,
+      "target": {
+        "kind": "warehouse",
+        "name": "dev"
+      },
+      "triggered_by": null
+    }
+  ],
+  "last_run": null,
+  "nodes": [
+    {
+      "adapter": {},
+      "blocked_by": [],
+      "compile": null,
+      "end_offset_ms": 3800,
+      "error": {
+        "details_at": null,
+        "kind": "Database Error",
+        "message": "division by zero [SQL removed]"
+      },
+      "execute": null,
+      "finished_at": "2026-09-29T00:04:13.800Z",
+      "kind": "model",
+      "name": "orders",
+      "node": "model.orders",
+      "requested": true,
+      "rows_affected": null,
+      "rows_missing": "not reported by the adapter",
+      "start_offset_ms": 200,
+      "started_at": "2026-09-29T00:04:10.200Z",
+      "status": "error",
+      "status_label": "failed",
+      "tests": null,
+      "thread": "Thread-1 [value removed]",
+      "took": "3.6s",
+      "took_ms": 3600
+    },
+    {
+      "adapter": {},
+      "blocked_by": [],
+      "compile": null,
+      "end_offset_ms": 1500,
+      "error": null,
+      "execute": null,
+      "finished_at": "2026-09-29T00:04:11.500Z",
+      "kind": null,
+      "name": "model.payments",
+      "node": "model.payments",
+      "requested": true,
+      "rows_affected": 12,
+      "rows_missing": null,
+      "start_offset_ms": 300,
+      "started_at": "2026-09-29T00:04:10.300Z",
+      "status": "success",
+      "status_label": "built",
+      "tests": null,
+      "thread": "Thread-2",
+      "took": "1.2s",
+      "took_ms": 1200
+    },
+    {
+      "adapter": {},
+      "blocked_by": [
+        {
+          "name": "orders",
+          "node": "model.orders"
+        }
+      ],
+      "compile": null,
+      "end_offset_ms": null,
+      "error": null,
+      "execute": null,
+      "finished_at": null,
+      "kind": null,
+      "name": "model.orders_view",
+      "node": "model.orders_view",
+      "requested": true,
+      "rows_affected": null,
+      "rows_missing": "didn't run",
+      "start_offset_ms": null,
+      "started_at": null,
+      "status": "skipped",
+      "status_label": "skipped",
+      "tests": null,
+      "thread": null,
+      "took": null,
+      "took_ms": null
+    }
+  ],
+  "run": {
+    "at": "2026-09-29T00:04:10Z",
+    "built": 0,
+    "command": null,
+    "duration": "4.0s",
+    "failed": 1,
+    "from_last_run": false,
+    "kept": 3,
+    "kept_state": 3,
+    "no_journal": null,
+    "outcome": "partial",
+    "outcome_from": "journal",
+    "outcome_inferred": false,
+    "outcome_note": "Its journal says the run failed: 1 failed, 1 succeeded.",
+    "recorded_at": null,
+    "replaces": null,
+    "run_id": "7d21a0c4-0000-4000-8000-000000000004",
+    "short_run_id": "7d21a0c4",
+    "skipped": 1,
+    "snapshot": null,
+    "stats": {
+      "by_status": {
+        "error": 1,
+        "skipped": 1,
+        "success": 1
+      },
+      "duration": "4.0s",
+      "duration_ms": 4000,
+      "finished_at": "2026-09-29T00:04:14.000Z",
+      "live": true,
+      "nodes": 3,
+      "rows": "at least 12",
+      "rows_affected": 12,
+      "rows_at_least": true,
+      "rows_unreported": 1,
+      "started_at": "2026-09-29T00:04:10.000Z",
+      "unreadable_lines": 1
+    },
+    "target": null,
+    "triggered_by": null
+  },
+  "schema_version": 2,
+  "scope": "jaffle_ods/dev",
+  "started_at": "2026-09-29T00:04:10Z",
+  "state_rule": "This run recorded no snapshot (inferred: no listed snapshot has its id). Snapshot 3 was the last good state when it ran. A failed run never replaces the last good state; its successful builds, if any, weren't recorded.",
+  "timeline": [
+    {
+      "built": false,
+      "duration": "3.6s",
+      "end_offset_ms": 3800,
+      "kept_from": null,
+      "kind": "model",
+      "lane": 0,
+      "name": "orders",
+      "node": "model.orders",
+      "start_offset_ms": 200,
+      "status": "error"
+    },
+    {
+      "built": false,
+      "duration": "1.2s",
+      "end_offset_ms": 1500,
+      "kept_from": null,
+      "kind": null,
+      "lane": 0,
+      "name": "model.payments",
+      "node": "model.payments",
+      "start_offset_ms": 300,
+      "status": "success"
+    },
+    {
+      "built": false,
+      "duration": null,
+      "end_offset_ms": null,
+      "kept_from": null,
+      "kind": null,
+      "lane": 0,
+      "name": "model.orders_view",
+      "node": "model.orders_view",
+      "start_offset_ms": null,
+      "status": "skipped"
+    }
+  ]
+}

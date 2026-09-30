@@ -228,6 +228,6 @@ expression: pretty(view.clone())
       "type_label": "seed"
     }
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "total": 3
 }

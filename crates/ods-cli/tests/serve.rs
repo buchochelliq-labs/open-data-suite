@@ -447,13 +447,15 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert_eq!(status, 200);
     assert!(page.contains(r#"aria-label="Why orders builds""#), "{page}");
 
-    // One run recorded; the failed one recorded nothing, and says so.
+    // One run recorded; the failed one recorded nothing, and says so. Both ran dbt, so
+    // their journals give their outcomes (#322): the failed one is listed from its
+    // journal alone.
     let (status, body) = get(&server, "api/state/runs");
     assert_eq!(status, 200, "{body}");
     let runs: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(runs["runs"].as_array().unwrap().len(), 1, "{runs}");
-    assert_eq!(runs["runs"][0]["built"], 13);
-    assert_eq!(runs["runs"][0]["outcome"], "recorded");
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 2, "{runs}");
+    let failed = journal_rows(&runs);
+    orders_failed_in(&server, failed["run_id"].as_str().unwrap());
     let last = &runs["last_run"];
     assert_eq!(
         last["failed"][0]["node"], "model.jaffle_ods.orders",
@@ -468,7 +470,6 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     );
     assert!(body.contains("--vars '<redacted>'"), "{body}");
     assert_eq!(last["last_good"], 1);
-    assert_eq!(runs["last_run_listed"], true);
     assert_eq!(runs["failed"], 1);
     // The retry it suggests is a command this ODS has.
     assert_eq!(last["next"][0]["command"], "ods state retry --failed");
@@ -479,19 +480,57 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("--failed"));
     let (_, page) = get(&server, "state/runs");
     assert!(page.contains("kept 1"), "{page}");
-    assert!(page.contains("Last good state: snapshot 1"));
+    assert!(
+        page.contains("Last good state when it ran: snapshot 1"),
+        "{page}"
+    );
     assert!(
         !page.contains("hunter2") && !page.contains("sekrit"),
         "{page}"
     );
-    let run_id = runs["runs"][0]["run_id"].as_str().unwrap();
+    let run_id = runs["runs"][1]["run_id"].as_str().unwrap();
     let (status, page) = get(&server, &format!("state/runs/{run_id}"));
     assert_eq!(status, 200);
     assert!(page.contains("first recorded build"), "{page}");
+    assert!(!page.contains("[duration]") && !page.contains("[wall clock]"));
     let (status, _) = get(&server, &format!("api/state/runs/{run_id}"));
     assert_eq!(status, 200);
     drop(server);
     assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
+}
+
+/// The runs listed from their journals (#322): the failed one first, by itself, then
+/// the recorded one, with their outcomes. Returns the failed run's row.
+#[cfg(unix)]
+fn journal_rows(runs: &Value) -> &Value {
+    let failed = &runs["runs"][0];
+    assert_eq!(failed["snapshot"], Value::Null, "{failed}");
+    assert_eq!(failed["outcome"], "failed", "{failed}");
+    assert_eq!(failed["from_last_run"], true, "{failed}");
+    assert_eq!(failed["kept_state"], 1, "{failed}");
+    assert_eq!(runs["runs"][1]["built"], 13);
+    assert_eq!(runs["runs"][1]["outcome"], "succeeded");
+    assert_eq!(runs["runs"][1]["outcome_from"], "journal");
+    assert!(runs["runs"][1]["duration"].is_string(), "{runs}");
+    assert_eq!(runs["last_run_listed"], false, "its journal lists it");
+    failed
+}
+
+/// The page of `run_id`, a run that recorded nothing, lists `orders` as failed, from
+/// its journal (#322).
+#[cfg(unix)]
+fn orders_failed_in(server: &Server, run_id: &str) {
+    let (status, run) = get(server, &format!("api/state/runs/{run_id}"));
+    assert_eq!(status, 200, "{run}");
+    let run: Value = serde_json::from_str(&run).unwrap();
+    let orders = run["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node"] == "model.jaffle_ods.orders")
+        .unwrap();
+    assert_eq!(orders["status"], "error", "{orders}");
+    assert!(orders["error"]["message"].is_string(), "{orders}");
 }
 
 /// `ods state <command>` with the fake dbt in `dir`, as `fake_build` runs `build`.
@@ -559,7 +598,8 @@ fn a_test_run_is_the_last_run_tied_to_its_snapshot() {
     let newest = &runs["runs"][0];
     assert_eq!(newest["run_id"], kept["run_id"], "{runs}");
     assert_eq!(newest["from_last_run"], true, "{runs}");
-    assert_eq!(newest["outcome"], "failed", "{runs}");
+    // Its journal says the run failed, and that other nodes' tests passed.
+    assert_eq!(newest["outcome"], "partial", "{runs}");
     assert_eq!(
         newest["command"]
             .as_str()

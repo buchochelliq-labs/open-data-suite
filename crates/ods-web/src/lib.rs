@@ -16,7 +16,9 @@
 //!
 //! This crate only presents. It never reads dbt artifacts or the state store, or wires
 //! providers: the caller (a binary) supplies a [`Loader`] that produces a fresh
-//! [`Snapshot`], with a [`Dashboard`] of neutral facts (ADR-0001).
+//! [`Snapshot`], with a [`Dashboard`] of neutral facts (ADR-0001). The one file it reads
+//! itself is a run's journal (#322), from the directory the binary names, through
+//! ods-sdk's reader, when a Runs or Run page asks.
 
 pub mod catalog;
 mod catalog_page;

@@ -14,11 +14,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, StateSnapshot, Timestamp};
 use serde::Serialize;
 
+pub mod journal;
 pub mod state;
 
 /// Version of the dashboard view models in `/api/shell` and `/api/home`. Additive
 /// fields don't change it; a removed or retyped field does.
-pub const DASHBOARD_SCHEMA_VERSION: u32 = 1;
+pub const DASHBOARD_SCHEMA_VERSION: u32 = 2;
 
 /// How many recent runs Home lists.
 pub const RECENT_RUNS: usize = 5;

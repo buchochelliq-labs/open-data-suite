@@ -14,6 +14,7 @@ form_urlencoded.workspace = true
 html-escape.workspace = true
 ods-core.workspace = true
 ods-lineage.workspace = true
+ods-sdk.workspace = true
 ods-state.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
@@ -26,7 +27,6 @@ tracing.workspace = true
 [dev-dependencies]
 insta.workspace = true
 ods-provider-fake.workspace = true
-ods-sdk.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 
 [lints]

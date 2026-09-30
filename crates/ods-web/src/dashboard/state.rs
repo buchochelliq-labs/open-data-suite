@@ -7,12 +7,14 @@
 //!
 //! - a snapshot records which nodes a run built, not which it reused, failed or left
 //!   out, so the rest are *kept earlier build*;
-//! - failures are only known for the last run, from the file `ods state retry` keeps
-//!   beside the store. It is shown only for the scope it names, and tied to the
-//!   snapshot that records its run id; that it recorded nothing is only ever
-//!   *inferred*;
-//! - durations, start times and who ran a command aren't recorded: they are `None`,
-//!   shown as placeholders.
+//! - a run's journal (#322, ADR-0024), when kept, says how it ended, when each node
+//!   started and finished and the rows it wrote; a stat it doesn't report is `None`,
+//!   shown as `—`, never `0`, and a run it doesn't say ended is never a success;
+//! - without a journal, failures are only known for the last run, from the file
+//!   `ods state retry` keeps beside the store. It is shown only for the scope it
+//!   names, and tied to the run that has its run id; that it recorded nothing is only
+//!   ever *inferred*;
+//! - who ran a command isn't recorded: `None`, shown as a placeholder.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -21,8 +23,12 @@ use ods_core::state::{
     Evidence, Exactness, ExecutionPlan, NodeState, PlanAction, PlanEntry, ReasonCode,
     StateSnapshot, Timestamp,
 };
+use ods_sdk::contracts::run_events::NodeRunStatus;
+use ods_sdk::run_journal::Journals;
 use ods_state::{Change, Explanation};
 use serde::Serialize;
+
+use super::journal::{Ended, JournalRun, JournalSource, NodeStatsView, RunStatsView};
 
 use super::{
     CommandHint, DASHBOARD_SCHEMA_VERSION, Dashboard, EmptyState, StateInput, StateStatus,
@@ -48,6 +54,8 @@ pub struct History {
     pub last_run: Option<LastRun>,
     /// Their run ids longer than people read, computed once (see `shorten`).
     long_run_ids: OnceLock<Vec<String>>,
+    /// The runs' journals (#322), when the binary names where they are.
+    journals: JournalSource,
 }
 
 impl History {
@@ -57,7 +65,16 @@ impl History {
             snapshots,
             last_run: None,
             long_run_ids: OnceLock::new(),
+            journals: JournalSource::default(),
         }
+    }
+
+    /// Reads each run's journal from `journals` (#322, ADR-0024), when a page asks:
+    /// its outcome, duration and per-node stats.
+    #[must_use]
+    pub fn with_journals(mut self, journals: Journals) -> Self {
+        self.journals = JournalSource::new(journals);
+        self
     }
 
     /// Adds the last run.
@@ -472,51 +489,115 @@ pub struct EvidenceView {
     pub fact: bool,
 }
 
-/// How a run ended, as far as ODS knows.
+/// How a run ended, as far as ODS knows: from its journal (#322), else from the last
+/// run's record, else only that a snapshot recorded it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RunOutcome {
-    /// Its successful builds were recorded; whether others failed isn't stored.
+    /// Its successful builds were recorded; whether others failed isn't stored (it
+    /// has no journal, and isn't the last run).
     Recorded,
-    /// Nothing failed, as the last run's outcome says.
+    /// Nothing failed.
     Succeeded,
-    /// Some nodes failed or were skipped, as the last run's outcome says.
+    /// Some nodes failed and others succeeded (their builds were recorded).
+    Partial,
+    /// It failed, and no node succeeded; or, from the last run's record, something
+    /// failed or was skipped.
     Failed,
+    /// Its journal says it ended, but not how: never read as a success.
+    Unknown,
+    /// Its journal doesn't say it ended: it is running, or stopped without finishing.
+    /// Past a while without change, only that it stopped ([`RunOutcome::Unknown`]).
+    Unfinished,
 }
 
-/// A recorded run, as the Runs page lists it.
+impl RunOutcome {
+    /// Its query value and word, e.g. `partial`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Recorded => "recorded",
+            Self::Succeeded => "succeeded",
+            Self::Partial => "partial",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+            Self::Unfinished => "unfinished",
+        }
+    }
+
+    /// Whether anything is known to have failed.
+    pub fn failed(self) -> bool {
+        matches!(self, Self::Failed | Self::Partial)
+    }
+}
+
+/// Where a run's outcome comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum OutcomeFrom {
+    /// Its run journal.
+    Journal,
+    /// The last run's record, kept beside the store for `ods state retry`.
+    LastRun,
+    /// Only its snapshot: the outcome reads *recorded*.
+    Snapshot,
+}
+
+/// A run, as the Runs page lists it: one that recorded a snapshot, one whose journal
+/// is kept (#322), or both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct RunRow {
-    /// The snapshot it committed.
-    pub snapshot: u64,
+    /// The snapshot it committed; `None` when it recorded none (e.g. it failed).
+    pub snapshot: Option<u64>,
     /// The snapshot it replaced.
     pub replaces: Option<u64>,
     /// The run's id.
     pub run_id: String,
     /// Its first eight characters.
     pub short_run_id: String,
-    /// When it was committed.
-    pub recorded_at: Timestamp,
+    /// When it started, from its journal, else when its snapshot was committed: what
+    /// the list is grouped and filtered by. `None` when neither is known (a journal
+    /// that never said it started): such a run is left out of a date filter.
+    pub at: Option<Timestamp>,
+    /// When its snapshot was committed.
+    pub recorded_at: Option<Timestamp>,
     /// The command, if known: only for the last run, tied to it by time.
     pub command: Option<String>,
     /// The target it built in, if recorded.
     pub target: Option<Target>,
-    /// Nodes it built.
+    /// For a run that recorded no snapshot: the snapshot that was the last good state
+    /// when it ran, the newest recorded before it started (inferred).
+    pub kept_state: Option<u64>,
+    /// Nodes it built, as its snapshot records them (0 without a snapshot).
     pub built: usize,
-    /// Recorded nodes that kept an earlier build: reused, not selected, or failed.
-    pub kept: usize,
-    /// Nodes that failed; `None` unless recorded (the last run only).
+    /// Nodes that kept an earlier build. With a journal: those the run didn't run
+    /// (reused or not selected); its failed and skipped nodes are counted apart, though
+    /// they keep their last good build too. Without one, every recorded node it didn't
+    /// build: reused, not selected, or failed. `None` when not known.
+    pub kept: Option<usize>,
+    /// Nodes that failed; `None` unless its journal or the last run's record says.
     pub failed: Option<usize>,
     /// Nodes skipped because of a failure; `None` unless recorded.
     pub skipped: Option<usize>,
     /// How it ended, as far as ODS knows.
     pub outcome: RunOutcome,
-    /// Whether the command and outcome come from the last run, whose run id this
-    /// snapshot records: kept beside the store, not in the snapshot.
+    /// Where the outcome comes from.
+    pub outcome_from: OutcomeFrom,
+    /// What the outcome does and doesn't say, for people.
+    pub outcome_note: String,
+    /// Whether the outcome is only inferred (e.g. a run that probably stopped).
+    pub outcome_inferred: bool,
+    /// Whether the command (and, without a journal, the outcome) come from the last
+    /// run, whose run id this run has: kept beside the store, not in the snapshot.
     pub from_last_run: bool,
-    /// How long it took; not recorded yet.
+    /// Its totals, from its journal.
+    pub stats: Option<RunStatsView>,
+    /// Why it has no journal, when it hasn't.
+    pub no_journal: Option<String>,
+    /// How long it took, for people, from its journal.
     pub duration: Option<String>,
     /// Who ran it; not recorded yet.
     pub triggered_by: Option<String>,
@@ -649,8 +730,11 @@ pub struct RunsView {
     pub filtered: bool,
     /// How many of the shown runs recorded a snapshot.
     pub recorded_snapshots: usize,
-    /// How many of the shown runs are known to have failed.
+    /// How many of the shown runs are known to have failed, no node succeeding
+    /// (partial runs are counted apart).
     pub failed: usize,
+    /// How many of the shown runs partly failed: some nodes failed, others succeeded.
+    pub partial: usize,
     /// The last run started against this store, if kept and for this scope.
     pub last_run: Option<LastRunView>,
     /// Whether the last run is listed as a row of its own, before the recorded runs:
@@ -661,6 +745,9 @@ pub struct RunsView {
     pub unscoped_last_run: Option<LastRunView>,
     /// The run in the side panel: the one asked for, else the newest shown.
     pub selected: Option<String>,
+    /// The selected run's failed and skipped nodes, from its journal: why each failed
+    /// (redacted) or what stopped it.
+    pub selected_nodes: Vec<NodeStatsView>,
     /// What the store does and doesn't record.
     pub recorded: Vec<String>,
     /// The CI runs tab: planned.
@@ -684,7 +771,14 @@ pub struct TimelineRow {
     pub lane: usize,
     /// For a kept node, the run whose build it kept.
     pub kept_from: Option<String>,
-    /// How long it took; not recorded yet.
+    /// How it ended in this run, from the journal; `None` if the run has no journal,
+    /// or the node wasn't in it (kept earlier build).
+    pub status: Option<NodeRunStatus>,
+    /// Milliseconds from the run's start to its start, from the journal.
+    pub start_offset_ms: Option<u64>,
+    /// Milliseconds from the run's start to its finish, from the journal.
+    pub end_offset_ms: Option<u64>,
+    /// How long it took, for people, from the journal.
     pub duration: Option<String>,
 }
 
@@ -716,11 +810,14 @@ pub struct RunPageView {
     pub run: RunRow,
     /// The run whose snapshot it replaced.
     pub compared_with: Option<RunRef>,
-    /// When it started; not recorded yet.
+    /// When it started, from its journal.
     pub started_at: Option<Timestamp>,
-    /// Every node its snapshot records: built ones last, in the order they waited on
-    /// each other.
+    /// Every node its snapshot records, and every node its journal ran: kept ones
+    /// first, then by when they started (or the order they waited on each other).
     pub timeline: Vec<TimelineRow>,
+    /// Each node the run ran, with its stats, from its journal (#322); empty without
+    /// one.
+    pub nodes: Vec<NodeStatsView>,
     /// Why each built node was built.
     pub built: Vec<BuiltWhy>,
     /// What failed, if this is the last run and its outcome is known.
@@ -1316,34 +1413,98 @@ fn source_versions(evidence: &[Evidence], names: &Names) -> Vec<SourceVersionVie
 
 // --------------------------------------------------------------------------- runs
 
-/// The run a snapshot records, as a row: built nodes are the ones whose last build is
-/// the snapshot's run.
-fn row(id: u64, snapshot: &StateSnapshot) -> RunRow {
-    let built = snapshot
-        .nodes
-        .values()
-        .filter(|n| n.run_id == snapshot.run_id)
-        .count();
-    RunRow {
-        snapshot: id,
-        replaces: snapshot.parent.map(|p| p.0),
-        run_id: snapshot.run_id.clone(),
-        short_run_id: short(&snapshot.run_id),
-        recorded_at: snapshot.created_at,
+/// Why a run has no journal, as the pages say it.
+pub const NO_JOURNAL: &str = "no run journal: the run predates run journals, recorded a build it didn't run (e.g. `ods state record`), or its journal was pruned (the newest 50 are kept)";
+
+/// A run as a row: from the snapshot it committed, if any, and its journal, if kept.
+/// Without a snapshot, it built nothing that was recorded; `kept_state` is then the
+/// snapshot that was the last good state when it ran.
+fn row(
+    snapshot: Option<(u64, &StateSnapshot)>,
+    kept_state: Option<(u64, &StateSnapshot)>,
+    run_id: &str,
+    journal: Option<&JournalRun>,
+    now: Timestamp,
+) -> RunRow {
+    let ran = |id: &str| journal.is_some_and(|j| j.summary.get(id).is_some());
+    let (built, kept, recorded_at, target, replaces) = match snapshot {
+        Some((_, s)) => {
+            let built = s.nodes.values().filter(|n| n.run_id == s.run_id).count();
+            // With a journal, a node the run ran and didn't build (failed, skipped) is
+            // counted as such, not as kept.
+            let kept = s
+                .nodes
+                .iter()
+                .filter(|(id, n)| n.run_id != s.run_id && !ran(id))
+                .count();
+            (
+                built,
+                Some(kept),
+                Some(s.created_at),
+                s.target
+                    .as_ref()
+                    .map(|t| Target::new(t.name.clone(), t.kind.clone())),
+                s.parent.map(|p| p.0),
+            )
+        }
+        None => (
+            0,
+            match (journal, kept_state) {
+                (Some(_), Some((_, k))) => Some(k.nodes.keys().filter(|id| !ran(id)).count()),
+                // Nothing was recorded before it: nothing to keep.
+                (Some(j), None) if j.started().is_some() => Some(0),
+                _ => None,
+            },
+            None,
+            None,
+            None,
+        ),
+    };
+    let mut row = RunRow {
+        snapshot: snapshot.map(|(id, _)| id),
+        replaces,
+        run_id: run_id.to_owned(),
+        short_run_id: short(run_id),
+        at: recorded_at,
+        recorded_at,
         command: None,
-        target: snapshot
-            .target
-            .as_ref()
-            .map(|t| Target::new(t.name.clone(), t.kind.clone())),
+        target,
+        kept_state: kept_state.map(|(id, _)| id),
         built,
-        kept: snapshot.nodes.len() - built,
+        kept,
         failed: None,
         skipped: None,
         outcome: RunOutcome::Recorded,
+        outcome_from: OutcomeFrom::Snapshot,
+        outcome_note: "Recorded: its successful builds are the new state. It has no run journal, so whether other nodes failed isn't known.".to_owned(),
+        outcome_inferred: false,
         from_last_run: false,
+        stats: None,
+        no_journal: Some(NO_JOURNAL.to_owned()),
         duration: None,
         triggered_by: None,
+    };
+    if let Some(journal) = journal {
+        let stats = journal.stats();
+        row.at = journal.started().or(recorded_at);
+        row.failed = Some(stats.count(NodeRunStatus::Error));
+        row.skipped = Some(stats.count(NodeRunStatus::Skipped));
+        row.duration.clone_from(&stats.duration);
+        let verdict = journal.ended(now);
+        row.outcome = match verdict.ended {
+            Ended::Succeeded => RunOutcome::Succeeded,
+            Ended::Partial => RunOutcome::Partial,
+            Ended::Failed => RunOutcome::Failed,
+            Ended::Unknown => RunOutcome::Unknown,
+            Ended::Unfinished => RunOutcome::Unfinished,
+        };
+        row.outcome_from = OutcomeFrom::Journal;
+        row.outcome_note = verdict.note;
+        row.outcome_inferred = verdict.inferred;
+        row.stats = Some(stats);
+        row.no_journal = None;
     }
+    row
 }
 
 /// How the last run relates to the listed snapshots.
@@ -1358,38 +1519,119 @@ enum Tie {
 }
 
 impl Dashboard {
-    /// Every listed run, newest first, with the last run's command and outcome on the
-    /// snapshot that records its run id.
-    fn run_rows(&self, details: bool) -> Vec<RunRow> {
-        let last = self.last_run();
-        let tie = self.last_run_tie();
-        self.snapshots()
+    /// The runs' journals, if the binary named where they are.
+    fn journals(&self) -> Option<&JournalSource> {
+        self.history().map(|h| &h.journals).filter(|j| j.is_set())
+    }
+
+    /// The journal of `run_id`, if kept.
+    pub(crate) fn journal_of(&self, run_id: &str) -> Option<std::sync::Arc<JournalRun>> {
+        self.journals()?.run_of(run_id)
+    }
+
+    /// Every listed run, newest first: the snapshots' runs, each with its journal if
+    /// kept, and the runs of this scope whose journal is kept but that recorded no
+    /// snapshot (e.g. they failed). The last run's command goes on the run whose id it
+    /// records, and its outcome too when that run has no journal.
+    fn run_rows(&self, details: bool, now: Timestamp) -> Vec<RunRow> {
+        let snapshots = self.snapshots();
+        let files = self.journals().map(JournalSource::list).unwrap_or_default();
+        let source = self.journals();
+        let by_id: BTreeMap<&str, &ods_sdk::run_journal::JournalFile> =
+            files.iter().map(|f| (f.run_id.as_str(), f)).collect();
+        let journal = |run_id: &str| source.and_then(|s| by_id.get(run_id).and_then(|f| s.run(f)));
+        // Each row with what it is ordered by: when it started or was recorded, else
+        // (a journal that never said it started) when its journal last changed.
+        let mut rows: Vec<(Timestamp, RunRow)> = snapshots
             .iter()
             .take(RUNS_LISTED)
             .map(|(id, snapshot)| {
-                let mut row = row(*id, snapshot);
-                if let Some(last) = last
-                    && tie == Tie::Snapshot(*id)
-                {
-                    row.from_last_run = true;
-                    row.command = Some(if details {
-                        last.command.clone()
-                    } else {
-                        last.command_name.clone()
-                    });
-                    if let Some(outcome) = &last.outcome {
-                        row.failed = Some(outcome.failures());
-                        row.skipped = Some(outcome.skipped.len());
-                        row.outcome = if outcome.is_clean() {
-                            RunOutcome::Succeeded
-                        } else {
-                            RunOutcome::Failed
-                        };
-                    }
-                }
-                row
+                let run = journal(&snapshot.run_id);
+                let row = row(
+                    Some((*id, snapshot)),
+                    None,
+                    &snapshot.run_id,
+                    run.as_deref(),
+                    now,
+                );
+                (row.at.unwrap_or(snapshot.created_at), row)
             })
-            .collect()
+            .collect();
+        let recorded: BTreeSet<&str> = snapshots.iter().map(|(_, s)| s.run_id.as_str()).collect();
+        // Beyond the snapshots read, a run may have recorded one that isn't listed:
+        // only runs since the oldest listed snapshot are said to have recorded none.
+        let since = (snapshots.len() > RUNS_LISTED)
+            .then(|| snapshots.get(RUNS_LISTED - 1).map(|(_, s)| s.created_at))
+            .flatten();
+        for file in &files {
+            if recorded.contains(file.run_id.as_str()) {
+                continue;
+            }
+            let Some(run) = journal(&file.run_id) else {
+                continue;
+            };
+            // The journals are kept per state database, which several scopes share.
+            if run.summary.scope.as_deref() != Some(self.scope.as_str()) {
+                continue;
+            }
+            let at = run.started();
+            if since.is_some_and(|since| at.is_none_or(|at| at < since)) {
+                continue;
+            }
+            // The last good state when it ran: the newest snapshot recorded before it
+            // started. Unknown if it never said when it started.
+            let kept_state = at.and_then(|at| {
+                snapshots
+                    .iter()
+                    .find(|(_, s)| s.created_at <= at)
+                    .map(|(id, s)| (*id, s))
+            });
+            let changed = file
+                .modified
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+            let row = row(None, kept_state, &file.run_id, Some(&run), now);
+            rows.push((at.unwrap_or(Timestamp::from_unix(changed)), row));
+        }
+        rows.sort_by(|(a_at, a), (b_at, b)| {
+            b_at.cmp(a_at)
+                .then_with(|| b.snapshot.cmp(&a.snapshot))
+                .then_with(|| a.run_id.cmp(&b.run_id))
+        });
+        let mut rows: Vec<RunRow> = rows.into_iter().map(|(_, r)| r).take(RUNS_LISTED).collect();
+        if let Some(last) = self.last_run() {
+            let tie = self.last_run_tie();
+            for row in &mut rows {
+                let ours = match (row.snapshot, &last.run_id) {
+                    (Some(id), _) => tie == Tie::Snapshot(id),
+                    (None, Some(run_id)) => *run_id == row.run_id,
+                    (None, None) => false,
+                };
+                if !ours {
+                    continue;
+                }
+                row.from_last_run = true;
+                row.command = Some(if details {
+                    last.command.clone()
+                } else {
+                    last.command_name.clone()
+                });
+                if row.stats.is_none()
+                    && let Some(outcome) = &last.outcome
+                {
+                    row.failed = Some(outcome.failures());
+                    row.skipped = Some(outcome.skipped.len());
+                    row.outcome = if outcome.is_clean() {
+                        RunOutcome::Succeeded
+                    } else {
+                        RunOutcome::Failed
+                    };
+                    row.outcome_from = OutcomeFrom::LastRun;
+                    LAST_RUN_OUTCOME.clone_into(&mut row.outcome_note);
+                }
+            }
+        }
+        rows
     }
 
     /// The last run, only if it names this page's scope: the file is kept per state
@@ -1453,7 +1695,7 @@ impl Dashboard {
             if let Some(command) = &last.retry_failed {
                 next.push(hint(
                     command,
-                    "builds only what failed or was skipped because of it, still planned; what succeeded isn't repeated",
+                    "rebuilds only the nodes that failed and those skipped because of them; what succeeded isn't repeated",
                 ));
             }
             if let Some(command) = &last.retry {
@@ -1487,7 +1729,11 @@ impl Dashboard {
         }
     }
 
-    /// The Runs page as of `now` (for the date filter).
+    /// The Runs page as of `now` (for the date filter, and to tell a run still going).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one page's view model, built top to bottom"
+    )]
     pub fn runs_view(
         &self,
         details: bool,
@@ -1496,7 +1742,7 @@ impl Dashboard {
         names: &Names,
     ) -> RunsView {
         let (state, empty) = self.state_status(details);
-        let all = self.run_rows(details);
+        let all = self.run_rows(details, now);
         let mut facets = facets(&all, filter, now);
         let runs: Vec<RunRow> = all
             .iter()
@@ -1504,10 +1750,16 @@ impl Dashboard {
             .cloned()
             .collect();
         let last_run = self.last_run_view(details, names);
-        // The last run, when it recorded nothing, is a run too: listed and counted.
+        // The last run, when it recorded nothing, is a run too: listed and counted,
+        // unless its journal already lists it.
         let unrecorded = last_run
             .as_ref()
             .filter(|l| l.recorded_nothing_inferred && l.outcome_known)
+            .filter(|_| {
+                self.last_run()
+                    .and_then(|l| l.run_id.as_deref())
+                    .is_none_or(|id| !all.iter().any(|r| r.run_id == id))
+            })
             .map(|l| {
                 let outcome = if l.has_failures() {
                     "failed"
@@ -1536,12 +1788,18 @@ impl Dashboard {
         });
         let last_failed = last_run_listed && unrecorded.is_some_and(|(o, _)| o == "failed");
         let selected = match filter.run.as_deref() {
-            Some("last")
-                if last_run
-                    .as_ref()
-                    .is_some_and(|l| l.recorded_nothing_inferred) =>
-            {
-                Some("last".to_owned())
+            Some("last") => {
+                // The last run's own row, when its journal lists it.
+                let own = self
+                    .last_run()
+                    .and_then(|l| l.run_id.clone())
+                    .filter(|id| runs.iter().any(|r| &r.run_id == id));
+                own.or_else(|| {
+                    last_run
+                        .as_ref()
+                        .is_some_and(|l| l.recorded_nothing_inferred)
+                        .then(|| "last".to_owned())
+                })
             }
             Some(want) => find_row(&runs, want).map(|r| r.run_id.clone()),
             None => None,
@@ -1552,21 +1810,37 @@ impl Dashboard {
                 return Some("last".to_owned());
             }
             runs.iter()
-                .find(|r| r.outcome == RunOutcome::Failed)
+                .find(|r| r.outcome.failed())
                 .or_else(|| runs.first())
                 .map(|r| r.run_id.clone())
         });
+        // The selected run's failed and skipped nodes, with their redacted errors.
+        let selected_nodes = selected
+            .as_deref()
+            .filter(|id| *id != "last")
+            .and_then(|id| self.journal_of(id))
+            .map(|journal| {
+                let mut names = names.clone();
+                names.extend(self.names());
+                journal
+                    .nodes(&|id| name_in(&names, id), &|_| None, details)
+                    .into_iter()
+                    .filter(|n| matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped))
+                    .collect()
+            })
+            .unwrap_or_default();
         let (total, capped) = self
             .recorded()
             .map_or((0, false), |r| (r.snapshots, r.snapshots_capped));
+        let recorded_runs = all.iter().filter(|r| r.snapshot.is_some()).count();
         RunsView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             project: self.project.clone(),
             scope: self.scope.clone(),
             state,
             store: self.store(details),
-            empty,
-            total: total.max(all.len()),
+            empty: if all.is_empty() { empty } else { None },
+            total: total.max(recorded_runs) + (all.len() - recorded_runs),
             total_capped: capped,
             limit: RUNS_LISTED,
             facets,
@@ -1575,10 +1849,14 @@ impl Dashboard {
                 .filter(|r| r.outcome == RunOutcome::Failed)
                 .count()
                 + usize::from(last_failed),
+            partial: runs
+                .iter()
+                .filter(|r| r.outcome == RunOutcome::Partial)
+                .count(),
             listed: runs.len() + usize::from(last_run_listed),
             unfiltered: all.len() + usize::from(unrecorded.is_some()),
             filtered: filter.outcome.is_some() || filter.target.is_some() || filter.date.is_some(),
-            recorded_snapshots: runs.len(),
+            recorded_snapshots: runs.iter().filter(|r| r.snapshot.is_some()).count(),
             runs,
             last_run,
             last_run_listed,
@@ -1586,6 +1864,7 @@ impl Dashboard {
                 .unscoped_last_run()
                 .map(|l| self.describe_last_run(l, Tie::Unknown, details, names)),
             selected,
+            selected_nodes,
             recorded: RECORDED.iter().map(|&line| line.to_owned()).collect(),
             ci: "CI runs — coming with server mode",
         }
@@ -1606,11 +1885,29 @@ impl Dashboard {
 
     /// One run, by its id or an unambiguous prefix of it (at least 8 characters).
     pub fn run_view(&self, details: bool, run: &str, names: &Names) -> Option<RunPageView> {
-        let rows = self.run_rows(details);
+        self.run_view_at(details, Timestamp::now(), run, names)
+    }
+
+    /// One run as of `now` (to tell whether a run without an end is still going).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one page's view model, built top to bottom"
+    )]
+    pub fn run_view_at(
+        &self,
+        details: bool,
+        now: Timestamp,
+        run: &str,
+        names: &Names,
+    ) -> Option<RunPageView> {
+        let rows = self.run_rows(details, now);
         let this = find_row(&rows, run)?.clone();
+        let journal = self.journal_of(&this.run_id);
         let snapshots = self.snapshots();
-        let position = snapshots.iter().position(|(id, _)| *id == this.snapshot)?;
-        let (_, snapshot) = &snapshots[position];
+        let snapshot = this
+            .snapshot
+            .and_then(|id| snapshots.iter().find(|(s, _)| *s == id))
+            .map(|(_, s)| s);
         let previous = snapshots
             .iter()
             .find(|(id, _)| Some(*id) == this.replaces)
@@ -1628,37 +1925,93 @@ impl Dashboard {
             _ => BTreeMap::new(),
         };
         let built: BTreeSet<&str> = snapshot
-            .nodes
-            .iter()
-            .filter(|(_, n)| n.run_id == snapshot.run_id)
-            .map(|(id, _)| id.as_str())
-            .collect();
-        let lanes = lanes(snapshot, &built);
+            .map(|s| {
+                s.nodes
+                    .iter()
+                    .filter(|(_, n)| n.run_id == s.run_id)
+                    .map(|(id, _)| id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let lanes = snapshot.map(|s| lanes(s, &built)).unwrap_or_default();
+        let kind = |id: &str| planned.get(id).map(|(_, kind)| kind.clone());
+        let nodes: Vec<NodeStatsView> = journal
+            .as_ref()
+            .map(|j| j.nodes(&|id| name_in(&names, id), &kind, details))
+            .unwrap_or_default();
+        let stats_of = |id: &str| nodes.iter().find(|n| n.node == id);
         let mut timeline: Vec<TimelineRow> = snapshot
-            .nodes
-            .iter()
-            .map(|(id, n)| {
-                let is_built = built.contains(id.as_str());
+            .map(|s| {
+                s.nodes
+                    .iter()
+                    .map(|(id, n)| {
+                        let is_built = built.contains(id.as_str());
+                        (id.clone(), is_built, (!is_built).then(|| n.run_id.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            // Nodes the run ran that its snapshot doesn't record (failed first builds).
+            .chain(
+                nodes
+                    .iter()
+                    .filter(|n| snapshot.is_none_or(|s| !s.nodes.contains_key(&n.node)))
+                    .map(|n| (n.node.clone(), false, None)),
+            )
+            .map(|(id, is_built, kept_from)| {
+                let stats = stats_of(&id);
                 TimelineRow {
-                    node: id.clone(),
-                    name: name_in(&names, id),
-                    kind: planned.get(id).map(|(_, kind)| kind.clone()),
+                    name: name_in(&names, &id),
+                    kind: kind(&id),
                     built: is_built,
                     lane: lanes.get(id.as_str()).copied().unwrap_or(0),
-                    kept_from: (!is_built).then(|| n.run_id.clone()),
-                    duration: None,
+                    // A node the run ran and failed still keeps an earlier build.
+                    kept_from,
+                    status: stats.map(|n| n.status),
+                    start_offset_ms: stats.and_then(|n| n.start_offset_ms),
+                    end_offset_ms: stats.and_then(|n| n.end_offset_ms),
+                    duration: stats.and_then(|n| n.took.clone()),
+                    node: id,
                 }
             })
             .collect();
         let at = |id: &str| planned.get(id).map_or(usize::MAX, |(i, _)| *i);
+        // Nodes the run didn't run first (kept), then the ones it ran: by when they
+        // started where timed, else in the order they waited on each other.
         timeline.sort_by(|a, b| {
-            (a.built, a.lane, at(&a.node), &a.node).cmp(&(b.built, b.lane, at(&b.node), &b.node))
+            let key = |r: &TimelineRow| {
+                (
+                    r.built || r.status.is_some(),
+                    r.start_offset_ms.unwrap_or(u64::MAX),
+                    r.lane,
+                    at(&r.node),
+                )
+            };
+            key(a).cmp(&key(b)).then_with(|| a.node.cmp(&b.node))
         });
-        let built_why = self.built_why(&timeline, snapshot, previous, &names);
-        let last_run = (self.last_run_tie() == Tie::Snapshot(this.snapshot))
-            .then(|| self.last_run_view(details, &names))
-            .flatten();
-        let state_rule = state_rule(&this);
+        let mut nodes = nodes;
+        nodes.sort_by(|a, b| {
+            (a.start_offset_ms.unwrap_or(u64::MAX), at(&a.node), &a.node).cmp(&(
+                b.start_offset_ms.unwrap_or(u64::MAX),
+                at(&b.node),
+                &b.node,
+            ))
+        });
+        let built_why = snapshot
+            .map(|s| self.built_why(&timeline, s, previous, &names))
+            .unwrap_or_default();
+        let last_run = match this.snapshot {
+            Some(id) => (self.last_run_tie() == Tie::Snapshot(id))
+                .then(|| self.last_run_view(details, &names))
+                .flatten(),
+            None => self
+                .last_run()
+                .filter(|l| l.run_id.as_deref() == Some(this.run_id.as_str()))
+                .and_then(|_| self.last_run_view(details, &names)),
+        };
+        let state_rule = state_rule(&this, this.kept_state);
+        let position = rows.iter().position(|r| r.run_id == this.run_id);
         Some(RunPageView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             scope: self.scope.clone(),
@@ -1667,17 +2020,21 @@ impl Dashboard {
                 run_id: p.run_id.clone(),
                 short_run_id: short(&p.run_id),
             }),
-            started_at: None,
+            started_at: journal.as_ref().and_then(|j| j.started()),
             timeline,
+            nodes,
             built: built_why,
             last_run,
             state_rule,
-            earlier: rows
-                .iter()
-                .filter(|r| r.snapshot < this.snapshot)
-                .take(EARLIER_RUNS)
-                .cloned()
-                .collect(),
+            earlier: position
+                .map(|p| {
+                    rows.iter()
+                        .skip(p + 1)
+                        .take(EARLIER_RUNS)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default(),
             run: this,
         })
     }
@@ -1762,38 +2119,76 @@ fn lanes<'a>(snapshot: &'a StateSnapshot, built: &BTreeSet<&'a str>) -> BTreeMap
     lanes
 }
 
-/// What the state rule (AGENTS rule 5) meant for `run`.
+/// Where a run's outcome comes from when it is the last run's record.
+const LAST_RUN_OUTCOME: &str = "From the last run's record, kept beside the store for `ods state retry`: it has this run's id. The run has no journal.";
+
+/// What the state rule (AGENTS rule 5) meant for `run`; `last_good` is the snapshot
+/// that stayed the last good state, when it recorded none.
 ///
-/// What is always true comes first; what the last run's record adds (which nodes failed,
-/// or that none did) is said to come from it, and only for the run whose id it records.
-fn state_rule(run: &RunRow) -> String {
+/// What is always true comes first; what the journal or the last run's record adds
+/// (which nodes failed, or that none did) is said to come from it.
+fn state_rule(run: &RunRow, last_good: Option<u64>) -> String {
+    let journal = run.outcome_from == OutcomeFrom::Journal;
+    let Some(s) = run.snapshot else {
+        let was = last_good.map_or_else(
+            || "No snapshot was recorded before it.".to_owned(),
+            |good| format!("Snapshot {good} was the last good state when it ran."),
+        );
+        let why = match run.outcome {
+            RunOutcome::Failed | RunOutcome::Partial => {
+                "A failed run never replaces the last good state; its successful builds, if any, weren't recorded."
+            }
+            RunOutcome::Unfinished => {
+                "It may still be running: a run records its snapshot only when it ends."
+            }
+            RunOutcome::Succeeded => {
+                "Its journal says it succeeded, yet no listed snapshot has its id: its builds weren't recorded (e.g. recording failed, or it only tested)."
+            }
+            _ => "How it ended isn't known, so it isn't read as having recorded anything.",
+        };
+        return format!(
+            "This run recorded no snapshot (inferred: no listed snapshot has its id). {was} {why}"
+        );
+    };
     let base = match run.replaces {
         Some(prev) => format!(
-            "Snapshot {} replaced snapshot {prev} with this run's successful builds; every other node keeps its last good build.",
-            run.snapshot
+            "Snapshot {s} replaced snapshot {prev} with this run's successful builds; every other node keeps its last good build."
         ),
-        None => format!(
-            "Snapshot {} is the first: it records this run's successful builds.",
-            run.snapshot
-        ),
+        None => format!("Snapshot {s} is the first: it records this run's successful builds."),
     };
-    match (run.outcome, run.from_last_run) {
+    match (run.outcome, journal) {
+        (RunOutcome::Succeeded, true) => format!("{base} Its journal says the run succeeded."),
+        (RunOutcome::Partial, _) => {
+            format!("{base} Its journal says some nodes failed: they keep their last good build.")
+        }
         (RunOutcome::Failed, true) => format!(
+            "{base} Its journal says the run failed: its failed and skipped nodes keep their last good build."
+        ),
+        (RunOutcome::Unknown, _) => format!(
+            "{base} Its journal doesn't say how the run ended, so it isn't read as a success."
+        ),
+        (RunOutcome::Unfinished, _) => format!(
+            "{base} Its journal doesn't say the run finished: it is running, or stopped without finishing."
+        ),
+        (RunOutcome::Failed, false) => format!(
             "{base} The last run's record says some nodes failed or weren't recorded: they keep their last good build."
         ),
-        (RunOutcome::Succeeded, true) => {
+        (RunOutcome::Succeeded, false) => {
             format!("{base} The last run's record says nothing failed.")
         }
-        _ => format!("{base} Whether any node failed isn't stored for this run."),
+        _ => format!(
+            "{base} Whether any node failed isn't stored for this run: it has no run journal."
+        ),
     }
 }
 
 /// What the store does and doesn't record, for the Runs page.
-const RECORDED: [&str; 4] = [
+const RECORDED: [&str; 5] = [
     "Each run that recorded something is a snapshot: which nodes it built, and the last good build of every other node.",
-    "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build.",
-    "Failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the snapshot that records its run id; that it recorded nothing is inferred.",
-    "Durations, start times, commands of earlier runs and who ran them aren't recorded yet.",
+    "Each run ODS executed also keeps a journal beside the store (the newest 50): how it ended, when each node started and finished, the rows it wrote where the adapter reported them, and each error as a one-line summary with values and SQL removed. A run that recorded no snapshot, e.g. a failed one, is listed from its journal.",
+    "A snapshot doesn't record which of the other nodes were reused, left out or failed, so they read kept earlier build; the journal, when kept, says which failed.",
+    "Without a journal, failures are only known for the last run, kept beside the store for `ods state retry`, and shown only for the target it ran for. It is tied to the run that has its run id; that it recorded nothing is inferred.",
+    "Who ran each run isn't recorded yet.",
 ];
 
 /// Whether `filter` keeps `row`, ignoring the filter named `skip` (to count what each
@@ -1862,11 +2257,17 @@ fn facets(all: &[RunRow], filter: &RunFilter, now: Timestamp) -> Vec<Facet> {
         facet(
             "outcome",
             "Outcome",
-            vec![
-                ("recorded".into(), "Recorded".into()),
-                ("succeeded".into(), "Succeeded".into()),
-                ("failed".into(), "Failed".into()),
-            ],
+            [
+                (RunOutcome::Succeeded, "Succeeded"),
+                (RunOutcome::Partial, "Partial"),
+                (RunOutcome::Failed, "Failed"),
+                (RunOutcome::Unfinished, "Running or stopped"),
+                (RunOutcome::Unknown, "Unknown"),
+                (RunOutcome::Recorded, "No journal"),
+            ]
+            .into_iter()
+            .map(|(o, label)| (o.word().to_owned(), label.to_owned()))
+            .collect(),
         ),
         Facet {
             key: "command",
@@ -1877,7 +2278,7 @@ fn facets(all: &[RunRow], filter: &RunFilter, now: Timestamp) -> Vec<Facet> {
                 count: all.len(),
                 selected: true,
             }],
-            unavailable: Some("Snapshots don't record their command yet"),
+            unavailable: Some("Runs don't record their command yet"),
         },
         facet(
             "target",
@@ -1907,18 +2308,16 @@ fn days(value: &str) -> Option<i64> {
 
 fn matches_one(row: &RunRow, filter: &RunFilter, now: Timestamp) -> bool {
     if let Some(o) = &filter.outcome {
-        let outcome = match row.outcome {
-            RunOutcome::Recorded => "recorded",
-            RunOutcome::Succeeded => "succeeded",
-            RunOutcome::Failed => "failed",
-        };
-        return outcome == o;
+        return row.outcome.word() == o;
     }
     if let Some(t) = &filter.target {
         return row.target.as_ref().is_some_and(|x| &x.name == t);
     }
     if let Some(d) = filter.date.as_deref().and_then(days) {
-        return row.recorded_at.unix() >= now.unix() - d * 86_400;
+        // A run whose time isn't known is never said to be within the last days.
+        return row
+            .at
+            .is_some_and(|at| at.unix() >= now.unix() - d * 86_400);
     }
     true
 }

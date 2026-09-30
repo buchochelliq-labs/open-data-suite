@@ -4,12 +4,17 @@
   --pill-build-bg: #DCE8FB; --pill-build: #1F4FA0; --pill-reuse-bg: #D5F0EC; --pill-reuse: #0B6B60;
   --pill-bad-bg: #FBE4E2; --pill-bad: #A12A25; --row-sel: #F4F7FE; --row-bad: #FDF4F3;
   --err-border: #F1C7C3; --seed: #7C9A6A; --kind: #6B7B93;
+  --row-warn: #FDF8EC; --pill-warn-bg: #FBEFD3; --pill-warn: #8A5A00;
+  --pill-kept-bg: #F1F3F6; --pill-kept: #18202A; --pill-skip-bg: #EEF0F3; --pill-skip: #4A5462;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --pill-build-bg: #1B2E52; --pill-build: #9CC0FF; --pill-reuse-bg: #10332F; --pill-reuse: #6FE3CF;
     --pill-bad-bg: #3A1F1E; --pill-bad: #F2A09B; --row-sel: #18223A; --row-bad: #2A1A1A;
     --err-border: #5A2B28; --seed: #8FAF7C; --kind: #8C98A6;
+    /* Subtle row tints, as PlanDark's selection: the text keeps its contrast. */
+    --row-bad: #1F181C; --row-warn: #1E1C17; --pill-warn-bg: #3A2F14; --pill-warn: #E3B341;
+    --pill-kept-bg: #2A3340; --pill-kept: #E4E9EF; --pill-skip-bg: #2A2F37; --pill-skip: #C3CBD5;
   }
 }
 .st-split { flex-grow: 1; display: flex; min-height: 0; }
@@ -230,3 +235,53 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-side-head code { overflow-wrap: anywhere; }
 .dot.bad { background: var(--bad); }
 .cmd .st-btn { height: 26px; font-size: 12px; padding: 0 8px; }
+/* Run journals (#322): outcomes beyond succeeded and failed, and per-node stats. */
+.st-glyph.warn { background: var(--warn); }
+.st-glyph.rec.run { border-style: dotted; }
+.st-outcome-value.warn { color: var(--warn); }
+.st-o.partial { color: var(--warn); }
+.st-runs th:nth-child(13) { width: 76px; }
+.st-runs th:nth-child(10) { width: 58px; } .st-runs th:nth-child(11) { width: 78px; } .st-runs th:nth-child(12) { width: 66px; }
+.st-runs .st-snap .st-grade { display: inline-block; margin-top: 2px; font-weight: 400; }
+.st-totals { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.st-totals > span { display: flex; align-items: center; gap: 6px; }
+.tl-bar.failed { fill: var(--bad); }
+.tl-bar.unknown, .tl-bar.untimed { fill: none; stroke: var(--dashed); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.tl-bar.untimed { stroke: var(--build); }
+.tl-bar.running { fill: var(--build); opacity: 0.55; }
+.st-sw.failed { width: 18px; height: 10px; border-radius: 2px; background: var(--bad); }
+.st-error.real { border-style: solid; border-left-color: var(--bad); background: var(--row-bad); color: var(--fg); display: block; }
+.st-error.real strong { color: var(--pill-bad); font-weight: 600; }
+.st-stats th, .st-stats td { padding-right: 10px; vertical-align: top; }
+.st-stats tr.failed > * { background: var(--row-bad); }
+.st-stats tr.st-err-row td { padding: 0 10px 10px; }
+.st-stats tr.st-err-row + tr > * { border-top: none; }
+.st-stats { table-layout: fixed; }
+.st-totals .muted { margin-left: 4px; }
+.st-totals .st-right { margin-left: auto; }
+/* Review of #322 step 3: amber partial runs, one zero style, readable pills and tints. */
+.st-num.kept { background: var(--pill-kept-bg); color: var(--pill-kept); }
+.st-num.skipped { background: var(--pill-skip-bg); color: var(--pill-skip); }
+.st-num.zero { background: none; border: none; color: var(--muted); font-weight: 500; }
+.st-outcome.partial { background: var(--pill-warn-bg); color: var(--pill-warn); }
+.st-runs tr.partial > td { background: var(--row-warn); }
+.st-runs tr.partial > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.st-runs tr.failed .st-dim, .st-runs tr.partial .st-dim { color: var(--muted); }
+.st-runs td { padding-right: 10px; }
+.st-runs code { overflow-wrap: normal; word-break: normal; }
+.st-runs code .tok, .st-dl code .tok, .st-side-head code .tok { white-space: nowrap; }
+.dot.warn { background: var(--warn); }
+.st-chip-cmd { max-width: 440px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-btn.disabled { padding-right: 8px; }
+.st-btn.disabled .chip { margin-left: 8px; }
+.st-why { font-size: 12px; color: var(--muted); margin-left: 4px; }
+.st-stats th, .st-stats td { overflow-wrap: break-word; word-break: normal; }
+.st-stats th .st-small, .st-stats td > .st-num + .st-why, .st-stats td > .mono + .st-small { display: block; margin-left: 0; margin-top: 2px; }
+.st-stats td .st-small { display: block; }
+.st-why-ran { font-size: 12px; }
+.tl-sel.failed { fill: var(--row-bad); }
+.tl-skip { fill: none; stroke: var(--dashed); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.st-sw.skip { width: 11px; height: 11px; border: 1.5px dashed var(--dashed); border-radius: 2px; }
+.st-sw.seed { width: 7px; height: 7px; border-radius: 50%; background: var(--seed); }
+.st-sw.kind { width: 4px; height: 12px; background: var(--kind); }
+.st-dl .st-why { display: inline; margin-left: 4px; }
