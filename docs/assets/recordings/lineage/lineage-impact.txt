@@ -1,0 +1,44 @@
+❯ ods lineage impact --column stg_orders.status
+Downstream impact
+
+artifacts  target
+dialect    duckdb
+models     9 analyzed, 1 opaque, 6 dependency waves, <n> ms
+
+changes   1
+must run  6
+pruned    1
+
+model.jaffle_ods.customer_order_rank
+├── all rows may change
+└── jaffle_ods.main.orders.status modified → its rows (indirect:filter)
+
+model.jaffle_ods.customer_segments
+├── all rows may change
+└── lineage unknown, reads changed jaffle_ods.main.customers
+
+model.jaffle_ods.customers
+├── all rows may change
+└── jaffle_ods.main.orders.status modified → its rows (indirect:filter)
+
+model.jaffle_ods.customers_snapshot_view
+├── all rows may change
+└── rows of jaffle_ods.main.customers may differ
+
+model.jaffle_ods.orders
+├── changed columns: status
+└── jaffle_ods.main.stg_orders.status modified → `status` (identity)
+
+model.jaffle_ods.segment_summary
+├── all rows may change
+└── rows of jaffle_ods.main.customer_segments may differ
+
+           Skipped: they read changed models but none of the changed columns
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ model                         ┃ reads                      ┃ unused changed columns ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ model.jaffle_ods.order_events │ jaffle_ods.main.stg_orders │ status                 │
+└───────────────────────────────┴────────────────────────────┴────────────────────────┘
+❯
+
+

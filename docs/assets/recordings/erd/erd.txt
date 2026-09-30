@@ -1,0 +1,40 @@
+❯ ods erd generate
+erDiagram
+    customer_order_rank {
+        double amount
+        integer customer_id PK
+        integer order_id FK
+        bigint order_seq PK
+        double running_amount
+    }
+    customers {
+        unknown customer_id PK "tested key"
+        unknown lifetime_value
+    }
+    orders {
+        double amount
+        double bank_transfer_amount
+        double coupon_amount
+        double credit_card_amount
+        integer customer_id FK
+        double gift_card_amount
+        date order_date
+        integer order_id PK
+        varchar status
+    }
+    stg_customers {
+    }
+    stg_orders {
+        unknown order_id PK "tested key"
+    }
+    stg_payments {
+        unknown order_id FK
+        unknown payment_id PK "tested key"
+    }
+    customer_order_rank |o--o| orders : "order_id"
+    orders }o--o| customers : "customer_id"
+    orders }o--o{ stg_customers : "customer_id (joined)"
+    stg_payments }o--o| stg_orders : "order_id"
+❯
+
+

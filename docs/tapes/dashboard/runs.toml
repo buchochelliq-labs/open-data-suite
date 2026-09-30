@@ -1,0 +1,35 @@
+# Home → Runs → a partial run's Nodes tab, with the failed node's redacted error.
+title = "Runs: from Home to a failed node"
+theme = "light"
+
+[[step]]
+goto = "/"
+caption = "Home: the project's health, the recent runs, what needs attention"
+expect = ["Project health", "Recent runs", "Needs attention"]
+pause = 3800
+still = "home"
+
+[[step]]
+click = "a:has-text('All runs')"
+caption = "Runs: every recorded run, with its outcome, rows and duration from its journal"
+expect = ["Partial"]
+pause = 3800
+still = "runs"
+
+[[step]]
+click = "tr.partial a.st-runid"
+caption = "A partial run: some nodes failed, the others were recorded"
+expect = ["partial", "at least 100"]
+pause = 3600
+
+[[step]]
+click = "a.st-tab:has-text('Nodes'), [role=tab]:has-text('Nodes'), a:has-text('Nodes')"
+caption = "Each node's result, time taken, rows, thread and why it ran"
+pause = 3000
+
+[[step]]
+hover = "text=KeyError >> nth=0"
+caption = "The error is dbt's first line, with quoted values and SQL removed"
+expect = ["[value removed]"]
+pause = 4000
+still = "run-nodes"

@@ -14,8 +14,8 @@ flowchart BT
     foundation["foundation<br/><small>ods-config (ods-events, ods-policy planned)</small>"]
     sdk["ods-sdk<br/><small>provider contracts + conformance tests</small>"]
     modules["modules<br/><small>ods-lineage · ods-erd · ods-state · …</small>"]
-    providers["providers<br/><small>ods-provider-dbt · -sqlparser · -databricks · -fake</small>"]
-    edge["edge<br/><small>ods-web (explorer, HTTP API) · ods-mcp (MCP protocol)</small>"]
+    providers["providers<br/><small>ods-provider-dbt · -sqlparser · -databricks · -fake · ods-store-sqlite</small>"]
+    edge["edge<br/><small>ods-web (dashboard, explorer, HTTP API) · ods-mcp (MCP protocol)</small>"]
     cli["ods-cli<br/><small>the <code>ods</code> binary: composition root</small>"]
     foundation --> core
     sdk --> foundation
@@ -32,14 +32,16 @@ flowchart BT
 - **`ods-sdk`**: the contracts providers implement, for example reading a project or
   analyzing SQL. Each contract has a fake implementation and conformance tests that
   every real provider runs too.
-- **Modules** hold the logic: lineage graph and impact, ERD building, and, later,
-  State planning. They never import a provider, and never depend on each other unless
-  explicitly allowed.
+- **Modules** hold the logic: lineage graph and impact, ERD building, and State
+  (fingerprints, the planner and its explanations). They never import a provider, and
+  never depend on each other unless explicitly allowed.
 - **Providers** hold everything vendor-specific. That includes reading dbt artifacts
-  (JSON and Parquet), SQL parsing (`sqlparser-rs`), and Databricks lineage exports.
+  (JSON and Parquet), running dbt (the executor, with its run events), SQL parsing
+  (`sqlparser-rs`), Databricks lineage exports and table versions, and the SQLite state
+  store.
 - **Edge crates** turn module output into something a client consumes. `ods-web`
-  serves the explorer and a JSON API. `ods-mcp` speaks the Model Context Protocol.
-  They may use modules, but not providers.
+  serves the dashboard, the lineage explorer and a JSON API. `ods-mcp` speaks the
+  Model Context Protocol. They may use modules, but not providers.
 - **`ods-cli`** is the only place that wires concrete providers into modules. It also
   owns terminal rendering and exit codes.
 
@@ -67,11 +69,13 @@ sequenceDiagram
 | Concern | Choice |
 |---|---|
 | Language | Rust, stable, MSRV 1.90 |
-| CLI | `clap`; styled output only in `ods-cli` |
+| CLI | `clap`; styled output with `rs-rich` 0.0.9, only in `ods-cli` ([ADR-0003](adr/0003-cli-presentation-boundary.md)) |
 | Serialization | `serde`; persisted formats carry a `schema_version` |
 | SQL parsing | `sqlparser-rs` |
 | dbt v2 Parquet | `parquet` |
-| HTTP (explorer) | `axum`, only in `ods-web` |
+| HTTP (dashboard, explorer) | `axum`, only in `ods-web` |
+| State store | SQLite through `sqlx` ([ADR-0013](adr/0013-state-snapshots-fingerprints-and-store.md)) |
+| Time | `jiff` (UTC only) |
 | Errors | `thiserror` in libraries, `anyhow` only in binaries |
 
 Dependencies must have permissive licences; `cargo deny` checks this in CI.

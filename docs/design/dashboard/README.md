@@ -1,8 +1,9 @@
 # ODS Dashboard
 
 The dashboard is the central, read-only view of one dbt project and its targets.
-`ods serve` hosts it locally today (lineage only). This design grows it into the
-control-plane view of every ODS module. It stays a server-rendered page with inlined
+`ods serve` hosts it locally: the screens marked **Built** below are in `ods serve`
+today, the rest are still designs. This design grows it into the control-plane view of
+every ODS module; v0.1.0 ships when every screen is built (#309). It stays a server-rendered page with inlined
 assets and no npm build ([ADR-0009](../../adr/0009-hostable-explorer-ods-web.md)).
 
 **Layout.**
@@ -19,9 +20,28 @@ assets and no npm build ([ADR-0009](../../adr/0009-hostable-explorer-ods-web.md)
 
 Light is the default. Home, Lineage, Model and Plan also have dark versions.
 
+**What is built** (each screen below says so, and what it still lacks):
+
+| Screen | Status |
+|---|---|
+| Shell and Home | **Built** (#310) |
+| Catalog: models, and the Model page | **Built** (#313, merged in #319) |
+| Lineage: State overlay | **Built** (#312, merged in #320) |
+| State: Plan and Why, Runs, one Run | **Built** (#311, merged in #318); real run outcomes, durations and per-node stats from run journals (#322 steps 1 and 3) |
+| Live run on the DAG, with follow mode | Designed; the run events and journals it reads are built (#322 steps 1–3), the live view isn't (#322 step 4) |
+| Freshness evidence, Semantic layer, Impact simulator, ERD, Settings | Designed (#309) |
+| Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
+
+The recordings on this page are real: `ods serve` on the demo project, played by
+`scripts/record-dashboard.py` ([how they're made](../../recordings.md)). The images
+under each heading are the design boards.
+
 ## Screens
 
 ### Home: project health
+
+**Built** (#310). Health and coverage are still `[n]` placeholders, and a run's
+outcome on Home reads *recorded* (the Runs page has the journal's outcome).
 
 ![Home](images/main.png)
 
@@ -34,6 +54,10 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 `[n]` until the health signals exist.
 
 ### Catalog: models
+
+**Built** (#313). The health badge is `[n]` until the health signals exist (#117).
+
+![The Catalog and a model page in ods serve](../../assets/recordings/dashboard/catalog/catalog.webp)
 
 ![Catalog](images/catalog.png)
 
@@ -49,6 +73,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 
 ### Catalog: freshness evidence
 
+Not built yet (#309).
+
 ![Freshness evidence](images/sources.png)
 
 - **Evidence per input:** how ODS knows whether each seed or source changed.
@@ -58,6 +84,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 **Needs:** the freshness evidence already recorded in each snapshot.
 
 ### Catalog: semantic layer (placeholder)
+
+Not built yet (#309).
 
 ![Semantic layer](images/metrics.png)
 
@@ -70,6 +98,10 @@ plug in the way warehouses do. ODS reads definitions only; it never serves or qu
 metrics.
 
 ### Lineage: State overlay
+
+**Built** (#312).
+
+![Lineage with the State overlay in ods serve](../../assets/recordings/dashboard/lineage/lineage.webp)
 
 ![Lineage](images/lineage.png)
 
@@ -100,6 +132,8 @@ no font files, so it falls back to the system fonts.
 
 ### Lineage: impact simulator
 
+Not built as designed (#309); the Lineage page's *Impact* tab runs impact for one node.
+
 ![Impact simulator](images/impact.png)
 
 - **Input:** pick a column and a change (rename, type change or drop).
@@ -113,6 +147,9 @@ no font files, so it falls back to the system fonts.
 **Needs:** column-level impact (`ods lineage impact`). Nothing is run.
 
 ### Model page
+
+**Built** (#313): Overview, Code, Columns, Lineage, State and Tests; Relationships and
+Usage are greyed as planned.
 
 ![Model page](images/model.png)
 
@@ -130,6 +167,10 @@ no font files, so it falls back to the system fonts.
 
 ### State: plan and why
 
+**Built** (#311).
+
+![The Plan and its Why panel in ods serve, in dark mode](../../assets/recordings/dashboard/plan/plan.webp)
+
 ![Plan](images/plan.png)
 
 - **Decision table:** every node, with its decision and reason code.
@@ -139,6 +180,10 @@ no font files, so it falls back to the system fonts.
 **Needs:** `ods state plan --output json`, which already carries all of this.
 
 ### State: runs (local)
+
+**Built** (#311), with outcomes, rows and durations from run journals (#322 step 3).
+
+![From Home to a partial run's Nodes tab in ods serve](../../assets/recordings/dashboard/runs/runs.webp)
 
 ![Runs](images/runs.png)
 
@@ -161,6 +206,9 @@ no font files, so it falls back to the system fonts.
 
 ### State: one run
 
+**Built** (#311), with the timeline and per-node stats from its journal (#322 step 3).
+A run still going isn't followed live yet (#322 step 4).
+
 ![Run](images/run.png)
 
 - **Timeline:** when each node started and finished, from the run's journal, as bars
@@ -177,6 +225,8 @@ no font files, so it falls back to the system fonts.
 
 ### ERD
 
+Not built yet (#309); `ods erd generate` draws it from the command line.
+
 ![ERD](images/erd.png)
 
 - **Diagram:** tables and keys, with each edge drawn by its strongest evidence:
@@ -188,6 +238,8 @@ no font files, so it falls back to the system fonts.
 
 ### Settings
 
+Not built yet (#309).
+
 ![Settings](images/settings.png)
 
 - **Read-only view of `ods.toml`:** project and target, the state store, secret
@@ -197,6 +249,11 @@ no font files, so it falls back to the system fonts.
   CLI already emits, not a second record.
 
 ### Live run on the DAG, with follow mode (#322)
+
+Designed. What it reads is built: run events, per-node stats and run journals
+(#322 steps 1–2, [ADR-0024](../../adr/0024-run-events-node-stats-and-run-journal.md)),
+shown after a run on the Runs and Run pages (step 3). The live overlay, the event
+stream and follow mode are step 4.
 
 The boards are in `docs/design/dashboard/boards/live-run/` in the repository; like every board they are left out of the docs site and open in the Design canvas (see [the design README](../README.md)). `Main.dc.html` there is interactive: it plays a demo run, and the other boards reuse it in fixed states. Screenshots will be added once they are exported from the design canvas.
 

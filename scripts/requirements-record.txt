@@ -1,0 +1,4 @@
+# Docs tooling for scripts/record-dashboard.py (dashboard tours). Not used by any ODS
+# crate. Playwright: Apache-2.0; Pillow: MIT-CMU (HPND).
+playwright==1.63.0
+pillow==12.3.0

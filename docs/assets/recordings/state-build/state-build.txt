@@ -1,0 +1,62 @@
+ods ▸ plan: 8 to build, 5 to reuse
+ods ▸   code changed: stg_orders
+ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, customer_segments, customers_snapsh
+ot_view, segment_summary
+ods ▸ 5/5 dbt build: 8 nodes and their tests
+HH:MM:SS  fake dbt: build
+ods ▸ stg_orders built in 250ms, 99 rows
+HH:MM:SS  SUCCESS model.jaffle_ods.stg_orders
+ods ▸ orders built in 250ms, 99 rows
+HH:MM:SS  SUCCESS model.jaffle_ods.orders
+ods ▸ customers built in 250ms, 100 rows
+HH:MM:SS  SUCCESS model.jaffle_ods.customers
+ods ▸ order_events built in 250ms
+HH:MM:SS  SUCCESS model.jaffle_ods.order_events
+ods ▸ customer_order_rank built in 250ms
+HH:MM:SS  SUCCESS model.jaffle_ods.customer_order_rank
+ods ▸ customer_segments built in 250ms
+HH:MM:SS  SUCCESS model.jaffle_ods.customer_segments
+ods ▸ segment_summary built in 250ms
+HH:MM:SS  SUCCESS model.jaffle_ods.segment_summary
+ods ▸ customers_snapshot_view built in 250ms
+HH:MM:SS  SUCCESS model.jaffle_ods.customers_snapshot_view
+HH:MM:SS  PASS test.jaffle_ods.unique_customers_customer_id.c5af1ff4b1
+HH:MM:SS  PASS test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d
+HH:MM:SS  PASS test.jaffle_ods.unique_orders_order_id.fed79b3a6e
+HH:MM:SS  PASS test.jaffle_ods.not_null_orders_order_id.cf6c17daed
+HH:MM:SS  PASS test.jaffle_ods.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2
+HH:MM:SS  PASS test.jaffle_ods.unique_customer_order_rank_order_id.3ddaa5af35
+HH:MM:SS  PASS test.jaffle_ods.relationships_customer_order_rank_order_id__order_id__ref_orders_.10125cf94b
+HH:MM:SS  PASS test.jaffle_ods.unique_stg_orders_order_id.e3b841c71a
+HH:MM:SS  PASS test.jaffle_ods.not_null_stg_orders_order_id.81cfe2fe64
+HH:MM:SS  fake dbt: a warning after the nodes
+State run
+
+scope          jaffle_ods/default
+compared with  snapshot 1 in .ods/state.db
+plan           8 to build and test, 5 to reuse
+dbt            target_dir target (default)
+target         dev (jaffle_ods, fake, fake-host, jaffle_ods)
+ran            dbt build --select fqn:jaffle_ods.marts,resource_type:model
+fqn:jaffle_ods.staging.stg_orders,resource_type:model --target-path /tmp/ods-demo/jaffle_shop/target --write-json
+--partial-parse-file-diff --indirect-selection eager --log-format json --log-level debug
+outcome        succeeded
+totals         <took> · 8 built
+rows           at least 298 (5 nodes didn't report rows)
+stats          reported as it ran
+journal        .ods/state.db.runs/<run-id>.jsonl
+recorded       snapshot 2: 8 nodes advanced
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ node                    ┃ result  ┃ took  ┃ rows ┃ why it ran                                                       ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ stg_orders              │ success │ 250ms │ 99   │ code changed since run <run-id>: sql │
+│ order_events            │ success │ 250ms │ —    │ upstream code changed: stg_orders will be rebuilt                │
+│ orders                  │ success │ 250ms │ 99   │ upstream code changed: stg_orders will be rebuilt                │
+│ customer_order_rank     │ success │ 250ms │ —    │ upstream code changed: orders will be rebuilt                    │
+│ customers               │ success │ 250ms │ 100  │ upstream code changed: orders will be rebuilt                    │
+│ customer_segments       │ success │ 250ms │ —    │ upstream code changed: customers will be rebuilt                 │
+│ customers_snapshot_view │ success │ 250ms │ —    │ upstream code changed: customers will be rebuilt                 │
+│ segment_summary         │ success │ 250ms │ —    │ upstream code changed: customer_segments will be rebuilt         │
+└─────────────────────────┴─────────┴───────┴──────┴──────────────────────────────────────────────────────────────────┘
+❯
