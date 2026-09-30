@@ -1464,7 +1464,7 @@ fn runs_side(b: &mut String, view: &RunsView) {
             counts = text(&run_counts(row)),
             totals = run_totals(row),
         );
-        failed_nodes(b, &view.selected_nodes, "../");
+        failed_nodes(b, &view.selected_nodes, "../", false);
         let ours = last.filter(|l| match row.snapshot {
             Some(id) => l.snapshot == Some(id),
             None => view.selected.as_deref() == Some(row.run_id.as_str()) && row.from_last_run,
@@ -1663,7 +1663,7 @@ fn no_snapshot_why(outcome: RunOutcome) -> &'static str {
 
 /// Failed and skipped nodes from a run's journal: each failed node's error as the
 /// journal keeps it (redacted), and what stopped each skipped one.
-fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str) {
+fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str, compact: bool) {
     let failed: Vec<&NodeStatsView> = nodes
         .iter()
         .filter(|n| n.status == NodeRunStatus::Error)
@@ -1691,7 +1691,17 @@ fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str) {
                         .map_or_else(String::new, |t| format!(" · after {t}"))
                 ),
             );
-            error_box(b, node);
+            match (&node.explanation, compact) {
+                (Some(e), true) => {
+                    let _ = write!(
+                        b,
+                        r##"<p class="st-explain-brief">{} <a href="#why-{}">Why it failed</a></p>"##,
+                        explained_text(e.headline()),
+                        attr(&node.node),
+                    );
+                }
+                _ => explanation_card(b, node, nodes),
+            }
         }
         b.push_str("</div>");
     }
@@ -1722,13 +1732,253 @@ fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str) {
     }
 }
 
+/// What is removed from an engine's message before ODS keeps it, said the same way in
+/// every box (and in the terminal).
+const REDACTED_NOTE: &str = "Literal values and SQL removed.";
+
+/// A path, escaped, that may break after each `/` rather than inside a name.
+fn path_html(path: &str) -> String {
+    text(path).replace('/', "/<wbr>")
+}
+
+/// A pointer to a file, e.g. "dbt's log file (logs/dbt.log in the project…)": escaped,
+/// with only its path-like words as code.
+fn pointer_html(at: &str) -> String {
+    at.split(' ')
+        .map(|word| {
+            let bare = word.trim_matches(|c| matches!(c, '(' | ')' | ',' | '.'));
+            if bare.contains('/') && !bare.is_empty() {
+                let (lead, rest) = word.split_at(word.find(bare).unwrap_or(0));
+                let trail = &rest[bare.len()..];
+                format!(
+                    "{}<code>{}</code>{}",
+                    text(lead),
+                    path_html(bare),
+                    text(trail)
+                )
+            } else {
+                text(word).into_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Explanation text, with its code spans as `<code>`: every part escaped.
+fn explained_text(t: &ods_core::failure::Text) -> String {
+    t.parts()
+        .into_iter()
+        .map(|(part, code)| {
+            if code {
+                format!("<code>{}</code>", text(part))
+            } else {
+                text(part).into_owned()
+            }
+        })
+        .collect()
+}
+
+/// A failed node, explained (#323, board 9): what went wrong, how sure ODS is, why it
+/// thinks so (or what it knows), where, what to try with commands to copy, the impact,
+/// and the engine's own redacted message one click away. An unrecognised error gets no
+/// cause, only facts.
+fn explanation_card(b: &mut String, node: &NodeStatsView, nodes: &[NodeStatsView]) {
+    use ods_core::failure::Confidence;
+    let Some(e) = &node.explanation else {
+        return error_box(b, node);
+    };
+    let recognised = e.confidence() != Confidence::NotRecognised;
+    let (confidence, class) = match e.confidence() {
+        Confidence::KnownPatternWithEvidence => ("known_pattern_with_evidence", "evidence"),
+        Confidence::KnownPattern => ("known_pattern", "known"),
+        _ => ("not_recognised", "unknown"),
+    };
+    let _ = write!(
+        b,
+        r#"<div class="st-explain" data-confidence="{confidence}"><div class="st-explain-chips"><span class="st-chip-kind">{chip}</span><span class="st-conf {class}" title="How sure ODS is">{label}</span></div><h4 class="st-explain-head">{head}</h4>"#,
+        chip = text(&e.chip()),
+        label = text(e.confidence().label()),
+        head = explained_text(e.headline()),
+    );
+    if let Some(detail) = e.detail() {
+        let _ = write!(
+            b,
+            r#"<p class="st-explain-detail">{}</p>"#,
+            explained_text(detail)
+        );
+    }
+    explanation_evidence(b, e, recognised);
+    explanation_where(b, e);
+    explanation_steps(b, e, recognised);
+    explanation_impact(b, e, nodes);
+    explanation_said(b, e, node, recognised);
+    b.push_str("</div>");
+}
+
+/// Why ODS thinks so, or, for an unrecognised error, what it knows.
+fn explanation_evidence(b: &mut String, e: &ods_core::failure::ErrorExplanation, recognised: bool) {
+    if e.evidence().is_empty() {
+        return;
+    }
+    let _ = write!(
+        b,
+        r#"<div class="st-explain-sec"><h5 class="st-label">{}</h5><ul>"#,
+        if recognised {
+            "Why ODS thinks so"
+        } else {
+            "What ODS knows"
+        }
+    );
+    for item in e.evidence() {
+        let _ = write!(
+            b,
+            r#"<li>{} <span class="st-src">[{}]</span></li>"#,
+            explained_text(&item.text),
+            text(item.source.label()),
+        );
+    }
+    b.push_str("</ul></div>");
+}
+
+/// Where: the source file (and line, where ODS knows it), and the line the engine
+/// reported in the code it ran.
+fn explanation_where(b: &mut String, e: &ods_core::failure::ErrorExplanation) {
+    let Some(at) = e.location() else {
+        return;
+    };
+    b.push_str(r#"<div class="st-explain-sec st-explain-where"><h5 class="st-label">Where</h5>"#);
+    if let Some(file) = &at.file {
+        let _ = write!(
+            b,
+            r#"<div class="mono">{}{}</div>"#,
+            path_html(file),
+            at.line.map_or_else(String::new, |l| format!(":{l}"))
+        );
+    }
+    let mut parts = Vec::new();
+    if let Some(l) = at.reported_line {
+        parts.push(format!("reported at line {l} of the code it ran"));
+    }
+    if let Some(f) = &at.compiled_file {
+        parts.push(format!("compiled: <code>{}</code>", path_html(f)));
+    }
+    if !parts.is_empty() {
+        let _ = write!(b, r#"<span class="st-small">{}</span>"#, parts.join(" · "));
+    }
+    b.push_str("</div>");
+}
+
+/// What to try, with a Copy button per command; an unrecognised error also shows the
+/// planned agent.
+fn explanation_steps(b: &mut String, e: &ods_core::failure::ErrorExplanation, recognised: bool) {
+    if e.suggestions().is_empty() && recognised {
+        return;
+    }
+    b.push_str(r#"<div class="st-explain-sec"><h5 class="st-label">What to try</h5>"#);
+    if !e.suggestions().is_empty() {
+        b.push_str("<ol>");
+        for s in e.suggestions() {
+            let _ = write!(b, "<li>{}</li>", explained_text(&s.text));
+        }
+        b.push_str("</ol>");
+    }
+    for command in e.suggestions().iter().flat_map(|s| &s.commands) {
+        let _ = write!(
+            b,
+            r#"<div class="st-explain-cmd"><code>{}</code>{}</div>"#,
+            text(command),
+            copy_button(command, "Copy", &format!("Copy {command}"))
+        );
+    }
+    if !recognised {
+        b.push_str(r#"<button type="button" class="st-btn st-agent" disabled>Ask the ODS agent to investigate<span class="chip">Planned</span></button>"#);
+    }
+    b.push_str("</div>");
+}
+
+/// The nodes it blocked, and whether their last good builds are kept.
+fn explanation_impact(
+    b: &mut String,
+    e: &ods_core::failure::ErrorExplanation,
+    nodes: &[NodeStatsView],
+) {
+    let Some(impact) = e.impact() else {
+        return;
+    };
+    let name = |id: &String| {
+        nodes.iter().find(|n| &n.node == id).map_or_else(
+            || id.rsplit('.').next().unwrap_or(id).to_owned(),
+            |n| n.name.clone(),
+        )
+    };
+    let blocked: Vec<String> = impact.blocked.iter().map(name).collect();
+    let n = blocked.len();
+    let kept = match impact.kept.len() {
+        0 => String::new(),
+        k if k == n && n == 1 => " Its last good build is kept.".to_owned(),
+        k if k == n => " Their last good builds are kept.".to_owned(),
+        _ => format!(
+            " Last good builds are kept for {}.",
+            impact.kept.iter().map(name).collect::<Vec<_>>().join(", ")
+        ),
+    };
+    let _ = write!(
+        b,
+        r#"<div class="st-explain-impact"><strong>Impact:</strong> blocks {n} downstream node{s} ({names} {verb} skipped).{kept}</div>"#,
+        s = if n == 1 { "" } else { "s" },
+        names = text(&blocked.join(", ")),
+        verb = if n == 1 { "was" } else { "were" },
+        kept = text(&kept),
+    );
+}
+
+/// The engine's own words, redacted, in a disclosure: open when ODS doesn't recognise
+/// the error.
+fn explanation_said(
+    b: &mut String,
+    e: &ods_core::failure::ErrorExplanation,
+    node: &NodeStatsView,
+    recognised: bool,
+) {
+    let Some(said) = e.engine_message() else {
+        return;
+    };
+    let message = said
+        .kind
+        .as_deref()
+        .and_then(|k| said.message.strip_prefix(k))
+        .and_then(|rest| rest.strip_prefix(": "))
+        .unwrap_or(&said.message);
+    let _ = write!(
+        b,
+        r#"<details class="st-explain-said"{open}><summary>What {engine} said</summary><pre class="st-error real">{kind}{message}</pre><span class="st-small">{note}{at}</span></details>"#,
+        note = REDACTED_NOTE,
+        open = if recognised { "" } else { " open" },
+        engine = text(&said.engine),
+        kind = said
+            .kind
+            .as_deref()
+            .map_or_else(String::new, |k| format!("<strong>{}</strong>\n", text(k))),
+        message = text(message),
+        at = node
+            .error
+            .as_ref()
+            .and_then(|e| e.details_at.as_deref())
+            .map_or_else(String::new, |at| format!(
+                " Full text: {}",
+                pointer_html(at)
+            )),
+    );
+}
+
 /// A failed node's error, as the journal keeps it: never more.
 fn error_box(b: &mut String, node: &NodeStatsView) {
     match &node.error {
         Some(error) => {
             let _ = write!(
                 b,
-                r#"<pre class="st-error real">{kind}{message}</pre><span class="st-small">Quoted values, numbers and SQL removed.{at}</span>"#,
+                r#"<pre class="st-error real">{kind}{message}</pre><span class="st-small">{note}{at}</span>"#,
+                note = REDACTED_NOTE,
                 kind = error
                     .kind
                     .as_deref()
@@ -1738,8 +1988,8 @@ fn error_box(b: &mut String, node: &NodeStatsView) {
                     .details_at
                     .as_deref()
                     .map_or_else(String::new, |at| format!(
-                        " Full message: <code>{}</code>",
-                        text(at)
+                        " Full text: {}",
+                        pointer_html(at)
                     )),
             );
         }
@@ -1982,7 +2232,7 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
         timeline(&mut b, view);
     }
     b.push_str("</section>");
-    run_side(&mut b, view);
+    run_side(&mut b, view, nodes_tab);
     b.push_str("</div>");
     b.push_str(LIVE);
     // The dot says the outcome only when the journal or the last run's record gives it.
@@ -2555,8 +2805,12 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
             ),
         );
         if n.status == NodeRunStatus::Error {
-            b.push_str(r#"<tr class="failed st-err-row"><td colspan="8">"#);
-            error_box(b, n);
+            let _ = write!(
+                b,
+                r#"<tr class="failed st-err-row" id="why-{}" tabindex="-1"><td colspan="8">"#,
+                attr(&n.node)
+            );
+            explanation_card(b, n, &view.nodes);
             b.push_str("</td></tr>");
         }
     }
@@ -2586,7 +2840,7 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
 }
 
 #[allow(clippy::too_many_lines, reason = "one panel, built top to bottom")]
-fn run_side(b: &mut String, view: &RunPageView) {
+fn run_side(b: &mut String, view: &RunPageView, nodes_tab: bool) {
     let run = &view.run;
     let _ = write!(
         b,
@@ -2646,7 +2900,8 @@ fn run_side(b: &mut String, view: &RunPageView) {
             None => format!(r#"<span title="{}">none</span>"#, attr(run.no_journal.as_deref().unwrap_or(NO_JOURNAL))),
         },
     );
-    failed_nodes(b, &view.nodes, "../../");
+    // On the Nodes tab the full explanation is in the table: the aside links to it.
+    failed_nodes(b, &view.nodes, "../../", nodes_tab);
     b.push_str(r#"<div class="st-side-sec" id="built" tabindex="-1"><h2>Built in this run</h2>"#);
     if view.built.is_empty() {
         b.push_str(if run.snapshot.is_some() {

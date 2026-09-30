@@ -281,9 +281,11 @@ Board: `boards/live-run/ErrorExplained.dc.html` (in the repository, not on the d
   - the **impact** on downstream nodes.
 - **dbt's own message** stays one click away, with literal values and SQL removed.
 - **An unrecognised error** never gets a guessed cause. The card shows what ODS knows instead.
-- **Built:** the explanations and the terminal and JSON output (`ods state run`, `build`,
-  `test` and `history --run`, [ADR-0025](../../adr/0025-error-explanations.md)).
-  "Ask the ODS agent to investigate" stays planned (M6).
+- **Built:** the explanations, the terminal and JSON output (`ods state run`, `build`,
+  `test` and `history --run`, [ADR-0025](../../adr/0025-error-explanations.md)), and the
+  card on the Run page's Nodes tab and in the Runs side panel, with Copy buttons and
+  dbt's message in a disclosure (open when the error isn't recognised). "Ask the ODS
+  agent to investigate" is shown disabled, as planned (M6).
 
 ## Dark versions
 

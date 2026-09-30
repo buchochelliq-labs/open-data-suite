@@ -10,9 +10,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ods_core::FreshnessPolicy;
 use ods_core::failure::{Confidence, ErrorExplanation, Text};
-use ods_core::state::{ExecutionPlan, PlanAction, PlanEntry, Reason, ReasonCode, StateSnapshot};
+use ods_core::state::{ExecutionPlan, StateSnapshot};
 use ods_provider_dbt::error_catalogue::{DbtErrorCatalogue, project_index};
 use ods_provider_dbt::events::project_failure;
 use ods_sdk::contracts::error_catalogue::{ErrorCatalogue, ProjectIndex};
@@ -58,7 +57,7 @@ impl ProjectFiles<'_> {
         text.strip_prefix("./").unwrap_or(&text).to_owned()
     }
 
-    fn index(&self) -> Option<ProjectIndex> {
+    pub(super) fn index(&self) -> Option<ProjectIndex> {
         let name = self.target_name();
         self.manifest.map(|m| project_index(m, Some(&name)))
     }
@@ -197,65 +196,6 @@ pub(super) fn explain_prepare(output: &str, evidence: &Evidence<'_>) -> Option<E
     facts.plan = evidence.plan;
     facts.before = evidence.before;
     Some(explain_failure(&facts))
-}
-
-/// A plan rebuilt from state, for a run whose plan wasn't kept: every node the run
-/// finished, with its parents in the project now, built for a change of its own code
-/// when the state it committed has another fingerprint than the state before it.
-pub(super) fn plan_from_states(
-    run: &RunSummary,
-    before: Option<&StateSnapshot>,
-    after: Option<&StateSnapshot>,
-    project: Option<&ods_state::Project>,
-) -> ExecutionPlan {
-    let entries = run
-        .nodes
-        .iter()
-        .map(|n| {
-            let was = before.and_then(|s| s.nodes.get(&n.node));
-            let now = after
-                .and_then(|s| s.nodes.get(&n.node))
-                .filter(|state| run.run_id.as_deref() == Some(state.run_id.as_str()));
-            let mut entry = PlanEntry::new(
-                n.node.clone(),
-                display_name(&n.node),
-                "node",
-                PlanAction::Build,
-                Vec::new(),
-                FreshnessPolicy::conservative(),
-                0,
-            );
-            entry.depends_on = project
-                .and_then(|p| p.nodes.iter().find(|p| p.id == n.node))
-                .map(|p| p.parents.clone())
-                .unwrap_or_default();
-            if let (Some(was), Some(now)) = (was, now)
-                && was.fingerprint.digest != now.fingerprint.digest
-            {
-                let mut names: Vec<String> = now
-                    .fingerprint
-                    .components
-                    .iter()
-                    .filter(|(k, v)| was.fingerprint.components.get(*k) != Some(*v))
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                names.extend(
-                    was.fingerprint
-                        .components
-                        .keys()
-                        .filter(|k| !now.fingerprint.components.contains_key(*k))
-                        .cloned(),
-                );
-                names.sort();
-                entry.reasons = vec![Reason::new(ReasonCode::CodeChanged, "code changed")];
-                entry.changed_components = names;
-                entry.before = Some(was.fingerprint.digest.clone());
-                entry.after = Some(now.fingerprint.digest.clone());
-            }
-            entry
-        })
-        .collect();
-    ExecutionPlan::new(None, ods_core::state::Timestamp::from_unix(0), entries)
 }
 
 /// What was removed from the engine's message, said the same way everywhere.

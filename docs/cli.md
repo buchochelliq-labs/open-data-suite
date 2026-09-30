@@ -634,7 +634,7 @@ ods state build        # record a run first, if you haven't
 ods serve              # then open http://127.0.0.1:8765/
 ```
 
-![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node's redacted error](assets/recordings/dashboard/runs/runs.webp)
+![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node explained](assets/recordings/dashboard/runs/runs.webp)
 
 Home shows:
 - **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
@@ -679,8 +679,8 @@ Home, it only reads, and every action is a command to copy into a terminal.
 |---|---|---|
 | Plan | `/state/plan` | every planned node with its Build or Reuse pill and reason, the counts to build and reuse, and how many reused relations were checked; `?action=build` or `reuse` filters |
 | Why | `/state/plan?node=<id>` | for one node (its percent-encoded unique id, or a name only one node has): its recorded build, which fingerprint parts changed, what it reads (parents' decisions; each source's version, strategy and origin, ADR-0022), the relation check, the decision, and the reason chain; `&view=json` shows its data |
-| Runs | `/state/runs` | every recorded run, and every run whose journal is kept, newest first (the newest 50; `ods state history` lists all): its outcome, node counts, rows and duration. Filtered by `?outcome=` (`succeeded`, `partial`, `failed`, `unfinished`, `unknown`, or `recorded` for runs without a journal), `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel, with its failed nodes' errors |
-| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node's error. An unambiguous prefix of the id (8 characters or more) works too |
+| Runs | `/state/runs` | every recorded run, and every run whose journal is kept, newest first (the newest 50; `ods state history` lists all): its outcome, node counts, rows and duration. Filtered by `?outcome=` (`succeeded`, `partial`, `failed`, `unfinished`, `unknown`, or `recorded` for runs without a journal), `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel, with its failed nodes explained ([why a node failed](#why-a-node-failed)) |
+| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node explained: headline, category, how sure ODS is, why it thinks so (or what it knows), where, what to try with Copy buttons, the impact, and dbt's redacted message one click away. An unambiguous prefix of the id (8 characters or more) works too |
 
 What the pages claim is what ODS records, and no more:
 - **The plan** is the one `ods state plan` makes, offline, made again at most every 30
@@ -1304,6 +1304,13 @@ calls an undefined macro), the report says `failed before any node ran: nothing 
 built or recorded` (`outcome: failed_before_running` in JSON) and explains dbt's error
 the same way. An error after dbt started building isn't reported this way: its hint
 names the run's journal, which `ods state history --run` explains.
+
+`ods serve` shows the same explanations on the Run page's Nodes tab and in the Runs side
+panel (`explanation` on each failed node in `/api/state/runs/<run_id>` and
+`/api/state/runs`), with Copy buttons for the commands; on the Nodes tab the side panel
+gives each failed node's headline with a link to its row. `ods state retry --failed` is
+offered only for the last run, which is what it retries. Beyond loopback, explanations
+leave out file paths and where dbt's full message is, as the Catalog does.
 
 `--output json` includes the explanations as `failures` (in `ods state history --run`, too):
 each has `schema_version`, `node`, `category`, `symptom` (when recognised),

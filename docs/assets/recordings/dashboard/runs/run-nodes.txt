@@ -81,9 +81,21 @@ kept its last good build
 compile <took>
 execute <took>
 	—not reported	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+python model · python exception
+known pattern
+The Python model raised KeyError
+WHY ODS THINKS SO
+It failed after <took>, during execution (compile succeeded). [run stats]
+WHERE
+models/marts/customer_segments.py
+compiled: target/compiled/jaffle_ods/models/marts/customer_segments.py
+WHAT TO TRY
+Read the traceback in the full log: it shows where in the model's code the exception was raised.
+Impact: blocks 1 downstream node (segment_summary was skipped). Its last good build is kept.
+What dbt said
 KeyError
 [value removed]
-Quoted values, numbers and SQL removed. Full message: dbt's log file (logs/dbt.log in the project, unless --log-path)
+Literal values and SQL removed. Full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 customers_snapshot_view
 model
 	built	<clock>	<took>
@@ -144,9 +156,7 @@ Triggered by
 FAILED NODE
 customer_segments
 model · after <took>
-KeyError
-[value removed]
-Quoted values, numbers and SQL removed. Full message: dbt's log file (logs/dbt.log in the project, unless --log-path)
+The Python model raised KeyError Why it failed
 SKIPPED
 segment_summary · waited on a failed node
 Built in this run

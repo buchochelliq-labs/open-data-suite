@@ -57,7 +57,9 @@ the changelog was introduced.
   doesn't recognise never gets a guessed cause: it lists what ODS knows. A command that
   fails before any node runs (e.g. `dbt compile` can't find a macro) is explained too,
   with outcome `failed_before_running`. Explanations are computed when shown, so older
-  runs get them.
+  runs get them. `ods serve` shows them on the Run page's Nodes tab and in the Runs side
+  panel, as board 9 of the live-run design, with Copy buttons for the commands
+  (`explanation` on failed nodes in `/api/state/runs…`).
 - An `error_explain` capability and `ErrorCatalogue` SDK contract (#323, ADR-0025):
   providers classify a failed node's redacted error summary into ODS's neutral
   taxonomy, with a fake and a conformance suite. The dbt provider's catalogue
