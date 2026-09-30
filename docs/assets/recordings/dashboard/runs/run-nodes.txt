@@ -85,8 +85,7 @@ python model · python exception
 known pattern
 The Python model raised KeyError
 WHY ODS THINKS SO
-It failed after <took>, during execution (compile succeeded).
-It built fine in its last 1 run.
+It failed after <took>, during execution (compile succeeded). [run stats]
 WHERE
 models/marts/customer_segments.py
 compiled: target/compiled/jaffle_ods/models/marts/customer_segments.py
@@ -157,19 +156,7 @@ Triggered by
 FAILED NODE
 customer_segments
 model · after <took>
-python model · python exception
-known pattern
-The Python model raised KeyError
-WHY ODS THINKS SO
-It failed after <took>, during execution (compile succeeded).
-It built fine in its last 1 run.
-WHERE
-models/marts/customer_segments.py
-compiled: target/compiled/jaffle_ods/models/marts/customer_segments.py
-WHAT TO TRY
-Read the traceback in the full log: it shows where in the model's code the exception was raised.
-Impact: blocks 1 downstream node (segment_summary was skipped). Its last good build is kept.
-What dbt said
+The Python model raised KeyError Why it failed
 SKIPPED
 segment_summary · waited on a failed node
 Built in this run

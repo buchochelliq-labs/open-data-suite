@@ -1307,8 +1307,10 @@ names the run's journal, which `ods state history --run` explains.
 
 `ods serve` shows the same explanations on the Run page's Nodes tab and in the Runs side
 panel (`explanation` on each failed node in `/api/state/runs/<run_id>` and
-`/api/state/runs`), with Copy buttons for the commands; `ods state retry --failed` is
-offered only for the last run, which is what it retries.
+`/api/state/runs`), with Copy buttons for the commands; on the Nodes tab the side panel
+gives each failed node's headline with a link to its row. `ods state retry --failed` is
+offered only for the last run, which is what it retries. Beyond loopback, explanations
+leave out file paths and where dbt's full message is, as the Catalog does.
 
 `--output json` includes the explanations as `failures` (in `ods state history --run`, too):
 each has `schema_version`, `node`, `category`, `symptom` (when recognised),
