@@ -444,7 +444,7 @@ fn symptom_steps(symptom: Symptom, builder: ExplanationBuilder) -> ExplanationBu
             "Check the relation's name, and that it was built in this target.",
         ))),
         Symptom::PythonException => builder.suggest(Suggestion::new(Text::new().plain(
-            "Read the traceback in the full log: the exception was raised at the reported line of the model's code.",
+            "Read the traceback in the full log: it shows where in the model's code the exception was raised.",
         ))),
         _ => builder,
     }
