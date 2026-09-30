@@ -42,11 +42,19 @@ impl ProjectFiles<'_> {
     fn target_name(&self) -> String {
         let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_owned());
         let (target, project) = (absolute(self.target_dir), absolute(self.project_dir));
-        let text = target
+        // One side may reach the project through a symlink the other doesn't (macOS's
+        // `/var` is `/private/var`), so compare the resolved paths when the plain ones
+        // don't nest.
+        let resolved = |p: &Path| std::fs::canonicalize(p).ok();
+        let relative = target
             .strip_prefix(&project)
-            .unwrap_or(&target)
-            .display()
-            .to_string();
+            .map(Path::to_path_buf)
+            .ok()
+            .or_else(|| {
+                let (target, project) = (resolved(&target)?, resolved(&project)?);
+                target.strip_prefix(project).map(Path::to_path_buf).ok()
+            });
+        let text = relative.unwrap_or(target).display().to_string();
         text.strip_prefix("./").unwrap_or(&text).to_owned()
     }
 
@@ -477,4 +485,33 @@ pub(super) fn project_dir(settings: &super::state_settings::StateSettings) -> Pa
         .project_dir
         .as_ref()
         .map_or_else(|| PathBuf::from("."), |s| PathBuf::from(&s.value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectFiles;
+
+    /// The project reached through a symlink and its target directory through the real
+    /// path (macOS's `/var` is `/private/var`) still gives the name the project uses.
+    #[cfg(unix)]
+    #[test]
+    fn the_target_is_named_relative_to_the_project_through_a_symlink() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(real.join("target")).expect("the target directory");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("a symlink to the project");
+        let files = ProjectFiles {
+            project_dir: &link,
+            target_dir: &real.join("target"),
+            manifest: None,
+        };
+        assert_eq!(files.target_name(), "target");
+        let files = ProjectFiles {
+            project_dir: &link,
+            target_dir: &link.join("target"),
+            manifest: None,
+        };
+        assert_eq!(files.target_name(), "target");
+    }
 }
