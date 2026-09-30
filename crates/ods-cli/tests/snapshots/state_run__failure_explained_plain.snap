@@ -19,6 +19,7 @@ impact: blocks 3 downstream nodes (customer_segments, customers_snapshot_view, s
 
 what to try
   1. Then retry what failed:
-    $ ods state retry --failed
+    $ ods state retry --failed --state-db <project>/.ods/state.db
 
-dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  (values and SQL removed; full text: dbt's log file (logs/dbt.log in the project, unless --log-path))
+dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
+full text: dbt's log file (logs/dbt.log in the project, unless --log-path)

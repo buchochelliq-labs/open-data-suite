@@ -298,7 +298,9 @@ fn explainer(
         ods_provider_dbt::error_catalogue::DbtErrorCatalogue::new(),
     ))
     .with_missing_columns(missing)
-    .with_parents(parents);
+    .with_parents(parents)
+    .with_artifacts_from(ws.manifest.invocation_id.clone())
+    .with_retry_state_db(super::failures::retry_state_db(settings).map(str::to_owned));
     if let Some(index) = files.index() {
         explainer = explainer.with_index(index);
     }

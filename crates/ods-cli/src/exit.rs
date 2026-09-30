@@ -111,6 +111,9 @@ pub struct CliError {
     /// Whether the command already wrote this error into its JSON envelope, alongside
     /// its result.
     in_envelope: bool,
+    /// Whether it happened before the command ran anything (e.g. while dbt compiled the
+    /// project), so nothing can have been built (#323).
+    before_running: bool,
 }
 
 impl CliError {
@@ -123,6 +126,7 @@ impl CliError {
             hint: None,
             io_kind: None,
             in_envelope: false,
+            before_running: false,
         }
     }
 
@@ -139,6 +143,18 @@ impl CliError {
     pub(crate) fn in_envelope(mut self) -> Self {
         self.in_envelope = true;
         self
+    }
+
+    /// Marks the error as happening before anything ran (#323).
+    #[must_use]
+    pub(crate) fn before_running(mut self) -> Self {
+        self.before_running = true;
+        self
+    }
+
+    /// Whether it happened before anything ran.
+    pub(crate) fn is_before_running(&self) -> bool {
+        self.before_running
     }
 
     /// Whether the error is already in the command's JSON envelope.
@@ -167,6 +183,7 @@ impl From<io::Error> for CliError {
             hint: None,
             io_kind: Some(err.kind()),
             in_envelope: false,
+            before_running: false,
         }
     }
 }

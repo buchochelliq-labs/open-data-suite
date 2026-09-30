@@ -179,6 +179,9 @@ pub struct IndexedNode {
     /// Macros its code calls that the project and its installed packages don't
     /// define, in the order they appear.
     pub undefined_calls: Vec<NameAt>,
+    /// The language its code is in (e.g. `sql`, `python`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 impl IndexedNode {
@@ -195,6 +198,13 @@ impl IndexedNode {
     pub fn in_file(mut self, file: Option<&str>, compiled_file: Option<&str>) -> Self {
         self.file = file.map(str::to_owned);
         self.compiled_file = compiled_file.map(str::to_owned);
+        self
+    }
+
+    /// Sets the language its code is in.
+    #[must_use]
+    pub fn in_language(mut self, language: Option<&str>) -> Self {
+        self.language = language.map(str::to_ascii_lowercase);
         self
     }
 

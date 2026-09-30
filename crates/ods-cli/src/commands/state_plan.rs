@@ -1142,6 +1142,12 @@ fn explain_history(
         before: before.as_ref(),
         state_db: &state_db,
         retry: None,
+        // The manifest describes this run's code only if this run wrote it (dbt's
+        // invocation is the run id); otherwise it is the project as it is now.
+        project_is_run: ws
+            .as_ref()
+            .and_then(|w| w.manifest.invocation_id.as_deref())
+            .is_some_and(|id| run.run_id.as_deref() == Some(id)),
     };
     super::failures::explain_run(run, &evidence)
 }

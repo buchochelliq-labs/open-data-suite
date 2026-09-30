@@ -22,7 +22,19 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
     {
       "source": "column_lineage",
       "text": "Column lineage: `raw_orders` now outputs `given_name`, not `first_name`, from the same input column.",
-      "confirms": true
+      "confirms": true,
+      "data": {
+        "kind": "missing_columns",
+        "columns": [
+          {
+            "upstream": "seed.raw_orders",
+            "column": "first_name",
+            "renamed_to": [
+              "given_name"
+            ]
+          }
+        ]
+      }
     },
     {
       "source": "run_history",
@@ -35,14 +47,18 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
       "confirms": false
     }
   ],
+  "location": {
+    "file": "models/marts/customers.sql",
+    "compiled_file": "target/compiled/shop/models/marts/customers.sql"
+  },
   "suggestions": [
     {
       "text": "Use `given_name` in `customers`, or restore `first_name` in `raw_orders`."
     },
     {
-      "text": "Check what else reads it:",
+      "text": "See what else reads `raw_orders.first_name`:",
       "commands": [
-        "ods lineage impact --column raw_orders.first_name=removed"
+        "ods lineage impact --column seed.raw_orders.first_name=removed"
       ]
     }
   ],
@@ -57,6 +73,7 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
   "engine_message": {
     "engine": "the fake engine",
     "kind": "Query Error",
-    "message": "Query Error: no such column [value removed] in the [SQL removed]"
+    "message": "Query Error: no such column [value removed] in the [SQL removed]",
+    "details_at": "logs/x.log"
   }
 }

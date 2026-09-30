@@ -76,7 +76,7 @@ impl ErrorCatalogue for FakeErrorCatalogue {
                 if *symptom == Symptom::UnknownMacro {
                     found = found.suggest(
                         Suggestion::new(Text::new().plain("Install the fake packages."))
-                            .with_command("fake deps"),
+                            .with_command("fake deps", &[]),
                     );
                 }
                 Classification::Recognised(found)
@@ -128,6 +128,6 @@ mod tests {
     fn conforms() {
         let report = run(&Harness(FakeErrorCatalogue::new()));
         assert!(report.skipped.is_empty(), "{report:?}");
-        assert_eq!(report.passed.len(), 5);
+        assert_eq!(report.passed.len(), 6);
     }
 }

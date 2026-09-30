@@ -1232,12 +1232,10 @@ impl ImpactReport {
             // change", which impacts every reader.
             // A column already removed (#323): some node still reads it, which is what
             // `ods state run` suggests checking after it fails.
+            let removed = ColumnRef::new(node.relation.clone(), column.clone());
             let still_read = kind == ColumnChangeKind::Removed
-                && loaded
-                    .graph
-                    .unresolved_readers(&ColumnRef::new(node.relation.clone(), column.clone()))
-                    .next()
-                    .is_some();
+                && (loaded.graph.unresolved_readers(&removed).next().is_some()
+                    || loaded.graph.uses_of(&removed).next().is_some());
             if kind != ColumnChangeKind::Added && !still_read && !node.columns.contains(&column) {
                 if node.columns.is_empty() {
                     changes.push(Change::Rows {

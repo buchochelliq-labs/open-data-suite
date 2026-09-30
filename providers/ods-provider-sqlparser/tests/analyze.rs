@@ -623,4 +623,11 @@ fn unresolved_columns_of_known_tables_are_named() {
             .is_empty()
     );
     assert!(analyze("select id from db.orders").unresolved.is_empty());
+    // A lateral column alias is no table's column (#323 review).
+    for sql in [
+        "select amount * 2 as doubled, doubled + 1 as more from db.orders",
+        "select doubled + 1 as more, amount * 2 as doubled from db.orders",
+    ] {
+        assert!(analyze(sql).unresolved.is_empty(), "{sql}");
+    }
 }

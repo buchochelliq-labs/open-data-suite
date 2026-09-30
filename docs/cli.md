@@ -1296,12 +1296,13 @@ impact: blocks 3 downstream nodes (customer_segments, customers_snapshot_view, s
 
 what to try
   1. Use given_name in customers, or restore first_name in stg_customers.
-  2. Check what else reads it:
-    $ ods lineage impact --column stg_customers.first_name=removed
+  2. See what else reads stg_customers.first_name:
+    $ ods lineage impact --column model.jaffle_ods.stg_customers.first_name=removed
   3. Then retry what failed:
     $ ods state retry --failed
 
-dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  (values and SQL removed; full text: dbt's log file (logs/dbt.log in the project, unless --log-path))
+dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
+full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 ```
 
 - **What and kind:** a headline, and the category (`compilation error`, `dependency or
@@ -1309,8 +1310,10 @@ dbt said: Binder Error: Values list [value removed] does not have a column named
   failure`, `configuration or profile`, `internal error`), with what ODS recognised
   (e.g. `missing column`, `unknown macro`, `missing ref`, `type mismatch`).
 - **Confidence:** `known pattern + evidence` when a pattern recognised dbt's error and
-  ODS's own evidence confirms it (column lineage for a missing column, the manifest for
-  an undefined macro); `known pattern` when nothing confirms it; `not recognised` when
+  ODS's own evidence confirms it (column lineage for a missing column, the project's
+  macros for an undefined macro), about exactly one candidate and from the code the run
+  ran; `known pattern` when nothing confirms it (or several candidates are listed, or,
+  for an older run, the evidence is the project as it is now); `not recognised` when
   no pattern does. An unrecognised error never gets a guessed cause: the headline only
   says what happened ("The warehouse rejected the query"), and **what ODS knows** lists
   facts: how long it ran and in which phase, whether its code changed since its last
@@ -1320,8 +1323,9 @@ dbt said: Binder Error: Values list [value removed] does not have a column named
   dbt's adapter reported in the code it ran, which adapters wrap: it isn't a line of
   the source file.
 - **What to try:** steps and commands to copy, only real ones: `ods lineage impact
-  --column MODEL.COLUMN=removed`, `ods state retry --failed`, `ods doctor`, and dbt's
-  own (`dbt deps`, `dbt debug`); "did you mean" for a macro with a close name.
+  --column <unique id>.COLUMN=removed`, `ods state retry --failed` (with `--state-db`
+  when you passed one, and only for the last run), `ods doctor`, and dbt's own (`dbt
+  deps`, `dbt debug`); "did you mean" for a macro with a close name.
 - **Impact:** the nodes it blocked, and whether their last good builds are kept.
 - **dbt said:** dbt's message, only as the redacted summary kept in the journal.
   Nothing else in an explanation comes from dbt's text: the names in it come from
@@ -1330,20 +1334,24 @@ dbt said: Binder Error: Values list [value removed] does not have a column named
 When dbt fails before any node runs (e.g. `dbt compile` can't compile a model that
 calls an undefined macro), the report says `failed before any node ran: nothing was
 built or recorded` (`outcome: failed_before_running` in JSON) and explains dbt's error
-the same way.
+the same way. An error after dbt started building isn't reported this way: its hint
+names the run's journal, which `ods state history --run` explains.
 
 `ods serve` shows the same explanations on the Run page's Nodes tab and in the Runs side
 panel (`explanation` on each failed node in `/api/state/runs/<run_id>` and
-`/api/state/runs`), with Copy buttons for the commands; `ods state retry --failed` is
-offered only for the last run, which is what it retries.
+`/api/state/runs`), with Copy buttons for the commands; on the Nodes tab the side panel
+gives each failed node's headline with a link to its row. `ods state retry --failed` is
+offered only for the last run, which is what it retries. Beyond loopback, explanations
+leave out file paths and where dbt's full message is, as the Catalog does.
 
-`--json` includes the explanations as `failures` (in `ods state history --run`, too):
+`--output json` includes the explanations as `failures` (in `ods state history --run`, too):
 each has `schema_version`, `node`, `category`, `symptom` (when recognised),
 `confidence` (`known_pattern_with_evidence`, `known_pattern`, `not_recognised`),
 `pattern` (`catalogue`, `version` and `id` of the pattern that matched), `headline`,
 `detail`, `evidence` (each with `source`: `plan`, `fingerprint`, `column_lineage`,
-`manifest`, `source_versions`, `run_history` or `run_stats`; its `text`; and whether it
-`confirms` the pattern), `location` (`file`, `line`, `compiled_file`,
+`project`, `source_versions`, `run_history` or `run_stats`; its `text`; whether it
+`confirms` the pattern; and, for missing columns or undefined macros, its `data`),
+`location` (`file`, `line`, `compiled_file`,
 `reported_line`), `suggestions` (`text`, `commands`), `impact` (`blocked`, `kept`) and
 `engine_message` (`engine`, `kind`, `message`, `details_at`). Text marks names as code
 with backticks. Explanations are computed when shown, never stored, so an older run is

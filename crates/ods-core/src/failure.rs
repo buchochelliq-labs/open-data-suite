@@ -267,8 +267,8 @@ pub enum EvidenceSource {
     Fingerprint,
     /// Column-level lineage.
     ColumnLineage,
-    /// The project's compiled description: its nodes, macros and files.
-    Manifest,
+    /// The project's description: its nodes, macros and files.
+    Project,
     /// The versions of upstream data.
     SourceVersions,
     /// Earlier runs' journals and recorded state.
@@ -284,7 +284,7 @@ impl EvidenceSource {
             Self::Plan => "plan",
             Self::Fingerprint => "fingerprints",
             Self::ColumnLineage => "column lineage",
-            Self::Manifest => "manifest",
+            Self::Project => "project",
             Self::SourceVersions => "source versions",
             Self::RunHistory => "run history",
             Self::RunStats => "run stats",
@@ -292,11 +292,13 @@ impl EvidenceSource {
     }
 }
 
-/// The characters a [code span](Text::code) or a command may hold: those of
-/// identifiers, paths, ids and ODS's own command lines. Anything else (quotes, spaces
-/// inside a name, `;`, `$(`) could carry a value, so it never gets in.
+/// The characters a [code span](Text::code) or a command argument may hold: those of
+/// identifiers, dotted ids and relative paths. Anything else (quotes, spaces, `:`, `@`,
+/// `=`, `+`, `$`) could carry a value such as a URL with a password or `token=…`, so it
+/// never gets in. (A long token made of these characters alone still could: names come
+/// only from ODS's own evidence, never from an engine's text.)
 fn code_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '.' | '-' | '/' | '$' | '@' | ':' | '+' | '=')
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '/')
 }
 
 /// The longest code span or command kept.
@@ -387,15 +389,43 @@ pub struct EvidenceItem {
     /// Whether it confirms the recognised pattern (e.g. lineage shows the column is
     /// gone), rather than adding context (e.g. how long the node ran).
     pub confirms: bool,
+    /// What it says, for machines, where that is more than the text (rule 4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<EvidenceData>,
+}
+
+/// Evidence as data, beside its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
+pub enum EvidenceData {
+    /// Columns the node reads that its upstreams don't produce.
+    MissingColumns {
+        /// Each one.
+        columns: Vec<MissingColumn>,
+    },
+    /// Macros the node calls that the project doesn't define.
+    UndefinedMacros {
+        /// Their names, in the order the code calls them.
+        names: Vec<String>,
+    },
 }
 
 impl EvidenceItem {
+    /// Adds its data.
+    #[must_use]
+    pub fn with_data(mut self, data: EvidenceData) -> Self {
+        self.data = Some(data);
+        self
+    }
+
     /// Context: a fact about the failure that confirms nothing.
     pub fn context(source: EvidenceSource, text: Text) -> Self {
         Self {
             source,
             text,
             confirms: false,
+            data: None,
         }
     }
 
@@ -405,6 +435,7 @@ impl EvidenceItem {
             source,
             text,
             confirms: true,
+            data: None,
         }
     }
 }
@@ -480,17 +511,27 @@ impl Suggestion {
         }
     }
 
-    /// Adds a command. Only words of identifier-shaped characters, separated by single
-    /// spaces, and `&&` between commands are kept; any other command is dropped.
+    /// Adds a command: a fixed `template`, whose `{}`s are filled with `args` in order.
+    /// The template is the caller's own text (it may hold `--flag`, `=`, `&&`); each
+    /// argument must be [code](is_code), and the template must have one `{}` per
+    /// argument, or the command is dropped. Nothing but these makes a command.
     #[must_use]
-    pub fn with_command(mut self, command: &str) -> Self {
-        let safe = !command.is_empty()
-            && command.chars().count() <= MAX_CODE_CHARS
-            && command
-                .split(' ')
-                .all(|word| word == "&&" || (!word.is_empty() && word.chars().all(code_char)));
-        if safe {
-            self.commands.push(command.to_owned());
+    pub fn with_command(mut self, template: &'static str, args: &[&str]) -> Self {
+        let holes = template.matches("{}").count();
+        if holes != args.len() || !args.iter().all(|a| is_code(a)) || template.contains('$') {
+            return self;
+        }
+        let mut command = String::new();
+        let mut rest = template;
+        for arg in args {
+            let (before, after) = rest.split_once("{}").unwrap_or((rest, ""));
+            command.push_str(before);
+            command.push_str(arg);
+            rest = after;
+        }
+        command.push_str(rest);
+        if command.chars().count() <= MAX_CODE_CHARS && !command.chars().any(char::is_control) {
+            self.commands.push(command);
         }
         self
     }
@@ -530,8 +571,18 @@ impl EngineMessage {
     /// this only drops control characters.
     pub fn new(engine: &str, kind: Option<&str>, message: &str, details_at: Option<&str>) -> Self {
         let clean = |s: &str| s.chars().filter(|c| !c.is_control()).collect::<String>();
+        // An engine's name, as people say it: words only.
+        let named = engine.chars().count() <= 40
+            && !engine.trim().is_empty()
+            && engine
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'));
         Self {
-            engine: clean(engine),
+            engine: if named {
+                engine.to_owned()
+            } else {
+                "the engine".to_owned()
+            },
             kind: kind.map(clean),
             message: clean(message),
             details_at: details_at.map(clean),
@@ -602,9 +653,10 @@ impl PatternRef {
 
 /// A failed node, explained: what went wrong, why ODS thinks so, where, what to try,
 /// and what it blocked. Made only by [`ExplanationBuilder`], which derives the
-/// confidence.
+/// confidence; one read back from JSON has its confidence derived again, whatever the
+/// JSON said.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", from = "Unchecked")]
 pub struct ErrorExplanation {
     schema_version: SchemaVersion,
     node: String,
@@ -627,6 +679,56 @@ pub struct ErrorExplanation {
     impact: Option<Impact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine_message: Option<EngineMessage>,
+}
+
+/// An explanation as read, before its confidence is derived again.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct Unchecked {
+    schema_version: SchemaVersion,
+    node: String,
+    category: ErrorCategory,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    symptom: Option<Symptom>,
+    confidence: Confidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pattern: Option<PatternRef>,
+    headline: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<Text>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    evidence: Vec<EvidenceItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    location: Option<Location>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    suggestions: Vec<Suggestion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    impact: Option<Impact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine_message: Option<EngineMessage>,
+}
+
+impl From<Unchecked> for ErrorExplanation {
+    fn from(u: Unchecked) -> Self {
+        ExplanationBuilder {
+            explanation: Self {
+                schema_version: u.schema_version,
+                node: u.node,
+                category: u.category,
+                symptom: u.symptom,
+                confidence: u.confidence,
+                pattern: u.pattern,
+                headline: u.headline,
+                detail: u.detail,
+                evidence: u.evidence,
+                location: u.location,
+                suggestions: u.suggestions,
+                impact: u.impact,
+                engine_message: u.engine_message,
+            },
+        }
+        .build()
+    }
 }
 
 impl ErrorExplanation {
@@ -690,6 +792,24 @@ impl ErrorExplanation {
         self.engine_message.as_ref()
     }
 
+    /// The explanation without file paths (its source and compiled files, and where
+    /// the engine's full message is), for a reader that mustn't learn the project's
+    /// layout (e.g. a dashboard served beyond loopback). Lines and names are kept.
+    #[must_use]
+    pub fn without_paths(mut self) -> Self {
+        if let Some(location) = &mut self.location {
+            location.file = None;
+            location.compiled_file = None;
+        }
+        if self.location.as_ref().is_some_and(Location::is_empty) {
+            self.location = None;
+        }
+        if let Some(message) = &mut self.engine_message {
+            message.details_at = None;
+        }
+        self
+    }
+
     /// The label of its chip, e.g. `database error · missing column`.
     pub fn chip(&self) -> String {
         match self.symptom {
@@ -707,11 +827,17 @@ pub struct ExplanationBuilder {
 
 impl ExplanationBuilder {
     /// An explanation of `node`'s failure, of `category`, not (yet) recognised.
+    /// A node id that isn't [code](is_code) reads `[node hidden]`.
     pub fn new(node: impl Into<String>, category: ErrorCategory) -> Self {
+        let node = node.into();
         Self {
             explanation: ErrorExplanation {
                 schema_version: EXPLANATION_SCHEMA_VERSION,
-                node: node.into(),
+                node: if is_code(&node) {
+                    node
+                } else {
+                    "[node hidden]".to_owned()
+                },
                 category,
                 symptom: None,
                 confidence: Confidence::NotRecognised,
@@ -908,21 +1034,65 @@ mod tests {
                 (" and [name hidden]", false)
             ]
         );
+        // Token-shaped values (#323 review): a URL with a password, `key=value`, `$`.
+        for value in ["db://u:SENTINEL@h/db", "token=abc", "a+b", "$HOME", "x@y"] {
+            assert_eq!(Text::new().code(value).as_str(), "[name hidden]", "{value}");
+        }
         let s = Suggestion::new(Text::new().plain("x"))
-            .with_command("ods lineage impact --column stg_customers.first_name=removed")
-            .with_command("ods state retry --failed")
-            .with_command("dbt deps && ods state retry --failed")
-            .with_command("echo 'sk_live_1'")
-            .with_command("rm -rf / ; true")
-            .with_command("a  b");
+            .with_command(
+                "ods lineage impact --column {}.{}=removed",
+                &["model.shop.stg_customers", "first_name"],
+            )
+            .with_command("ods state retry --failed --state-db {}", &["dir/state.db"])
+            .with_command("fake deps && ods state retry --failed", &[])
+            .with_command("echo {}", &["'sk_live_1'"])
+            .with_command("connect {}", &["db://u:SENTINEL@h/db"])
+            .with_command("echo $HOME", &[])
+            .with_command("a {} {}", &["b"]);
         assert_eq!(
             s.commands,
             vec![
-                "ods lineage impact --column stg_customers.first_name=removed",
-                "ods state retry --failed",
-                "dbt deps && ods state retry --failed"
+                "ods lineage impact --column model.shop.stg_customers.first_name=removed",
+                "ods state retry --failed --state-db dir/state.db",
+                "fake deps && ods state retry --failed"
             ]
         );
+        let e = ExplanationBuilder::new("db://u:SENTINEL@h/db", ErrorCategory::Database)
+            .engine_message(EngineMessage::new("x'SENTINEL", None, "m", None))
+            .build();
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(!json.contains("SENTINEL"), "{json}");
+    }
+
+    #[test]
+    fn without_paths_keeps_lines_and_names() {
+        let e = ExplanationBuilder::new("model.a", ErrorCategory::Database)
+            .location(
+                Location::in_file("models/a.sql")
+                    .at_line(Some(3))
+                    .compiled(Some("target/a.sql"), Some(9)),
+            )
+            .engine_message(EngineMessage::new("x", None, "m", Some("logs/x.log")))
+            .build()
+            .without_paths();
+        let at = e.location().unwrap();
+        assert_eq!(
+            (at.file.as_deref(), at.compiled_file.as_deref()),
+            (None, None)
+        );
+        assert_eq!((at.line, at.reported_line), (Some(3), Some(9)));
+        assert_eq!(e.engine_message().unwrap().details_at, None);
+    }
+
+    #[test]
+    fn read_back_explanations_derive_their_confidence_again() {
+        let e = ExplanationBuilder::new("model.a", ErrorCategory::Database).build();
+        let mut json = serde_json::to_value(&e).unwrap();
+        json["confidence"] = "known_pattern_with_evidence".into();
+        json["symptom"] = "missing_column".into();
+        let back: ErrorExplanation = serde_json::from_value(json).unwrap();
+        assert_eq!(back.confidence(), Confidence::NotRecognised);
+        assert_eq!(back.symptom(), None);
     }
 
     #[test]

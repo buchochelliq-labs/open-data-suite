@@ -10,15 +10,17 @@
 //! get better explanations as the catalogue grows.
 //!
 //! Evidence **confirms** a recognised pattern only when it independently shows the
-//! same thing: column lineage for a missing column, the manifest for an undefined
-//! macro, the state for a parent that was never built. Everything else (what changed,
-//! how long it ran, earlier runs) is context. An unrecognised error gets context only,
-//! and its category's neutral headline (rule 3).
+//! same thing, about one candidate, from the code the run ran: column lineage for a
+//! missing column (one column, from an upstream built from the code lineage read), the
+//! project for an undefined macro (one undefined call), the state for a parent that was
+//! never built. Everything else (what changed, how long it ran, earlier runs, several
+//! candidates, or the project as it is now for an older run) is context. An
+//! unrecognised error gets context only, and its category's neutral headline (rule 3).
 
 use ods_core::FreshnessPolicy;
 use ods_core::failure::{
-    EngineMessage, ErrorExplanation, EvidenceItem, EvidenceSource, ExplanationBuilder, Location,
-    MissingColumn, PatternRef, Suggestion, Symptom, Text,
+    EngineMessage, ErrorExplanation, EvidenceData, EvidenceItem, EvidenceSource,
+    ExplanationBuilder, Location, MissingColumn, PatternRef, Suggestion, Symptom, Text, is_code,
 };
 use ods_core::state::{
     ExecutionPlan, NodeState, PlanAction, PlanEntry, Reason, ReasonCode, StateSnapshot, Timestamp,
@@ -31,8 +33,30 @@ use ods_sdk::contracts::run_events::{ErrorSummary, NodeRunStats, NodeRunStatus, 
 /// How many earlier runs of a node its history looks at.
 pub const HISTORY_RUNS: usize = 5;
 
-/// The command that retries what failed in the last run.
-pub const RETRY_FAILED: &str = "ods state retry --failed";
+/// How to retry what failed in the last run: `ods state retry --failed`, with the
+/// state database when the run didn't use the default one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct Retry<'a> {
+    /// The state database, when not the default.
+    pub state_db: Option<&'a str>,
+}
+
+impl<'a> Retry<'a> {
+    /// Retrying with the state database at `state_db`, or the default one.
+    pub fn new(state_db: Option<&'a str>) -> Self {
+        Self { state_db }
+    }
+
+    /// The suggestion's command.
+    fn suggest(self, text: &str) -> Suggestion {
+        let s = Suggestion::new(Text::new().plain(text));
+        match self.state_db {
+            Some(db) => s.with_command("ods state retry --failed --state-db {}", &[db]),
+            None => s.with_command("ods state retry --failed", &[]),
+        }
+    }
+}
 
 /// When the node failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +97,12 @@ pub struct FailureFacts<'a> {
     pub index: Option<&'a ProjectIndex>,
     /// Columns the node reads that its upstreams don't produce, from column lineage.
     pub missing_columns: &'a [MissingColumn],
-    /// The command that retries what failed, when the host can retry this run.
-    pub retry: Option<&'a str>,
+    /// How to retry what failed, when the host can retry this run.
+    pub retry: Option<Retry<'a>>,
+    /// Whether the project index and column lineage describe the code this run ran
+    /// (right after the run, or nothing ran since). When not, they describe the project
+    /// as it is now: their evidence is context, never confirmation.
+    pub project_is_run: bool,
 }
 
 impl<'a> FailureFacts<'a> {
@@ -99,6 +127,7 @@ impl<'a> FailureFacts<'a> {
             index: None,
             missing_columns: &[],
             retry: None,
+            project_is_run: true,
         }
     }
 
@@ -144,24 +173,41 @@ pub fn explain_failure(facts: &FailureFacts<'_>) -> ErrorExplanation {
             Symptom::MissingColumn => missing_column(facts, builder),
             Symptom::UnknownMacro => unknown_macro(facts, builder),
             Symptom::MissingRelation => missing_relation(facts, builder),
-            Symptom::PythonException => match &found.subject {
-                Some(exception) => builder.headline(
-                    Text::new()
-                        .plain("The Python model raised ")
-                        .code(exception),
-                ),
-                None => builder,
-            },
-            Symptom::MissingRef => builder.suggest(Suggestion::new(
-                Text::new().plain("Check the names the model refers to against the project's models, seeds, snapshots and sources."),
-            )),
+            Symptom::PythonException => {
+                let python = facts
+                    .indexed(facts.node)
+                    .and_then(|n| n.language.as_deref())
+                    == Some("python");
+                match (&found.subject, python) {
+                    (Some(exception), true) => builder.headline(
+                        Text::new()
+                            .plain("The Python model raised ")
+                            .code(exception),
+                    ),
+                    (Some(exception), false) => builder.headline(
+                        Text::new()
+                            .plain("It raised the Python exception ")
+                            .code(exception),
+                    ),
+                    (None, true) => builder,
+                    (None, false) => {
+                        builder.headline(Text::new().plain("It raised a Python exception"))
+                    }
+                }
+            }
+            Symptom::MissingRef => builder
+                .suggest(Suggestion::new(Text::new().plain(
+                    "Check the names the model refers to against the project's nodes.",
+                ))),
             _ => builder,
         };
-        for suggestion in &found.suggestions {
-            builder = builder.suggest(suggestion.clone());
-        }
+        // A macro with a close name comes first: without evidence that packages are
+        // missing, a typo is the likelier cause.
         if found.symptom == Symptom::UnknownMacro {
             builder = similar_macro(facts, builder);
+        }
+        for suggestion in &found.suggestions {
+            builder = builder.suggest(suggestion.clone());
         }
         builder = symptom_steps(found.symptom, builder);
     } else {
@@ -200,10 +246,38 @@ fn similar<'c>(name: &str, candidates: impl IntoIterator<Item = &'c String>) -> 
     close.into_iter().map(|(_, c)| c).take(3).collect()
 }
 
+/// Whether an upstream's output, as column lineage read it, is what the run read: it
+/// was rebuilt in this run, or its committed build is the code there is now.
+fn upstream_is_current(facts: &FailureFacts<'_>, upstream: &str) -> bool {
+    facts.status_in_run(upstream) == Some(NodeRunStatus::Success)
+        || matches!(
+            (facts.last_good(upstream), facts.entry(upstream)),
+            (Some(last), Some(entry)) if entry.after.as_deref() == Some(last.fingerprint.digest.as_str())
+        )
+}
+
+/// "Column lineage: " or, for an older run, "Column lineage, as the project is now: ".
+fn lineage_label(facts: &FailureFacts<'_>) -> Text {
+    Text::new().plain(if facts.project_is_run {
+        "Column lineage: "
+    } else {
+        "Column lineage, as the project is now: "
+    })
+}
+
 fn missing_column(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> ExplanationBuilder {
-    let Some(missing) = facts.missing_columns.first() else {
-        return builder;
+    let candidates = facts.missing_columns;
+    let data = EvidenceData::MissingColumns {
+        columns: candidates.to_vec(),
     };
+    let confirmed = match candidates {
+        [one] => facts.project_is_run && upstream_is_current(facts, &one.upstream),
+        _ => false,
+    };
+    if !confirmed {
+        return missing_columns_as_context(facts, builder, data);
+    }
+    let missing = &candidates[0];
     let node = facts.name(facts.node);
     let upstream = facts.name(&missing.upstream);
     let had_it = facts.last_good(facts.node).is_some();
@@ -227,17 +301,13 @@ fn missing_column(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> Expl
                 }),
         );
     let lineage = match missing.renamed_to.as_slice() {
-        [] => Text::new()
-            .plain("Column lineage: ")
+        [] => lineage_label(facts)
             .code(&upstream)
             .plain(" doesn't output ")
             .code(&missing.column)
             .plain("."),
         renamed => {
-            let mut text = Text::new()
-                .plain("Column lineage: ")
-                .code(&upstream)
-                .plain(" now outputs ");
+            let mut text = lineage_label(facts).code(&upstream).plain(" now outputs ");
             for (i, to) in renamed.iter().enumerate() {
                 if i > 0 {
                     text = text.plain(", ");
@@ -249,10 +319,8 @@ fn missing_column(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> Expl
                 .plain(", from the same input column.")
         }
     };
-    builder = builder.evidence(EvidenceItem::confirming(
-        EvidenceSource::ColumnLineage,
-        lineage,
-    ));
+    builder = builder
+        .evidence(EvidenceItem::confirming(EvidenceSource::ColumnLineage, lineage).with_data(data));
     let changed = changed_in_run(facts, &missing.upstream);
     if let Some(components) = &changed {
         let mut text = Text::new().code(&upstream).plain(" changed in this run");
@@ -283,6 +351,51 @@ fn missing_column(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> Expl
     missing_column_steps(missing, &node, &upstream, builder)
 }
 
+/// Missing columns that can't confirm the pattern (several, a stale upstream, or the
+/// project as it is now): listed as context, each with how to see what else reads it.
+fn missing_columns_as_context(
+    facts: &FailureFacts<'_>,
+    builder: ExplanationBuilder,
+    data: EvidenceData,
+) -> ExplanationBuilder {
+    let candidates = facts.missing_columns;
+    if candidates.is_empty() {
+        return builder;
+    }
+    let mut text = lineage_label(facts);
+    for (i, m) in candidates.iter().enumerate() {
+        if i > 0 {
+            text = text.plain("; ");
+        }
+        text = text
+            .code(&facts.name(&m.upstream))
+            .plain(" doesn't output ")
+            .code(&m.column);
+    }
+    let mut builder = builder.evidence(
+        EvidenceItem::context(EvidenceSource::ColumnLineage, text.plain(".")).with_data(data),
+    );
+    for m in candidates.iter().take(3) {
+        builder = builder.suggest(impact_step(m, &facts.name(&m.upstream)));
+    }
+    builder
+}
+
+/// Seeing what else reads a missing column: `ods lineage impact`, by the upstream's
+/// unique id, which it always resolves.
+fn impact_step(missing: &MissingColumn, upstream: &str) -> Suggestion {
+    Suggestion::new(
+        Text::new()
+            .plain("See what else reads ")
+            .code(&format!("{upstream}.{}", missing.column))
+            .plain(":"),
+    )
+    .with_command(
+        "ods lineage impact --column {}.{}=removed",
+        &[&missing.upstream, &missing.column],
+    )
+}
+
 /// What to try for a missing column: use its new name, or restore it; and see what
 /// else reads it.
 fn missing_column_steps(
@@ -311,12 +424,9 @@ fn missing_column_steps(
             .code(node)
             .plain("."),
     };
-    builder.suggest(Suggestion::new(fix)).suggest(
-        Suggestion::new(Text::new().plain("Check what else reads it:")).with_command(&format!(
-            "ods lineage impact --column {upstream}.{}=removed",
-            missing.column
-        )),
-    )
+    builder
+        .suggest(Suggestion::new(fix))
+        .suggest(impact_step(missing, upstream))
 }
 
 /// The components of `node`'s code that changed, when the plan built it for a change
@@ -335,47 +445,63 @@ fn short_run(run_id: &str) -> &str {
     run_id.get(..8).unwrap_or(run_id)
 }
 
+/// The one undefined macro call ODS can name: exactly one, in the code the run ran.
 fn undefined_call<'a>(facts: &FailureFacts<'a>) -> Option<&'a NameAt> {
-    facts.indexed(facts.node)?.undefined_calls.first()
+    match facts.indexed(facts.node)?.undefined_calls.as_slice() {
+        [one] if facts.project_is_run => Some(one),
+        _ => None,
+    }
 }
 
 fn unknown_macro(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> ExplanationBuilder {
     let mut builder = builder.detail(Text::new().plain(
-        "The model calls a macro that isn't defined in this project or its installed packages, so it stopped before running any SQL. Nothing was changed in the warehouse.",
+        "The model calls a macro that isn't defined in this project or its installed packages, so it stopped before running any SQL. This model changed nothing in the warehouse.",
     ));
-    let Some(call) = undefined_call(facts) else {
-        return builder;
-    };
-    builder = builder
-        .headline(
-            Text::new()
-                .plain("The macro ")
-                .code(&call.name)
-                .plain(" isn't defined"),
-        )
-        .evidence(EvidenceItem::confirming(
-            EvidenceSource::Manifest,
-            Text::new()
-                .code(&call.name)
-                .plain(" isn't among the manifest's macros."),
-        ));
-    let others = facts
+    let calls = facts
         .indexed(facts.node)
-        .map_or(0, |n| n.undefined_calls.len().saturating_sub(1));
-    if others > 0 {
-        builder = builder.evidence(EvidenceItem::confirming(
-            EvidenceSource::Manifest,
-            Text::new().plain(&format!(
-                "The model calls {others} more undefined macro{}.",
-                if others == 1 { "" } else { "s" }
-            )),
-        ));
+        .map_or(&[][..], |n| n.undefined_calls.as_slice());
+    let data = EvidenceData::UndefinedMacros {
+        names: calls.iter().map(|c| c.name.clone()).collect(),
+    };
+    if let Some(call) = undefined_call(facts) {
+        return builder
+            .headline(
+                Text::new()
+                    .plain("The macro ")
+                    .code(&call.name)
+                    .plain(" isn't defined"),
+            )
+            .evidence(
+                EvidenceItem::confirming(
+                    EvidenceSource::Project,
+                    Text::new()
+                        .code(&call.name)
+                        .plain(" isn't among the project's macros."),
+                )
+                .with_data(data),
+            );
     }
+    if calls.is_empty() {
+        return builder;
+    }
+    // Several candidates, or the project as it is now: which one failed isn't known.
+    let mut text = Text::new().plain(if facts.project_is_run {
+        "The model calls names the project doesn't define as macros: "
+    } else {
+        "As the project is now, the model calls names it doesn't define as macros: "
+    });
+    for (i, c) in calls.iter().enumerate() {
+        if i > 0 {
+            text = text.plain(", ");
+        }
+        text = text.code(&c.name);
+    }
+    builder = builder
+        .evidence(EvidenceItem::context(EvidenceSource::Project, text.plain(".")).with_data(data));
     builder
 }
 
-/// Did-you-mean for an undefined macro: after the engine's own steps, since a name
-/// close to it is only a hint.
+/// Did-you-mean for an undefined macro.
 fn similar_macro(facts: &FailureFacts<'_>, mut builder: ExplanationBuilder) -> ExplanationBuilder {
     let Some(call) = undefined_call(facts) else {
         return builder;
@@ -384,7 +510,7 @@ fn similar_macro(facts: &FailureFacts<'_>, mut builder: ExplanationBuilder) -> E
         let close = similar(&call.name, &index.macros);
         if let Some((first, rest)) = close.split_first() {
             let mut text = Text::new()
-                .plain("Or check the name: a macro called ")
+                .plain("Check the name: a macro called ")
                 .code(first);
             for other in rest {
                 text = text.plain(" or ").code(other);
@@ -428,7 +554,7 @@ fn symptom_steps(symptom: Symptom, builder: ExplanationBuilder) -> ExplanationBu
                 Suggestion::new(Text::new().plain(
                     "Check the profile, target and credentials ODS and the engine use:",
                 ))
-                .with_command("ods doctor"),
+                .with_command("ods doctor", &[]),
             )
         }
         Symptom::PermissionDenied => builder.suggest(Suggestion::new(Text::new().plain(
@@ -524,17 +650,22 @@ fn source_versions(
         if let (Some(before), Some(now)) = (before, &evidence.value)
             && before.value != *now
         {
-            builder = builder.evidence(EvidenceItem::context(
-                EvidenceSource::SourceVersions,
-                Text::new()
-                    .plain("Upstream ")
-                    .code(&facts.name(&evidence.subject))
-                    .plain(" has new data since then (version ")
+            let text = Text::new()
+                .plain("Upstream ")
+                .code(&facts.name(&evidence.subject))
+                .plain(" has new data since then");
+            // Versions are shown only when they are plain (e.g. a table version); a
+            // timestamp or anything else stays out.
+            let text = if is_code(&before.value) && is_code(now) {
+                text.plain(" (version ")
                     .code(&before.value)
                     .plain(" → ")
                     .code(now)
-                    .plain(")."),
-            ));
+                    .plain(").")
+            } else {
+                text.plain(".")
+            };
+            builder = builder.evidence(EvidenceItem::context(EvidenceSource::SourceVersions, text));
         }
     }
     builder
@@ -542,17 +673,20 @@ fn source_versions(
 
 /// How the node did in its earlier runs.
 fn history(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> ExplanationBuilder {
-    let earlier: Vec<&NodeRunStats> = facts
+    let earlier: Vec<(Option<&str>, &NodeRunStats)> = facts
         .history
         .iter()
-        .filter_map(|run| run.get(facts.node).map(|n| &n.stats))
-        .filter(|s| s.status.is_finished())
+        .filter_map(|run| {
+            run.get(facts.node)
+                .map(|n| (run.run_id.as_deref(), &n.stats))
+        })
+        .filter(|(_, s)| s.status.is_finished())
         .take(HISTORY_RUNS)
         .collect();
     if earlier.is_empty() {
         return builder;
     }
-    let same = |s: &&&NodeRunStats| {
+    let same = |s: &NodeRunStats| {
         s.status == NodeRunStatus::Error
             && match (&s.error, facts.error) {
                 (Some(a), Some(b)) => a.kind() == b.kind() && a.message() == b.message(),
@@ -560,12 +694,27 @@ fn history(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> Explanation
             }
     };
     let n = earlier.len();
-    let runs = if n == 1 { "run" } else { "runs" };
-    let repeated = earlier.iter().filter(same).count();
+    let last = if n == 1 {
+        "its last run".to_owned()
+    } else {
+        format!("its last {n} runs")
+    };
+    let repeated = earlier.iter().filter(|(_, s)| same(s)).count();
     let text = if repeated > 0 {
-        format!("It failed the same way in {repeated} of its last {n} {runs}.")
-    } else if earlier.iter().all(|s| s.status == NodeRunStatus::Success) {
-        format!("It built fine in its last {n} {runs}.")
+        format!("It failed the same way in {repeated} of {last}.")
+    } else if earlier
+        .iter()
+        .all(|(_, s)| s.status == NodeRunStatus::Success)
+    {
+        // One run that built it is its last good build, said already.
+        let said = n == 1
+            && facts
+                .last_good(facts.node)
+                .is_some_and(|l| earlier[0].0 == Some(l.run_id.as_str()));
+        if said {
+            return builder;
+        }
+        format!("It built fine in {last}.")
     } else {
         return builder;
     };
@@ -608,15 +757,9 @@ fn next_steps(facts: &FailureFacts<'_>, mut builder: ExplanationBuilder) -> Expl
         Classification::Recognised(m) if matches!(m.symptom, Symptom::QueryTimeout | Symptom::LockConflict | Symptom::WarehouseUnavailable)
     );
     match facts.retry {
-        Some(retry) if !recognised || transient => builder.suggest(
-            Suggestion::new(
-                Text::new().plain("If it may be transient (timeouts, locks), retry what failed:"),
-            )
-            .with_command(retry),
-        ),
-        Some(retry) => builder.suggest(
-            Suggestion::new(Text::new().plain("Then retry what failed:")).with_command(retry),
-        ),
+        Some(retry) if !recognised || transient => builder
+            .suggest(retry.suggest("If it may be transient (timeouts, locks), retry what failed:")),
+        Some(retry) => builder.suggest(retry.suggest("Then retry what failed:")),
         None if facts.stage == FailureStage::Prepare => builder.suggest(Suggestion::new(
             Text::new().plain("Then run the same command again: nothing was built or recorded."),
         )),
@@ -888,7 +1031,7 @@ mod tests {
         facts.plan = Some(&plan);
         facts.before = Some(&before);
         facts.missing_columns = &missing;
-        facts.retry = Some(RETRY_FAILED);
+        facts.retry = Some(Retry::default());
         let e = explain_failure(&facts);
         assert_eq!(e.confidence(), Confidence::KnownPatternWithEvidence);
         assert_eq!(e.chip(), "database error · missing column");
@@ -914,7 +1057,7 @@ mod tests {
         assert_eq!(
             commands,
             vec![
-                "ods lineage impact --column stg_customers.first_name=removed",
+                "ods lineage impact --column model.shop.stg_customers.first_name=removed",
                 "ods state retry --failed"
             ]
         );
@@ -980,14 +1123,14 @@ mod tests {
         );
         assert_eq!(
             e.evidence()[0].text.as_str(),
-            "`cent_to_dollars` isn't among the manifest's macros."
+            "`cent_to_dollars` isn't among the project's macros."
         );
         let texts: Vec<&str> = e.suggestions().iter().map(|s| s.text.as_str()).collect();
         assert_eq!(
             texts,
             vec![
+                "Check the name: a macro called `cents_to_dollars` exists.",
                 "Install the fake packages.",
-                "Or check the name: a macro called `cents_to_dollars` exists.",
                 "Then run the same command again: nothing was built or recorded.",
             ]
         );
@@ -1074,7 +1217,7 @@ mod tests {
         facts.history = &history;
         facts.plan = Some(&plan);
         facts.before = Some(&before);
-        facts.retry = Some(RETRY_FAILED);
+        facts.retry = Some(Retry::default());
         let index = ProjectIndex::new(Vec::<String>::new())
             .with_node("source.shop.raw.payments", IndexedNode::new("raw.payments"));
         facts.index = Some(&index);
@@ -1133,12 +1276,12 @@ mod tests {
         let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
         facts.error = Some(&error);
         facts.history = &history;
-        facts.retry = Some(RETRY_FAILED);
+        facts.retry = Some(Retry::default());
         let e = explain_failure(&facts);
         assert_eq!(e.confidence(), Confidence::KnownPattern);
         assert_eq!(
             e.evidence()[0].text.as_str(),
-            "It built fine in its last 1 run."
+            "It built fine in its last run."
         );
         assert_eq!(
             e.suggestions()[0].text.as_str(),
@@ -1165,6 +1308,137 @@ mod tests {
         assert_eq!(
             e.evidence()[0].text.as_str(),
             "Upstream `stg_customers` has never been built, and didn't build in this run."
+        );
+    }
+
+    /// #323 review (H1): several missing columns, or one whose upstream wasn't built
+    /// from the code lineage read, are context, all listed, never a confirmed cause.
+    #[test]
+    fn missing_columns_confirm_only_one_current_candidate() {
+        let catalogue = catalogue();
+        let error = summary("Query Error: no such column here");
+        let classification = catalogue.classify(&error);
+        let info = catalogue.catalogue();
+        let two = [
+            MissingColumn::new(STG, "discount", Vec::new()),
+            MissingColumn::new(STG, "fooo", Vec::new()),
+        ];
+        let run = run(&[(STG, NodeRunStats::new(NodeRunStatus::Success))]);
+        let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+        facts.error = Some(&error);
+        facts.run = Some(&run);
+        facts.missing_columns = &two;
+        let e = explain_failure(&facts);
+        assert_eq!(e.confidence(), Confidence::KnownPattern);
+        assert_eq!(
+            e.evidence()[0].text.as_str(),
+            "Column lineage: `stg_customers` doesn't output `discount`; `stg_customers` doesn't output `fooo`."
+        );
+        assert!(matches!(
+            &e.evidence()[0].data,
+            Some(EvidenceData::MissingColumns { columns }) if columns.len() == 2
+        ));
+        assert_eq!(
+            e.suggestions()
+                .iter()
+                .filter(|s| !s.commands.is_empty())
+                .count(),
+            2
+        );
+
+        // One candidate, but its upstream neither ran nor matches its committed build.
+        let one = [MissingColumn::new(STG, "discount", Vec::new())];
+        let nothing_ran = super::tests::run(&[]);
+        let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+        facts.run = Some(&nothing_ran);
+        facts.missing_columns = &one;
+        assert_eq!(
+            explain_failure(&facts).confidence(),
+            Confidence::KnownPattern
+        );
+
+        // (H2) An older run, explained with the project as it is now: context only.
+        let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+        facts.run = Some(&run);
+        facts.missing_columns = &one;
+        facts.project_is_run = false;
+        let e = explain_failure(&facts);
+        assert_eq!(e.confidence(), Confidence::KnownPattern);
+        assert!(
+            e.evidence()[0]
+                .text
+                .as_str()
+                .starts_with("Column lineage, as the project is now: ")
+        );
+    }
+
+    /// #323 review (B2): with two undefined names, which failed isn't known.
+    #[test]
+    fn several_undefined_calls_are_listed_not_confirmed() {
+        let catalogue = catalogue();
+        let error = summary("no such macro [value removed]");
+        let classification = catalogue.classify(&error);
+        let info = catalogue.catalogue();
+        let index = ProjectIndex::new(["cents_to_dollars"]).with_node(
+            CUSTOMERS,
+            IndexedNode::new("customers").calling_undefined(vec![
+                NameAt::new("cent_to_dollars", Some(5)),
+                NameAt::new("other_one", Some(7)),
+            ]),
+        );
+        let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+        facts.index = Some(&index);
+        let e = explain_failure(&facts);
+        assert_eq!(e.confidence(), Confidence::KnownPattern);
+        assert_eq!(
+            e.evidence()[0].text.as_str(),
+            "The model calls names the project doesn't define as macros: `cent_to_dollars`, `other_one`."
+        );
+        assert_eq!(
+            e.location().and_then(|l| l.line),
+            None,
+            "no line for a guess"
+        );
+        assert!(
+            e.suggestions()
+                .iter()
+                .all(|s| !s.text.as_str().contains("Check the name"))
+        );
+    }
+
+    /// #323 review (M2, M1): "the Python model" only for a Python node; token-shaped
+    /// values from the engine never reach an explanation's own text.
+    #[test]
+    fn python_wording_follows_the_index_and_tokens_stay_out() {
+        let classification = Classification::Recognised(
+            ods_sdk::contracts::error_catalogue::PatternMatch::new("p", Symptom::PythonException)
+                .about(Some("KeyError".into())),
+        );
+        let info = catalogue().catalogue();
+        let error = summary("KeyError: ghp_SENTINEL123 db://u:SENTINEL@h/db token=SENTINEL");
+        let sql = ProjectIndex::new(Vec::<String>::new()).with_node(
+            CUSTOMERS,
+            IndexedNode::new("customers").in_language(Some("sql")),
+        );
+        let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+        facts.error = Some(&error);
+        facts.index = Some(&sql);
+        let e = explain_failure(&facts);
+        assert_eq!(
+            e.headline().as_str(),
+            "It raised the Python exception `KeyError`"
+        );
+        let mut json = serde_json::to_value(&e).unwrap();
+        json.as_object_mut().unwrap().remove("engine_message");
+        assert!(!json.to_string().contains("SENTINEL"), "{json}");
+        let python = ProjectIndex::new(Vec::<String>::new()).with_node(
+            CUSTOMERS,
+            IndexedNode::new("customers").in_language(Some("python")),
+        );
+        facts.index = Some(&python);
+        assert_eq!(
+            explain_failure(&facts).headline().as_str(),
+            "The Python model raised `KeyError`"
         );
     }
 

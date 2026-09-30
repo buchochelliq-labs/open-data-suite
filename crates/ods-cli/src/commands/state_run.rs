@@ -817,9 +817,11 @@ fn plan_options(args: &ArgMatches, target_changed: bool) -> ods_state::PlanOptio
 /// command here uses.
 pub(super) fn identify(executor: &DbtExecutor) -> Result<TargetIdentity, CliError> {
     let target = block_on(executor.identify())?.map_err(|e| {
-        execution_error(&e).with_hint(
-            "ODS keeps state per target, so it needs dbt to render the profile; check `dbt debug`",
-        )
+        execution_error(&e)
+            .with_hint(
+                "ODS keeps state per target, so it needs dbt to render the profile; check `dbt debug`",
+            )
+            .before_running()
     })?;
     tracing::info!(target = %target, "dbt target");
     Ok(target)
@@ -1239,9 +1241,11 @@ pub(super) fn prepare(
         PrepareRequest::new()
     };
     let report = block_on(executor.prepare(&request))?.map_err(|e| {
-        execution_error(&e).with_hint(
-            "fix the project so `dbt compile` succeeds, or plan from existing artifacts with --no-compile",
-        )
+        execution_error(&e)
+            .with_hint(
+                "fix the project so `dbt compile` succeeds, or plan from existing artifacts with --no-compile",
+            )
+            .before_running()
     })?;
     warnings.extend(report.warnings.iter().cloned());
     // A measurement that was attempted and failed leaves an out-of-date file behind.
@@ -1705,7 +1709,7 @@ impl RunReport {
         let started = std::time::SystemTime::now();
         let (report, record_error) = match Self::build(kind, args, &settings, ctx.progress, retry) {
             Ok(built) => built,
-            Err(error) => return failed_before_running(ctx, &settings, started, error),
+            Err(error) => return failed_before_running::<false>(ctx, &settings, started, error),
         };
         if let Some(remembered) = remembered {
             remembered.finish(
@@ -1903,7 +1907,10 @@ impl RunReport {
             plan: Some(&self.plan),
             before: before.map(|s| &s.snapshot),
             state_db: &self.state_db,
-            retry: Some(ods_state::RETRY_FAILED),
+            retry: Some(ods_state::Retry::new(super::failures::retry_state_db(
+                settings,
+            ))),
+            project_is_run: true,
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);
     }
@@ -1938,9 +1945,19 @@ impl RunReport {
             &mut self.warnings,
         )?;
         self.observed = observed;
+        // dbt started: what it did is in the run's journal, not "nothing ran".
+        let journal_hint = self
+            .observed
+            .run_stats
+            .as_ref()
+            .and_then(|r| r.run_id.as_deref())
+            .map_or_else(String::new, |id| {
+                format!("; `ods state history --run {id}` shows and explains what it did")
+            });
         let execution = executed.map_err(|e| {
-            execution_error(&e)
-                .with_hint("nothing was recorded; the last successful state is unchanged")
+            execution_error(&e).with_hint(format!(
+                "nothing was recorded; the last successful state is unchanged{journal_hint}"
+            ))
         })?;
         if !execution.unrequested.is_empty() {
             self.warnings.push(format!(
@@ -2359,21 +2376,22 @@ impl Present for RunReport {
 }
 
 /// A command that failed before any node ran, with dbt's error explained (#323).
+/// `TEST`: it was `ods state test`, whose JSON command is `state.test`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) struct FailedBeforeRunning {
+pub(super) struct FailedBeforeRunning<const TEST: bool> {
     /// Always `failed_before_running`.
     outcome: &'static str,
     /// dbt's error, explained.
     failures: Vec<ods_core::failure::ErrorExplanation>,
 }
 
-impl Present for FailedBeforeRunning {
-    const COMMAND: &'static str = "state.run";
+impl<const TEST: bool> Present for FailedBeforeRunning<TEST> {
+    const COMMAND: &'static str = if TEST { "state.test" } else { "state.run" };
 
     fn view(&self) -> ViewNode {
         let mut blocks = vec![
-            ViewNode::Heading("State run".into()),
+            ViewNode::Heading(if TEST { "State test" } else { "State run" }.into()),
             ViewNode::KeyValue(vec![(
                 "outcome".into(),
                 vec![Span::toned(
@@ -2388,18 +2406,20 @@ impl Present for FailedBeforeRunning {
 }
 
 /// Returns `error`, first showing an explanation of dbt's own error in it when it has
-/// one (e.g. `dbt compile` failed in the prepare step).
-pub(super) fn failed_before_running(
+/// one, only for an error from before anything ran (e.g. `dbt compile` failed in the
+/// prepare step): an error once dbt started building is never shown as "nothing was
+/// built". `TEST`: the command was `ods state test`.
+pub(super) fn failed_before_running<const TEST: bool>(
     ctx: &mut Context<'_>,
     settings: &StateSettings,
     started: std::time::SystemTime,
     error: CliError,
 ) -> Result<(), CliError> {
-    if error.code != codes::STATE_EXECUTION {
+    if !error.is_before_running() {
         return Err(error);
     }
     let project_dir = super::failures::project_dir(settings);
-    let target_dir = PathBuf::from(&settings.target_dir.value);
+    let target_dir = settings.target_dir();
     // Only a manifest this command wrote describes the code that failed.
     let manifest_path = target_dir.join("manifest.json");
     let fresh = std::fs::metadata(&manifest_path)
@@ -2418,10 +2438,11 @@ pub(super) fn failed_before_running(
         before: None,
         state_db: Path::new(""),
         retry: None,
+        project_is_run: true,
     };
     match super::failures::explain_prepare(&error.message, &evidence) {
         Some(explanation) => ctx.emit_failed(
-            &FailedBeforeRunning {
+            &FailedBeforeRunning::<TEST> {
                 outcome: "failed_before_running",
                 failures: vec![explanation],
             },

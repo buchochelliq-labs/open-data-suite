@@ -27,11 +27,6 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
       "source": "fingerprint",
       "text": "Its code changed since its last successful build (sql), in run `<first run>`.",
       "confirms": false
-    },
-    {
-      "source": "run_history",
-      "text": "It built fine in its last 1 run.",
-      "confirms": false
     }
   ],
   "location": {
@@ -43,7 +38,7 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
     {
       "text": "Then retry what failed:",
       "commands": [
-        "ods state retry --failed"
+        "ods state retry --failed --state-db <project>/.ods/state.db"
       ]
     }
   ],

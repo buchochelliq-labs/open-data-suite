@@ -1683,7 +1683,9 @@ mod journals {
                     Some(ms("2026-09-29T00:08:01.000Z")),
                     Some(ms("2026-09-29T00:08:02.500Z")),
                 )
-                .with_error(ErrorSummary::from_message(message));
+                .with_error(
+                    ErrorSummary::from_message(message).map(|e| e.with_details_at("logs/x.log")),
+                );
             stats.thread = Some("Thread-1".into());
             stats
         };
@@ -1695,7 +1697,19 @@ mod journals {
                     RUN_7,
                     SCOPE,
                     "2026-09-29T00:08:00.000Z",
-                    &["model.customers", "model.orders", "model.customers_view"],
+                    &[
+                        "seed.raw_orders",
+                        "model.customers",
+                        "model.orders",
+                        "model.customers_view",
+                    ],
+                ),
+                // The upstream lineage reads was rebuilt in this run.
+                finished(
+                    RUN_7,
+                    "2026-09-29T00:08:00.900Z",
+                    "seed.raw_orders",
+                    success("2026-09-29T00:08:00.900Z"),
                 ),
                 node_started(
                     RUN_7,
@@ -1713,7 +1727,7 @@ mod journals {
                     RUN_7,
                     "2026-09-29T00:08:02.600Z",
                     "model.orders",
-                    error("Query Error: the disk said 'SENTINEL-7777'"),
+                    error("Query Error: the disk <b>said</b> & \"broke\" 'SENTINEL-7777'"),
                 ),
                 finished(
                     RUN_7,
@@ -1729,6 +1743,16 @@ mod journals {
         let explainer = Explainer::new(std::sync::Arc::new(
             ods_provider_fake::FakeErrorCatalogue::new(),
         ))
+        .with_artifacts_from(Some(RUN_7.to_owned()))
+        .with_index(
+            ods_sdk::contracts::error_catalogue::ProjectIndex::new(Vec::<String>::new()).with_node(
+                "model.customers",
+                ods_sdk::contracts::error_catalogue::IndexedNode::new("customers").in_file(
+                    Some("models/marts/customers.sql"),
+                    Some("target/compiled/shop/models/marts/customers.sql"),
+                ),
+            ),
+        )
         .with_missing_columns(BTreeMap::from([(
             "model.customers".to_owned(),
             vec![MissingColumn::new(
@@ -1772,8 +1796,44 @@ mod journals {
             serde_json::to_string_pretty(&customers).unwrap()
         );
 
+        // Beyond loopback: no file paths, no log path (#323 review).
+        let remote = dashboard.run_view(false, RUN_7, &BTreeMap::new()).unwrap();
+        let remote_json = serde_json::to_string(&remote).unwrap();
+        for path in [
+            "logs/x.log",
+            "models/marts/customers.sql",
+            "target/compiled",
+        ] {
+            assert!(!remote_json.contains(path), "{path}: {remote_json}");
+        }
+        let local = serde_json::to_string(&view).unwrap();
+        assert!(local.contains("logs/x.log") && local.contains("models/marts/customers.sql"));
+        let panel = dashboard.runs_view(
+            false,
+            now(),
+            &{
+                let mut f = RunFilter::default();
+                f.run = Some(RUN_7.into());
+                f
+            },
+            &BTreeMap::new(),
+        );
+        assert!(
+            !serde_json::to_string(&panel)
+                .unwrap()
+                .contains("logs/x.log")
+        );
+
         let addr = start(dashboard);
         let (_, page) = get(addr, &format!("/state/runs/{RUN_7}?tab=nodes"));
+        // Engine text is escaped; the aside links to the row instead of a second card.
+        assert!(page.contains("&lt;b&gt;said&lt;/b&gt; &amp;"), "{page}");
+        assert!(!page.contains("<b>said"));
+        assert!(page.contains(r##"<a href="#why-model.customers">Why it failed</a>"##));
+        assert!(page.contains(r#"id="why-model.customers""#));
+        assert!(page.contains(r#"<span class="st-src">[column lineage]</span>"#));
+        assert!(!page.contains("<ol></ol>"));
+        assert!(page.contains("Full text: <code>logs/<wbr>x.log</code>"));
         assert!(
             page.contains(
                 r#"<div class="st-explain" data-confidence="known_pattern_with_evidence">"#
@@ -1783,11 +1843,9 @@ mod journals {
         assert!(page.contains("database error · missing column"));
         assert!(page.contains("Why ODS thinks so"));
         assert!(page.contains("now outputs <code>given_name</code>, not <code>first_name</code>"));
-        assert!(
-            page.contains(
-                r#"data-copy="ods lineage impact --column raw_orders.first_name=removed""#
-            )
-        );
+        assert!(page.contains(
+            r#"data-copy="ods lineage impact --column seed.raw_orders.first_name=removed""#
+        ));
         assert!(page.contains("What the fake engine said"));
         // Not recognised: facts, no cause, the engine's words shown open.
         assert!(page.contains(r#"data-confidence="not_recognised""#));

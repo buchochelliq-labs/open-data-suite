@@ -40,7 +40,7 @@ pub use explain::{
     explain, node_history,
 };
 pub use failure::{
-    FailureFacts, FailureStage, HISTORY_RUNS, RETRY_FAILED, explain_failure, plan_from_states,
+    FailureFacts, FailureStage, HISTORY_RUNS, Retry, explain_failure, plan_from_states,
 };
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
