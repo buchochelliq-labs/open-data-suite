@@ -34,6 +34,8 @@ codes).
 Planned commands already appear in `--help`. They accept any arguments and exit with
 status 3 (`ods usage --select x` reports "not implemented", not a usage error).
 
+![ods -h: every command, with what is available and what is planned](assets/recordings/help/help.svg)
+
 ## Global flags
 
 These work anywhere on the line: `ods --json version`, `ods version --json` and
@@ -64,15 +66,15 @@ literally.
 ```json
 {
   "schema_version": {"major": 0, "minor": 1},
-  "command": "state",
+  "command": "usage",
   "ods_version": "0.0.1",
   "result": null,
   "diagnostics": [
     {
       "level": "error",
       "code": "ODS-E0003",
-      "message": "`ods state` is not implemented yet",
-      "hint": "planned for M1 State MVP (v0.0.1); see docs/ROADMAP.md"
+      "message": "`ods usage` is not implemented yet",
+      "hint": "planned for M3 ERD & Usage (v0.3.0); see docs/ROADMAP.md"
     }
   ]
 }
@@ -258,6 +260,8 @@ ods doctor --connect              # also the live checks, through dbt's own conn
 ods doctor --strict --json        # for CI: warnings fail too; one JSON document
 ```
 
+![ods doctor --project on the demo project: every check ok](assets/recordings/doctor/doctor.svg)
+
 It takes the options `ods state` commands take to find things (`--project-dir`,
 `--target-dir`, `--dbt`, `--profiles-dir`, `--dbt-profile`, `--target`, `--state-db`,
 `--environment`), with the same [precedence](#state-settings-in-odstoml), and the
@@ -425,6 +429,10 @@ ods lineage view --open                                  # offline HTML explorer
 ods lineage graph --format dot-columns --output-file g.dot && dot -Tsvg g.dot > g.svg
 ```
 
+![ods lineage columns --model customers: where each column comes from](assets/recordings/lineage/lineage-columns.svg)
+
+![ods lineage impact --column stg_orders.status: what must run, and what is skipped](assets/recordings/lineage/lineage-impact.svg)
+
 ![The offline lineage explorer tracing customers.lifetime_value](images/lineage-viewer.png)
 
 `ods lineage view` writes one self-contained HTML file (no network, no external scripts):
@@ -448,6 +456,9 @@ or `graphml` (Gephi, yEd, Neo4j). With `graph` and `view`, `--focus MODEL[.COLUM
 | `--base DIR` | (`impact`) another build to compare with; every difference in compiled SQL becomes column changes |
 | `--run-events` | (`export`) write `COMPLETE` RunEvents instead of JobEvents, for sinks that only accept runs |
 | `--indirect-in-fields` | (`export`) also copy row-shaping inputs into every field, for consumers that ignore the facet's `dataset` array |
+| `--namespace NS` | (`export`, required) the datasets' namespace, e.g. `unitycatalog://<workspace-host>` |
+| `--job-namespace NS` | (`export`) the jobs' namespace; default `ods` |
+| `--event-time RFC3339` | (`export`) the `eventTime` of every event; default now |
 
 Column lists come from the warehouse catalog (`dbt docs generate`). Without one, a
 seed's columns come from its CSV header, which is exactly what dbt loads. The header is
@@ -526,6 +537,8 @@ ods lineage view --site public/lineage        # static site: index.html + graph.
 ods serve                                     # http://127.0.0.1:8765/lineage, live reload
 ods serve --host 0.0.0.0 --port 8080 --base-path /ods   # behind a reverse proxy: /ods/, /ods/lineage
 ```
+
+![ods serve starting on the demo project](assets/recordings/serve/serve.svg)
 
 A static site can go on any static web server (S3, GitHub Pages, nginx). Browsers won't
 fetch `graph.json` from a `file://` page, so use `ods lineage view` for local files.
@@ -621,14 +634,17 @@ ods state build        # record a run first, if you haven't
 ods serve              # then open http://127.0.0.1:8765/
 ```
 
+![A tour of ods serve: Home, the Runs page, and a partial run's nodes with the failed node's redacted error](assets/recordings/dashboard/runs/runs.webp)
+
 Home shows:
 - **tiles:** the planned nodes by kind; how many nodes the last run built, and how many
   kept an earlier build; and how many snapshots are recorded;
 - **recent runs:** each recorded snapshot, its run, and how many nodes it built and how
   many kept an earlier build. *Kept* is not the same as reused: a snapshot keeps the
   last good build of a node the run reused, didn't select, or failed to build, and
-  can't tell them apart. Runs don't record their command yet (shown as —), and whether
-  some nodes failed isn't stored, so the outcome reads *recorded*, without a tick;
+  can't tell them apart. Runs don't record their command yet (shown as —), and Home
+  doesn't read run journals yet, so the outcome reads *recorded*, without a tick
+  (*All runs* opens the Runs page, which has each run's outcome from its journal);
 - **needs attention:** from the plan against the latest snapshot (`ods state plan`),
   nodes whose code changed and nodes whose evidence is missing, then opaque nodes whose
   column lineage is unknown. Each links to the node in the explorer. Below them, *The
@@ -856,6 +872,11 @@ ods state build --resource-type seed --exclude big_model
 ods state run --full-refresh -- --threads 8    # anything after `--` goes to dbt
 ```
 
+![ods state build after an edit to stg_orders: dbt's progress, each node's result as it finishes, and the report with time taken, rows and why each node ran](assets/recordings/state-build/state-build.svg)
+
+The recordings on this page run the demo project with the repository's fake dbt
+(its lines start `fake dbt:`); see [Recording the docs](recordings.md).
+
 ### Where source versions come from
 
 A model reading a source is reused only when the source has no new data since the model
@@ -1062,6 +1083,12 @@ ods state retry --failed         # builds customer_segments and segment_summary 
 ods state retry --failed --dry-run   # plan it; build and record nothing
 ```
 
+![ods state build where customer_segments fails: the error is redacted, the successes are recorded](assets/recordings/state-retry/state-build-failed.svg)
+
+![ods state retry --failed builds only the failed node and the node skipped because of it](assets/recordings/state-retry/state-retry-failed.svg)
+
+The same session can be [replayed in the browser](assets/recordings/state-retry/state-retry.html).
+
 - **What it keeps:** once dbt has built, the last-run file also keeps the outcome:
   the ids of the nodes that failed (or whose tests failed), those skipped, and the
   sources whose tests failed. A run whose results couldn't be recorded counts every node
@@ -1089,16 +1116,18 @@ ods state retry --failed --dry-run   # plan it; build and record nothing
 
 ### What you see while it runs
 
-ODS runs the dbt CLI as a child process: up to three invocations, one after another,
+ODS runs the dbt CLI as a child process: up to five invocations, one after another,
 each starting with dbt's usual `Running with dbt=…` banner:
 
 | # | dbt command | Why | Skipped with |
 |---|---|---|---|
 | 1 | `dbt source freshness` | measure source data, so nodes reading changed sources build | `--no-source-freshness`, `--no-compile` |
 | 2 | `dbt compile` | compiled SQL for every node, which the fingerprints need | `--no-compile` |
-| 3 | the command's namesake with `--select …`: `dbt run`, `seed`, `snapshot` or `build` (`build --exclude-resource-type test --exclude-resource-type unit_test` without tests) | build exactly the plan's BUILD set | `compile`, `--dry-run`, or nothing to build |
+| 3 | `dbt compile --inline …` | which target dbt builds in ([state per target](#state-plan-record-history)); renders the profile, connects to nothing | |
+| 4 | `dbt show --inline …` | whether the tables of the nodes ODS would reuse still exist, and, on Databricks, the sources' table versions ([below](#where-source-versions-come-from)) | nothing to reuse and no table versions to read |
+| 5 | the command's namesake with `--select …`: `dbt run`, `seed`, `snapshot` or `build` (`build --exclude-resource-type test --exclude-resource-type unit_test` without tests) | build exactly the plan's BUILD set | `compile`, `--dry-run`, or nothing to build |
 
-`ods state test` runs 1 and 2 the same way, then `dbt test --select …`. In both, the
+`ods state test` runs 1 to 3 the same way, then `dbt test --select …`. In both, the
 dbt command's step line counts the sources whose tests run with it, e.g. `dbt build:
 8 nodes and their tests, and the tests of 1 source`, and the plan summary names them
 (`source tests to run: raw.orders (new data)`).
@@ -1107,13 +1136,15 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   dbt starts each one with the same banner; the plan is summed up between them:
 
   ```text
-  ods ▸ 1/4 dbt source freshness: how new each source's data is
-  ods ▸ 2/4 dbt compile: the code as it is now, for the plan
-  ods ▸ 3/4 dbt show: are the tables of 5 nodes ODS would reuse still there?
+  ods ▸ 1/5 dbt source freshness: how new each source's data is
+  ods ▸ 2/5 dbt compile: the code as it is now, for the plan
+  ods ▸ 3/5 dbt compile --inline: which target dbt builds in
+  ods ▸ 4/5 dbt show: are the tables of 5 nodes ODS would reuse still there?
   ods ▸ plan: 8 to build, 5 to reuse
   ods ▸   code changed: stg_orders
   ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, …
-  ods ▸ 4/4 dbt build: 8 nodes, without tests
+  ods ▸ 5/5 dbt build: 8 nodes and their tests
+  ods ▸ stg_orders built in 250ms, 99 rows
   ```
 
   What builds is grouped by its main reason, with long lists cut short; reused nodes
@@ -1201,6 +1232,8 @@ secrets: no options at all, and errors only as the redacted summary above. The 5
 recent journals are kept; older ones are deleted when a run starts. `ods state history
 --run <run_id>` shows a run from its journal.
 
+![ods state history, then ods state history --run with one run's per-node stats](assets/recordings/state-history/state-history-run.svg)
+
 It also takes `--target-dir`, `--state-db`, `--environment` and `--sources`, as below.
 Don't run other dbt commands against the same target directory while it runs.
 ODS checks that the manifest it records from comes from its own build, and records
@@ -1255,6 +1288,10 @@ ods state plan                  # what to build, what to reuse, why, and the dbt
 ods state plan --select +orders --json
 ods state history
 ```
+
+![ods state plan with nothing recorded: everything builds](assets/recordings/state-plan/state-plan-first.svg)
+
+![ods state plan after an edit to stg_orders: it and what reads it build, the rest is reused](assets/recordings/state-plan/state-plan-after-change.svg)
 
 A node is **built** when (first match wins):
 1. ODS has no successful build of it;
@@ -1348,6 +1385,8 @@ ods state diff --from 3 --to 5     # what changed between two snapshots
 ods state history orders           # each build of `orders`, and why it happened
 ods state graph --changed          # what would be built, as a Mermaid graph
 ```
+
+![ods state explain customers: traced upstream to the edit in stg_orders](assets/recordings/state-explain/state-explain.svg)
 
 - **`explain NODE`** shows the node's decision, its reasons and evidence (the
   fingerprint, the source data versions, its parents' decisions), and what changed.
@@ -1565,6 +1604,8 @@ ods erd generate --select orders --depth 2 --output-file erd.mmd
 ods erd generate --format dot | dot -Tsvg > erd.svg
 ods erd generate --infer --format json    # also guess from naming, labelled inferred
 ```
+
+![ods erd generate on the demo project: a Mermaid erDiagram](assets/recordings/erd/erd.svg)
 
 | Flag | Meaning |
 |---|---|

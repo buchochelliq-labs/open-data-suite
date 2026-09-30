@@ -1,8 +1,10 @@
 # UX designs
 
-These are the two user interfaces we will build on top of the ODS engines. Both are
-mock-ups: every screen shows data from the `jaffle_ods` demo project, and anything ODS
-doesn't record yet is shown as a `[placeholder]`.
+These are the two user interfaces we are building on top of the ODS engines. Both
+start as mock-ups: every screen shows data from the `jaffle_ods` demo project, and
+anything ODS doesn't record yet is shown as a `[placeholder]`. The dashboard's first
+screens (Home, Catalog and model pages, Lineage with the State overlay, Plan, Runs and
+Run) are built in `ods serve`; its README marks which.
 
 | Design | What it is | Built on | Roadmap |
 |---|---|---|---|

@@ -11,11 +11,23 @@ hide:
     to explore and give feedback, and don't rely on it for production decisions.
 
 ODS is an open-source toolkit for analytics engineering, written in Rust. It reads a
-dbt project's compiled artifacts and answers questions about them. Today's commands
-need no account, read only local files and collect no telemetry. Answers come with the
-evidence behind them.
+dbt project's compiled artifacts, answers questions about them, and runs dbt on only
+what needs to run. It needs no account and collects no telemetry; only the `ods state`
+commands that run dbt reach your warehouse, through dbt's own connection. Answers come
+with the evidence behind them.
+
+![ods state build after an edit to stg_orders: 8 nodes build, 5 are reused, with each node's time, rows and reason](assets/recordings/state-build/state-build.gif)
 
 <div class="grid cards" markdown>
+
+- **State: build only what changed.** `ods state build` runs dbt on the models whose
+  code or upstream data changed, reports each node's time and rows, and explains
+  every decision.
+  [Getting started →](getting-started.md#6-build-only-what-changed)
+
+- **A read-only dashboard.** `ods serve` shows the plan, the runs with each node's
+  stats, lineage coloured by what the next run does, and the catalog.
+  [The dashboard →](cli.md#the-dashboard)
 
 - **Column-level lineage.** Where every column comes from and what uses it, down to
   joins, filters and aggregations. Includes an offline explorer.
@@ -40,8 +52,12 @@ evidence behind them.
 ```sh
 cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suite ods-cli
 cd my-dbt-project && dbt compile
-ods lineage view --open
+ods lineage view --open        # explore the lineage, offline
+ods state build                # build what needs it, and record the run
+ods serve                      # the dashboard, on http://127.0.0.1:8765/
 ```
+
+![A tour of ods serve: Home, the Runs page and a partial run's nodes](assets/recordings/dashboard/runs/runs.webp)
 
 [Getting started](getting-started.md) has the details.
 
