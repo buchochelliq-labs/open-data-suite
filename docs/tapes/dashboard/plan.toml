@@ -1,0 +1,22 @@
+# The State plan and its Why panel, in dark mode.
+title = "Plan and Why (dark)"
+theme = "dark"
+
+[[step]]
+goto = "/state/plan"
+caption = "The plan: what the next run builds, what it reuses, and why"
+expect = ["To build", "To reuse"]
+pause = 4800
+
+[[step]]
+click = "tr[data-node='model.jaffle_ods.customers'] a.st-node"
+caption = "Why: the recorded build, what changed, what it reads, the decision"
+expect = ["Decision: BUILD"]
+pause = 5200
+still = "plan-why"
+
+[[step]]
+click = "tr[data-node='model.jaffle_ods.stg_customers'] a.st-node"
+caption = "A reused node: fingerprint unchanged since its recorded build"
+pause = 5000
+still = "plan-why-reuse"

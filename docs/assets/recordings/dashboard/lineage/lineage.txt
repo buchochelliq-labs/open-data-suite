@@ -1,0 +1,86 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+jaffle_ods
+/
+Lineage
+plan against snapshot 3
+Skip to the selected node's details
+search
+Overlay
+State decision
+None
+Resource type (planned)
+Freshness evidence (planned)
+Lineage confidence (planned)
+Latest status (planned)
+Columns
+Indirect edges
+Fit
+Simulate impact
+raw_orders
+REUSE
+raw_payments
+REUSE
+stg_orders
+REUSE
+stg_payments
+REUSE
+raw_customers
+REUSE
+order_events
+REUSE
+orders
+BUILD
+stg_customers
+REUSE
+customer_order_…
+BUILD
+customers
+BUILD
+customer_segmen…
+BUILD
+customers_snaps…
+BUILD
+segment_summary
+BUILD
+BUILD
+will run
+REUSE
+last build kept; relation not checked here
+UNKNOWN
+no evidence: builds
+seed
+model
+opaque
+declared
+13 of 13 nodes · 66 column edges
+Focus on selection
+STATE OVERLAY
+Each node shows what ods state plan decides against snapshot 3.
+BUILD
+6 nodes
+REUSE
+7 nodes
+WHAT QUALIFIES THE PLAN
+reuse assumes each relation built earlier still exists: this page didn't check the warehouse (ods state build --dry-run does)
+Click a node to see why it builds or is reused, and a column to trace it upstream and downstream.

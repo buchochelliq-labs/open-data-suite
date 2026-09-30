@@ -1,0 +1,163 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Lineage
+State
+Plan
+Runs
+History
+Planned
+Policies
+Planned
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+State
+/
+Runs
+/
+<run>
+/
+snapshot 2 · recorded <time>
+<run>
+dev · fake
+Copy run id
+Why these decisions
+OUTCOME
+partial
+from its run journal
+BUILT
+2
+KEPT EARLIER BUILD
+9
+not in this run: reused or not selected
+WALL CLOCK
+<took>
+2
+built
+1
+failed
+1
+skipped
+at least
+100
+rows (2 nodes didn't report)
+live stats: yes, each node's reported as it ran
+State rule: if a node fails, it keeps its last good state. Snapshot 2 replaced snapshot 1 with this run's successful builds; every other node keeps its last good build. Its journal says some nodes failed: they keep their last good build.
+Timeline
+Nodes
+Log
+PLANNED
+Graph
+PLANNED
+Node	Status	Started	Took	Rows	Thread	Tests	Why it ran
+customers
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	100
+code INSERT
+	Thread-1 (worker)	2 passed	code: sql changed
+customer_segments
+model
+	failed
+kept its last good build
+	<clock>	<took>
+compile <took>
+execute <took>
+	—not reported	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+KeyError
+[value removed]
+Quoted values, numbers and SQL removed. Full message: dbt's log file (logs/dbt.log in the project, unless --log-path)
+customers_snapshot_view
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	—not reported	Thread-1 (worker)	—none ran on it	reads customers, which was rebuilt
+segment_summary
+model
+	skipped
+waited on a failed node; kept its last good build
+	—didn't run	—didn't run	—didn't run	Thread-1 (worker)	—didn't run	—not recorded: snapshots keep why only for the builds they record
+raw_customers
+seed
+	kept	not in this run: kept the build of <run>
+raw_orders
+seed
+	kept	not in this run: kept the build of <run>
+raw_payments
+seed
+	kept	not in this run: kept the build of <run>
+stg_customers
+model
+	kept	not in this run: kept the build of <run>
+stg_orders
+model
+	kept	not in this run: kept the build of <run>
+stg_payments
+model
+	kept	not in this run: kept the build of <run>
+order_events
+model
+	kept	not in this run: kept the build of <run>
+orders
+model
+	kept	not in this run: kept the build of <run>
+customer_order_rank
+model
+	kept	not in this run: kept the build of <run>
+Run details
+Command
+not recorded
+Target
+dev · fake
+Snapshot
+2 (replaces 1)
+Compared with
+snapshot 1 · <run>
+Recorded
+<time>
+Started
+<time>
+Finished
+<time>
+Run journal
+kept · live stats: yes
+Triggered by
+[user]
+FAILED NODE
+customer_segments
+model · after <took>
+KeyError
+[value removed]
+Quoted values, numbers and SQL removed. Full message: dbt's log file (logs/dbt.log in the project, unless --log-path)
+SKIPPED
+segment_summary · waited on a failed node
+Built in this run
+customers
+code: sql changed
+customers_snapshot_view
+reads customers, which was rebuilt
+Earlier runs on dev
+<run>
+succeeded
+13 built, 0 kept, <took> · <clock>
+Copy as JSON
+Download log
+PLANNED
