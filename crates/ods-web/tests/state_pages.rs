@@ -1572,7 +1572,7 @@ mod journals {
             .iter()
             .find(|n| n.node == "model.orders_view")
             .unwrap();
-        assert_eq!(skipped.rows_missing, Some("didn't run"));
+        assert_eq!(skipped.rows_missing, Some("the node didn't build"));
         assert_eq!(skipped.blocked_by[0].node, "model.orders");
         assert_eq!(view.earlier[0].run_id, RUN_3);
 

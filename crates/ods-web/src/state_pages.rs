@@ -28,7 +28,9 @@ use crate::model_page::{no_link_reason, warehouse_link, with_code};
 use crate::server::Shared;
 use ods_sdk::contracts::run_events::NodeRunStatus;
 
-const CSS: &str = include_str!("../assets/state.css");
+mod live_card;
+
+pub(crate) const CSS: &str = include_str!("../assets/state.css");
 const JS: &str = include_str!("../assets/state.js");
 
 /// Whether node names link to their Model page (`catalog/<id>`): on since the Catalog
@@ -48,6 +50,8 @@ pub(crate) fn routes(app: Router<Shared>, at: &dyn Fn(&str) -> String) -> Router
     .route(&at("/state/plan"), get(plan_page))
     .route(&at("/state/runs"), get(runs_page))
     .route(&at("/state/runs/{run}"), get(run_page))
+    // A node's stats card, for the Lineage page's live view (#322).
+    .route(&at("/state/runs/{run}/card"), get(live_card::handler))
     .route(&at("/api/state/plan"), get(plan_api))
     .route(&at("/api/state/plan/{node}"), get(why_api))
     .route(&at("/api/state/runs"), get(runs_api))
@@ -2097,8 +2101,17 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
     b.push_str(r#"<div class="st-split"><section class="st-main">"#);
     let _ = write!(
         b,
-        r#"<div class="st-run-title"><h1 class="mono">run {short}</h1>{command}{target}<span class="st-right st-actions">{copy}{why}</span></div>"#,
+        r#"<div class="st-run-title"><h1 class="mono">run {short}</h1>{command}{target}<span class="st-right st-actions">{live}{copy}{why}</span></div>"#,
         short = text(&run.short_run_id),
+        // A run whose journal doesn't say it ended may still be going: watch it (#322).
+        live = if run.outcome == RunOutcome::Unfinished {
+            format!(
+                r#"<a class="st-btn st-live" href="../../lineage?live={}" title="Its journal doesn't say it finished, and changed recently: probably still running">Watch live on the DAG →</a>"#,
+                attr(&enc(&run.run_id))
+            )
+        } else {
+            String::new()
+        },
         // Long commands are cut to one line; the whole command is in the title.
         command = run.command.as_deref().map_or_else(String::new, |c| format!(
             r#"<code class="st-chip-cmd" title="{}">{}</code>"#,

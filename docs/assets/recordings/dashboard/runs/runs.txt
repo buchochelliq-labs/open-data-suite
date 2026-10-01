@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog
@@ -59,11 +59,11 @@ Outcome
 ✓
 	<run>
 ods state build --state-db '<redacted>'
-	dev · fake	3	2	11	0	0	—	<clock>	<took>	[user]
+	dev · duckdb	3	2	11	0	0	—	<clock>	<took>	[user]
 !
-	<run>	—	dev · fake	2	2	9	1	1	≥ 100	<clock>	<took>	[user]
+	<run>	—	dev · duckdb	2	2	9	1	1	≥ 100	<clock>	<took>	[user]
 ✓
-	<run>	—	dev · fake	1	13	0	0	0	≥ 610	<clock>	<took>	[user]
+	<run>	—	dev · duckdb	1	13	0	0	0	≥ 610	<clock>	<took>	[user]
 n
 built
 n
@@ -83,7 +83,7 @@ What the state store records
 <run>
 PARTIAL
 from its run journal
-command not recorded · dev · fake · <clock>
+command not recorded · dev · duckdb · <clock>
 2 built · 9 kept earlier build · 1 failed · 1 skipped
 <took> · at least 100 rows (2 nodes didn't report)
 FAILED NODE

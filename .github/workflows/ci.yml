@@ -152,6 +152,10 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Dashboard tours match `ods serve`
         run: python scripts/record-dashboard.py --check
+      # The live run view (#322) in Chromium, against a simulated run: follow mode,
+      # scopes, the node menu from the keyboard, reduced motion.
+      - name: Live run view in a browser
+        run: python crates/ods-web/tests/browser/live_view.py -v
 
   msrv:
     runs-on: ubuntu-latest

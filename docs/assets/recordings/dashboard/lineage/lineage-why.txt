@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog
@@ -27,6 +27,7 @@ plan against snapshot 3
 Skip to the selected node's details
 search
 Overlay
+Live run (none running)
 State decision
 None
 Resource type (planned)

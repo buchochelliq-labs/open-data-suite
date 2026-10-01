@@ -548,6 +548,108 @@ fn runs_going_on_now_are_listed_as_probably_running() {
 }
 
 #[test]
+fn a_nodes_card_and_the_home_banner_come_from_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal = Journal::create(dir.path(), RUN);
+    journal.write(&started(&["model.orders", "model.view", "model.bad"]));
+    journal.write(&node_started(100, "model.orders"));
+    journal.write(&node_finished(
+        900,
+        "model.orders",
+        NodeRunStats::new(NodeRunStatus::Success)
+            .with_rows_affected(Some(99))
+            .with_extra("query_id", "01b2"),
+    ));
+    journal.write(&node_started(1_000, "model.view"));
+    journal.write(&node_finished(
+        1_400,
+        "model.view",
+        NodeRunStats::new(NodeRunStatus::Success),
+    ));
+    journal.write(&node_started(1_500, "model.bad"));
+    let addr = start(snapshot(dir.path()), limits(4));
+
+    // Rows as the adapter reported them, with where they came from.
+    let (status, card) = get(addr, &format!("/state/runs/{RUN}/card?node=model.orders"));
+    assert_eq!(status, 200, "{card}");
+    assert!(card.contains(r#"data-status="success""#), "{card}");
+    assert!(card.contains(">BUILT<"), "{card}");
+    assert!(card.contains("from the adapter response"), "{card}");
+    assert!(card.contains(">99<"), "{card}");
+    assert!(card.contains("query_id 01b2"), "{card}");
+    // The relation breaks between its parts, never inside a name.
+    assert!(card.contains("db.<wbr>orders"), "the relation: {card}");
+    assert!(
+        card.contains("run after this node"),
+        "its tests are still to come: {card}"
+    );
+    // None reported: a dash with the reason, never 0.
+    let (_, card) = get(addr, &format!("/state/runs/{RUN}/card?node=model.view"));
+    assert!(card.contains("not reported by the adapter"), "{card}");
+    assert!(!card.contains(">0<"), "{card}");
+    // Running: the page counts the time from when it started.
+    let (_, card) = get(addr, &format!("/state/runs/{RUN}/card?node=model.bad"));
+    assert!(card.contains("still running"), "{card}");
+    assert!(card.contains("lv-so-far"), "{card}");
+    // A failure: the summary as the journal keeps it, nothing more.
+    journal.write(&node_finished(
+        2_000,
+        "model.bad",
+        NodeRunStats::new(NodeRunStatus::Error)
+            .with_error(ErrorSummary::from_message("KeyError: 'lifetime_value'")),
+    ));
+    let (_, card) = get(addr, &format!("/state/runs/{RUN}/card?node=model.bad"));
+    assert!(card.contains(">FAILED<"), "{card}");
+    assert!(card.contains("[value removed]"), "{card}");
+    assert!(!card.contains("lifetime_value"), "{card}");
+    // It built nothing: its rows and tests say so, not "not reported".
+    assert!(
+        card.contains("the node didn&#x27;t build") || card.contains("the node didn't build"),
+        "{card}"
+    );
+    assert!(card.contains("the node did not build"), "{card}");
+    assert_eq!(
+        get(addr, &format!("/state/runs/{RUN}/card?node=model.none")).0,
+        404
+    );
+    assert_eq!(
+        get(addr, "/state/runs/no-run/card?node=model.orders").0,
+        404
+    );
+
+    // Home says a run is going on, and links to it live.
+    let (status, home) = get(addr, "/");
+    assert_eq!(status, 200);
+    assert!(
+        home.contains(r#"<section class="card live-banner""#),
+        "{home}"
+    );
+    assert!(
+        home.contains("<strong>Run probably in progress</strong>"),
+        "{home}"
+    );
+    assert!(
+        home.contains(r#"class="live-inferred""#),
+        "inference is said: {home}"
+    );
+    assert!(
+        home.contains(&format!(r#"href="lineage?live={RUN}""#)),
+        "{home}"
+    );
+    assert!(home.contains("probably running"), "{home}");
+    // The Lineage page carries the live view.
+    let (_, page) = get(addr, &format!("/lineage?live={RUN}"));
+    assert!(page.contains("OdsLive"), "the live view's script");
+    journal.write(&run_finished(2_100, RunOutcome::Failed));
+    let (_, home) = get(addr, "/");
+    // (The page's script names it too, to redraw it.)
+    assert!(
+        !home.contains(r#"<section class="card live-banner""#),
+        "{home}"
+    );
+}
+
+#[test]
 fn a_poll_answers_at_most_its_cap_and_the_next_goes_on_from_there() {
     let dir = tempfile::tempdir().unwrap();
     let mut journal = Journal::create(dir.path(), RUN);
