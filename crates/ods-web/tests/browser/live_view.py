@@ -415,7 +415,7 @@ class SimulatedRun(LiveCase):
         self.assertAlmostEqual(self.view()[2], 1.15, places=2)
         # Clearing the scope follows the whole run again.
         self.page.click("#lv-scope button")
-        self.assertTrue(self.page.locator("#lv-scope").is_hidden())
+        self.page.locator("#lv-scope").wait_for(state="hidden", timeout=2000)
         self.assertNotIn("follow=", self.page.url)
         self.settle()
         self.assertTrue(self.in_view("customers"))
@@ -429,7 +429,7 @@ class SimulatedRun(LiveCase):
         self.wait("() => !document.getElementById('lv-toast').hidden")
         self.assertIn("customers_snapshot_view finished", self.text("#lv-toast"))
         self.page.click("#lv-toast button")
-        self.assertTrue(self.page.locator("#lv-scope").is_hidden())
+        self.page.locator("#lv-scope").wait_for(state="hidden", timeout=2000)
 
     def test_the_end_stops_follow_frames_the_failure_and_offers_it(self) -> None:
         self.play(99)

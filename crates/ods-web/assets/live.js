@@ -960,6 +960,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     S.edgesStale = true;
     x.remember();
     tick(true);
+    // The chip is the click's own answer, so it changes now, not on the next frame.
+    controls();
     schedule();
   }
   scopeClear.addEventListener("click", () => setScope(null));
