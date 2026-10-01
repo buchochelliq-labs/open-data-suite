@@ -2187,7 +2187,18 @@ fn retry_reruns_the_last_command_with_its_options() {
     assert_eq!(code, 2, "{json:#}");
     let text = json.to_string();
     assert!(text.contains("aren't kept"), "{text}");
-    assert!(text.contains("ods state retry --vars <value>"), "{text}");
+    assert!(text.contains("--dry-run --vars <value>`"), "{text}");
+
+    // So does --failed; the hint keeps the retry's own flags.
+    let (code, json, _) = retry(&project, &["--failed", "--dry-run"]);
+    assert_eq!(code, 2, "{json:#}");
+    let text = json.to_string();
+    assert!(
+        text.contains("--dry-run --failed --vars <value>`"),
+        "{text}"
+    );
+    let (code, json, _) = retry(&project, &["--failed", "--dry-run", "--vars", vars]);
+    assert_eq!(code, 0, "{json:#}");
 
     // A dry run plans the same selection and changes nothing, not even what retry reruns.
     let (code, json, _) = retry(&project, &["--dry-run", "--vars", vars]);
@@ -2215,40 +2226,17 @@ fn retry_reruns_the_last_command_with_its_options() {
 }
 
 /// #321: `--vars` and what follows `--` are never written to the last-run file, and a
-/// retry needs them again; a file from before 1.3 is read without them and rewritten.
+/// retry needs them again, and doesn't write the values it is given either.
 #[test]
 fn retry_never_keeps_vars_or_dbt_arguments() {
     let project = Project::new("retry-withheld");
-    let path = project.dir.join(".ods/state.db.last-run.json");
-    let (code, json) = project.command(
-        "build",
-        &[
-            "--exclude-resource-type",
-            "test",
-            "--vars",
-            r#"{"password":"hunter2"}"#,
-            "--",
-            "--log-path",
-            "s3cr3t",
-        ],
-    );
-    assert_eq!(code, 0, "{json:#}");
-    let kept = std::fs::read_to_string(&path).unwrap();
-    for secret in ["hunter2", "s3cr3t", "--log-path"] {
-        assert!(!kept.contains(secret), "{secret} in {kept}");
-    }
-    let kept: Value = serde_json::from_str(&kept).unwrap();
-    assert_eq!(
-        kept["withheld"],
-        serde_json::json!(["vars", "--"]),
-        "{kept:#}"
-    );
+    let (path, _) = build_with_secrets(&project);
 
     // Both must be given again; the refusal names both, never their old values.
     let (code, json, _) = retry(&project, &["--dry-run", "--vars", "{}"]);
     assert_eq!(code, 2, "{json:#}");
     let text = json.to_string();
-    assert!(text.contains("-- <dbt arguments>"), "{text}");
+    assert!(text.contains("--dry-run -- <dbt arguments>`"), "{text}");
     assert!(
         !text.contains("password") && !text.contains("s3cr3t"),
         "{text}"
@@ -2284,13 +2272,96 @@ fn retry_never_keeps_vars_or_dbt_arguments() {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
+    // A retry that runs keeps its own line the same way: the values given again
+    // aren't written either.
+    let db = project.db();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args([
+            "state",
+            "retry",
+            "--state-db",
+            db.to_str().unwrap(),
+            "--json",
+        ])
+        .args([
+            "--vars",
+            r#"{"password":"y4nk33"}"#,
+            "--",
+            "--log-path",
+            "els3where",
+        ])
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("XDG_CONFIG_HOME", &project.dir)
+        .envs(project.env.iter().map(|(k, v)| (k, v)))
+        .current_dir(&project.dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let again = std::fs::read_to_string(&path).unwrap();
+    for secret in ["y4nk33", "els3where", "--log-path"] {
+        assert!(!again.contains(secret), "{secret} in {again}");
+    }
+    assert!(again.contains(r#""withheld""#), "{again}");
+
+    // A file edited to withhold an option retry doesn't take: refused, by name.
+    let mut edited: Value = serde_json::from_str(&again).unwrap();
+    edited["withheld"] = serde_json::json!(["gone"]);
+    std::fs::write(&path, serde_json::to_vec_pretty(&edited).unwrap()).unwrap();
+    let (code, json, _) = retry(&project, &["--dry-run"]);
+    assert_eq!(code, 2, "{json:#}");
+    assert!(json.to_string().contains("--gone <value>"), "{json:#}");
+    std::fs::write(&path, &again).unwrap();
+
     // And none it didn't have.
     let plain = Project::new("retry-plain");
     plain.run_ok(&[]);
     let (code, json, _) = retry(&plain, &["--dry-run", "--vars", "{}"]);
     assert_eq!(code, 2, "{json:#}");
     assert!(json.to_string().contains("didn't have --vars"), "{json:#}");
+}
 
+/// A build with `--vars` and dbt arguments that may be secret, and the last-run file
+/// it kept, checked to hold neither (#321).
+fn build_with_secrets(project: &Project) -> (PathBuf, Value) {
+    let path = project.dir.join(".ods/state.db.last-run.json");
+    let (code, json) = project.command(
+        "build",
+        &[
+            "--exclude-resource-type",
+            "test",
+            "--vars",
+            r#"{"password":"hunter2"}"#,
+            "--",
+            "--log-path",
+            "s3cr3t",
+        ],
+    );
+    assert_eq!(code, 0, "{json:#}");
+    let kept = std::fs::read_to_string(&path).unwrap();
+    for secret in ["hunter2", "s3cr3t", "--log-path"] {
+        assert!(!kept.contains(secret), "{secret} in {kept}");
+    }
+    let kept: Value = serde_json::from_str(&kept).unwrap();
+    assert_eq!(
+        kept["withheld"],
+        serde_json::json!(["vars", "--"]),
+        "{kept:#}"
+    );
+    (path, kept)
+}
+
+/// #321: a last-run file from before 1.3 is read without its withheld values and
+/// rewritten without them; one with an option this ODS doesn't know is removed.
+#[test]
+fn an_older_last_run_file_is_scrubbed_or_removed() {
+    let project = Project::new("retry-old-file");
+    let (path, kept) = build_with_secrets(&project);
     // A 1.2 file with the values in it: read without them, and rewritten without them.
     let mut old = kept.clone();
     old["schema_version"] = serde_json::json!({"major": 1, "minor": 2});
@@ -2324,6 +2395,16 @@ fn retry_never_keeps_vars_or_dbt_arguments() {
             .contains("exclude-resource-type"),
         "{rewritten:#}"
     );
+
+    // A 1.2 file with an option this ODS doesn't know: which words are values can't be
+    // told, so it is removed rather than kept or retried with a wider selection.
+    old["args"] = serde_json::json!(["--gone", "--tok3n", "--select", "x"]);
+    std::fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+    let (code, json, _) = retry(&project, &["--dry-run"]);
+    assert_eq!(code, 1, "{json:#}");
+    assert!(json.to_string().contains("so it was removed"), "{json:#}");
+    assert!(!json.to_string().contains("tok3n"), "{json:#}");
+    assert!(!path.exists());
 }
 
 /// #276: the database a retry is found in is the one it runs against, even when the

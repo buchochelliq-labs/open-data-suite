@@ -334,9 +334,10 @@ fn last_run(state_db: &Path) -> Option<LastRun> {
         .with_run(last.scope.clone(), last.run_id.clone())
         // Both exist in this ODS (`ods state retry`, #276, and `--failed`, #292);
         // `--failed` refuses a run that only tested, so it isn't offered then.
+        // With placeholders for what the run withheld, which retry needs again (#321).
         .with_retry(
-            Some("ods state retry".to_owned()),
-            (last.command != "test").then(|| "ods state retry --failed".to_owned()),
+            Some(last.retry_line(false)),
+            (last.command != "test").then(|| last.retry_line(true)),
         ),
     )
 }

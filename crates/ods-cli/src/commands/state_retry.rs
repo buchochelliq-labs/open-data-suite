@@ -86,6 +86,12 @@ const REDACTED: &str = "<redacted>";
 /// What a withheld value reads as on a command line shown in the terminal.
 const NOT_KEPT: &str = "<not kept>";
 
+/// What a withheld value to give again reads as in a suggested retry.
+const VALUE_AGAIN: &str = "<value>";
+
+/// What withheld arguments after `--` to give again read as in a suggested retry.
+const ARGUMENTS_AGAIN: &str = "<dbt arguments>";
+
 /// `ods state retry`'s arguments.
 pub(super) fn retry_command() -> Command {
     Command::new("retry")
@@ -225,6 +231,17 @@ impl LastOutcome {
     }
 }
 
+/// A last run as read, against what 1.3 withholds (#321).
+#[derive(Debug)]
+enum Scrub {
+    /// Written at 1.3 or later: nothing to scrub.
+    Current,
+    /// Older, and read without its withheld values.
+    Scrubbed(Box<LastRun>),
+    /// Older, with a command, option or word this build doesn't know.
+    Unreadable,
+}
+
 /// A retry of only what failed (#292): the run retried, and what failed in it.
 #[derive(Debug, Clone)]
 pub(super) struct RetryFailed {
@@ -244,47 +261,62 @@ impl LastRun {
             .into_iter()
             .map(str::to_owned)
             .chain(self.args.iter().cloned())
-            .chain(self.withheld_words(NOT_KEPT))
+            .chain(self.withheld_words(NOT_KEPT, NOT_KEPT))
             .collect();
         // Only a NUL byte can't be quoted, and a command line can't hold one.
         shlex::try_join(words.iter().map(String::as_str)).unwrap_or_else(|_| words.join(" "))
     }
 
-    /// The withheld options as words, each value reading `placeholder`, `--` last.
-    fn withheld_words<'a>(&'a self, placeholder: &'a str) -> impl Iterator<Item = String> + 'a {
+    /// The withheld options as words, each value reading `value`, then `--` and `tail`.
+    fn withheld_words<'a>(
+        &'a self,
+        value: &'a str,
+        tail: &'a str,
+    ) -> impl Iterator<Item = String> + 'a {
         let options = self
             .withheld
             .iter()
             .filter(|w| *w != PASSTHROUGH)
-            .flat_map(move |name| [format!("--{name}"), placeholder.to_owned()]);
-        let tail = self
+            .flat_map(move |name| [format!("--{name}"), value.to_owned()]);
+        let rest = self
             .withheld
             .iter()
             .any(|w| w == PASSTHROUGH)
-            .then(|| [PASSTHROUGH.to_owned(), placeholder.to_owned()])
+            .then(|| [PASSTHROUGH.to_owned(), tail.to_owned()])
             .into_iter()
             .flatten();
-        options.chain(tail)
+        options.chain(rest)
+    }
+
+    /// `ods state retry`, with `--failed` if `failed`, and what the last run withheld
+    /// to give again, as placeholders: what the dashboard offers to copy (#321).
+    pub(super) fn retry_line(&self, failed: bool) -> String {
+        let words: Vec<String> = ["ods", "state", "retry"]
+            .into_iter()
+            .chain(failed.then_some("--failed"))
+            .map(str::to_owned)
+            .chain(self.withheld_words(VALUE_AGAIN, ARGUMENTS_AGAIN))
+            .collect();
+        shlex::try_join(words.iter().map(String::as_str)).unwrap_or_else(|_| words.join(" "))
     }
 
     /// The same run, without what a file older than 1.3 kept of the values now withheld:
-    /// read through `command`, the command it ran (#321). Newer files are left as they
-    /// are; `None` when there is nothing to scrub.
-    fn scrubbed(&self, command: Option<&Command>) -> Option<Self> {
+    /// read through `command`, the command it ran (#321).
+    fn scrubbed(&self, command: Option<&Command>) -> Scrub {
         if self.schema_version >= WITHHOLDING_SINCE {
-            return None;
+            return Scrub::Current;
         }
-        let (args, withheld) = match command {
-            Some(command) => split(command, &self.args),
-            // A command this build doesn't know: nothing of it is kept.
-            None => (Vec::new(), vec![PASSTHROUGH.to_owned()]),
-        };
-        Some(Self {
-            schema_version: LAST_RUN_VERSION,
-            args,
-            withheld,
-            ..self.clone()
-        })
+        // A command, option or word this build doesn't know: what it held can't be
+        // told apart, so none of it is kept, nor retried with a wider selection.
+        match command.and_then(|command| split(command, &self.args)) {
+            Some((args, withheld)) => Scrub::Scrubbed(Box::new(Self {
+                schema_version: LAST_RUN_VERSION,
+                args,
+                withheld,
+                ..self.clone()
+            })),
+            None => Scrub::Unreadable,
+        }
     }
 }
 
@@ -302,8 +334,14 @@ pub(super) fn peek(state_db: &Path) -> Option<(PathBuf, LastRun)> {
     };
     match serde_json::from_slice::<LastRun>(&text) {
         Ok(last) if LAST_RUN_VERSION.can_read(last.schema_version) => {
-            let scrubbed = last.scrubbed(command_named(&last.command).as_ref());
-            Some((path, scrubbed.unwrap_or(last)))
+            match last.scrubbed(command_named(&last.command).as_ref()) {
+                Scrub::Current => Some((path, last)),
+                Scrub::Scrubbed(scrubbed) => Some((path, *scrubbed)),
+                Scrub::Unreadable => {
+                    tracing::warn!(path = %path.display(), "the last run was kept by an older ODS with options this one doesn't know");
+                    None
+                }
+            }
         }
         Ok(_) => {
             tracing::warn!(path = %path.display(), "the last run was kept by a newer ODS");
@@ -324,7 +362,7 @@ impl LastRun {
         let words: Vec<String> = ["ods".to_owned(), "state".to_owned(), self.command.clone()]
             .into_iter()
             .chain(redact(&self.args))
-            .chain(self.withheld_words(REDACTED))
+            .chain(self.withheld_words(REDACTED, REDACTED))
             .collect();
         shlex::try_join(words.iter().map(String::as_str)).unwrap_or_else(|_| words.join(" "))
     }
@@ -370,9 +408,9 @@ fn command_named(name: &str) -> Option<Command> {
 
 /// `args`, a command line [`typed`] for `command`, split into what is kept and the names
 /// of what is withheld: the values of options not in [`KEPT_VALUES`] (`vars`), and what
-/// follows `--`. An option `command` doesn't know is withheld with what follows it up to
-/// the next option, as it can't be told whether it took a value.
-fn split(command: &Command, args: &[String]) -> (Vec<String>, Vec<String>) {
+/// follows `--`. `None` when it holds an option `command` doesn't know, or a word with
+/// no option before it: what is a value can't be told then.
+fn split(command: &Command, args: &[String]) -> Option<(Vec<String>, Vec<String>)> {
     let mut kept = Vec::new();
     let mut withheld: Vec<String> = Vec::new();
     let mut words = args.iter().peekable();
@@ -383,39 +421,27 @@ fn split(command: &Command, args: &[String]) -> (Vec<String>, Vec<String>) {
             }
             break;
         }
-        let Some(name) = word.strip_prefix("--") else {
-            // A value without its option: never written by `typed`; not kept.
-            continue;
-        };
-        let arg = command.get_arguments().find(|a| a.get_long() == Some(name));
-        let takes_value = arg.is_none_or(|a| {
-            !matches!(
-                a.get_action(),
-                ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count
-            )
-        });
+        let name = word.strip_prefix("--")?;
+        let arg = command
+            .get_arguments()
+            .find(|a| a.get_long() == Some(name))?;
+        let takes_value = !matches!(
+            arg.get_action(),
+            ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count
+        );
         if !takes_value {
             kept.push(word.clone());
-            continue;
-        }
-        if arg.is_some() && KEPT_VALUES.contains(&name) {
+        } else if KEPT_VALUES.contains(&name) {
             kept.push(word.clone());
-            if let Some(value) = words.next() {
-                kept.push(value.clone());
-            }
-            continue;
-        }
-        if !withheld.iter().any(|w| w == name) {
-            withheld.push(name.to_owned());
-        }
-        // Its value, or for an unknown option everything up to the next option.
-        if arg.is_some() {
-            words.next();
+            kept.push(words.next()?.clone());
         } else {
-            while words.next_if(|w| !w.starts_with("--")).is_some() {}
+            if !withheld.iter().any(|w| w == name) {
+                withheld.push(name.to_owned());
+            }
+            words.next();
         }
     }
-    (kept, withheld)
+    Some((kept, withheld))
 }
 
 /// The options typed for `command`, as `args` parsed them: flags and values set on the
@@ -469,7 +495,11 @@ pub(super) fn remember(
     if args.try_get_one::<bool>("dry-run").ok().flatten() == Some(&true) {
         return None;
     }
-    let (kept, withheld) = split(command, &typed(command, args));
+    // `typed` writes only options `command` has, so it always splits.
+    let Some((kept, withheld)) = split(command, &typed(command, args)) else {
+        tracing::warn!("can't keep this run for `ods state retry`: its options can't be read");
+        return None;
+    };
     let remembered = Remembered {
         path: path_for(&settings.state_db()),
         last: LastRun {
@@ -576,14 +606,25 @@ pub(super) fn last_run(
     }
     // A file from before 1.3 may hold `--vars` or dbt's arguments: they are dropped, and
     // the file rewritten without them (#321).
+    // A dry run rewrites it too: a secret kept isn't a change worth keeping.
     let last = match last.scrubbed(command_named(&last.command).as_ref()) {
-        Some(scrubbed) => {
+        Scrub::Current => last,
+        Scrub::Scrubbed(scrubbed) => {
             if let Err(e) = write(&path, &scrubbed) {
                 tracing::warn!(path = %path.display(), "can't rewrite the last run without its withheld values: {e}");
             }
-            scrubbed
+            *scrubbed
         }
-        None => last,
+        Scrub::Unreadable => {
+            // It may hold a secret that can't be told apart: it goes.
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(path = %path.display(), "can't remove the last run: {e}");
+            }
+            return Err(unreadable(
+                "it was kept by an older ODS with options this one doesn't know, so it was removed"
+                    .to_owned(),
+            ));
+        }
     };
     if dry_run && last.command == "test" {
         return Err(CliError::new(
@@ -619,6 +660,25 @@ pub(super) fn last_run(
         line.extend(given.passthrough);
     }
     Ok((last, line, failed))
+}
+
+/// `ods state retry`, with the options this retry was given on the command line
+/// (`--state-db`, `--dry-run`, `--failed`), then `missing`: the retry to run instead.
+fn retry_again(args: &ArgMatches, missing: &[String]) -> String {
+    let mut words = vec!["ods state retry".to_owned()];
+    if args.value_source("state-db") == Some(ValueSource::CommandLine)
+        && let Some(db) = args.get_one::<String>("state-db")
+    {
+        words.push("--state-db".to_owned());
+        words.push(shlex::try_quote(db).map_or_else(|_| db.clone(), std::borrow::Cow::into_owned));
+    }
+    for flag in ["dry-run", "failed"] {
+        if args.get_flag(flag) {
+            words.push(format!("--{flag}"));
+        }
+    }
+    words.extend(missing.iter().cloned());
+    words.join(" ")
 }
 
 /// What the retry was given again of what the last run withheld.
@@ -669,8 +729,8 @@ fn given_again(args: &ArgMatches, last: &LastRun) -> Result<GivenAgain, CliError
             ),
         )
         .with_hint(format!(
-            "give them again, as the last run had them: `ods state retry {}`",
-            missing.join(" ")
+            "give them again, as the last run had them: `{}`",
+            retry_again(args, &missing)
         )));
     }
     let mut extra: Vec<String> = WITHHELD_VALUES
@@ -824,7 +884,7 @@ mod tests {
             "ods state build --select +orders --vars '<redacted>' --full-refresh -- '<redacted>'"
         );
         // As kept since 1.3: the values aren't in it, and it reads the same.
-        let (args, withheld) = split(&command_named("build").unwrap(), &last.args);
+        let (args, withheld) = split(&command_named("build").unwrap(), &last.args).unwrap();
         let kept = LastRun {
             args,
             withheld,
@@ -965,7 +1025,8 @@ mod tests {
     #[test]
     fn splits_off_what_may_be_secret() {
         let build = command_named("build").unwrap();
-        let line = [
+        let words = |w: &[&str]| w.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        let line = words(&[
             "--select",
             "+orders",
             "--vars",
@@ -976,24 +1037,44 @@ mod tests {
             "--",
             "--log-path",
             "s3cr3t",
-        ]
-        .map(str::to_owned);
-        let (kept, withheld) = split(&build, &line);
+        ]);
+        let (kept, withheld) = split(&build, &line).unwrap();
         assert_eq!(
             kept,
             ["--select", "+orders", "--full-refresh", "--target", "dev"]
         );
         assert_eq!(withheld, ["vars", "--"]);
-        // An option no longer known is withheld with what follows it, up to the next.
-        let (kept, withheld) = split(
-            &build,
-            &["--gone".into(), "x".into(), "--full-refresh".into()],
-        );
-        assert_eq!(kept, ["--full-refresh"]);
-        assert_eq!(withheld, ["gone"]);
         // `--` with nothing after it withholds nothing.
-        let (_, withheld) = split(&build, &["--".into()]);
+        let (_, withheld) = split(&build, &words(&["--"])).unwrap();
         assert!(withheld.is_empty(), "{withheld:?}");
+        // What can't be told apart isn't split at all: an option this build doesn't
+        // know, a word with no option before it, a kept option without its value.
+        for line in [&["--gone", "--tok3n"][..], &["-s", "x"], &["--select"]] {
+            assert_eq!(split(&build, &words(line)), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_dashboard_offers_a_retry_with_what_to_give_again() {
+        let last = LastRun {
+            schema_version: LAST_RUN_VERSION,
+            command: "build".into(),
+            args: vec!["--select".into(), "x".into()],
+            withheld: vec!["vars".into(), PASSTHROUGH.into()],
+            recorded_at: Timestamp::from_unix(0),
+            outcome: None,
+            scope: None,
+            run_id: None,
+        };
+        assert_eq!(
+            last.retry_line(true),
+            "ods state retry --failed --vars '<value>' -- '<dbt arguments>'"
+        );
+        let plain = LastRun {
+            withheld: Vec::new(),
+            ..last
+        };
+        assert_eq!(plain.retry_line(false), "ods state retry");
     }
 
     #[test]
@@ -1002,7 +1083,7 @@ mod tests {
         let db = dir.path().join("state.db");
         std::fs::write(
             path_for(&db),
-            r#"{"schema_version":{"major":1,"minor":2},"command":"build","args":["-s","x","--vars","{\"password\":\"hunter2\"}","--","--log-path","s3cr3t"],"recorded_at":"2026-01-01T00:00:00Z"}"#,
+            r#"{"schema_version":{"major":1,"minor":2},"command":"build","args":["--select","x","--vars","{\"password\":\"hunter2\"}","--","--log-path","s3cr3t"],"recorded_at":"2026-01-01T00:00:00Z"}"#,
         )
         .unwrap();
         let (_, last) = peek(&db).unwrap();
@@ -1016,20 +1097,27 @@ mod tests {
             "{text}"
         );
         assert_eq!(last.withheld, ["vars", "--"]);
+        assert_eq!(last.args, ["--select", "x"]);
         assert_eq!(last.schema_version, LAST_RUN_VERSION);
-        // A command this build doesn't know keeps nothing.
-        let unknown = LastRun {
-            command: "frobnicate".into(),
-            ..last.clone()
-        };
+        // A command, or an option, this build doesn't know: none of it can be kept.
         let old = LastRun {
             schema_version: SchemaVersion::new(1, 2),
             args: vec!["--vars".into(), "hunter2".into()],
-            ..unknown
+            ..last.clone()
         };
-        let scrubbed = old.scrubbed(command_named(&old.command).as_ref()).unwrap();
-        assert!(scrubbed.args.is_empty(), "{scrubbed:?}");
+        assert!(matches!(old.scrubbed(None), Scrub::Unreadable));
+        let gone = LastRun {
+            args: vec!["--gone".into(), "hunter2".into()],
+            ..old
+        };
+        assert!(matches!(
+            gone.scrubbed(command_named("build").as_ref()),
+            Scrub::Unreadable
+        ));
         // A 1.3 file is left as it is.
-        assert!(last.scrubbed(command_named("build").as_ref()).is_none());
+        assert!(matches!(
+            last.scrubbed(command_named("build").as_ref()),
+            Scrub::Current
+        ));
     }
 }

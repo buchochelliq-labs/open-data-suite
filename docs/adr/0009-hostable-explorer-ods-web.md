@@ -130,7 +130,11 @@ panel), Runs and one Run under `<base>/state/`.
   with ones the run didn't have. Every option of the commands that keep their line is
   classed as kept or withheld, and a test fails on one that isn't. Files at 1.0–1.2
   still read: their withheld values are dropped as they are read (the dashboard), and
-  the file is rewritten without them the first time `retry` reads it.
+  the file is rewritten without them the first time `retry` reads it, a dry run
+  included. One with an option or a word this build doesn't know is removed, as which
+  words are values can't be told, rather than kept or retried with a wider selection.
+  The dashboard offers the retry with placeholders for what to give again
+  (`ods state retry --vars '<value>' -- '<dbt arguments>'`).
 - **Secrets (AGENTS rule 9):** the command line reaches `ods-web` redacted by the CLI:
   option names are kept, and only the values of `--select`, `--exclude`,
   `--resource-type`, `--exclude-resource-type`, `--target`, `--environment` and

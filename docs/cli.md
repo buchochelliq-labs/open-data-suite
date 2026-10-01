@@ -1179,7 +1179,10 @@ ods state retry --dry-run        # plan the retry; build and record nothing
 
   The other options (`--select`, `--target`, `--dbt-profile`, paths, …) are kept as
   typed. A last-run file written by an older ODS (before format 1.3) is read without
-  those values, and rewritten without them the first time `retry` reads it.
+  those values, and rewritten without them the first time `retry` reads it, even with
+  `--dry-run`: removing a secret is the one change a dry run makes. A file with an
+  option this ODS doesn't know is removed instead, as which of its words are values
+  can't be told.
 - **One last run per state database:** `retry` reruns whichever command ran last,
   whatever its target. It prints what it runs on stderr, e.g. retrying
   `ods state build -s +orders`. `--state-db` picks the database, as elsewhere, and the
