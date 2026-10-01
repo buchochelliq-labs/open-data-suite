@@ -306,6 +306,13 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- `ods state retry` asks for `--vars` and the arguments after `--` again when the last
+  run had them (#321): the last-run file (`<state-db>.last-run.json`, format 1.3) no
+  longer stores their values, which may hold secrets, or a digest of them; it lists
+  only that they were given (`withheld`). Without them, or with ones the last run didn't
+  have, `retry` refuses (`ODS-E0403`) and says what to add. Files from an older ODS still
+  read, without those values, and are rewritten without them when `retry` first reads
+  them.
 - `ods serve`'s Run pages say *the node didn't build* for a failed or skipped node's
   rows (`rows_missing` in `/api/state/runs/<run_id>`), instead of *not reported by the
   adapter* or *didn't run* (#322).

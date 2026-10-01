@@ -122,6 +122,15 @@ panel), Runs and one Run under `<base>/state/`.
   that records its run id; when no listed snapshot does, the page says it *probably*
   recorded nothing, marked inferred (a clock step or a later `ods state record` could
   make that wrong).
+- **The last-run file, version 1.3 (persisted format, additive, #321):** `args` no
+  longer holds the values of options that may carry secrets (`--vars`) or what followed
+  `--`; the new `withheld` lists which were given (`["vars", "--"]`). No digest of them
+  is kept either: a digest of a short secret can be reversed by guessing.
+  `ods state retry` takes them again (`--vars`, `-- …`) and refuses without them, or
+  with ones the run didn't have. Every option of the commands that keep their line is
+  classed as kept or withheld, and a test fails on one that isn't. Files at 1.0–1.2
+  still read: their withheld values are dropped as they are read (the dashboard), and
+  the file is rewritten without them the first time `retry` reads it.
 - **Secrets (AGENTS rule 9):** the command line reaches `ods-web` redacted by the CLI:
   option names are kept, and only the values of `--select`, `--exclude`,
   `--resource-type`, `--exclude-resource-type`, `--target`, `--environment` and
