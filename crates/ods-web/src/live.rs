@@ -223,6 +223,36 @@ fn identity(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
     None
 }
 
+/// Whether the path's file and the open handle's file look like one file. On Unix the
+/// identity above decides it; elsewhere there is none, so a file put in the journal's
+/// place is told apart by a size or time outside what the handle read just before and
+/// after (an append-only journal only grows between the two).
+#[cfg(unix)]
+fn same_file(
+    _path: &std::fs::Metadata,
+    _before: &std::fs::Metadata,
+    _after: &std::fs::Metadata,
+) -> bool {
+    true
+}
+#[cfg(not(unix))]
+fn same_file(
+    path: &std::fs::Metadata,
+    before: &std::fs::Metadata,
+    after: &std::fs::Metadata,
+) -> bool {
+    let within = |p: Option<std::time::SystemTime>, a, b| match (p, a, b) {
+        (Some(p), Some(a), Some(b)) => a <= p && p <= b,
+        _ => false,
+    };
+    (before.len()..=after.len()).contains(&path.len())
+        && within(
+            path.modified().ok(),
+            before.modified().ok(),
+            after.modified().ok(),
+        )
+}
+
 /// Reads a journal from where it last stopped: complete lines only, a bounded chunk at
 /// a time, from one handle opened once. A line still being written is left for the next
 /// read.
@@ -297,13 +327,17 @@ impl Tail {
             self.ident = identity(&file.metadata()?);
             self.file = Some(file);
         }
-        // The path must still name the file this stream opened.
-        let same = std::fs::symlink_metadata(&self.path)
-            .is_ok_and(|m| m.is_file() && identity(&m) == self.ident);
         let Some(file) = self.file.as_mut() else {
             return Ok(false);
         };
+        // The path must still name the file this stream opened. The handle is read on
+        // both sides of the path, so an append in between can't look like a new file.
+        let before = file.metadata()?;
+        let at_path = std::fs::symlink_metadata(&self.path);
         let meta = file.metadata()?;
+        let same = at_path.is_ok_and(|m| {
+            m.is_file() && identity(&m) == self.ident && same_file(&m, &before, &meta)
+        });
         let len = meta.len();
         if !same || len < self.offset {
             self.end(
