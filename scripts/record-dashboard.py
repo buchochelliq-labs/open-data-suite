@@ -59,7 +59,8 @@ MASKS = [
     # A day on its own, e.g. the Runs page's "today" group: recordings run on any day.
     (re.compile(r"\b\d{4}-\d\d-\d\d\b"), "<date>"),
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s)\b"), "<took>"),
-    (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour)s? ago)\b"), "<when>"),
+    # Relative times, as the dashboard writes them ("just now", "4 min ago", "2 h ago").
+    (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour|min|h|d)s? ago)\b"), "<when>"),
 ]
 
 # A pointer and a click ring drawn into the page, and a caption bar: the page's own
