@@ -508,6 +508,10 @@ impl Dashboard {
 pub(crate) const CSS: &str = include_str!("../assets/lineage.css");
 /// The explorer's script, shared by the served page and the offline one.
 pub(crate) const JS: &str = include_str!("../assets/lineage.js");
+/// The live run view (#322): served only, as it streams from the server.
+pub(crate) const LIVE_JS: &str = include_str!("../assets/live.js");
+/// Its stylesheet.
+pub(crate) const LIVE_CSS: &str = include_str!("../assets/live.css");
 
 /// The explorer's markup: toolbar, canvas, legend and side panel. `served` adds the
 /// overlay picker and impact, which need the server.
@@ -589,10 +593,13 @@ pub(crate) fn lineage_page(
 <script type="application/json" id="ods-graph">{graph}</script>
 <script type="application/json" id="ods-overlay">{overlay}</script>
 <script type="application/json" id="ods-selected">{selected}</script>
+<script>{LIVE_JS}</script>
 <script>{JS}</script>"#,
         markup = explorer_markup(true),
         dagre = crate::page::DAGRE,
     );
+    // The live view's node card is the Run page's (#322), so its styles come too.
+    let css = format!("{CSS}{}{LIVE_CSS}", crate::state_pages::CSS);
     let frame = Frame {
         title: "Lineage",
         crumbs: None,
@@ -601,7 +608,7 @@ pub(crate) fn lineage_page(
         sub: None,
         // The toolbar's search is the page's; the header's would search elsewhere.
         search: false,
-        css: CSS,
+        css: &css,
         js: "",
     };
     Ok(framed(shell, &frame, &body, generation))
@@ -670,7 +677,15 @@ mod tests {
         let dashboard_css = include_str!("../assets/dashboard.css");
         let offline = explorer_markup(false);
         let served = explorer_markup(true);
-        for asset in [CSS, JS, dashboard_css, offline.as_str(), served.as_str()] {
+        for asset in [
+            CSS,
+            JS,
+            LIVE_JS,
+            LIVE_CSS,
+            dashboard_css,
+            offline.as_str(),
+            served.as_str(),
+        ] {
             assert!(!asset.contains("__ODS_"));
             assert!(!asset.to_ascii_lowercase().contains("</script"));
             assert!(!asset.to_ascii_lowercase().contains("</style"));

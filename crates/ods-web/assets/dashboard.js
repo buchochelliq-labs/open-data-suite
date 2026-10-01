@@ -38,14 +38,58 @@
     });
   }
 
-  // Reload when the server has a new snapshot (new artifacts or a new run).
+  // "Run in progress" on Home (#322): the runs that are probably going on now, kept up
+  // to date. The server draws it first; this redraws it the same way.
+  const slot = document.getElementById("ods-live");
+  if (slot) {
+    const el = (tag, cls, text, parent) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      if (parent) parent.appendChild(e);
+      return e;
+    };
+    // Redrawn only when something changed, so the dot keeps its rhythm.
+    let last = [...slot.children].map(c => c.textContent).join("\n");
+    const draw = runs => {
+      const fresh = document.createDocumentFragment();
+      for (const r of runs) {
+        const s = el("section", "card live-banner", null, fresh);
+        s.dataset.run = r.run_id;
+        el("span", "live-dot", null, s).setAttribute("aria-hidden", "true");
+        const t = el("div", "live-text", null, s);
+        const head = el("span", "live-head", null, t);
+        el("strong", null, "Run probably in progress", head);
+        el("span", "live-inferred", "inferred", head).title = r.note;
+        const m = el("span", "muted", null, t);
+        el("code", null, r.command || "a run", m);
+        m.append(" · run ");
+        el("span", "mono", r.run_id.slice(0, 8), m);
+        m.append(` · ${r.finished} of ${r.nodes} nodes finished · ${r.running} probably running` + (r.failed ? ` · ${r.failed} failed` : ""));
+        const go = el("a", "live-go", "Watch live on the DAG →", s);
+        go.href = base + r.href;
+        const page = el("a", "live-run", "Run page", s);
+        page.href = base + r.run_href;
+      }
+      const text = [...fresh.children].map(c => c.textContent).join("\n");
+      if (text !== last) { last = text; slot.replaceChildren(fresh); }
+    };
+    setInterval(async () => {
+      try { draw((await (await fetch(base + "api/runs/live")).json()).runs || []); } catch (_) { /* keep what is shown */ }
+    }, 3000);
+  }
+
+  // Reload when the server has a new snapshot (new artifacts or a new run), unless the
+  // page holds it (the live run view, which would lose its place).
   const meta = document.querySelector('meta[name="ods-generation"]');
   if (!meta) return;
   const generation = Number(meta.content);
   setInterval(async () => {
     try {
       const v = await (await fetch(base + "api/version")).json();
-      if (v.generation !== generation) location.reload();
+      if (v.generation === generation) return;
+      if (typeof window.odsHoldReload === "function" && window.odsHoldReload()) { window.odsReloadPending = true; return; }
+      location.reload();
     } catch (_) { /* the server stopped; keep showing what we have */ }
   }, 2000);
 })();

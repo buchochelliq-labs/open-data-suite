@@ -12,7 +12,7 @@ compared with  snapshot 2 in .ods/state.db
 plan           2 to build and test, 11 to reuse
 retrying       what failed in ods state build: 2 retried, 0 reused, 0 held back
 dbt            target_dir target (default)
-target         dev (jaffle_ods, fake, fake-host, jaffle_ods)
+target         dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
 ran            dbt build --select fqn:jaffle_ods.marts.customer_segments,resource_type:model
 fqn:jaffle_ods.marts.segment_summary,resource_type:model --target-path /tmp/ods-demo/jaffle_shop/target --write-json
 --partial-parse-file-diff --indirect-selection eager --log-format json --log-level debug

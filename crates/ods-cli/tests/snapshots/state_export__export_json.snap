@@ -10,7 +10,7 @@ expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
   "target": {
     "name": "dev",
     "profile": "jaffle_ods",
-    "kind": "fake",
+    "kind": "duckdb",
     "location": "fake-host",
     "location_digest": "647923f19b3462a158d718187b8217d5",
     "database": "jaffle_ods"

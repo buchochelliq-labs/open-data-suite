@@ -365,6 +365,7 @@ async fn home(State(state): State<Shared>) -> Response {
         Html(crate::home::home_page(
             &dashboard.shell("home"),
             &dashboard.home(state.details),
+            &dashboard.live_runs(SystemTime::now()),
             generation,
         ))
         .into_response()

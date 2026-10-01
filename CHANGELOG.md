@@ -44,6 +44,16 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- The live run view (#322): `ods serve`'s Lineage page shows a run as it goes
+  (`/lineage?live=<run_id>`), with each node's state, time and rows, the run's progress
+  and events, and each node's stats card (the Run page's, with a failed node explained).
+  Follow mode keeps the running nodes in view (never below 60% zoom; one focus node,
+  edge chips and a minimap when they are too far apart), turns off on any pan, zoom, Fit
+  or node click, and back on with *Follow run* or `F`. The node menu (right-click, the
+  menu key or Shift+F10) follows a node and its downstream, its upstream, or just it
+  (`&follow=<node>:down|up|self`). Home shows a *Run probably in progress* banner
+  (inferred from the run's journal), and an
+  unfinished run's page links to the live view.
 - `ods serve` streams a run while it goes (#322, ADR-0024): `/api/runs/<run_id>/events`
   sends the run's journal as Server-Sent Events, from the start and then each event as
   `ods state run`, `build` or `test` writes it, ending with `end`; ids are journal line
@@ -294,6 +304,9 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- `ods serve`'s Run pages say *the node didn't build* for a failed or skipped node's
+  rows (`rows_missing` in `/api/state/runs/<run_id>`), instead of *not reported by the
+  adapter* or *didn't run* (#322).
 - `ods lineage impact --column MODEL.COLUMN=removed` accepts a column that is already
   gone when some model still reads it, and reports what reads it (#323).
 - A failed Python model's error summary is its exception (`Python model failed:
