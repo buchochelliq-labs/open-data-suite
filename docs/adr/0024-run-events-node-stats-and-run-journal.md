@@ -1,7 +1,7 @@
 # ADR-0024: Run events, per-node run stats and the run journal
 
 - **Status:** Proposed
-- **Date:** 2026-09-29
+- **Date:** 2026-09-29 (amended 2026-09-30: the live stream)
 - **Issues:** #322 (live run view), #318 (Run pages), #320 (values removed from diagnostics), #321 (`.last-run.json`)
 - **Deciders:** @n1ckyb
 
@@ -221,6 +221,67 @@ snapshot the run commits.
   someone needs another (`state.runs.keep`), and `ods state history` says when a run's
   journal is gone.
 
+### The live stream (`ods serve`, amended 2026-09-30)
+`ods serve` shows a run while it goes by tailing its journal; the executor, the CLI and
+the journal format are unchanged. ods-web reads the journal through the shared reader
+(`ods_sdk::run_journal::parse`, one line at a time), so the stream can't carry more
+than the Run pages show.
+
+- **Routes:** `GET /api/runs/<run_id>/events` streams Server-Sent Events;
+  `GET /api/runs/<run_id>/events?since=<n>` answers the same messages once as JSON
+  lines (`{"id", "event", "data"}` per line), the fallback for clients without
+  `EventSource`, at most 2,000 per answer; `GET /api/runs/live` lists the runs that are
+  probably running. All are `GET` and read-only: no route starts, stops or changes a
+  run.
+- **Messages:** `run_event` (data: the sanitized `RunEvent`), `unreadable` (data:
+  `{"line"}`, for any line that doesn't parse as an event of this run: a newer version,
+  a line cut short, one longer than 256 KiB, or another run's event) and `end` (data:
+  `reason` `finished` | `stopped` | `replaced`, the `outcome` when known, `inferred`,
+  `note`). The **id** of a line's message is its line number in the journal, from 1
+  (blank lines count and send nothing); `end` has none. A stream replays the journal
+  from the start, then follows it; with `Last-Event-ID: n` (or `?since=n`) it sends only
+  lines after `n`. Lines up to `n` aren't parsed: only one that may hold
+  `run_finished` is, so a reconnect after the end still ends at once. It ends after
+  `run_finished`, or as `stopped` (marked inferred) once the journal hasn't grown for
+  `RECENT` (10 minutes), measured both by the file's time and by the server's own
+  monotonic clock since the stream last saw it grow (a file dated in the future can't
+  keep a stream open), or as `replaced` if the path names another file now or the file
+  got shorter. When it ends as `finished` or `stopped`, a last line cut short (a run
+  that stopped mid-write) is sent as `unreadable` first, so the stream counts it as the
+  Run page's reader does. The first message sets `retry` to 2 s; a comment is sent as a
+  heartbeat every 15 s when nothing else is.
+- **Tailing:** the journal is opened once per stream and that handle is read: on Unix
+  with `O_NOFOLLOW | O_NONBLOCK` (a symbolic link fails to open, and a FIFO can't block
+  a thread), then checked with `fstat` to be a regular file; elsewhere after checking
+  with `lstat` that the path is a regular file. Each tick (every 300 ms, on the
+  blocking pool) checks the path still names the same file (device and inode on Unix)
+  and how long it is; no file watcher: it needs no new dependency (`libc` is already in
+  the tree), behaves the same on every platform and on network file systems, and costs
+  two `stat`s per open stream per tick. Only complete lines are read; a line still
+  being written waits for its newline, so the torn last line of a running journal is
+  never shown as unreadable while it runs.
+- **Limits:** a stream reads at most 256 KiB at a time and holds no more than that and
+  one queued chunk of messages, so memory is bounded whatever the journal's size; at
+  most 16 streams are open at once, across clients (one more gets `503` with
+  `Retry-After`), and at most as many `?since=` answers are read at once (the same
+  `503` beyond). A `?since=` answer stops at 2,000 messages, exactly (the next asks from
+  the last id), or after reading 32 MiB of journal. A stream holds its place until the
+  client disconnects, which the server notices when it next writes: within one
+  heartbeat, up to 15 s. The limits are `ods_web::StreamLimits`, set by the binary.
+- **Live runs:** `/api/runs/live` reads the newest 8 journals changed within `RECENT`,
+  through the dashboard's journal cache (read again only when a file's size or time
+  changes), and lists those without `run_finished` whose scope is the dashboard's (or
+  unknown) as `probably_running`, `inferred: true`: a journal changing is the only sign
+  a run is alive. One answer is made at a time and reused for 1.5 s (until the next
+  reload), so many pages polling it share one read. The journals are read beside the
+  state database even before the store exists, as a first run writes its journal
+  before its first snapshot.
+- **Privacy:** as for the pages: every line is sanitized again on read, an event of
+  another run isn't passed on, and beyond loopback an error's `details_at` (a local
+  path) is removed. Run ids must pass `usable_run_id`; a journal that is a symbolic
+  link, or isn't a regular file, is never opened, and a path replaced while a stream
+  reads it ends the stream; so no request can reach another file.
+
 ### Privacy
 Events have no field for SQL, the command line, variables or the environment. Error
 summaries and adapter extras are redacted and cut as above, and hosts re-redact every
@@ -266,7 +327,8 @@ graph LR
 - Follow-up issues:
   - #322 part 2: the dbt event bridge, the journal writer, terminal output and
     `ods state history`.
-  - #322 parts 3–4: the Run page's stats, and `ods serve`'s SSE stream and live view.
+  - #322 parts 3–4: the Run page's stats, and `ods serve`'s SSE stream and live view
+    (the stream's contract is above).
   - A `state.runs.keep` setting, when needed.
 
 ## References

@@ -56,8 +56,11 @@ MASKS = [
     (re.compile(r"\b(?:run |runs/|· |snapshot \d+ · )?[0-9a-f]{8}\b"), "<run>"),
     (re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z?"), "<time>"),
     (re.compile(r"\b\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z?(?!\w)"), "<clock>"),
+    # A day on its own, e.g. the Runs page's "today" group: recordings run on any day.
+    (re.compile(r"\b\d{4}-\d\d-\d\d\b"), "<date>"),
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s)\b"), "<took>"),
-    (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour)s? ago)\b"), "<when>"),
+    # Relative times, as the dashboard writes them ("just now", "4 min ago", "2 h ago").
+    (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour|min|h|d)s? ago)\b"), "<when>"),
 ]
 
 # A pointer and a click ring drawn into the page, and a caption bar: the page's own
@@ -125,13 +128,16 @@ class Server:
             "TZ": "UTC",
             "LANG": "C.UTF-8",
         }
+        # Where setup.sh makes the project (ODS_DEMO_ROOT, as in docs/tapes/setup.sh).
+        root = Path(os.environ.get("ODS_DEMO_ROOT") or "/tmp/ods-demo")
+        env["ODS_DEMO_ROOT"] = str(root)
         subprocess.run(
             ["bash", "-c", 'source "$REPO/docs/tapes/dashboard/setup.sh" >/dev/null 2>&1'],
             env=env, check=True,
         )
         # setup.sh's project and HOME (see docs/tapes/setup.sh).
-        project = Path("/tmp/ods-demo/jaffle_shop")
-        env["HOME"] = "/tmp/ods-demo/home"
+        project = root / "jaffle_shop"
+        env["HOME"] = str(root / "home")
         self.process = subprocess.Popen(
             [str(bin_dir / "ods"), "serve", "--port", "0", "--no-watch", "-o", "plain"],
             cwd=project, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,

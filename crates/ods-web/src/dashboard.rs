@@ -56,6 +56,10 @@ pub struct Dashboard {
     pub modules: Vec<ModuleStatus>,
     /// The project's nodes, for the Catalog and the model pages (#313).
     pub catalog: crate::catalog::CatalogInput,
+    /// The run journals beside the state database (#322), read for the live view even
+    /// before the store exists: a first run writes its journal before its first
+    /// snapshot.
+    journals: journal::JournalSource,
 }
 
 impl Dashboard {
@@ -75,7 +79,27 @@ impl Dashboard {
             opaque: Vec::new(),
             modules: Vec::new(),
             catalog: crate::catalog::CatalogInput::default(),
+            journals: journal::JournalSource::default(),
         }
+    }
+
+    /// Reads the runs' journals in `journals` for the live view (#322, ADR-0024): the
+    /// runs going on now, and each run's events as they are written.
+    #[must_use]
+    pub fn with_journals(mut self, journals: ods_sdk::run_journal::Journals) -> Self {
+        self.journals = journal::JournalSource::new(journals);
+        self
+    }
+
+    /// The journals the live view reads: those named with [`Self::with_journals`],
+    /// else the State pages' ones, if any.
+    pub(crate) fn journal_source(&self) -> Option<&journal::JournalSource> {
+        if self.journals.is_set() {
+            return Some(&self.journals);
+        }
+        self.history()
+            .map(state::History::journal_source)
+            .filter(|j| j.is_set())
     }
 
     /// Sets the state scope, when the binary names it differently.

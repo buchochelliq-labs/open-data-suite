@@ -7,8 +7,10 @@
 # in what it compiles, as editing the model's SQL would.
 #
 # The project lives at a fixed path so that paths ODS prints are the same on every run.
+# ODS_DEMO_ROOT moves it (the dashboard tours and browser tests don't print paths), so
+# several can run at once.
 
-demo_root=/tmp/ods-demo
+demo_root=${ODS_DEMO_ROOT:-/tmp/ods-demo}
 rm -rf "$demo_root" && mkdir -p "$demo_root/home" "$demo_root/jaffle_shop/.fake"
 export HOME="$demo_root/home" XDG_CONFIG_HOME="$demo_root/home/.config"
 cd "$demo_root/jaffle_shop" || return

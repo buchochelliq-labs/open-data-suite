@@ -620,3 +620,171 @@ fn a_test_run_is_the_last_run_tied_to_its_snapshot() {
         .collect();
     assert_eq!(next, ["ods state retry"], "no --failed after a test run");
 }
+
+/// The live run view (#322): while `ods state build` runs, `ods serve` lists it as
+/// probably running and streams its journal as it is written, then ends the stream.
+#[cfg(unix)]
+#[test]
+fn a_build_is_streamed_live_while_it_runs() {
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    fs::create_dir_all(dir.join("base")).unwrap();
+    let base = dir.join("base/manifest.json");
+    fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        &base,
+    )
+    .unwrap();
+    let out = fake_build(dir, &[], &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let db = dir.join(".ods/state.db");
+    let journals = dir.join(".ods/state.db.runs");
+    let first: Vec<_> = fs::read_dir(&journals)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    let server = serve(
+        &dir.join("target"),
+        &["--no-watch", "--state-db", db.to_str().unwrap()],
+    );
+
+    // Everything builds again, slowly, and orders fails.
+    let mut build = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--full-refresh", "--dbt"])
+        .arg(fixtures("fake-dbt/dbt"))
+        .args(["--dbt-output", "capture", "--target-dir"])
+        .arg(dir.join("target"))
+        .arg("--state-db")
+        .arg(&db)
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", dir.join("base"))
+        .env("FAKE_DBT_FAIL", "orders")
+        .env("FAKE_DBT_NODE_DELAY", "0.15")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // The dashboard finds it: a journal that changed recently and doesn't say it ended.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let run_id = loop {
+        let (status, body) = get(&server, "api/runs/live");
+        assert_eq!(status, 200, "{body}");
+        let live: Value = serde_json::from_str(&body).unwrap();
+        if let Some(run) = live["runs"].as_array().unwrap().first() {
+            assert_eq!(run["status"], "probably_running", "{run}");
+            assert!(!first.iter().any(|p| {
+                p.to_string_lossy()
+                    .contains(run["run_id"].as_str().unwrap())
+            }));
+            break run["run_id"].as_str().unwrap().to_owned();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the build never showed as running"
+        );
+        assert!(
+            build.try_wait().unwrap().is_none(),
+            "the build ended before it was seen"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    let (events, end, while_running) = stream_run(&server, &run_id, &mut build);
+    let status = build.wait().unwrap();
+    assert!(!status.success(), "orders fails");
+    assert!(while_running > 0, "no event arrived while the build ran");
+    let end = end.expect("the stream ends with `end`");
+    assert_eq!(end["reason"], "finished", "{end}");
+    assert_eq!(end["outcome"], "failed", "{end}");
+    let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.first(), Some(&"run_started"), "{kinds:?}");
+    assert_eq!(kinds.last(), Some(&"run_finished"), "{kinds:?}");
+    // Each node starts before it finishes, and orders failed.
+    for (i, e) in events.iter().enumerate() {
+        if e["kind"] == "node_finished" && e["stats"]["status"] != "skipped" {
+            let node = &e["node"];
+            assert!(
+                events[..i]
+                    .iter()
+                    .any(|s| s["kind"] == "node_started" && &s["node"] == node),
+                "{node} finished before it started"
+            );
+        }
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| e["node"] == "model.jaffle_ods.orders" && e["stats"]["status"] == "error")
+    );
+    // Once it ended, it is no longer listed as running (after the list's short reuse).
+    wait_not_listed(&server);
+}
+
+/// Reads the run's event stream to its end: the run events, the `end` event's data, and
+/// how many events arrived while `build` was still running.
+#[cfg(unix)]
+fn stream_run(
+    server: &Server,
+    run_id: &str,
+    build: &mut Child,
+) -> (Vec<Value>, Option<Value>, usize) {
+    use std::io::BufRead as _;
+
+    let rest = server.url.strip_prefix("http://").unwrap();
+    let (host, base_path) = rest.split_once('/').unwrap();
+    let stream = TcpStream::connect(host).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    write!(
+        &stream,
+        "GET /{base_path}api/runs/{run_id}/events HTTP/1.0\r\nHost: {host}\r\n\r\n"
+    )
+    .unwrap();
+    let mut reader = std::io::BufReader::new(stream);
+    let (mut events, mut end, mut while_running) = (Vec::<Value>::new(), None, 0);
+    let mut name = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        let line = line.trim_end();
+        if let Some(value) = line.strip_prefix("event: ") {
+            value.clone_into(&mut name);
+        } else if let Some(data) = line.strip_prefix("data: ") {
+            let data: Value = serde_json::from_str(data).unwrap();
+            if name == "end" {
+                end = Some(data);
+            } else if name == "run_event" {
+                if build.try_wait().unwrap().is_none() {
+                    while_running += 1;
+                }
+                events.push(data);
+            }
+        }
+    }
+    (events, end, while_running)
+}
+
+/// Waits until `/api/runs/live` lists nothing: it is reused for a moment after a run ends.
+#[cfg(unix)]
+fn wait_not_listed(server: &Server) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, body) = get(server, "api/runs/live");
+        let live: Value = serde_json::from_str(&body).unwrap();
+        if live["runs"].as_array().unwrap().is_empty() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "still listed as running: {live}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

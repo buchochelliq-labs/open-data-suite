@@ -79,7 +79,8 @@ scripts/record-dashboard.py --check              # steps and stills' text; write
 ```
 
 `--chromium PATH` (or `ODS_CHROMIUM`) picks a Chromium when Playwright's own isn't
-installed. `docs/tapes/dashboard/setup.sh` prepares the project: the same scratch copy,
+installed. `ODS_DEMO_ROOT` moves the scratch project from `/tmp/ods-demo`, so
+several recordings or test runs can go at once. `docs/tapes/dashboard/setup.sh` prepares the project: the same scratch copy,
 then a few runs of the fake dbt (a full build, a partial build whose failed node's
 error is redacted, a `retry --failed`) and a code change, so every page has something
 to show. The script then starts `ods serve` on a free port and plays each tour in
@@ -103,7 +104,8 @@ still = "home"
 ```
 
 It writes, per tour, an animated WebP (960 px wide) for pages to embed, a PNG per still,
-and each still's visible text (`<still>.txt`, with run ids, times and durations masked).
+and each still's visible text (`<still>.txt`, with run ids, dates, times and durations
+masked).
 `--check` plays the tours without images: a step whose element is missing, an
 `expect` that isn't on the page, or a still whose text differs fails. The `.webm`
 video (`--webm`) isn't committed.

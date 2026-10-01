@@ -126,7 +126,15 @@ fn prune(dir: &Path, keep: usize, now: std::time::SystemTime) {
     let mut journals: Vec<(std::time::SystemTime, PathBuf)> = entries
         .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        // The path's time, not the listing's: on Windows the listing's can lag a journal
+        // another run is still writing, which would make it look old enough to delete.
+        .filter_map(|e| {
+            let path = e.path();
+            Some((
+                std::fs::symlink_metadata(&path).ok()?.modified().ok()?,
+                path,
+            ))
+        })
         .collect();
     if journals.len() <= keep {
         return;

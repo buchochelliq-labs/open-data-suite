@@ -44,6 +44,14 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- `ods serve` streams a run while it goes (#322, ADR-0024): `/api/runs/<run_id>/events`
+  sends the run's journal as Server-Sent Events, from the start and then each event as
+  `ods state run`, `build` or `test` writes it, ending with `end`; ids are journal line
+  numbers, so a reconnect with `Last-Event-ID` resumes. `?since=<n>` answers the same as
+  JSON lines for clients without `EventSource`, and `/api/runs/live` lists the runs that
+  are probably running (inferred from a journal that changed recently and doesn't say it
+  finished). Every event is redacted again as it is read; at most 16 streams are open at
+  once.
 - A failed node is explained (#323, ADR-0025): `ods state run`, `seed`, `snapshot`,
   `build`, `test` and `ods state history --run` end with **Why it failed**, and
   `--output json` with `failures`. Each explanation has a plain-language headline, a category (e.g.
