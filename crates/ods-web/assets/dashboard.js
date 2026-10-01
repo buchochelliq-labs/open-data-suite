@@ -56,16 +56,16 @@
       for (const r of runs) {
         const s = el("section", "card live-banner", null, fresh);
         s.dataset.run = r.run_id;
-        s.title = r.note;
         el("span", "live-dot", null, s).setAttribute("aria-hidden", "true");
         const t = el("div", "live-text", null, s);
-        el("strong", null, "Run in progress", t);
+        const head = el("span", "live-head", null, t);
+        el("strong", null, "Run probably in progress", head);
+        el("span", "live-inferred", "inferred", head).title = r.note;
         const m = el("span", "muted", null, t);
         el("code", null, r.command || "a run", m);
         m.append(" · run ");
         el("span", "mono", r.run_id.slice(0, 8), m);
-        m.append(` · ${r.finished} of ${r.nodes} nodes finished · ${r.running} running` + (r.failed ? ` · ${r.failed} failed` : "") + " · ");
-        el("span", "inferred", "probably running", m);
+        m.append(` · ${r.finished} of ${r.nodes} nodes finished · ${r.running} probably running` + (r.failed ? ` · ${r.failed} failed` : ""));
         const go = el("a", "live-go", "Watch live on the DAG →", s);
         go.href = base + r.href;
         const page = el("a", "live-run", "Run page", s);

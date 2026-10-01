@@ -298,7 +298,7 @@ fn live_banner(b: &mut String, live: &crate::live::LiveRuns) {
         let command = run.command.unwrap_or("a run");
         let _ = write!(
             b,
-            r#"<section class="card live-banner" data-run="{id}" title="{note}"><span class="live-dot" aria-hidden="true"></span><div class="live-text"><strong>Run in progress</strong><span class="muted"><code>{command}</code> · run <span class="mono">{short}</span> · {done} of {nodes} nodes finished · {running} running{failed} · <span class="inferred">probably running</span></span></div><a class="live-go" href="{href}">Watch live on the DAG →</a><a class="live-run" href="{run_href}">Run page</a></section>"#,
+            r#"<section class="card live-banner" data-run="{id}"><span class="live-dot" aria-hidden="true"></span><div class="live-text"><span class="live-head"><strong>Run probably in progress</strong><span class="live-inferred" title="{note}">inferred</span></span><span class="muted"><code>{command}</code> · run <span class="mono">{short}</span> · {done} of {nodes} nodes finished · {running} probably running{failed}</span></div><a class="live-go" href="{href}">Watch live on the DAG →</a><a class="live-run" href="{run_href}">Run page</a></section>"#,
             id = attr(&run.run_id),
             note = attr(&run.note),
             command = text(command),

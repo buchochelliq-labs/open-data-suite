@@ -10,8 +10,8 @@ live_scope = "jaffle_ods/default"
 [[step]]
 run = 0.4
 goto = "/"
-caption = "While ods state build runs, Home says a run is in progress"
-expect = ["Run in progress", "probably running"]
+caption = "While ods state build runs, Home says a run is probably in progress: its journal is still being written"
+expect = ["Run probably in progress", "inferred", "probably running"]
 pause = 3200
 still = "home-banner"
 

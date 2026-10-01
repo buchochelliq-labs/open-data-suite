@@ -16,7 +16,7 @@
     --lv-queued-bg: #2A2F37; --lv-queued-fg: #C3CBD5; --lv-queued-line: #5B6474;
     --lv-running-bg: #232B4A; --lv-running-fg: #B3C0FF; --lv-running-line: #8C9EFF; --lv-halo: rgba(140, 158, 255, 0.26);
     --lv-success-bg: #1B2E52; --lv-success-fg: #9CC0FF; --lv-success-line: #3A5A8F;
-    --lv-error-bg: #3A1F1E; --lv-error-fg: #F2A09B; --lv-error-line: #F2706B; --lv-error-fill: #221718;
+    --lv-error-bg: #3A1F1E; --lv-error-fg: #F2A09B; --lv-error-line: #F2706B; --lv-error-fill: #34191A;
     --lv-skipped-bg: #2E2422; --lv-skipped-fg: #E0B4AE; --lv-skipped-line: #7A5550; --lv-skipped-fill: #1C1819;
     --lv-kept-bg: #10332F; --lv-kept-fg: #6FE3CF; --lv-kept-line: #2A323D; --lv-kept-fill: #12171D;
     --lv-unknown-line: #7F8A99;
@@ -36,6 +36,7 @@
 .lv-scope { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 4px 0 10px; border-radius: 999px;
   background: var(--active-bg); color: var(--accent-strong); font-size: 12px; white-space: nowrap; }
 .lv-scope[hidden] { display: none; }
+.lv-scope.static { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--heading-muted); }
 .lin-bar .lv-scope button { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 15px; }
 .lv-focus { color: var(--heading-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-size: 13px; }
 .lv-focus .mono { color: var(--fg); }
@@ -48,6 +49,8 @@
 
 /* ---- header pill */
 .lv-pill-status.running { background: var(--active-bg); color: var(--accent-strong); border-color: transparent; }
+.lv-dot-done { background: var(--faint); }
+.lv-node-count { color: var(--muted); }
 .lv-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); animation: lv-dot 1.6s ease-in-out infinite; }
 @keyframes lv-dot { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent); } }
 
@@ -57,6 +60,9 @@
 .lv-node .lv-pill text { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .03em; pointer-events: none; }
 .lv-node .lv-pill rect { stroke-width: 1; }
 .lv-node .lv-halo { fill: none; stroke: none; }
+/* State only: a Python model's "opaque" dashes would read as queued or skipped here;
+   its kind shows in the corner tag and on its card. */
+.lv-node.opaque .nbox { stroke-dasharray: none; }
 .lv-node.lv-queued .nbox { stroke: var(--lv-queued-line); stroke-dasharray: 5 3; }
 .lv-node.lv-queued .lv-pill rect { fill: var(--lv-queued-bg); stroke: var(--lv-queued-line); stroke-dasharray: 3 2; }
 .lv-node.lv-queued .lv-pill text { fill: var(--lv-queued-fg); }
@@ -84,7 +90,10 @@
 .lv-node.lv-unknown .lv-pill rect { fill: none; stroke: var(--lv-unknown-line); stroke-dasharray: 3 2; }
 .lv-node.lv-unknown .lv-pill text { fill: var(--muted); }
 .lv-node.sel .nbox { stroke: var(--lv-ink); stroke-width: 2.5; stroke-dasharray: none; }
-.lv-faded { opacity: .4; }
+.lv-faded { opacity: .45; }
+@media (prefers-color-scheme: dark) { .lv-faded { opacity: .55; } }
+/* The keyboard's focus: accent and dashed, apart from the selection's solid ink. */
+.lv-node .hit:focus-visible { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 3; outline: none; }
 .lv-node.lv-faded .lv-halo { animation: none; }
 .edge.lv-into-running { stroke: var(--lv-running-line); stroke-width: 2.5; }
 .edge.lv-into-skipped { stroke: var(--lv-skipped-line); stroke-dasharray: 5 4; }
@@ -111,6 +120,8 @@
 .lv-chips.left { left: 12px; align-items: flex-start; }
 .lv-chips.top { top: 12px; left: 50%; transform: translateX(-50%); }
 .lv-chips.bottom { bottom: 196px; left: 50%; transform: translateX(-50%); }
+.lv-chips-note { max-width: 250px; font-size: 11.5px; color: var(--heading-muted); text-align: right; background: color-mix(in srgb, var(--surface) 85%, transparent);
+  padding: 4px 8px; border-radius: 6px; }
 .lv-chips-head { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); }
 .lv-chip { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--lv-running-line); border-radius: 999px;
   background: var(--surface); color: var(--fg); font: inherit; font-size: 13px; box-shadow: 0 4px 12px var(--lv-shadow); cursor: pointer; white-space: nowrap; }
@@ -133,7 +144,7 @@
 }
 .lv-mini canvas { width: 300px; height: 170px; display: block; }
 .lv-mini-label { position: absolute; left: 10px; top: 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); pointer-events: none; }
-.lv-on .lin-legend { right: 332px; max-width: none; }
+.lv-on .lin-legend { flex-wrap: nowrap; max-width: calc(100% - 350px); gap: 6px; }
 .lin-legend .lv-pill { font-size: 11px; }
 .lin-legend .lv-note { color: var(--heading-muted); }
 
@@ -204,6 +215,7 @@
 .lv-sub { font-size: 12px; color: var(--muted); }
 .lv-row .st-na { color: var(--faint); }
 .lv-row .wh-link { font-size: 12px; }
+.lv-row dd .lv-rel { overflow-wrap: normal; word-break: normal; }
 .lv-card .st-explain { padding: 14px; }
 .lv-card .st-explain-head { font-size: 15px; }
 .lv-card-actions { display: flex; }

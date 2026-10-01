@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog
@@ -26,8 +26,9 @@ Home
 /
 snapshot 3 ·
 <when>
-Run in progress
-ods state build · <run> · 0 of 7 nodes finished · 1 running · probably running
+Run probably in progress
+inferred
+ods state build · <run> · 0 of 7 nodes finished · 1 probably running
 Watch live on the DAG →
 Run page
 Project health

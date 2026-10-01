@@ -34,7 +34,6 @@ import ods_live_sim as sim  # noqa: E402
 
 M = sim.M
 SCOPE = "jaffle_ods/default"
-DEMO_DB = Path("/tmp/ods-demo/jaffle_shop/.ods/state.db")
 WAIT = 6000
 
 
@@ -95,15 +94,20 @@ def large_manifest(target: Path) -> None:
 
 
 def setUpModule() -> None:
-    global BIN, DEMO, DEMO_URL, BIG, BIG_URL, BIG_DB, BROWSER, PW, SCRATCH
+    global BIN, DEMO, DEMO_URL, DEMO_DB, BIG, BIG_URL, BIG_DB, BROWSER, PW, SCRATCH
     from playwright.sync_api import sync_playwright
 
     BIN = ods_bin_dir()
-    env = {"PATH": f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}", "REPO": str(REPO), "TZ": "UTC", "LANG": "C.UTF-8"}
-    subprocess.run(["bash", "-c", 'source "$REPO/docs/tapes/dashboard/setup.sh" >/dev/null 2>&1'], env=env, check=True)
-    env["HOME"] = "/tmp/ods-demo/home"
-    DEMO, DEMO_URL = serve(BIN, Path("/tmp/ods-demo/jaffle_shop"), env, [])
     SCRATCH = Path(tempfile.mkdtemp(prefix="ods-live-view-"))
+    # The demo project in a folder of its own (ODS_DEMO_ROOT, else a new one), so this
+    # can run beside the recordings.
+    root = Path(os.environ.get("ODS_DEMO_ROOT") or SCRATCH / "demo")
+    env = {"PATH": f"{BIN}{os.pathsep}{os.environ.get('PATH', '')}", "REPO": str(REPO), "TZ": "UTC",
+           "LANG": "C.UTF-8", "ODS_DEMO_ROOT": str(root)}
+    subprocess.run(["bash", "-c", 'source "$REPO/docs/tapes/dashboard/setup.sh" >/dev/null 2>&1'], env=env, check=True)
+    env["HOME"] = str(root / "home")
+    DEMO_DB = root / "jaffle_shop" / ".ods" / "state.db"
+    DEMO, DEMO_URL = serve(BIN, root / "jaffle_shop", env, [])
     large_manifest(SCRATCH / "target")
     BIG_DB = SCRATCH / ".ods" / "state.db"
     BIG, BIG_URL = serve(BIN, SCRATCH, {**env, "HOME": str(SCRATCH)},
@@ -125,12 +129,13 @@ class LiveCase(unittest.TestCase):
     """One run and one page per test."""
 
     url = property(lambda self: DEMO_URL)
-    db = DEMO_DB
+    db = property(lambda self: DEMO_DB)
     scope = SCOPE
     reduced = "no-preference"
+    run_prefix = "7f2f6c69"
 
     def setUp(self) -> None:
-        self.run_id = f"7f2f6c69-{uuid.uuid4().hex[:4]}-4000-8000-{uuid.uuid4().hex[:12]}"
+        self.run_id = f"{self.run_prefix}-{uuid.uuid4().hex[:4]}-4000-8000-{uuid.uuid4().hex[:12]}"
         self.journal = sim.Journal(self.db, self.run_id, self.scope)
         self.context = BROWSER.new_context(viewport={"width": 1440, "height": 900}, reduced_motion=self.reduced,
                                            timezone_id="UTC", locale="en-GB")
@@ -240,6 +245,8 @@ class SimulatedRun(LiveCase):
         self.assertIn("Rows affected 99 from the adapter response", card)
         self.assertIn("Adapter query_id 01b2-c3", card)
         self.assertIn("Relation", card)
+        # The run goes on: its tests come after it.
+        self.assertIn("run after this node", self.text('#lv-card [data-stat="tests"]'))
         # A view that reported no rows: a dash with the reason, never 0.
         self.choose("stg_orders")
         self.wait("() => document.querySelector('.lp-title .nm').textContent === 'stg_orders' && document.querySelector('#lv-card .lv-stats')")
@@ -260,6 +267,16 @@ class SimulatedRun(LiveCase):
         card = self.page.text_content("#lv-card")
         self.assertIn("KeyError", card)
         self.assertIn("[value removed]", card)
+        # It built nothing: neither rows nor tests are "not reported".
+        self.assertIn("the node didn't build", self.text('#lv-card [data-stat="rows_affected"]'))
+        self.assertIn("not run the node did not build", self.text('#lv-card [data-stat="tests"]'))
+        # A Python model, and how it materializes, as the board has them.
+        pills = self.text("#lv-card .lv-card-pills")
+        self.assertIn("python model", pills)
+        self.assertIn("table", pills)
+        # Its state alone draws its box: solid red, not the "opaque" dashes.
+        dash = self.node("customer_segments").locator("rect.nbox").evaluate("e => getComputedStyle(e).strokeDasharray")
+        self.assertEqual(dash, "none")
 
     def test_follow_frames_the_running_nodes(self) -> None:
         self.play(6.7)
@@ -307,11 +324,14 @@ class SimulatedRun(LiveCase):
         self.assertTrue(self.in_view("customers"))
         self.assertTrue(self.in_view("customer_order_rank"))
         # A zoom, Fit, or a node click turns it off too; the toggle turns it on.
-        for act in (lambda: self.page.click('button[aria-label="Zoom in"]'),
-                    lambda: self.page.click("#lin-fit"),
-                    lambda: self.choose("orders")):
+        # A zoom, Fit, or a node click turns it off too, and the hint says which; the
+        # toggle turns it on.
+        for act, why in ((lambda: self.page.click('button[aria-label="Zoom in"]'), "you zoomed"),
+                         (lambda: self.page.click("#lin-fit"), "you used Fit"),
+                         (lambda: self.choose("orders"), "you selected a node")):
             act()
             self.assertFalse(self.following())
+            self.assertIn(why, self.text("#lv-hint"))
             self.page.click("#lv-follow")
             self.assertTrue(self.following())
 
@@ -411,17 +431,38 @@ class SimulatedRun(LiveCase):
         self.page.click("#lv-toast button")
         self.assertTrue(self.page.locator("#lv-scope").is_hidden())
 
-    def test_the_end_stops_follow_and_offers_the_failure(self) -> None:
+    def test_the_end_stops_follow_frames_the_failure_and_offers_it(self) -> None:
         self.play(99)
-        self.open()
+        self.open("&follow=customers:down")
         self.wait("() => !document.getElementById('lv-toast').hidden")
         self.assertFalse(self.following())
         self.assertTrue(self.page.locator("#lv-hint").is_hidden())
+        # The final view has the failure in it.
+        self.settle()
+        self.assertTrue(self.in_view("customer_segments"))
+        self.assertTrue(self.in_view("segment_summary"))
+        # Nothing is followed any more: the scope only fades the rest.
+        self.assertEqual(self.text("#lv-scope span"), "Scope: customers + 3 downstream")
         self.page.click(".lv-jump")
         self.wait("() => document.querySelector('.lp-title .nm') && document.querySelector('.lp-title .nm').textContent === 'customer_segments'")
         self.settle()
         self.assertTrue(self.in_view("customer_segments"))
         self.assertTrue(self.in_view("segment_summary"))
+        # Selected and in view: the offer is gone.
+        self.assertEqual(self.page.locator(".lv-jump").count(), 0)
+
+    def test_a_link_opened_before_the_journal_exists_waits_for_it(self) -> None:
+        later = f"7f2f6c69-0000-4000-8000-{uuid.uuid4().hex[:12]}"
+        self.page.goto(f"{self.url}/lineage?live={later}")
+        self.page.wait_for_selector("#lin-nodes g[data-node]")
+        self.wait("() => /Waiting for run/.test(document.querySelector('.lin-status').textContent)")
+        journal = sim.Journal(self.db, later, self.scope)
+        try:
+            sim.play(journal, until=2.4, speed=0)
+            self.wait_pill("orders", "RUNNING")
+            self.assertIn("Live", self.text(".lin-status"))
+        finally:
+            journal.remove()
 
     def test_polling_works_without_event_source(self) -> None:
         self.play(2.3)
@@ -456,8 +497,9 @@ class SimulatedRun(LiveCase):
         self.page.goto(self.url + "/")
         self.wait("() => document.querySelector('.live-banner')")
         banner = self.text(".live-banner")
-        self.assertIn("Run in progress", banner)
-        self.assertIn("probably running", banner)
+        self.assertIn("Run probably in progress", banner)
+        self.assertIn("inferred", banner)
+        self.assertIn("1 probably running", banner)
         self.page.click(".live-banner .live-go")
         self.page.wait_for_selector("#lin-nodes g[data-node]")
         self.assertIn(f"live={self.run_id}", self.page.url)
@@ -509,19 +551,33 @@ class SpreadOut(LiveCase):
     """Three chains of twelve: running nodes at their far ends can't be framed at 60%."""
 
     url = property(lambda self: BIG_URL)
+    db = property(lambda self: BIG_DB)
     scope = "big/default"
+    run_prefix = "3c91e0aa"
 
     def setUp(self) -> None:
-        self.db = BIG_DB
         super().setUp()
+        # Each event a second after the last, in the last two minutes; each running node on a
+        # thread of its own.
+        self.step = 0
+        start = sim.datetime.now(sim.timezone.utc) - sim.timedelta(seconds=120)
+
+        def clock():
+            self.step += 1
+            return start + sim.timedelta(seconds=self.step)
+        self.journal.clock = clock
+        self.threads: dict[str, int] = {}
 
     def big(self, *steps) -> None:
         for kind, name in steps:
             node = f"model.big.{name}"
             if kind == "start":
-                self.journal.node_started(node)
+                busy = set(self.threads.values())
+                thread = next(t for t in range(1, 99) if t not in busy)
+                self.threads[name] = thread
+                self.journal.node_started(node, thread)
             else:
-                self.journal.node_finished(node, "success")
+                self.journal.node_finished(node, "success", thread=self.threads.pop(name, None))
 
     def test_follow_keeps_one_focus_shows_chips_and_moves_only_when_it_finishes(self) -> None:
         nodes = [f"model.big.{c}_{i:02d}" for c in "abc" for i in range(12)]

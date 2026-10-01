@@ -116,15 +116,19 @@ const OdsLive = (function () {
     if (n.startedAt != null && n.finishedAt != null) return Math.max(0, n.finishedAt - n.startedAt);
     return null;
   }
-  // Rows so far: the sum of what was reported, and how many nodes that ran didn't.
+  // Rows so far: the sum of what was reported; built nodes that didn't report theirs;
+  // and failed or unknown nodes that didn't, which may have written some too.
   function rows(run) {
-    let sum = 0, reported = 0, missing = 0;
+    let sum = 0, reported = 0, missingBuilt = 0, missingOther = 0, finished = 0;
     for (const n of run.nodes.values()) {
       if (!["success", "error", "unknown"].includes(n.status)) continue;
+      finished += 1;
       const r = n.stats && n.stats.rows_affected;
-      if (r == null) missing += 1; else { sum += r; reported += 1; }
+      if (r != null) { sum += r; reported += 1; }
+      else if (n.status === "success") missingBuilt += 1;
+      else missingOther += 1;
     }
-    return { sum, reported, missing };
+    return { sum, reported, missingBuilt, missingOther, finished };
   }
   // `850ms`, `4.2s`, `2m 05s`, as the Run pages say it.
   function duration(msv) {
@@ -171,18 +175,28 @@ const OdsLive = (function () {
     }
     return x0 === Infinity ? null : { x0, y0, x1, y1 };
   }
-  // The camera that shows `b` in a `vw`×`vh` view, no closer than `max`.
-  function fit(b, vw, vh, max) {
-    const bw = Math.max(1, b.x1 - b.x0), bh = Math.max(1, b.y1 - b.y0);
-    const k = Math.min(max, (vw - 2 * PAD) / bw, (vh - 2 * PAD) / bh);
-    return { k, x: vw / 2 - (b.x0 + bw / 2) * k, y: vh / 2 - (b.y0 + bh / 2) * k };
+  // The part of the view to frame in: all of it but `inset` (e.g. the minimap's
+  // corner), as { cx, cy, w, h }.
+  function region(vw, vh, inset) {
+    const i = Object.assign({ top: 0, right: 0, bottom: 0, left: 0 }, inset);
+    const w = Math.max(1, vw - i.left - i.right), h = Math.max(1, vh - i.top - i.bottom);
+    return { cx: i.left + w / 2, cy: i.top + h / 2, w, h };
   }
-  // The same, but never below the readable minimum: centred on `b` if it doesn't fit.
-  function fitReadable(b, vw, vh) {
-    const c = fit(b, vw, vh, MAX_FOLLOW);
+  // The camera that shows `b` in a `vw`×`vh` view (less `inset`), no closer than `max`.
+  function fit(b, vw, vh, max, inset) {
+    const r = region(vw, vh, inset);
+    const pad = Math.min(PAD, r.w / 6, r.h / 6);
+    const bw = Math.max(1, b.x1 - b.x0), bh = Math.max(1, b.y1 - b.y0);
+    const k = Math.min(max, (r.w - 2 * pad) / bw, (r.h - 2 * pad) / bh);
+    return { k, x: r.cx - (b.x0 + bw / 2) * k, y: r.cy - (b.y0 + bh / 2) * k };
+  }
+  // The same, but never below the readable minimum: centred on `b` (or on `on`, a box
+  // that must stay in view) if it doesn't fit.
+  function fitReadable(b, vw, vh, inset, on) {
+    const c = fit(b, vw, vh, MAX_FOLLOW, inset);
     if (c.k >= MIN_READABLE) return c;
-    const k = MIN_READABLE;
-    return { k, x: vw / 2 - ((b.x0 + b.x1) / 2) * k, y: vh / 2 - ((b.y0 + b.y1) / 2) * k };
+    const k = MIN_READABLE, r = region(vw, vh, inset), at = on || b;
+    return { k, x: r.cx - ((at.x0 + at.x1) / 2) * k, y: r.cy - ((at.y0 + at.y1) / 2) * k };
   }
   // The running node follow should keep in view when they don't all fit: the one that
   // blocks the most queued nodes downstream; on a tie the nearest to the view's centre,
@@ -207,7 +221,7 @@ const OdsLive = (function () {
     if (running.length) {
       const b = box(running, ctx.pos);
       if (b) {
-        const c = fit(b, ctx.vw, ctx.vh, MAX_FOLLOW);
+        const c = fit(b, ctx.vw, ctx.vh, MAX_FOLLOW, ctx.inset);
         if (c.k >= MIN_READABLE) return { mode: "running", cam: c, focus: null, running };
       }
       const kept = ctx.focus && running.includes(ctx.focus) ? { id: ctx.focus } : chooseFocus(running, ctx);
@@ -215,22 +229,33 @@ const OdsLive = (function () {
       return {
         mode: "focus", focus: kept.id, running,
         blocks: blocking(ctx.graph, ctx.statusOf, kept.id),
-        cam: fb ? fit(fb, ctx.vw, ctx.vh, MAX_FOLLOW) : null,
+        cam: fb ? fit(fb, ctx.vw, ctx.vh, MAX_FOLLOW, ctx.inset) : null,
       };
     }
     if (pool) {
       const inRun = [...pool].filter(id => ctx.inRun(id));
       if (inRun.length && inRun.every(id => !["queued", "running"].includes(ctx.statusOf(id)))) {
-        const b = box([...pool], ctx.pos);
-        return { mode: "scope-done", cam: b ? fitReadable(b, ctx.vw, ctx.vh) : null, focus: null, running };
+        // The whole scope; if it can't be read whole, its root stays in view.
+        const b = box([...pool], ctx.pos), root = ctx.root ? box([ctx.root], ctx.pos) : null;
+        return { mode: "scope-done", cam: b ? fitReadable(b, ctx.vw, ctx.vh, ctx.inset, root) : null, focus: null, running };
       }
     }
     if (ctx.done) return { mode: "done", cam: null, focus: null, running };
     const ready = ctx.ids.filter(id => inPool(id) && ctx.statusOf(id) === "queued"
       && (ctx.graph.up.get(id) || []).every(u => !ctx.inRun(u) || FINISHED.has(ctx.statusOf(u)))).sort();
     const b = ready.length ? box(ready, ctx.pos) : null;
-    if (b) return { mode: "next", cam: fitReadable(b, ctx.vw, ctx.vh), focus: null, running, ready };
+    if (b) return { mode: "next", cam: fitReadable(b, ctx.vw, ctx.vh, ctx.inset), focus: null, running, ready };
     return { mode: "idle", cam: null, focus: null, running };
+  }
+  // The view at the end of a run: the whole graph if it reads at the minimum, else every
+  // node that ran, else the failed and skipped ones; null when none of that applies.
+  function finalView(ctx) {
+    const all = box(ctx.pos.keys(), ctx.pos);
+    if (all) { const c = fit(all, ctx.vw, ctx.vh, 1, ctx.inset); if (c.k >= MIN_READABLE) return c; }
+    const ran = box(ctx.ids.filter(ctx.inRun), ctx.pos);
+    if (ran) { const c = fit(ran, ctx.vw, ctx.vh, 1, ctx.inset); if (c.k >= MIN_READABLE) return c; }
+    const bad = box(ctx.ids.filter(id => ["error", "skipped"].includes(ctx.statusOf(id))), ctx.pos);
+    return bad ? fitReadable(bad, ctx.vw, ctx.vh, ctx.inset) : null;
   }
   // Whether the camera moved enough to be worth moving.
   function moved(a, b) {
@@ -255,7 +280,7 @@ const OdsLive = (function () {
   return {
     MIN_READABLE, MAX_FOLLOW, MOVE_EVERY, FINISHED,
     newRun, apply, counts, took, rows, duration, adjacency, reach, scopeSet, blocking,
-    box, fit, fitReadable, chooseFocus, follow, moved, offscreen,
+    box, fit, fitReadable, chooseFocus, follow, finalView, moved, offscreen,
   };
 })();
 
@@ -330,7 +355,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   const canvas = x.canvas;
   const hint = h("div", null, "lv-hint lin-ui", canvas);
   hint.id = "lv-hint";
-  h("span", "Follow is off: you moved the view.", null, hint);
+  const hintText = h("span", "Follow is off: you moved the view.", null, hint);
   const hintBtn = h("button", "Follow run", null, hint);
   hintBtn.type = "button";
   const toast = h("div", null, "lv-toast lin-ui", canvas);
@@ -373,7 +398,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   function start(runId, opts) {
     opts = opts || {};
     stop(true);
-    S.on = true; S.runId = runId; S.run = L.newRun(runId); S.done = false;
+    S.on = true; S.runId = runId; S.run = L.newRun(runId); S.done = false; S.jumped = false;
+    S.waitFrom = 0; S.backoff = 0; S.waiting = false;
     document.body.classList.remove("lv-done");
     S.follow = true; S.hint = false; S.focus = null; S.lastCam = null; S.lastMove = 0; S.scopeDoneShown = false;
     S.scope = opts.scope || null;
@@ -427,10 +453,26 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     if (!S.on || S.done) return;
     try {
       const r = await fetch(url + "?since=" + since);
+      if (r.status === 404 && Date.now() - (S.waitFrom || (S.waitFrom = Date.now())) < 60000) {
+        // Opened from a link before the run wrote its journal: wait for it, a while.
+        S.waiting = true;
+        S.backoff = Math.min(8000, (S.backoff || 500) * 2);
+        schedule();
+        S.pollTimer = setTimeout(() => poll(url, S.run.lastId), S.backoff);
+        return;
+      }
       if (r.status === 400 || r.status === 404) {
+        S.waiting = false;
         ended({ reason: "missing", outcome: null, inferred: false, note: `No journal for run ${S.runId}: it may have been pruned (the newest 50 are kept), or the id is wrong.` });
         return;
       }
+      if (r.ok && S.waiting && params.get("poll") !== "1" && typeof EventSource !== "undefined") {
+        // It's there now: stream it.
+        S.waiting = false;
+        connect();
+        return;
+      }
+      S.waiting = false;
       if (r.ok) {
         for (const line of (await r.text()).split("\n")) {
           if (!line.trim()) continue;
@@ -446,12 +488,15 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   function receive(id, ev) {
     if (id && id <= S.run.lastId) return;
     if (id) S.run.lastId = id;
+    // Another run's event in this journal: counted, never drawn.
+    if (ev.run_id && ev.run_id !== S.runId) { S.run.unreadable += 1; schedule(); return; }
     for (const changed of L.apply(S.run, ev)) S.dirty.add(changed);
     const said = S.run.log[S.run.log.length - 1];
     if (said && said !== S.lastSaid) { S.lastSaid = said; announce(said); }
     schedule();
   }
   function ended(end) {
+    const following = S.follow;
     S.done = true;
     document.body.classList.add("lv-done");
     S.run.ended = end;
@@ -459,6 +504,15 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     S.follow = false; S.hint = false; S.focus = null;
     for (const id of S.run.nodes.keys()) S.dirty.add(id);
     if (end.reason !== "finished") announce({ kind: "run", text: end.note });
+    // The final view shows what ran, the failure included, unless the person was
+    // looking elsewhere.
+    if (following && end.reason !== "missing") {
+      requestAnimationFrame(() => {
+        const { vw, vh } = viewport();
+        const cam = L.finalView({ ids: buildable, inRun, statusOf, pos: positions(), vw, vh });
+        if (cam) moveTo(cam);
+      });
+    }
     schedule();
   }
   function schedule() {
@@ -608,6 +662,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   }
 
   // ---------- follow mode
+  // The minimap's corner, kept clear while framing.
+  const inset = () => (S.done ? {} : { bottom: 190 });
   function viewport() { const r = canvas.getBoundingClientRect(); return { vw: r.width, vh: r.height }; }
   function positions() {
     const out = new Map(), { w } = x.size();
@@ -619,6 +675,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     return L.follow({
       ids: buildable, statusOf, inRun, graph, pos: positions(), vw, vh,
       view: { x: x.view.x, y: x.view.y, k: x.view.k }, focus: S.focus, pool: pool(), done: S.done,
+      root: S.scope && S.scope.id, inset: inset(),
     });
   }
   // Moves the camera where follow wants it, at most once a second unless `now`.
@@ -662,7 +719,11 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     controls();
     schedule();
   }
-  x.hooks.user.push(kind => { if (S.on && S.follow) setFollow(false, "user"); if (kind !== "select") closeMenu(); });
+  const WHY_OFF = { pan: "You moved the view", zoom: "You zoomed", fit: "You used Fit", select: "You selected a node" };
+  x.hooks.user.push(kind => {
+    if (S.on && S.follow) { S.offWhy = WHY_OFF[kind] || "You moved the view"; setFollow(false, "user"); }
+    if (kind !== "select") closeMenu();
+  });
   followBtn.addEventListener("click", () => setFollow(!S.follow, S.follow ? "toggle" : null));
   hintBtn.addEventListener("click", () => setFollow(true));
   zoomIn.addEventListener("click", () => zoom(1.25));
@@ -695,13 +756,16 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const off = L.offscreen(running, positions(), x.view, vw, vh);
     const arrows = { right: "→", left: "←", top: "↑", bottom: "↓" };
     const where = { right: "to the right", left: "to the left", top: "above", bottom: "below" };
-    const key = off.map(o => `${o.id}:${o.side}`).join("|");
+    const focusMode = S.follow && S.want && S.want.mode === "focus";
+    const key = off.map(o => `${o.id}:${o.side}`).join("|") + (focusMode ? "|focus" : "");
     if (key === S.chipsKey) return;
     S.chipsKey = key;
     for (const side of Object.keys(chips)) {
       const list = off.filter(o => o.side === side);
       chips[side].replaceChildren();
-      chips[side].hidden = !list.length;
+      const note = side === "right" && focusMode;
+      chips[side].hidden = !list.length && !note;
+      if (note) h("div", "When the focus finishes, follow moves to the running node blocking the most queued work, then the nearest.", "lv-chips-note", chips[side]);
       if (!list.length) continue;
       if (side === "right" || side === "left") h("div", `${list.length} RUNNING OFF SCREEN`, "lv-chips-head", chips[side]);
       for (const o of list) {
@@ -722,7 +786,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
           S.follow = true; S.hint = false; S.focus = o.id; S.lastCam = null;
           const { vw: w2, vh: h2 } = viewport();
           const bx = L.box([o.id], positions());
-          if (bx) { const c = L.fit(bx, w2, h2, L.MAX_FOLLOW); S.lastCam = c; S.lastMove = performance.now(); moveTo(c); }
+          if (bx) { const c = L.fit(bx, w2, h2, L.MAX_FOLLOW, inset()); S.lastCam = c; S.lastMove = performance.now(); moveTo(c); }
           for (const id of S.run.nodes.keys()) S.dirty.add(id);
           schedule();
         });
@@ -764,7 +828,10 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const vx0 = (0 - x.view.x) / x.view.k, vy0 = (0 - x.view.y) / x.view.k;
     ctx.strokeStyle = color("view");
     ctx.lineWidth = 2;
-    ctx.strokeRect(ox + vx0 * k, oy + vy0 * k, (vw / x.view.k) * k, (vh / x.view.k) * k);
+    // The view's box, kept inside the minimap so all four sides show.
+    const rx0 = Math.max(2, ox + vx0 * k), ry0 = Math.max(2, oy + vy0 * k);
+    const rx1 = Math.min(W - 2, ox + (vx0 + vw / x.view.k) * k), ry1 = Math.min(H - 2, oy + (vy0 + vh / x.view.k) * k);
+    if (rx1 > rx0 && ry1 > ry0) ctx.strokeRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
   }
   setInterval(() => { if (S.on && !S.done && buildable.some(id => statusOf(id) === "running")) miniDraw(); }, still() ? 1000 : 120);
   miniCanvas.addEventListener("click", e => {
@@ -779,17 +846,26 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   });
 
   // ---------- the toolbar, header, hint and toast
+  // "· 36 nodes" after the page's name, as the large-project board has it.
+  const crumb = document.querySelector("header.top .crumb-here");
+  const count = crumb ? h("span", null, "lv-node-count", null) : null;
+  if (crumb) crumb.insertAdjacentElement("afterend", count);
   function header() {
+    if (count) count.textContent = S.on ? ` · ${buildable.length.toLocaleString("en")} nodes` : "";
     if (!status) return;
     const running = !S.done;
-    const word = running ? `Live · run ${shortRun(S.runId)}` + (S.run.startedAt ? ` · ${elapsed(Date.now() - S.run.startedAt)}` : "") : `Finished · run ${shortRun(S.runId)}`;
+    const c = L.counts(S.run);
+    const requested = S.run.requested.length || S.run.nodes.size;
+    const finished = c.success + c.error + c.skipped + c.unknown;
+    const word = S.waiting ? `Waiting for run ${shortRun(S.runId)}'s journal`
+      : running ? `Live · run ${shortRun(S.runId)} · ${finished} of ${requested} finished · ${c.running} running` : `Finished · run ${shortRun(S.runId)}`;
     const ending = S.run.ended && S.run.ended.reason;
     const text = ending === "missing" ? `No journal · run ${shortRun(S.runId)}` : ending && ending !== "finished" ? `Stopped? · run ${shortRun(S.runId)}` : word;
     if (status.dataset.live !== text) {
       status.dataset.live = text;
       status.innerHTML = "";
       status.className = "pill-snap lin-status lv-pill-status" + (running ? " running" : "");
-      h("span", null, running ? "dot lv-dot" : "dot none", status);
+      h("span", null, running ? "dot lv-dot" : "dot lv-dot-done", status);
       status.append(text);
       status.title = running ? "Probably running: its journal is still being written" : (S.run.ended ? S.run.ended.note : "");
     }
@@ -804,7 +880,11 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     scopeChip.hidden = !S.scope;
     if (S.scope) {
       const set = L.scopeSet(graph, S.scope), n = set.size - 1;
-      scopeText.textContent = S.scope.dir === "self" ? `Following ${x.nameOf(S.scope.id)}` : `Following ${x.nameOf(S.scope.id)} + ${n} ${S.scope.dir === "down" ? "downstream" : "upstream"}`;
+      // Once the run is over nothing is followed: the scope only fades the rest.
+      const lead = S.done ? "Scope:" : "Following";
+      scopeText.textContent = S.scope.dir === "self" ? `${lead} ${x.nameOf(S.scope.id)}` : `${lead} ${x.nameOf(S.scope.id)} + ${n} ${S.scope.dir === "down" ? "downstream" : "upstream"}`;
+      scopeChip.classList.toggle("static", S.done);
+      scopeClear.setAttribute("aria-label", S.done ? "Clear the scope" : "Stop following this scope; follow the whole run");
     }
     const w = S.want;
     focusLine.replaceChildren();
@@ -815,6 +895,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       focusLine.title = "Running nodes are too far apart to show at a readable size, so follow keeps one in focus until it finishes, then moves to the running node blocking the most queued work (the nearest one on a tie).";
     } else focusLine.title = "";
     hint.hidden = !(S.hint && !S.follow && !S.done);
+    hintText.textContent = `Follow is off: ${(S.offWhy || "You moved the view").replace(/^You/, "you")}.`;
     toastDraw();
   }
   function toastDraw() {
@@ -825,7 +906,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       const kept = buildable.filter(id => !inRun(id) && shownStatus(id) === "kept").length;
       const took = S.run.finishedAt && S.run.startedAt ? L.duration(S.run.finishedAt - S.run.startedAt) : null;
       const failed = [...S.run.nodes.values()].filter(n => n.status === "error").map(n => n.id);
-      key = `done:${c.success}:${c.error}:${c.skipped}:${kept}:${took}:${S.run.ended && S.run.ended.reason}`;
+      key = `done:${c.success}:${c.error}:${c.skipped}:${kept}:${took}:${S.run.ended && S.run.ended.reason}:${!!S.jumped}`;
       build = () => {
         toast.className = "lv-toast lin-ui" + (failed.length ? " failed" : "");
         const stopped = S.run.ended && S.run.ended.reason !== "finished";
@@ -836,7 +917,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
         if (c.unknown) parts.push(`${c.unknown} unknown`);
         parts.push(`${kept} kept`);
         h("span", stopped ? S.run.ended.note : parts.join(" · "), "lv-toast-sub", toast);
-        if (failed.length) {
+        // Gone once the failure is selected and in view.
+        if (failed.length && !S.jumped) {
           const b = h("button", failed.length === 1 ? "Jump to failure" : `Jump to failures (${failed.length})`, "lv-jump", toast);
           b.type = "button";
           b.addEventListener("click", () => jumpToFailure(failed));
@@ -861,7 +943,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   function jumpToFailure(failed) {
     const first = failed.slice().sort((a, b) => x.nameOf(a) < x.nameOf(b) ? -1 : 1)[0];
     const around = [...L.reach(graph.down, first)].filter(id => id === first || statusOf(id) === "skipped");
-    S.follow = false; S.hint = false;
+    S.follow = false; S.hint = false; S.jumped = true;
     x.select(first, null);
     const { vw, vh } = viewport();
     const b = L.box(around, positions());
@@ -1013,10 +1095,20 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     h("h3", "So far", "lv-h", body);
     const rowsLine = h("div", null, "lv-kv", body);
     h("span", "Rows affected", null, rowsLine);
-    h("span", r.reported ? (r.missing ? `at least ${r.sum}` : String(r.sum)) : "—", "mono", rowsLine);
-    h("p", r.missing
-      ? `${r.missing} node${r.missing === 1 ? "" : "s"} that ran didn't report rows: many adapters report none for views or merges, so the total is a lower bound.`
-      : r.reported ? "Every node that ran reported its rows." : "No node has finished yet.", "lv-note", body);
+    const short = r.missingBuilt + r.missingOther;
+    h("span", r.reported ? (short ? `at least ${r.sum}` : String(r.sum)) : "—", "mono", rowsLine);
+    let note;
+    if (!r.finished) note = "No node has finished yet.";
+    // Nothing reported: no total, so no claim about one.
+    else if (!r.reported) note = "No node reported rows yet.";
+    else if (short) {
+      const parts = [];
+      const s = n => (n === 1 ? "" : "s");
+      if (r.missingBuilt) parts.push(`${r.missingBuilt} built node${s(r.missingBuilt)} didn't report rows (many adapters report none for views or merges)`);
+      if (r.missingOther) parts.push(`${r.missingOther} failed or unknown node${s(r.missingOther)} may have written some`);
+      note = `${parts.join("; ")}, so the total is a lower bound.`;
+    } else note = "Every node that ran reported its rows.";
+    h("p", note, "lv-note", body);
     if (run.unreadable) h("p", `${run.unreadable} line${run.unreadable === 1 ? "" : "s"} of the journal couldn't be read (a newer version, or cut short).`, "warn", body);
     if (run.live === false) h("p", "This run's events came from its final results only: no times, rows or threads while it ran.", "warn", body);
     h("h3", "Events", "lv-h", body);
@@ -1096,11 +1188,11 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const row = document.createElement("div");
     row.className = "lv-row";
     row.dataset.stat = "why_it_ran";
-    h("dt", "Why it ran", null, row);
+    h("dt", "Planned because", null, row);
     const dd = h("dd", null, null, row);
     const first = d.reasons && d.reasons[0];
     h("span", first ? first.message : d.summary, "lv-v", dd);
-    h("span", "the plan's reason when this page opened", "lv-sub", dd);
+    h("span", "the plan's reason when this page opened; the run records its own once it commits", "lv-sub", dd);
     const tests = dl.querySelector('[data-stat="tests"]');
     dl.insertBefore(row, tests || null);
   }
@@ -1141,13 +1233,19 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   });
 
   // ---------- the legend
+  const LEGEND = {
+    queued: "waiting to run", running: "running now", success: "built in this run", error: "failed in this run",
+    skipped: "skipped: something upstream failed", kept: "not selected: its last build is kept",
+    notrun: "not selected, and no build of it is recorded", source: "a source: read, never built",
+  };
   function legendDraw(boxEl) {
     if (!S.on) return false;
-    for (const s of ["queued", "running", "success", "error", "skipped", "kept"]) {
-      const span = h("span", null, null, boxEl);
-      h("span", pillOf(s), "lv-pill " + s, span);
+    const shown = ["queued", "running", "success", "error", "skipped", "kept"];
+    for (const s of ["notrun", "source"]) if (x.doc.nodes.some(n => shownStatus(n.id) === s)) shown.push(s);
+    for (const s of shown) {
+      const pill = h("span", pillOf(s), "lv-pill " + s, boxEl);
+      pill.title = LEGEND[s];
     }
-    h("span", "not selected: last build kept", "lv-note", boxEl);
     return true;
   }
 

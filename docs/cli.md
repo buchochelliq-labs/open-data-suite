@@ -778,15 +778,16 @@ once, and at most 16 `?since=` answers are read at once; one more gets `503` wit
 left: within a heartbeat, up to 15 seconds. The journal is checked every 300 ms, a
 bounded chunk at a time; `/api/runs/live` is reused for 1.5 seconds.
 
-**On the page.** Home shows a *Run in progress* banner for each run that is probably
-running, linking to it **live on the DAG** (`/lineage?live=<run_id>`); the Run page of
+**On the page.** Home shows a *Run probably in progress* banner (marked *inferred*)
+for each run that is probably running, linking to it **live on the DAG** (`/lineage?live=<run_id>`); the Run page of
 an unfinished run links there too, and the Lineage page's *Overlay* picker has a *Live
 run* when one is going on. The Live overlay shows each node as queued, running (with
 its time so far and thread), built (time taken and rows, `rows —` when the adapter
 reported none), failed, skipped (upstream failed), unknown, or kept (not in this run,
 with the run whose build it kept). The side panel shows the run's progress, its counts,
-what is running now, the rows written so far (*at least N* while some nodes didn't
-report theirs) and its events; selecting a node shows its stats card, the Run page's,
+what is running now, the rows written so far (*at least N* while some built nodes
+didn't report theirs, or a failed one may have written some; `—` while none reported)
+and its events; selecting a node shows its stats card, the Run page's,
 with a failed node explained.
 
 **Follow mode** is on for a live run: the camera frames every running node, moves at
@@ -795,9 +796,10 @@ for that, it keeps one **focus** node until it finishes, then moves to the runni
 that blocks the most queued nodes downstream (the nearest one on a tie); the toolbar
 says which (*Focus: int_sessions · blocks 41 queued nodes*), each running node off
 screen gets a chip on that edge (a click makes it the focus), and a minimap shows the
-whole run. Any pan, zoom, *Fit* or node click turns follow off; *Follow run* or `F`
-turns it back on. When the run ends, follow stops on the final view and offers to jump
-to the failure. With `prefers-reduced-motion`, the camera jumps instead of gliding;
+whole run (follow frames above its corner). Any pan, zoom, *Fit* or node click turns
+follow off, and the page says which; *Follow run* or `F` turns it back on. When the run
+ends, follow stops and the view shows what ran (the whole graph if it reads at 60%,
+else the nodes that ran, else the failure), and offers to jump to the failure. With `prefers-reduced-motion`, the camera jumps instead of gliding;
 starts and finishes are announced to screen readers, at most every two seconds.
 
 **Follow scopes:** the node menu (right-click, the menu key, or Shift+F10 on a focused

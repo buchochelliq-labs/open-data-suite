@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog

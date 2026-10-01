@@ -53,7 +53,7 @@ Target
   [ok] target.identity (required): dbt builds in target `dev`
     target: dev (profile's default)
     profile: jaffle_ods
-    kind: fake
+    kind: duckdb
     location: fake-host
     database: jaffle_ods
     environment: default (default)

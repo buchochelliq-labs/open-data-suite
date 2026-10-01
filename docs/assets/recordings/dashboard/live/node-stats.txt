@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog
@@ -23,7 +23,8 @@ Local · read-only
 jaffle_ods
 /
 Lineage
-Live · <run> · <elapsed>
+· 13 nodes
+Live · <run> · 2 of 7 finished · 2 running
 Skip to the selected node's details
 Overlay
 Live run
@@ -95,14 +96,14 @@ BUILT
 FAILED
 SKIPPED
 KEPT
-not selected: last build kept
-Follow is off: you moved the view.
+Follow is off: you selected a node.
 Follow run
 WHOLE RUN
 orders
 ×
 BUILT
 model
+table
 Status
 built
 Started
@@ -123,11 +124,12 @@ Thread-1 (worker)
 Relation
 jaffle_ods.main.orders
 No warehouse link for duckdb targets
-Why it ran
+Planned because
 Code changed since <run>: sql
-the plan's reason when this page opened
+the plan's reason when this page opened; the run records its own once it commits
 Tests
-—
+run after this node
+ods state build tests each node once it builds (skip with --exclude-resource-type test)
 Follow this node and its downstream
 Why this decision
 Model page

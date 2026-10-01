@@ -577,7 +577,12 @@ fn a_nodes_card_and_the_home_banner_come_from_the_journal() {
     assert!(card.contains("from the adapter response"), "{card}");
     assert!(card.contains(">99<"), "{card}");
     assert!(card.contains("query_id 01b2"), "{card}");
-    assert!(card.contains("db.orders"), "the relation: {card}");
+    // The relation breaks between its parts, never inside a name.
+    assert!(card.contains("db.<wbr>orders"), "the relation: {card}");
+    assert!(
+        card.contains("run after this node"),
+        "its tests are still to come: {card}"
+    );
     // None reported: a dash with the reason, never 0.
     let (_, card) = get(addr, &format!("/state/runs/{RUN}/card?node=model.view"));
     assert!(card.contains("not reported by the adapter"), "{card}");
@@ -597,6 +602,12 @@ fn a_nodes_card_and_the_home_banner_come_from_the_journal() {
     assert!(card.contains(">FAILED<"), "{card}");
     assert!(card.contains("[value removed]"), "{card}");
     assert!(!card.contains("lifetime_value"), "{card}");
+    // It built nothing: its rows and tests say so, not "not reported".
+    assert!(
+        card.contains("the node didn&#x27;t build") || card.contains("the node didn't build"),
+        "{card}"
+    );
+    assert!(card.contains("the node did not build"), "{card}");
     assert_eq!(
         get(addr, &format!("/state/runs/{RUN}/card?node=model.none")).0,
         404
@@ -613,7 +624,14 @@ fn a_nodes_card_and_the_home_banner_come_from_the_journal() {
         home.contains(r#"<section class="card live-banner""#),
         "{home}"
     );
-    assert!(home.contains("<strong>Run in progress</strong>"), "{home}");
+    assert!(
+        home.contains("<strong>Run probably in progress</strong>"),
+        "{home}"
+    );
+    assert!(
+        home.contains(r#"class="live-inferred""#),
+        "inference is said: {home}"
+    );
     assert!(
         home.contains(&format!(r#"href="lineage?live={RUN}""#)),
         "{home}"

@@ -262,20 +262,29 @@ stream"), and the Lineage page shows it as the **Live run** overlay
   sit where the State overlay has them, not on the board's grid. Nodes are the board's
   196 × 72 while the run is shown.
 - The toolbar drops search, the column view and impact while a run is shown, as the
-  board's has none. The focus line's explanation ("Running nodes are too far apart…")
-  is its tooltip: there is no room beside it at 1440 px with the zoom buttons.
+  board's has none. There is no room beside the focus line at 1440 px for the board's
+  explanation, so it is the line's tooltip, and in focus mode a short note above the
+  edge chips says where follow goes next.
 - The minimap is shown on every live run, not only on large DAGs, and hidden once the
-  run ends (the Complete board has none); the "run finished" toast sits above it while
-  it shows.
+  run ends (the Complete board has none). Follow frames above its corner, so it never
+  covers what it frames; the "run finished" toast sits above it while it shows.
+- At the end of a run, the view shows the whole graph if it reads at 60%, else every
+  node that ran, else the failed and skipped nodes (unless follow was off). *Jump to
+  failure* goes once the failure is selected and in view, and a scope chip becomes a
+  plain *Scope: …* chip: nothing is followed any more.
+- Python models draw their state only (the Lineage page's dashed "opaque" border would
+  read as queued or skipped); their kind shows in the node's corner tag (`py`) and on
+  the card (*python model*, with the materialization).
+- Home's banner says *Run probably in progress*, with an *inferred* chip and a hollow
+  dot: a journal still being written is the only sign a run is going on.
 - A node the run doesn't touch reads **KEPT** only when a build of it is recorded;
   otherwise **NOT RUN**, never a build it doesn't have. Sources read **SOURCE**.
 - The stats card is the Run page's (its view model and its explanation card, #323,
   and the relation link, #329), served as a fragment, so it says the same as the Nodes
   tab: the thread as the engine names it (`Thread-1 (worker)`), `—` with the reason for
-  every stat not reported. "Why it ran" is the snapshot's reason once the run recorded
-  one; while it runs, the plan's reason when the page opened, said as such.
-- Opened after a run ended, the page shows the whole run as the Lineage page frames it;
-  follow is off, as at the end of a run.
+  every stat not reported (a failed or skipped node's rows and tests say *the node
+  didn't build*). "Why it ran" is the snapshot's reason once the run recorded one;
+  while it runs, *Planned because* gives the plan's reason when the page opened.
 - The Run page of an unfinished run links to the live view; its timeline doesn't
   update live.
 

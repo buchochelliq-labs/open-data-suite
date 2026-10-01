@@ -69,7 +69,8 @@ MASKS = [
     # How long a live run has gone: `0:09`.
     (re.compile(r"\b\d{1,2}:\d\d\b"), "<elapsed>"),
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s)\b"), "<took>"),
-    (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour)s? ago)\b"), "<when>"),
+    # Relative times, as the dashboard writes them ("just now", "4 min ago", "2 h ago").
+    (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour|min|h|d)s? ago)\b"), "<when>"),
 ]
 
 # A pointer and a click ring drawn into the page, and a caption bar: the page's own

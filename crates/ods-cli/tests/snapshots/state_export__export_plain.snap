@@ -7,7 +7,7 @@ State export for dbt
 written: export
 upstream: prod
 scope: jaffle_ods/default
-target: dev (jaffle_ods, fake, fake-host, jaffle_ods)
+target: dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
 recorded state: snapshot 1
 relations: checked in the warehouse
 

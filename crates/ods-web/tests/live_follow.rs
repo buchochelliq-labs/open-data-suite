@@ -30,8 +30,9 @@ const ev = (s, kind, fields) => Object.assign({ run_id: "r", scope: "p/dev", at:
   L.apply(run, ev(4, "node_started", { node: "b" }));
   L.apply(run, ev(5, "node_finished", { node: "b", stats: { status: "success" } }));
   assert.strictEqual(L.took(run.nodes.get("b")), 1000, "end minus start without the engine's time");
-  // Missing rows are never zero: the total is a lower bound.
-  assert.deepStrictEqual(L.rows(run), { sum: 10, reported: 1, missing: 1 });
+  // Missing rows are never zero: the total is a lower bound, and only built nodes
+  // count as "didn't report" (a failed one may have written some).
+  assert.deepStrictEqual(L.rows(run), { sum: 10, reported: 1, missingBuilt: 1, missingOther: 0, finished: 2 });
   L.apply(run, ev(6, "run_finished", { outcome: "failed" }));
   // What hadn't finished never will: unknown, never success.
   assert.strictEqual(run.nodes.get("c").status, "unknown");
@@ -101,7 +102,32 @@ function ctx(status, extra) {
   // When the scope finished, it is framed whole.
   const done = L.follow(ctx({ n5: "running", x0: "success", x1: "error" }, { pool }));
   assert.strictEqual(done.mode, "scope-done");
+  // A scope too wide to read whole keeps its root in view.
+  const wide = L.scopeSet(graph, { id: "n0", dir: "down" });
+  const allDone = Object.fromEntries(ids.map(id => [id, "success"]));
+  const w2 = L.follow(ctx(allDone, { pool: wide, root: "n0" }));
+  assert.strictEqual(w2.mode, "scope-done");
+  assert.ok(w2.cam.k >= L.MIN_READABLE);
+  const sx = w2.cam.x + 0 * w2.cam.k, sx1 = w2.cam.x + 196 * w2.cam.k;
+  assert.ok(sx >= 0 && sx1 <= vw, "the root n0 is in view: " + JSON.stringify(w2.cam));
+  // The minimap's corner is kept clear: a framed box ends above it.
+  const inset = L.follow(ctx({ n1: "running" }, { inset: { bottom: 190 } }));
+  const bottom = inset.cam.y + 72 * inset.cam.k;
+  assert.ok(bottom <= vh - 190, "above the minimap: " + bottom);
   assert.deepStrictEqual([...L.scopeSet(graph, { id: "n10", dir: "up" })].length, 11);
+}
+{
+  // The end of a run: the whole graph if it reads at 60%, else what ran, else the
+  // failure.
+  const wide = ctx({ n0: "success", n11: "error" }, { inRun: id => id === "n0" || id === "n11" });
+  const fin = L.finalView(wide);
+  assert.ok(fin.k >= L.MIN_READABLE);
+  const small = new Map([["a", { x: 0, y: 0, w: 196, h: 72 }], ["b", { x: 250, y: 0, w: 196, h: 72 }]]);
+  const whole = L.finalView({ ids: ["a", "b"], pos: small, vw, vh, inRun: () => true, statusOf: () => "success" });
+  assert.ok(whole.x >= 0 && whole.x + 446 * whole.k <= vw, "the whole small graph");
+  const failure = L.finalView(ctx({ n11: "error" }, { inRun: id => id === "n11" || id === "n0" }));
+  const fx = failure.x + 2750 * failure.k;
+  assert.ok(fx >= 0 && fx + 196 * failure.k <= vw, "the failure is in view");
 }
 {
   // Off screen: on the edge each node is past.

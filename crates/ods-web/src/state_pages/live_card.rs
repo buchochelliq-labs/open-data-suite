@@ -15,6 +15,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use html_escape::{encode_double_quoted_attribute as attr, encode_text as text};
 use ods_core::state::TimestampMs;
+use ods_sdk::contracts::executor::ExecutionMode;
 use ods_sdk::contracts::run_events::NodeRunStatus;
 use serde::Deserialize;
 
@@ -84,24 +85,35 @@ fn row(b: &mut String, key: &str, value: &str, sub: Option<&str>) {
 )]
 /// The card of `node`: its status, times, rows, adapter extras, thread, relation, why
 /// it ran, tests and what blocked it, and for a failed node what went wrong.
-pub(crate) fn card(
-    node: &NodeStatsView,
-    nodes: &[NodeStatsView],
-    relation: Option<&str>,
-    link: Option<&RelationLinkFields>,
-    why: Option<(&str, &str)>,
-) -> String {
+pub(crate) fn card(node: &NodeStatsView, nodes: &[NodeStatsView], about: &About<'_>) -> String {
+    let About {
+        relation,
+        link,
+        why,
+        ..
+    } = *about;
     let mut b = String::with_capacity(4 * 1024);
     // A success in a test run tested; it didn't build.
     let (class, word) = pill(node.status, node.status_label == "tested");
+    // `python model`, as the Catalog says it, and how it materializes.
+    let kind = match (node.kind.as_deref(), about.language) {
+        (Some(kind), Some(language)) if language != "sql" => format!("{language} {kind}"),
+        (Some(kind), _) => kind.to_owned(),
+        (None, _) => String::new(),
+    };
+    let chip = |t: &str| {
+        if t.is_empty() {
+            String::new()
+        } else {
+            format!(r#"<span class="pill plain">{}</span>"#, text(t))
+        }
+    };
     let _ = write!(
         b,
-        r#"<section class="lv-card" data-status="{class}" aria-label="{name}, this run's stats"><div class="lv-card-pills"><span class="lv-pill {class}">{word}</span>{kind}</div>"#,
+        r#"<section class="lv-card" data-status="{class}" aria-label="{name}, this run's stats"><div class="lv-card-pills"><span class="lv-pill {class}">{word}</span>{kind}{mat}</div>"#,
         name = attr(&node.name),
-        kind = node.kind.as_deref().map_or_else(String::new, |k| format!(
-            r#"<span class="pill plain">{}</span>"#,
-            text(k)
-        )),
+        kind = chip(&kind),
+        mat = chip(about.materialization.unwrap_or_default()),
     );
     if node.status == NodeRunStatus::Error {
         explanation_card(&mut b, node, nodes);
@@ -147,7 +159,14 @@ pub(crate) fn card(
         (None, _, _) => (missing("not timed"), None),
     };
     row(&mut b, "Time taken", &took, split.as_deref());
+    let built = !matches!(node.status, NodeRunStatus::Error | NodeRunStatus::Skipped);
     match (node.rows_affected, node.rows_missing) {
+        (None, _) if !built => row(
+            &mut b,
+            "Rows affected",
+            &missing("the node didn't build"),
+            Some("the node didn't build"),
+        ),
         (Some(rows), _) => row(
             &mut b,
             "Rows affected",
@@ -187,11 +206,11 @@ pub(crate) fn card(
             )
         });
         let value = if link_html.is_empty() {
-            format!(r#"<span class="mono lv-rel">{}</span>"#, text(relation))
+            format!(r#"<span class="mono lv-rel">{}</span>"#, dotted(relation))
         } else {
             format!(
                 r#"<span class="mono lv-rel">{}</span> {link_html}"#,
-                text(relation)
+                dotted(relation)
             )
         };
         // Where the manifest puts it, never a check that it exists (#329).
@@ -205,23 +224,8 @@ pub(crate) fn card(
     if let Some((why, note)) = why {
         row(&mut b, "Why it ran", &text(why), Some(note));
     }
-    let tests = match node.tests {
-        Some(t) => {
-            let mut parts = vec![format!("{} passed", t.passed)];
-            if t.failed > 0 {
-                parts.push(format!("{} failed", t.failed));
-            }
-            if t.warned > 0 {
-                parts.push(format!("{} warned", t.warned));
-            }
-            text(&parts.join(" · ")).into_owned()
-        }
-        None if matches!(node.status, NodeRunStatus::Error | NodeRunStatus::Skipped) => {
-            "not run".to_owned()
-        }
-        None => missing("none ran on it"),
-    };
-    row(&mut b, "Tests", &tests, None);
+    let (tests, tests_sub) = tests_said(node, about);
+    row(&mut b, "Tests", &tests, tests_sub);
     if !node.blocked_by.is_empty() {
         let blocked: Vec<String> = node
             .blocked_by
@@ -232,6 +236,63 @@ pub(crate) fn card(
     }
     b.push_str("</dl></section>");
     b
+}
+
+/// What the card says beside the node's own stats.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct About<'a> {
+    /// Its relation, from the graph.
+    pub(crate) relation: Option<&'a str>,
+    /// Where the relation is in the warehouse's UI, or why there is no link.
+    pub(crate) link: Option<&'a RelationLinkFields>,
+    /// Why it ran, and what that reason is.
+    pub(crate) why: Option<(&'a str, &'a str)>,
+    /// Its language, e.g. `python`.
+    pub(crate) language: Option<&'a str>,
+    /// How it materializes, e.g. `table`.
+    pub(crate) materialization: Option<&'a str>,
+    /// Build, run or test.
+    pub(crate) mode: Option<ExecutionMode>,
+    /// Whether the run ended.
+    pub(crate) over: bool,
+}
+
+/// A relation that breaks between its parts, never inside a name.
+fn dotted(relation: &str) -> String {
+    text(relation).replace('.', ".<wbr>")
+}
+
+/// The tests on a node in this run, in words: counts when checks reported, else why
+/// none did.
+fn tests_said(node: &NodeStatsView, about: &About<'_>) -> (String, Option<&'static str>) {
+    if let Some(t) = node.tests {
+        let mut parts = vec![format!("{} passed", t.passed)];
+        if t.failed > 0 {
+            parts.push(format!("{} failed", t.failed));
+        }
+        if t.warned > 0 {
+            parts.push(format!("{} warned", t.warned));
+        }
+        return (text(&parts.join(" · ")).into_owned(), None);
+    }
+    match (node.status, about.mode) {
+        (NodeRunStatus::Error | NodeRunStatus::Skipped, _) => {
+            ("not run".to_owned(), Some("the node did not build"))
+        }
+        (_, Some(ExecutionMode::Run)) => {
+            ("not run".to_owned(), Some("`ods state run` runs no tests"))
+        }
+        (_, _) if about.over => (
+            "none ran on it".to_owned(),
+            Some("no test covers it, or tests were left out of this run"),
+        ),
+        _ => (
+            "run after this node".to_owned(),
+            Some(
+                "`ods state build` tests each node once it builds (skip with `--exclude-resource-type test`)",
+            ),
+        ),
+    }
 }
 
 /// `GET /state/runs/<run_id>/card?node=<id>`: the card, as an HTML fragment; 404 when
@@ -246,7 +307,18 @@ pub(super) async fn handler(
         let dashboard = snapshot.dashboard();
         let names = snapshot.names();
         let graph_node = snapshot.document.nodes.iter().find(|n| n.id == query.node);
-        let relation = graph_node.map(|n| n.relation.as_str());
+        let catalog = dashboard.catalog.nodes.iter().find(|n| n.id == query.node);
+        let journal = dashboard.journal_source().and_then(|j| j.run_of(&run));
+        let base = About {
+            relation: graph_node.map(|n| n.relation.as_str()),
+            language: catalog.and_then(|n| n.language.as_deref()),
+            materialization: catalog.and_then(|n| n.materialization.as_deref()),
+            mode: journal.as_ref().and_then(|j| j.summary.mode),
+            over: journal
+                .as_ref()
+                .is_some_and(|j| j.summary.outcome.is_some()),
+            ..About::default()
+        };
         // The Run page's view, when the run is listed: with explanations and links.
         let view: Option<RunPageView> = dashboard.run_view(state.details, &run, &names);
         let html = if let Some(view) = &view {
@@ -263,9 +335,11 @@ pub(super) async fn handler(
                     card(
                         node,
                         &view.nodes,
-                        relation,
-                        view.relation_links.get(&query.node),
-                        why,
+                        &About {
+                            link: view.relation_links.get(&query.node),
+                            why,
+                            ..base
+                        },
                     )
                 })
         } else {
@@ -273,11 +347,11 @@ pub(super) async fn handler(
         };
         // Not listed yet (e.g. a first run, before the store exists): its journal alone.
         let html = html.or_else(|| {
-            let run = dashboard.journal_source()?.run_of(&run)?;
+            let run = journal.as_ref()?;
             let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
             let nodes = run.nodes(&name, &|_| None, state.details);
             let node = nodes.iter().find(|n| n.node == query.node)?;
-            Some(card(node, &nodes, relation, None, None))
+            Some(card(node, &nodes, &base))
         });
         match html {
             Some(html) => {

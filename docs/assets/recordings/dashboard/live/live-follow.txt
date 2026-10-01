@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog
@@ -23,7 +23,8 @@ Local · read-only
 jaffle_ods
 /
 Lineage
-Live · <run> · <elapsed>
+· 13 nodes
+Live · <run> · 2 of 7 finished · 2 running
 Skip to the selected node's details
 Overlay
 Live run
@@ -95,7 +96,6 @@ BUILT
 FAILED
 SKIPPED
 KEPT
-not selected: last build kept
 WHOLE RUN
 ods state build
 <run> · scope jaffle_ods/default · started <clock>
@@ -124,7 +124,7 @@ thread 2
 SO FAR
 Rows affected
 at least 99
-1 node that ran didn't report rows: many adapters report none for views or merges, so the total is a lower bound.
+1 built node didn't report rows (many adapters report none for views or merges), so the total is a lower bound.
 EVENTS
 <clock>
 customer_order_rank started
