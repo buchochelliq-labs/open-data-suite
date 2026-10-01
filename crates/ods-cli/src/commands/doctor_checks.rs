@@ -1901,7 +1901,7 @@ mod tests {
         let file = dir.path().join("ods.toml");
         std::fs::write(
             &file,
-            "[providers.wh]\nkind = \"x\"\nsettings = { url = \"postgres://u:pw@h/db?sslpassword=x\", hosts = [\"a:b@c\"], name = \"plain\" }\n",
+            "[providers.wh]\nkind = \"x\"\nsettings = { url = \"postgres://u:hunter2@h/db?sslpassword=x\", hosts = [\"a:b@c\"], name = \"plain\" }\n",
         )
         .unwrap();
         let config = ods_config::load(&ods_config::Inputs {
@@ -1928,8 +1928,12 @@ mod tests {
         let hosts = value("providers.wh.settings.hosts");
         assert!(!hosts.contains("a:b"), "{hosts}");
         assert_eq!(value("providers.wh.settings.name"), "\"plain\"");
+        // A password long enough that a random temp directory in `source` can't hold it.
         let all = format!("{values:?}");
-        assert!(!all.contains("pw") && !all.contains("sslpassword"), "{all}");
+        assert!(
+            !all.contains("hunter2") && !all.contains("sslpassword"),
+            "{all}"
+        );
     }
 
     #[test]
