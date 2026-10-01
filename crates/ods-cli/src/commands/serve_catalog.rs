@@ -360,7 +360,11 @@ mod tests {
             ["core", "pii"],
             "sorted, once each"
         );
-        assert!(tags(by_id["model.jaffle_ods.stg_orders"]).is_empty());
+        assert!(
+            tags(by_id["model.jaffle_ods.stg_orders"]).is_empty(),
+            "{:?}",
+            tags(by_id["model.jaffle_ods.stg_orders"])
+        );
     }
 
     #[test]

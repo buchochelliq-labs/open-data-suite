@@ -554,7 +554,7 @@ fn the_all_clear_needs_a_plan_that_builds_nothing() {
         ),
     ]);
     let home = target_changed.home(true);
-    assert!(home.attention.is_empty());
+    assert!(home.attention.is_empty(), "{:?}", home.attention);
     let plan = home.plan.as_ref().unwrap();
     assert_eq!(plan.build, 3);
     let reasons: Vec<(String, usize)> = plan

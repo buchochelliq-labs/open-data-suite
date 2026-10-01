@@ -613,7 +613,9 @@ fn reuse_candidates_are_what_would_be_reused_unchecked() {
     assert!(
         reuse_candidates(&p, None, Timestamp::from_unix(T0), PlanOptions::default())
             .unwrap()
-            .is_empty()
+            .is_empty(),
+        "{:?}",
+        reuse_candidates(&p, None, Timestamp::from_unix(T0), PlanOptions::default()).unwrap()
     );
 }
 
@@ -1124,7 +1126,15 @@ fn sources_are_selected_as_ancestors_only() {
         ids(&["+report+"]),
         ["source.p.raw_orders", "source.p.raw_users"]
     );
-    assert!(ids(&["stg_orders"]).is_empty());
-    assert!(ids(&["stg_orders+"]).is_empty());
+    assert!(
+        ids(&["stg_orders"]).is_empty(),
+        "{:?}",
+        ids(&["stg_orders"])
+    );
+    assert!(
+        ids(&["stg_orders+"]).is_empty(),
+        "{:?}",
+        ids(&["stg_orders+"])
+    );
     assert!(select_sources(&project, &["+nope".to_owned()]).is_err());
 }

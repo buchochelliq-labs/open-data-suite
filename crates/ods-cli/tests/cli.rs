@@ -130,7 +130,7 @@ fn not_implemented_in_json_mode_is_one_document_on_stdout() {
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     assert!(value["result"].is_null());
     assert_eq!(value["diagnostics"][0]["code"], "ODS-E0003");
-    assert!(out.stderr.is_empty());
+    assert!(out.stderr.is_empty(), "{:?}", out.stderr);
 }
 
 #[test]

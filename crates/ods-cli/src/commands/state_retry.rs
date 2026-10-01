@@ -532,7 +532,11 @@ mod tests {
         );
         // Defaults aren't kept, so the retry uses what is in effect then.
         let matches = command().try_get_matches_from(["build"]).unwrap();
-        assert!(typed(&command(), &matches).is_empty());
+        assert!(
+            typed(&command(), &matches).is_empty(),
+            "{:?}",
+            typed(&command(), &matches)
+        );
     }
 
     #[test]

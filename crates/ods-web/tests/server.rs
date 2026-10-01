@@ -279,6 +279,6 @@ fn search_ranks_prefix_matches_first_and_needs_every_term() {
         ]
     );
     assert_eq!(labels("raw id"), ["raw_orders.id"]);
-    assert!(labels("  ").is_empty());
+    assert!(labels("  ").is_empty(), "{:?}", labels("  "));
     assert_eq!(search(&document, "orders", 1).len(), 1);
 }

@@ -627,5 +627,9 @@ fn the_fingerprint_step_lists_changed_and_unchanged_components() {
         [("sql", true), ("config", false), ("upstream", false)]
     );
     // Nothing recorded to compare with: nothing listed.
-    assert!(overlay.nodes["seed.shop.countries"].components.is_empty());
+    assert!(
+        overlay.nodes["seed.shop.countries"].components.is_empty(),
+        "{:?}",
+        overlay.nodes["seed.shop.countries"].components
+    );
 }

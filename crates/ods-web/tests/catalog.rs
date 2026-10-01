@@ -490,7 +490,7 @@ fn facets_filter_and_are_kept_in_the_url() {
         "newest first, never built last"
     );
     let view = json(addr, "/api/catalog?layer=gone");
-    assert!(names(&view).is_empty());
+    assert!(names(&view).is_empty(), "{:?}", names(&view));
     assert!(
         view["facets"][1]["values"]
             .as_array()
@@ -849,7 +849,11 @@ fn reuse_is_never_claimed_to_be_checked() {
 
     // Nothing reused: no caveat.
     let view = json(start(no_store()), "/api/catalog");
-    assert!(view["decisions"]["caveats"].as_array().unwrap().is_empty());
+    assert!(
+        view["decisions"]["caveats"].as_array().unwrap().is_empty(),
+        "{:?}",
+        view["decisions"]["caveats"].as_array().unwrap()
+    );
 }
 
 #[test]

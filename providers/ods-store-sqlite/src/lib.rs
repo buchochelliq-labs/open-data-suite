@@ -902,7 +902,11 @@ mod tests {
 
         let store = SqliteStateStore::open_with(&db, V3).await.unwrap();
         assert_eq!(store.schema_version().await.unwrap(), 3);
-        assert!(store.check().await.unwrap().problems.is_empty());
+        assert!(
+            store.check().await.unwrap().problems.is_empty(),
+            "{:?}",
+            store.check().await.unwrap().problems
+        );
         assert_eq!(store.latest(&scope).await.unwrap().unwrap().id, id);
         assert_eq!(backups(&db).len(), 2);
         // Opening again at the same version keeps no more copies.
@@ -937,7 +941,11 @@ mod tests {
         assert_eq!(store.schema_version().await.unwrap(), 2);
         assert!(!tables(&store).await.contains(&"half_done".to_owned()));
         assert_eq!(store.latest(&scope).await.unwrap().unwrap().id, id);
-        assert!(store.check().await.unwrap().problems.is_empty());
+        assert!(
+            store.check().await.unwrap().problems.is_empty(),
+            "{:?}",
+            store.check().await.unwrap().problems
+        );
     }
 
     #[tokio::test]

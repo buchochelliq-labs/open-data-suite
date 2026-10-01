@@ -271,7 +271,7 @@ fn nodes_built_here_point_at_this_target_and_the_rest_upstream() {
     }
     expected.sort();
     changed.sort();
-    assert!(!expected.is_empty());
+    assert!(!expected.is_empty(), "{expected:?}");
     assert_eq!(changed, expected);
     assert_eq!(
         written["nodes"]["model.jaffle_ods.order_events"]["relation_name"],

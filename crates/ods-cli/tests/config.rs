@@ -90,7 +90,7 @@ fn invalid_config_exits_4_in_the_active_output_mode() {
     dir.write("ods.toml", "[output]\nfromat = \"json\"\n");
     let out = ods(&dir, dir.path(), &["version"], &[]);
     assert_eq!(out.status.code(), Some(4));
-    assert!(out.stdout.is_empty());
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("error[ODS-E0102]") && stderr.contains("fromat"),

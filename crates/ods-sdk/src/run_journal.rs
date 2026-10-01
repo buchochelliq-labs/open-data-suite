@@ -335,7 +335,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("state.db");
         let journals = Journals::beside(&db);
-        assert!(journals.list().unwrap().is_empty());
+        assert!(
+            journals.list().unwrap().is_empty(),
+            "{:?}",
+            journals.list().unwrap()
+        );
         std::fs::create_dir_all(journals.dir()).unwrap();
         for (i, run) in ["old", "new"].iter().enumerate() {
             let path = journals.path(run).unwrap();

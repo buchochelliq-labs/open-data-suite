@@ -164,8 +164,9 @@ format, no dependency and no crate.
     quote and an empty name are refused. `path_segment` refuses `.` and `..`, which
     browsers resolve as dot segments even percent-encoded, so a link can't leave its
     path.
-  - **Private (rule 9):** a link is `https://` only, with no user part, query string or
-    fragment; each name is percent-encoded. The host is configuration, not a secret.
+  - **Private (rule 9):** a link is `https://` only, with no user part or fragment; a
+    query string may carry configuration (e.g. a workspace id), never a credential. Each
+    name is percent-encoded into the path. The host is configuration, not a secret.
   - The **label** comes from the provider ("Open in Catalog Explorer"), so hosts never
     write a warehouse's name.
 - **Where it is used:** only the CLI maps the target's adapter to a linker, checks the
@@ -179,9 +180,15 @@ format, no dependency and no crate.
   (ADR-0021 §3; `DATABRICKS_HOST` first). The path is the one Databricks' own
   documentation uses for a table's page (the `databricksWorkspaceUrl` in [access-request
   notifications](https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/access-request-destinations#access-request-examples)).
-  Those links also carry `?o=<workspace id>`, which is left out: a query string is never
-  put in a link, and a workspace's own host already selects it. Whether a shared host
-  that serves several workspaces needs `?o=` wasn't verified against a live workspace.
+  Those links also carry `?o=<workspace id>`, which selects the workspace when a host
+  serves several, and so does `CatalogExplorer`: from the provider's `workspace_id`
+  setting, else from a host that names it (Azure's `adb-<id>.<n>.azuredatabricks.net`,
+  GCP's `<id>.<n>.gcp.databricks.com`), else not at all. It is never guessed: an id
+  that isn't one, that differs from the host's, or that differs between providers is
+  refused with a reason. The conformance suite checks that a query doesn't change with
+  the relation; that it holds no credential is the provider's to keep. A link may
+  therefore carry a query string of configuration (never a credential, rule 9), but
+  never a user part or fragment.
 - **Alternatives considered:**
   - *A method on an existing contract* (`RelationInspector`, `RelationProbe`): they are
     async and implemented by executors (the dbt executor), which don't know the
@@ -191,7 +198,7 @@ format, no dependency and no crate.
     quoting and encoding would be left to a template. Kept as a possible later
     addition for warehouses without a provider.
 - **Conformance:** `conformance::relation_link` checks the capability, a qualified
-  relation's link (https, no user part, query or fragment, non-empty label,
+  relation's link (https, no user part or fragment, non-empty label,
   deterministic), that a missing part is never guessed, that names are encoded into
   exactly one segment each, and that an unconfigured provider says so. The fake
   (`FakeRelationLinker`) and `CatalogExplorer` both pass it.

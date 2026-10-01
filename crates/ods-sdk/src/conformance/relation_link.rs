@@ -32,11 +32,17 @@ pub trait RelationLinkHarness: Send + Sync {
     fn malformed(&self) -> Vec<String>;
 }
 
-/// The URL's scheme and host, and the rest (path).
+/// The URL's query string, if any.
+fn query(url: &str) -> Option<&str> {
+    url.split_once('?').map(|(_, query)| query)
+}
+
+/// The URL's host, and its path (without the query string).
 fn split(url: &str) -> (&str, &str) {
     let rest = url.strip_prefix("https://").unwrap_or_else(|| {
         panic!("a link must be https: {url}");
     });
+    let rest = rest.split_once('?').map_or(rest, |(before, _)| before);
     rest.split_once('/').unwrap_or((rest, ""))
 }
 
@@ -58,12 +64,12 @@ fn links_a_qualified_relation(harness: &dyn RelationLinkHarness) {
     assert!(!host.is_empty(), "{case}: no host in {}", link.url);
     assert!(!host.contains('@'), "{case}: a user part in {}", link.url);
     assert!(
-        !link.url.contains(['?', '#']),
-        "{case}: a query or fragment in {}",
+        !link.url.contains('#'),
+        "{case}: a fragment in {}",
         link.url
     );
     assert!(!path.is_empty(), "{case}: no path in {}", link.url);
-    assert!(!link.url.ends_with('/'), "{case}: {}", link.url);
+    assert!(!path.ends_with('/'), "{case}: {}", link.url);
     assert!(!link.label.trim().is_empty(), "{case}: no label");
     // Deterministic.
     assert_eq!(
@@ -110,6 +116,19 @@ fn encodes_every_name(harness: &dyn RelationLinkHarness) {
         .unwrap_or_else(|e| panic!("{case}: {e}"));
     let plain = split(&qualified.url).1.split('/').count();
     assert_eq!(path.split('/').count(), plain, "{case}: {}", link.url);
+    // A query carries configuration only, so it doesn't change with the relation. (That
+    // it holds no credential is the provider's to keep: no suite can tell.)
+    assert_eq!(
+        query(&link.url),
+        query(&qualified.url),
+        "{case}: the query depends on the relation: {}",
+        link.url
+    );
+    assert!(
+        !query(&link.url).unwrap_or_default().contains('@'),
+        "{case}: {}",
+        link.url
+    );
 }
 
 /// `.` or `..`, encoded or not: browsers resolve both forms, so they leave the path.

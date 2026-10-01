@@ -77,15 +77,34 @@ host = "https://<workspace>.cloud.databricks.com"
 ```
 
 A model whose relation is `catalog.schema.table` links to
-`https://<workspace>/explore/data/catalog/schema/table`, each name percent-encoded. The
-host must be `https://` (or a bare host name); a trailing `/` is dropped, and a path, a
-query string such as `?o=…` or a user name is refused. The host isn't a secret, and no
-token is ever put in a link. Nothing is fetched to build it.
+`https://<workspace>/explore/data/catalog/schema/table?o=<workspace id>`, each name
+percent-encoded. The host must be `https://` (or a bare host name); a trailing `/` is
+dropped, and a path, a query string or a user name is refused.
+
+The workspace id (`?o=`) picks the workspace when one host serves several. It is the
+number after `?o=` in your browser's address bar when you are in the workspace. ODS
+takes it from `workspace_id`:
+
+```toml
+[providers.uc.settings]
+host = "https://<workspace>.cloud.databricks.com"
+workspace_id = "1234567890123456"
+```
+
+Without `workspace_id`, it is read from a host that contains it: Azure's
+`adb-<workspace id>.<n>.azuredatabricks.net` and GCP's
+`<workspace id>.<n>.gcp.databricks.com`. AWS hosts (`dbc-….cloud.databricks.com`)
+don't contain it, so their links have no `?o=` unless you set `workspace_id`. ODS
+refuses a `workspace_id` rather than guess, and the page says why, when it:
+- isn't a number;
+- differs from the id in an Azure or GCP host;
+- differs between two Databricks providers that share a host or use `DATABRICKS_HOST`. Neither setting is a
+secret, and no token is ever put in a link. Nothing is fetched to build it.
 
 The link is where the manifest says the table is. It isn't proof that the table
 exists: it may not have been built yet, or may have been dropped. When there is no link,
-the page says why instead of guessing one: no `host` configured, a host that can't be
-used, a relation named with only two parts (the catalog would be a guess), or a name
+the page says why instead of guessing one: no `host` configured, a host or
+`workspace_id` that can't be used, a relation named with only two parts (the catalog would be a guess), or a name
 that isn't well formed (whitespace inside an unquoted name, text after a closing
 backtick, or a name that is `.` or `..`), which is never repaired.
 

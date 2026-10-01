@@ -1494,6 +1494,10 @@ mod tests {
             similar("cent_to_dollars", &names),
             vec!["CENT_TO_DOLLARS", "cents_to_dollars", "cents_to_dollar"]
         );
-        assert!(similar("zzzzzz", &names).is_empty());
+        assert!(
+            similar("zzzzzz", &names).is_empty(),
+            "{:?}",
+            similar("zzzzzz", &names)
+        );
     }
 }

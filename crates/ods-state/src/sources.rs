@@ -408,9 +408,14 @@ mod tests {
         assert!(forced[0].reasons[0].message.contains("run anyway"));
         // Sources without checks, or out of scope, have nothing to run.
         let unchecked = source(Some("2026-01-01T00:00:00Z"), 30).with_checks(None);
-        assert!(source_checks(&project(unchecked), None, &all(), false).is_empty());
+        let none = source_checks(&project(unchecked), None, &all(), false);
+        assert!(none.is_empty(), "{none:?}");
         let checked = project(source(Some("2026-01-01T00:00:00Z"), 30));
-        assert!(source_checks(&checked, None, &BTreeSet::new(), false).is_empty());
+        assert!(
+            source_checks(&checked, None, &BTreeSet::new(), false).is_empty(),
+            "{:?}",
+            source_checks(&checked, None, &BTreeSet::new(), false)
+        );
     }
 
     #[test]
