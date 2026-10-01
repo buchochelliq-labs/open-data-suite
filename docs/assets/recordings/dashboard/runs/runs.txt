@@ -55,7 +55,7 @@ All
 3 runs · 3 recorded a snapshot · 1 partial
 Outcome
 	Run	Command	Target	Snapshot	Built	Kept	Failed	Skipped	Rows	Started	Duration	Triggered by
-2026-09-30 · UTC
+<date> · UTC
 ✓
 	<run>
 ods state build --state-db '<redacted>'

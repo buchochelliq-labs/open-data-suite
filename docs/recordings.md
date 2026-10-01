@@ -103,7 +103,8 @@ still = "home"
 ```
 
 It writes, per tour, an animated WebP (960 px wide) for pages to embed, a PNG per still,
-and each still's visible text (`<still>.txt`, with run ids, times and durations masked).
+and each still's visible text (`<still>.txt`, with run ids, dates, times and durations
+masked).
 `--check` plays the tours without images: a step whose element is missing, an
 `expect` that isn't on the page, or a still whose text differs fails. The `.webm`
 video (`--webm`) isn't committed.

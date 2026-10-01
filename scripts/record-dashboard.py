@@ -56,6 +56,8 @@ MASKS = [
     (re.compile(r"\b(?:run |runs/|· |snapshot \d+ · )?[0-9a-f]{8}\b"), "<run>"),
     (re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z?"), "<time>"),
     (re.compile(r"\b\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z?(?!\w)"), "<clock>"),
+    # A day on its own, e.g. the Runs page's "today" group: recordings run on any day.
+    (re.compile(r"\b\d{4}-\d\d-\d\d\b"), "<date>"),
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s)\b"), "<took>"),
     (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour)s? ago)\b"), "<when>"),
 ]
