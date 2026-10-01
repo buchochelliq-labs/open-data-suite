@@ -616,7 +616,7 @@ fn each_command_runs_its_dbt_namesake() {
     assert_eq!(compiled["result"]["outcome"], "compiled");
     assert_eq!(compiled["result"]["build"], 13);
     assert!(compiled["result"].get("execution").is_none());
-    assert!(project.history().is_empty());
+    assert!(project.history().is_empty(), "{:?}", project.history());
 
     // run: models only, with `dbt run`; the seeds they read are left out, and it says so.
     let (code, ran) = project.command("run", &[]);
@@ -911,7 +911,7 @@ fn a_run_that_cant_be_recorded_still_reports_what_dbt_did() {
         13
     );
     assert!(json["result"].get("record").is_none());
-    assert!(project.history().is_empty());
+    assert!(project.history().is_empty(), "{:?}", project.history());
 }
 
 fn entry<'v>(result: &'v Value, name: &str) -> &'v Value {
@@ -1106,7 +1106,7 @@ fn when_dbt_cannot_run_nothing_is_recorded() {
             .contains("which target it builds in"),
         "{json:#}"
     );
-    assert!(project.history().is_empty());
+    assert!(project.history().is_empty(), "{:?}", project.history());
 }
 
 /// A copy of the demo project for real dbt, with a folder named like a model (#211):
@@ -2573,7 +2573,11 @@ fn explain_traces_a_build_to_its_root_cause() {
     let stg_orders = &orders["causes"][0];
     assert_eq!(stg_orders["entry"]["name"], "stg_orders");
     assert_eq!(stg_orders["entry"]["reasons"][0]["code"], "code_changed");
-    assert!(stg_orders["causes"].as_array().unwrap().is_empty());
+    assert!(
+        stg_orders["causes"].as_array().unwrap().is_empty(),
+        "{:?}",
+        stg_orders["causes"].as_array().unwrap()
+    );
 
     // Asked the other way round, the answer says so.
     let (code, json) = project.ods(&["state", "why-skip", "customers"]);

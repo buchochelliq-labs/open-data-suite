@@ -868,7 +868,11 @@ mod tests {
         assert!(a.diff(&b).is_empty());
         assert_eq!(b.cosmetic_changes(&a), ["sql"]);
         // Snapshots recorded before cosmetic digests existed claim nothing.
-        assert!(b.cosmetic_changes(&base).is_empty());
+        assert!(
+            b.cosmetic_changes(&base).is_empty(),
+            "{:?}",
+            b.cosmetic_changes(&base)
+        );
         // Old documents without the field still read, and write back unchanged.
         let json = serde_json::to_string(&base).unwrap();
         assert!(!json.contains("cosmetic"));

@@ -158,7 +158,7 @@ fn facts_about_unknown_columns_are_reported_not_dropped_silently() {
         ],
         BuildOptions::default(),
     );
-    assert!(erd.relationships.is_empty());
+    assert!(erd.relationships.is_empty(), "{:?}", erd.relationships);
     assert_eq!(erd.diagnostics.len(), 2, "{:?}", erd.diagnostics);
 }
 
@@ -171,7 +171,9 @@ fn inference_is_off_by_default_and_labelled_when_on() {
     assert!(
         build(&shop(), &facts, BuildOptions::default())
             .relationships
-            .is_empty()
+            .is_empty(),
+        "{:?}",
+        build(&shop(), &facts, BuildOptions::default()).relationships
     );
 
     let erd = build(

@@ -141,7 +141,7 @@ mod tests {
             .with_source("not asked");
         let mut warnings = Vec::new();
         let reading = versions(&provider, &sources(&["a", "b", "c"]), &mut warnings).unwrap();
-        assert!(warnings.is_empty());
+        assert!(warnings.is_empty(), "{warnings:?}");
         assert!(reading.capabilities.contains(&Capability::RelationVersions));
         assert!(reading.observed_at.is_some());
         assert!(matches!(reading.answers["a"], VersionAnswer::Version(_)));

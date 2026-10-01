@@ -555,7 +555,11 @@ fn impact_on_a_column_that_does_not_exist_is_an_error_not_nothing() {
         "--column",
         "orders.nope=added",
     ]);
-    assert!(added["run"].as_array().unwrap().is_empty());
+    assert!(
+        added["run"].as_array().unwrap().is_empty(),
+        "{:?}",
+        added["run"].as_array().unwrap()
+    );
 }
 
 #[test]

@@ -1449,7 +1449,7 @@ mod journals {
         assert_eq!(only("succeeded"), [RUN_3]);
         assert_eq!(only("unfinished"), [RUN_5]);
         assert_eq!(only("recorded"), [RUN_2, RUN_1]);
-        assert!(only("failed").is_empty());
+        assert!(only("failed").is_empty(), "{:?}", only("failed"));
         // Journal-only runs name no target: a target filter leaves them out.
         let mut filter = RunFilter::default();
         filter.target = Some("dev".into());
@@ -1552,7 +1552,7 @@ mod journals {
         );
         // Kept: snapshot 3's nodes the run didn't run; its failed node is counted apart.
         assert_eq!(view.run.kept, Some(3));
-        assert!(view.built.is_empty());
+        assert!(view.built.is_empty(), "{:?}", view.built);
         let names: Vec<&str> = view.timeline.iter().map(|t| t.node.as_str()).collect();
         // Parallel nodes by start; the skipped one never started.
         assert_eq!(

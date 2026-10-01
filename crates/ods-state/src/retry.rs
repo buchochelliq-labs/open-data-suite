@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(split.retried, ["a", "b"]);
         assert_eq!(split.reused, ["fixed"]);
         assert_eq!(split.changed_since, ["other"]);
-        assert!(split.held_back.is_empty());
+        assert!(split.held_back.is_empty(), "{:?}", split.held_back);
         assert_eq!(split.not_planned, ["gone"]);
     }
 
@@ -212,8 +212,8 @@ mod tests {
             .collect();
         assert_eq!(held, [("c", "p")]);
         // `p` isn't in the retry's plan, so it isn't reported as changed since.
-        assert!(split.changed_since.is_empty());
-        assert!(split.not_planned.is_empty());
+        assert!(split.changed_since.is_empty(), "{:?}", split.changed_since);
+        assert!(split.not_planned.is_empty(), "{:?}", split.not_planned);
 
         // Once `p` is reused, `c` is retried.
         let upstream = BTreeMap::from([("p".to_owned(), Reuse), ("q".to_owned(), Reuse)]);

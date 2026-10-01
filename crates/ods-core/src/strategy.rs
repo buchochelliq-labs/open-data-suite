@@ -144,7 +144,7 @@ mod tests {
             CapabilitySet::from([Capability::ZeroCopyClone, Capability::RelationVersions]);
         let choice = choose(&offered, &all).unwrap();
         assert_eq!(choice.chosen.value, Reuse::Clone);
-        assert!(choice.skipped.is_empty());
+        assert!(choice.skipped.is_empty(), "{:?}", choice.skipped);
     }
 
     #[test]

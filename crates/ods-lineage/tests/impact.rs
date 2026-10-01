@@ -638,7 +638,19 @@ fn missing_columns_name_the_upstream_and_what_it_was_renamed_to() {
     assert_eq!(missing[0].column, "first_name");
     assert_eq!(missing[0].renamed_to, vec!["given_name"]);
     // Nothing is missing where everything read is produced, or unknown.
-    assert!(graph.missing_columns("stg_customers").is_empty());
-    assert!(graph.missing_columns("opaque").is_empty());
-    assert!(graph.missing_columns("nope").is_empty());
+    assert!(
+        graph.missing_columns("stg_customers").is_empty(),
+        "{:?}",
+        graph.missing_columns("stg_customers")
+    );
+    assert!(
+        graph.missing_columns("opaque").is_empty(),
+        "{:?}",
+        graph.missing_columns("opaque")
+    );
+    assert!(
+        graph.missing_columns("nope").is_empty(),
+        "{:?}",
+        graph.missing_columns("nope")
+    );
 }

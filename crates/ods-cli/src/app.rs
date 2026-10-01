@@ -533,7 +533,7 @@ mod tests {
         let o = invoke_with(&["version"], Some("loud"));
         assert_eq!(o.status, ExitStatus::Config);
         assert!(o.err.contains("ODS-E0004"), "{}", o.err);
-        assert!(o.out.is_empty());
+        assert!(o.out.is_empty(), "{:?}", o.out);
     }
 
     #[test]
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(o.status, ExitStatus::NotImplemented);
         let value: serde_json::Value = serde_json::from_str(&o.out).expect("one JSON document");
         assert_eq!(value["diagnostics"][0]["code"], "ODS-E0003");
-        assert!(o.err.is_empty());
+        assert!(o.err.is_empty(), "{:?}", o.err);
 
         let bad = invoke(&["usage", "-o", "yaml"]);
         assert_eq!(

@@ -2520,7 +2520,7 @@ mod tests {
         let mut warnings = Vec::new();
         let facts = relation_facts(&executor, &[], CheckFor::Reuse, &mut warnings).unwrap();
         assert_eq!(facts, Some(BTreeMap::new()));
-        assert!(warnings.is_empty());
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]

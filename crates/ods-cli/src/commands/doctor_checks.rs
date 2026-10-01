@@ -1829,7 +1829,7 @@ mod tests {
                 ..Options::default()
             },
         );
-        assert!(both.is_empty());
+        assert!(both.is_empty(), "{both:?}");
     }
 
     /// Sets the manifest's adapter, keeping its time.

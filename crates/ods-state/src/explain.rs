@@ -531,7 +531,11 @@ mod tests {
         let c = &d.causes[1];
         assert_eq!(c.causes.len(), 1);
         assert!(c.causes[0].repeated);
-        assert!(explain(&plan, "b").unwrap().causes.is_empty());
+        assert!(
+            explain(&plan, "b").unwrap().causes.is_empty(),
+            "{:?}",
+            explain(&plan, "b").unwrap().causes
+        );
         assert!(explain(&plan, "nope").is_none());
     }
 
@@ -627,7 +631,7 @@ mod tests {
         );
         let diff = diff_project(&before, &project);
         assert_eq!(diff.removed, ["gone"]);
-        assert!(diff.added.is_empty());
+        assert!(diff.added.is_empty(), "{:?}", diff.added);
         assert_eq!(
             diff.changed[0].changes,
             [Change::Data {
