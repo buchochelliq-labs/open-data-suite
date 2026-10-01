@@ -268,10 +268,17 @@ pub(crate) fn framed(shell: &ShellView, frame: &Frame<'_>, body: &str, generatio
     out
 }
 
-/// Home, inside the shell. `generation` lets the page notice reloads.
-pub(crate) fn home_page(shell_view: &ShellView, home: &HomeView, generation: u64) -> String {
+/// Home, inside the shell. `generation` lets the page notice reloads; `live` are the
+/// runs going on now (#322), shown as a banner the page keeps up to date.
+pub(crate) fn home_page(
+    shell_view: &ShellView,
+    home: &HomeView,
+    live: &crate::live::LiveRuns,
+    generation: u64,
+) -> String {
     let mut b = String::with_capacity(16 * 1024);
     b.push_str(r#"<div class="content">"#);
+    live_banner(&mut b, live);
     title_row(&mut b, home);
     tiles(&mut b, home);
     b.push_str(r#"<div class="grid3">"#);
@@ -281,6 +288,34 @@ pub(crate) fn home_page(shell_view: &ShellView, home: &HomeView, generation: u64
     panels(&mut b, home);
     b.push_str("</div>");
     shell(shell_view, "Home", &b, generation)
+}
+
+/// "Run in progress" (#322): each run that is probably going on now, linking to it live
+/// on the DAG. `dashboard.js` polls `api/runs/live` and redraws it the same way.
+fn live_banner(b: &mut String, live: &crate::live::LiveRuns) {
+    b.push_str(r#"<div id="ods-live" class="live-slot" aria-live="polite">"#);
+    for run in &live.runs {
+        let command = run.command.unwrap_or("a run");
+        let _ = write!(
+            b,
+            r#"<section class="card live-banner" data-run="{id}" title="{note}"><span class="live-dot" aria-hidden="true"></span><div class="live-text"><strong>Run in progress</strong><span class="muted"><code>{command}</code> · run <span class="mono">{short}</span> · {done} of {nodes} nodes finished · {running} running{failed} · <span class="inferred">probably running</span></span></div><a class="live-go" href="{href}">Watch live on the DAG →</a><a class="live-run" href="{run_href}">Run page</a></section>"#,
+            id = attr(&run.run_id),
+            note = attr(&run.note),
+            command = text(command),
+            short = text(&run.run_id.chars().take(8).collect::<String>()),
+            done = run.finished,
+            nodes = run.nodes,
+            running = run.running,
+            failed = if run.failed > 0 {
+                format!(" · {} failed", run.failed)
+            } else {
+                String::new()
+            },
+            href = attr(&run.href),
+            run_href = attr(&run.run_href),
+        );
+    }
+    b.push_str("</div>");
 }
 
 /// The heading and the last run.

@@ -28,7 +28,7 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | Catalog: models, and the Model page | **Built** (#313, merged in #319) |
 | Lineage: State overlay | **Built** (#312, merged in #320) |
 | State: Plan and Why, Runs, one Run | **Built** (#311, merged in #318); real run outcomes, durations and per-node stats from run journals (#322 steps 1 and 3) |
-| Live run on the DAG, with follow mode | Designed; the run events and journals it reads are built (#322 steps 1–3), the live view isn't (#322 step 4) |
+| Live run on the DAG, with follow mode | **Built** (#322): the event stream, the Live overlay on Lineage, follow mode and scopes, node stats, the Home banner |
 | Freshness evidence, Semantic layer, Impact simulator, ERD, Settings | Designed (#309) |
 | Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
 
@@ -250,10 +250,34 @@ Not built yet (#309).
 
 ### Live run on the DAG, with follow mode (#322)
 
-Designed. What it reads is built: run events, per-node stats and run journals
-(#322 steps 1–2, [ADR-0024](../../adr/0024-run-events-node-stats-and-run-journal.md)),
-shown after a run on the Runs and Run pages (step 3). The live overlay, the event
-stream and follow mode are step 4.
+**Built** (#322). `ods serve` streams the run's journal as it is written
+([ADR-0024](../../adr/0024-run-events-node-stats-and-run-journal.md), "The live
+stream"), and the Lineage page shows it as the **Live run** overlay
+(`/lineage?live=<run_id>`, `&follow=<node>:down|up|self`).
+
+![A run watched live in ods serve: Home's banner, follow mode, a node's stats, the node menu and a scope, and the failure at the end](../../assets/recordings/dashboard/live/live.webp)
+
+**Built as designed, with these differences from the boards:**
+- The graph is the Lineage page's (dagre's layout, kind stripe on each node), so nodes
+  sit where the State overlay has them, not on the board's grid. Nodes are the board's
+  196 × 72 while the run is shown.
+- The toolbar drops search, the column view and impact while a run is shown, as the
+  board's has none. The focus line's explanation ("Running nodes are too far apart…")
+  is its tooltip: there is no room beside it at 1440 px with the zoom buttons.
+- The minimap is shown on every live run, not only on large DAGs, and hidden once the
+  run ends (the Complete board has none); the "run finished" toast sits above it while
+  it shows.
+- A node the run doesn't touch reads **KEPT** only when a build of it is recorded;
+  otherwise **NOT RUN**, never a build it doesn't have. Sources read **SOURCE**.
+- The stats card is the Run page's (its view model and its explanation card, #323,
+  and the relation link, #329), served as a fragment, so it says the same as the Nodes
+  tab: the thread as the engine names it (`Thread-1 (worker)`), `—` with the reason for
+  every stat not reported. "Why it ran" is the snapshot's reason once the run recorded
+  one; while it runs, the plan's reason when the page opened, said as such.
+- Opened after a run ended, the page shows the whole run as the Lineage page frames it;
+  follow is off, as at the end of a run.
+- The Run page of an unfinished run links to the live view; its timeline doesn't
+  update live.
 
 The boards are in `docs/design/dashboard/boards/live-run/` in the repository; like every board they are left out of the docs site and open in the Design canvas (see [the design README](../README.md)). `Main.dc.html` there is interactive: it plays a demo run, and the other boards reuse it in fixed states. Screenshots will be added once they are exported from the design canvas.
 

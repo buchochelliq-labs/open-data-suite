@@ -102,10 +102,20 @@ pause = 3800
 still = "home"
 ```
 
+A step may also `focus` an element and `press` keys (e.g. `Shift+F10`), or `drag`
+(`{ from = "<selector>", by = [dx, dy] }`). A tour with `live_run = "<run id>"` (and
+`live_scope`) plays a simulated run (#322): each `run = <seconds>` step writes the
+live-run board's demo run (`scripts/ods_live_sim.py`) into the run's journal up to that
+time, then waits until the page has read it and announced it, so its stills are the same
+every time; the journal is removed when the tour ends, so later tours don't list it.
+
 It writes, per tour, an animated WebP (960 px wide) for pages to embed, a PNG per still,
-and each still's visible text (`<still>.txt`, with run ids, times and durations masked).
+and each still's visible text (`<still>.txt`, with run ids, dates, times and durations
+masked).
 `--check` plays the tours without images: a step whose element is missing, an
 `expect` that isn't on the page, or a still whose text differs fails. The `.webm`
 video (`--webm`) isn't committed.
 
-CI (`docs-media` in `.github/workflows/ci.yml`) runs both checks on Linux.
+CI (`docs-media` in `.github/workflows/ci.yml`) runs both checks on Linux, then the
+live run view's browser tests (`crates/ods-web/tests/browser/live_view.py`), which use
+the same Playwright, Chromium and simulated run.

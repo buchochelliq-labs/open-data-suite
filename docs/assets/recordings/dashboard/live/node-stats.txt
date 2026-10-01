@@ -1,0 +1,134 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · fake
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+PLANNED
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+jaffle_ods
+/
+Lineage
+Live · <run> · <elapsed>
+Skip to the selected node's details
+Overlay
+Live run
+State decision
+None
+Resource type (planned)
+Freshness evidence (planned)
+Lineage confidence (planned)
+Latest status (planned)
+Follow run
+−
++
+Fit
+raw_orders
+seed
+KEPT
+build of <run>
+raw_payments
+seed
+KEPT
+build of <run>
+stg_orders
+model
+BUILT
+<took> · rows —
+stg_payments
+model
+KEPT
+build of <run>
+raw_customers
+seed
+KEPT
+build of <run>
+order_events
+model
+KEPT
+build of <run>
+orders
+model
+BUILT
+<took> · 99 rows
+stg_customers
+model
+KEPT
+build of <run>
+customer_order_ra…
+model
+RUNNING
+<took> · thread 2
+customers
+model
+RUNNING
+<took> · thread 1
+customer_segments
+py
+QUEUED
+waiting on upstream
+customers_snapsho…
+model
+QUEUED
+waiting on upstream
+segment_summary
+model
+QUEUED
+waiting on upstream
+QUEUED
+RUNNING
+BUILT
+FAILED
+SKIPPED
+KEPT
+not selected: last build kept
+Follow is off: you moved the view.
+Follow run
+WHOLE RUN
+orders
+×
+BUILT
+model
+Status
+built
+Started
+<clock>
+Ended
+<clock>
+Time taken
+<took>
+compile <took> · execute <took>
+Rows affected
+99
+from the adapter response
+Adapter
+query_id 01b2-c3
+as the adapter reported it
+Thread
+Thread-1 (worker)
+Relation
+jaffle_ods.main.orders
+No warehouse link for duckdb targets
+Why it ran
+Code changed since <run>: sql
+the plan's reason when this page opened
+Tests
+—
+Follow this node and its downstream
+Why this decision
+Model page
+Run page
