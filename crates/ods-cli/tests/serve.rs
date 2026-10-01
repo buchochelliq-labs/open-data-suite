@@ -723,10 +723,8 @@ fn a_build_is_streamed_live_while_it_runs() {
             .iter()
             .any(|e| e["node"] == "model.jaffle_ods.orders" && e["stats"]["status"] == "error")
     );
-    // Once it ended, it is no longer listed as running.
-    let (_, body) = get(&server, "api/runs/live");
-    let live: Value = serde_json::from_str(&body).unwrap();
-    assert!(live["runs"].as_array().unwrap().is_empty(), "{live}");
+    // Once it ended, it is no longer listed as running (after the list's short reuse).
+    wait_not_listed(&server);
 }
 
 /// Reads the run's event stream to its end: the run events, the `end` event's data, and
@@ -774,4 +772,19 @@ fn stream_run(
         }
     }
     (events, end, while_running)
+}
+
+/// Waits until `/api/runs/live` lists nothing: it is reused for a moment after a run ends.
+#[cfg(unix)]
+fn wait_not_listed(server: &Server) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, body) = get(server, "api/runs/live");
+        let live: Value = serde_json::from_str(&body).unwrap();
+        if live["runs"].as_array().unwrap().is_empty() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "still listed as running: {live}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }

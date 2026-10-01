@@ -79,7 +79,8 @@ scripts/record-dashboard.py --check              # steps and stills' text; write
 ```
 
 `--chromium PATH` (or `ODS_CHROMIUM`) picks a Chromium when Playwright's own isn't
-installed. `docs/tapes/dashboard/setup.sh` prepares the project: the same scratch copy,
+installed. `ODS_DEMO_ROOT` moves the scratch project from `/tmp/ods-demo`, so
+several recordings or test runs can go at once. `docs/tapes/dashboard/setup.sh` prepares the project: the same scratch copy,
 then a few runs of the fake dbt (a full build, a partial build whose failed node's
 error is redacted, a `retry --failed`) and a code change, so every page has something
 to show. The script then starts `ods serve` on a free port and plays each tour in

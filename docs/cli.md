@@ -765,16 +765,18 @@ The stream's messages:
 | `event` | `id` | `data` |
 |---|---|---|
 | `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it |
-| `unreadable` | the line's number | `{"line": n}`: a line of a newer version, or one longer than 256 KiB |
-| `end` | none | `{"reason", "outcome", "inferred", "note"}`: `finished` after `run_finished`; `stopped` (inferred) when the journal doesn't say it finished and hasn't changed for 10 minutes; `truncated` when the file got shorter |
+| `unreadable` | the line's number | `{"line": n}`: a line that isn't an event of this run: a newer version, a line cut short (sent before `end` when the run stopped mid-write), one longer than 256 KiB, or another run's event |
+| `end` | none | `{"reason", "outcome", "inferred", "note"}`: `finished` after `run_finished`; `stopped` (inferred) when the journal doesn't say it finished and hasn't grown for 10 minutes; `replaced` when the journal was replaced or got shorter |
 
 A client that reconnects with `Last-Event-ID` (browsers do it on their own) gets only
 the lines after it; without one, the stream replays from the start, so a page opened
 mid-run is complete. A line still being written is sent once it is whole. A comment is
 sent every 15 seconds when nothing else is (a heartbeat for proxies), and the response
 asks proxies not to buffer it (`X-Accel-Buffering: no`). At most 16 streams are open at
-once; one more gets `503` with `Retry-After` (polling with `?since=` still answers).
-The journal is checked every 300 ms, a bounded chunk at a time.
+once, and at most 16 `?since=` answers are read at once; one more gets `503` with
+`Retry-After`. A stream's place is freed when the server next writes to a client that
+left: within a heartbeat, up to 15 seconds. The journal is checked every 300 ms, a
+bounded chunk at a time; `/api/runs/live` is reused for 1.5 seconds.
 
 **On the page.** Home shows a *Run in progress* banner for each run that is probably
 running, linking to it **live on the DAG** (`/lineage?live=<run_id>`); the Run page of

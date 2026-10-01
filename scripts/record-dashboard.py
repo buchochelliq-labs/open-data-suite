@@ -137,14 +137,17 @@ class Server:
             "TZ": "UTC",
             "LANG": "C.UTF-8",
         }
+        # Where setup.sh makes the project (ODS_DEMO_ROOT, as in docs/tapes/setup.sh).
+        root = Path(os.environ.get("ODS_DEMO_ROOT") or "/tmp/ods-demo")
+        env["ODS_DEMO_ROOT"] = str(root)
         subprocess.run(
             ["bash", "-c", 'source "$REPO/docs/tapes/dashboard/setup.sh" >/dev/null 2>&1'],
             env=env, check=True,
         )
         # setup.sh's project and HOME (see docs/tapes/setup.sh).
-        project = Path("/tmp/ods-demo/jaffle_shop")
+        project = root / "jaffle_shop"
         self.state_db = project / ".ods" / "state.db"
-        env["HOME"] = "/tmp/ods-demo/home"
+        env["HOME"] = str(root / "home")
         self.process = subprocess.Popen(
             [str(bin_dir / "ods"), "serve", "--port", "0", "--no-watch", "-o", "plain"],
             cwd=project, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
