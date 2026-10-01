@@ -538,7 +538,42 @@ fn runs_going_on_now_are_listed_as_probably_running() {
     assert_eq!(run["run_href"], format!("state/runs/{RUN}"));
 
     going.write(&run_finished(900, RunOutcome::Succeeded));
+    // The answer is reused for a moment, so many pages polling it share one read.
+    let (_, cached) = get(addr, "/api/runs/live");
+    assert_eq!(cached, body, "the same answer, within its time to live");
+    std::thread::sleep(Duration::from_millis(1600));
     let (_, body) = get(addr, "/api/runs/live");
     let live: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(live["runs"].as_array().unwrap().len(), 0, "{body}");
+}
+
+#[test]
+fn a_poll_answers_at_most_its_cap_and_the_next_goes_on_from_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal = Journal::create(dir.path(), RUN);
+    let mut text = started(&["model.orders"]);
+    for i in 0..2_050 {
+        text.push_str(&node_started(i, "model.orders"));
+    }
+    journal.write(&text);
+    let addr = start(snapshot(dir.path()), limits(1));
+    let ids = |body: &str| -> Vec<u64> {
+        body.lines()
+            .map(|l| {
+                serde_json::from_str::<Value>(l).unwrap()["id"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect()
+    };
+    let (_, body) = get(addr, &format!("/api/runs/{RUN}/events?since=0"));
+    let first = ids(&body);
+    assert_eq!(
+        first.len(),
+        ods_web::live::MAX_POLLED,
+        "no more than the cap"
+    );
+    assert_eq!(first.last(), Some(&2_000));
+    let (_, body) = get(addr, &format!("/api/runs/{RUN}/events?since=2000"));
+    assert_eq!(ids(&body), (2_001..=2_051).collect::<Vec<_>>());
 }

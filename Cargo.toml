@@ -39,6 +39,9 @@ csv = "1"
 # Streams for the dashboard's Server-Sent Events (#322). MIT/Apache-2.0; axum already
 # depends on it.
 futures-util = { version = "0.3", default-features = false }
+# Opens run journals without following links or blocking on a FIFO (ods-web, #322).
+# MIT/Apache-2.0; tokio already depends on it.
+libc = "0.2"
 # Hex encoding of digests.
 hex = "0.4"
 insta = "1"

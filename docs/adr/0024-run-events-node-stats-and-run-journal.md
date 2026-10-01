@@ -234,37 +234,53 @@ than the Run pages show.
   probably running. All are `GET` and read-only: no route starts, stops or changes a
   run.
 - **Messages:** `run_event` (data: the sanitized `RunEvent`), `unreadable` (data:
-  `{"line"}`, for a line of a newer version or longer than 256 KiB) and `end` (data:
-  `reason` `finished` | `stopped` | `truncated`, the `outcome` when known, `inferred`,
+  `{"line"}`, for any line that doesn't parse as an event of this run: a newer version,
+  a line cut short, one longer than 256 KiB, or another run's event) and `end` (data:
+  `reason` `finished` | `stopped` | `replaced`, the `outcome` when known, `inferred`,
   `note`). The **id** of a line's message is its line number in the journal, from 1
   (blank lines count and send nothing); `end` has none. A stream replays the journal
-  from the start, then follows it; with `Last-Event-ID: n` it sends only lines after
-  `n`, but still ends at once if a line up to `n` was `run_finished`. It ends after
-  `run_finished`, or as `stopped` (marked inferred) once the journal hasn't changed for
-  `RECENT` (10 minutes) without one, or as `truncated` if the file gets shorter. The
-  first message sets `retry` to 2 s; a comment is sent as a heartbeat every 15 s when
-  nothing else is.
-- **Tailing:** by polling the file's size every 300 ms on the blocking pool, not a file
-  watcher: it needs no new dependency, behaves the same on every platform and on
-  network file systems, and costs one `stat` per open stream per tick. Only complete
-  lines are read; a line still being written waits for its newline, so the torn last
-  line of a running journal is never shown as unreadable.
+  from the start, then follows it; with `Last-Event-ID: n` (or `?since=n`) it sends only
+  lines after `n`. Lines up to `n` aren't parsed: only one that may hold
+  `run_finished` is, so a reconnect after the end still ends at once. It ends after
+  `run_finished`, or as `stopped` (marked inferred) once the journal hasn't grown for
+  `RECENT` (10 minutes), measured both by the file's time and by the server's own
+  monotonic clock since the stream last saw it grow (a file dated in the future can't
+  keep a stream open), or as `replaced` if the path names another file now or the file
+  got shorter. When it ends as `finished` or `stopped`, a last line cut short (a run
+  that stopped mid-write) is sent as `unreadable` first, so the stream counts it as the
+  Run page's reader does. The first message sets `retry` to 2 s; a comment is sent as a
+  heartbeat every 15 s when nothing else is.
+- **Tailing:** the journal is opened once per stream and that handle is read: on Unix
+  with `O_NOFOLLOW | O_NONBLOCK` (a symbolic link fails to open, and a FIFO can't block
+  a thread), then checked with `fstat` to be a regular file; elsewhere after checking
+  with `lstat` that the path is a regular file. Each tick (every 300 ms, on the
+  blocking pool) checks the path still names the same file (device and inode on Unix)
+  and how long it is; no file watcher: it needs no new dependency (`libc` is already in
+  the tree), behaves the same on every platform and on network file systems, and costs
+  two `stat`s per open stream per tick. Only complete lines are read; a line still
+  being written waits for its newline, so the torn last line of a running journal is
+  never shown as unreadable while it runs.
 - **Limits:** a stream reads at most 256 KiB at a time and holds no more than that and
   one queued chunk of messages, so memory is bounded whatever the journal's size; at
   most 16 streams are open at once, across clients (one more gets `503` with
-  `Retry-After`); a stream holds its place until the client disconnects, which the
-  next heartbeat or event detects. The limits are `ods_web::StreamLimits`, set by the
-  binary.
+  `Retry-After`), and at most as many `?since=` answers are read at once (the same
+  `503` beyond). A `?since=` answer stops at 2,000 messages, exactly (the next asks from
+  the last id), or after reading 32 MiB of journal. A stream holds its place until the
+  client disconnects, which the server notices when it next writes: within one
+  heartbeat, up to 15 s. The limits are `ods_web::StreamLimits`, set by the binary.
 - **Live runs:** `/api/runs/live` reads the newest 8 journals changed within `RECENT`,
   through the dashboard's journal cache (read again only when a file's size or time
   changes), and lists those without `run_finished` whose scope is the dashboard's (or
   unknown) as `probably_running`, `inferred: true`: a journal changing is the only sign
-  a run is alive. The journals are read beside the state database even before the store
-  exists, as a first run writes its journal before its first snapshot.
-- **Privacy:** as for the pages: every line is sanitized again on read, and beyond
-  loopback an error's `details_at` (a local path) is removed. Run ids must pass
-  `usable_run_id`, and a journal that is a symbolic link isn't read, so no request can
-  reach another file.
+  a run is alive. One answer is made at a time and reused for 1.5 s (until the next
+  reload), so many pages polling it share one read. The journals are read beside the
+  state database even before the store exists, as a first run writes its journal
+  before its first snapshot.
+- **Privacy:** as for the pages: every line is sanitized again on read, an event of
+  another run isn't passed on, and beyond loopback an error's `details_at` (a local
+  path) is removed. Run ids must pass `usable_run_id`; a journal that is a symbolic
+  link, or isn't a regular file, is never opened, and a path replaced while a stream
+  reads it ends the stream; so no request can reach another file.
 
 ### Privacy
 Events have no field for SQL, the command line, variables or the environment. Error
