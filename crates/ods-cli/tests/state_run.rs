@@ -1844,7 +1844,7 @@ fn state_is_kept_per_target() {
     assert!(
         result["warnings"]
             .to_string()
-            .contains("was built in target prod (jaffle_ods, fake, fake-host, jaffle_ods)"),
+            .contains("was built in target prod (jaffle_ods, duckdb, fake-host, jaffle_ods)"),
         "{result:#}"
     );
     // Recorded there, it is reused there.

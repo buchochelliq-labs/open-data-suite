@@ -3,7 +3,7 @@ PROJECT
 jaffle_ods
 ▾
 TARGET
-dev · fake
+dev · duckdb
 ▾
 Home
 Catalog
@@ -34,7 +34,7 @@ Runs
 /
 snapshot 2 · recorded <time>
 <run>
-dev · fake
+dev · duckdb
 Copy run id
 Why these decisions
 OUTCOME
@@ -80,7 +80,7 @@ kept its last good build
 	<clock>	<took>
 compile <took>
 execute <took>
-	—not reported	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+	—the node didn't build	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
 python model · python exception
 known pattern
 The Python model raised KeyError
@@ -106,7 +106,7 @@ segment_summary
 model
 	skipped
 waited on a failed node; kept its last good build
-	—didn't run	—didn't run	—didn't run	Thread-1 (worker)	—didn't run	—not recorded: snapshots keep why only for the builds they record
+	—didn't run	—didn't run	—the node didn't build	Thread-1 (worker)	—didn't run	—not recorded: snapshots keep why only for the builds they record
 raw_customers
 seed
 	kept	not in this run: kept the build of <run>
@@ -139,7 +139,7 @@ Run details
 Command
 not recorded
 Target
-dev · fake
+dev · duckdb
 Snapshot
 2 (replaces 1)
 Compared with

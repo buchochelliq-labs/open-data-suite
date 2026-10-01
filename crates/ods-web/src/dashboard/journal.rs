@@ -497,7 +497,9 @@ fn rows_missing(stats: &NodeRunStats, live: bool) -> Option<&'static str> {
         return None;
     }
     Some(match stats.status {
-        NodeRunStatus::Skipped | NodeRunStatus::Queued => "didn't run",
+        NodeRunStatus::Queued => "didn't run",
+        // A failed or skipped node built nothing: not a stat the adapter left out.
+        NodeRunStatus::Skipped | NodeRunStatus::Error => "the node didn't build",
         _ if !live => "not recorded: this run's stats came from its final results only",
         NodeRunStatus::Running => "still running",
         _ => "not reported by the adapter",

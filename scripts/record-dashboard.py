@@ -19,6 +19,11 @@ in Chromium at 1440x900, writing into docs/assets/recordings/dashboard/<tour>/:
 missing, if an `expect`ed text isn't on the page, or if a still's masked text differs
 from the committed `.txt`. Nothing is timed, so it is quick.
 
+A tour with `live_run = "<run id>"` plays a simulated run while it goes (#322,
+scripts/ods_live_sim.py, the live-run board's demo run): each `run = <seconds>` step
+writes the run's journal up to that time, and waits until the page has read it, so its
+stills are the same every time. Its journal is removed when the tour ends.
+
 Needs Python 3.11+, Playwright for Python and Pillow (scripts/requirements-record.txt),
 a Chromium Playwright can drive (`python3 -m playwright install chromium`, or name one
 with --chromium or ODS_CHROMIUM), and `ods` (built with cargo unless ODS_BIN_DIR names a
@@ -41,6 +46,9 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ods_live_sim  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 TOURS = REPO / "docs" / "tapes" / "dashboard"
 OUT = REPO / "docs" / "assets" / "recordings" / "dashboard"
@@ -58,6 +66,8 @@ MASKS = [
     (re.compile(r"\b\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z?(?!\w)"), "<clock>"),
     # A day on its own, e.g. the Runs page's "today" group: recordings run on any day.
     (re.compile(r"\b\d{4}-\d\d-\d\d\b"), "<date>"),
+    # How long a live run has gone: `0:09`.
+    (re.compile(r"\b\d{1,2}:\d\d\b"), "<elapsed>"),
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s)\b"), "<took>"),
     # Relative times, as the dashboard writes them ("just now", "4 min ago", "2 h ago").
     (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour|min|h|d)s? ago)\b"), "<when>"),
@@ -137,6 +147,7 @@ class Server:
         )
         # setup.sh's project and HOME (see docs/tapes/setup.sh).
         project = root / "jaffle_shop"
+        self.state_db = project / ".ods" / "state.db"
         env["HOME"] = str(root / "home")
         self.process = subprocess.Popen(
             [str(bin_dir / "ods"), "serve", "--port", "0", "--no-watch", "-o", "plain"],
@@ -275,8 +286,55 @@ class Tour:
             committed.write_text(text)
         self.page.evaluate("window.__odsTour.hide(false)")
 
+    def live(self, until: float) -> None:
+        """Writes the simulated run up to `until` seconds; on the live view, waits until
+        the page read it and said what it had to say."""
+        def caught_up(_t=None) -> None:
+            if not self.page.evaluate("document.body.classList.contains('lv-on')"):
+                self.page.wait_for_timeout(150)
+                return
+            self.page.wait_for_function(
+                "n => +(document.body.dataset.liveLine || 0) >= n && document.body.dataset.liveQuiet === '1'",
+                arg=self.journal.lines, timeout=15000)
+
+        def each(t: float) -> None:
+            if not self.check:
+                self.page.wait_for_timeout(250)
+                self.frame(400)
+
+        self.last_t = ods_live_sim.play(self.journal, until=until, since=self.last_t, speed=0 if self.check else 1.5,
+                                        after=each)
+        caught_up()
+
+    def press(self, keys: str) -> None:
+        self.page.keyboard.press(keys)
+        self.page.wait_for_timeout(250)
+        self.overlay()
+
+    def focus(self, selector: str) -> None:
+        locator = self.locate(selector)
+        if locator is not None:
+            locator.focus()
+
+    def drag(self, spec: dict) -> None:
+        locator = self.locate(spec["from"])
+        if locator is None:
+            return
+        x, y = self.move_to(locator)
+        dx, dy = spec["by"]
+        self.page.mouse.down()
+        steps = 1 if self.check else MOVE_FRAMES
+        for i in range(1, steps + 1):
+            self.page.mouse.move(x + dx * i / steps, y + dy * i / steps)
+            self.page.evaluate("([x, y]) => window.__odsTour.move(x, y)", [x + dx * i / steps, y + dy * i / steps])
+            self.frame(FRAME_MS)
+        self.page.mouse.up()
+        self.pointer = (x + dx, y + dy)
+
     def play(self, steps: list[dict]) -> None:
         for step in steps:
+            if "run" in step:
+                self.live(float(step["run"]))
             if "goto" in step:
                 self.goto(step["goto"])
             if "caption" in step:
@@ -287,6 +345,12 @@ class Tour:
                 self.hover(step["hover"])
             if "click" in step:
                 self.click(step["click"])
+            if "drag" in step:
+                self.drag(step["drag"])
+            if "focus" in step:
+                self.focus(step["focus"])
+            if "press" in step:
+                self.press(step["press"])
             for text in step.get("expect", []):
                 self.expect(text)
             self.frame(int(step.get("pause", 1600)))
@@ -347,7 +411,15 @@ def main() -> int:
                 page = context.new_page()
                 player = Tour(page, server.url, name, args.check, out)
                 print(f"{name}: {tour.get('title', '')}", file=sys.stderr)
-                player.play(tour["step"])
+                if tour.get("live_run"):
+                    player.journal = ods_live_sim.Journal(server.state_db, tour["live_run"], tour.get("live_scope"))
+                    player.last_t = -1.0
+                try:
+                    player.play(tour["step"])
+                finally:
+                    if tour.get("live_run"):
+                        # Gone, so later tours (Home, Runs) don't list it.
+                        player.journal.remove()
                 context.close()
                 problems += player.problems
                 if not args.check:

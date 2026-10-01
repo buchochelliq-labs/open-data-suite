@@ -28,7 +28,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
                     test (`source_not_null_raw_<table>_id`), to the manifest (#232); `3`
                     also adds `raw.customers` (read by stg_customers)
   FAKE_DBT_ADAPTER  the manifest's `metadata.adapter_type` [default: the base manifest's];
-                    also the plugin `--version` lists [default: duckdb]
+                    also the plugin `--version` lists [default: duckdb]; the target check
+                    reports the manifest's adapter as the target's type, as dbt would
   FAKE_DBT_VERSION  the version `--version` reports [default: 1.10.23]
   FAKE_DBT_PROBE  JSON file standing in for the warehouse, for ODS's relation probe
                   (`show --inline` of an `ods_relation_probe` query): source name (e.g.
@@ -391,7 +392,8 @@ def main():
             "ods_target": 1,
             "name": (options.get("target") or ["dev"])[0],
             "profile": (options.get("profile") or ["jaffle_ods"])[0],
-            "type": "fake",
+            # The profile's type is the adapter the manifest was made with, as with dbt.
+            "type": manifest["metadata"].get("adapter_type") or "duckdb",
             "location": os.environ.get("FAKE_DBT_TARGET_HOST", "fake-host"),
             "location_digest": hashlib.md5(os.environ.get("FAKE_DBT_TARGET_HOST", "fake-host").encode()).hexdigest(),
             "database": "jaffle_ods",

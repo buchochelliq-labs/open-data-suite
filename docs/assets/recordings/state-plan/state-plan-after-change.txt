@@ -3,7 +3,7 @@ State plan
 
 scope          jaffle_ods/default
 compared with  snapshot 1 in .ods/state.db
-recorded in    target dev (jaffle_ods, fake, fake-host, jaffle_ods) (not checked: `ods state compile` asks dbt)
+recorded in    target dev (jaffle_ods, duckdb, fake-host, jaffle_ods) (not checked: `ods state compile` asks dbt)
 decision       8 to build, 5 to reuse
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓

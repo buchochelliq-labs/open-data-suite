@@ -254,7 +254,7 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           },
           {
             "key": "kind",
-            "value": "fake"
+            "value": "duckdb"
           },
           {
             "key": "location",

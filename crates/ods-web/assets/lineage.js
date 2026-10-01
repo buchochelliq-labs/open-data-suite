@@ -128,7 +128,24 @@ if (typeof document !== "undefined") (async function () {
   }
   const overlay = served ? embedded("ods-overlay") : null;
   const SVG = "http://www.w3.org/2000/svg";
-  const W = 140, HEAD = 52, ROW = 20, FOOT = 6, GAPX = 28, GAPY = 34;
+  // Node boxes and their spacing; a plugin (the live run view) may make them larger.
+  let W = 140, HEAD = 52, GAPX = 28, GAPY = 34;
+  const ROW = 20, FOOT = 6;
+  // What a plugin (window.OdsExplorerPlugins, e.g. live.js) can add to the page: each
+  // hook is optional, and the page works the same without any.
+  const hooks = {
+    decorate: null,   // (g, id, hit, box) → draws a node's own status; no kind tag then
+    panel: null,      // (PANEL, sel, notice) → true when it drew the side panel
+    legend: null,     // (box) → true when it drew the legend
+    params: null,     // (URLSearchParams) → adds its own to the address bar
+    overlay: null,    // (value) → true when it handled the overlay picker
+    nodeKey: null,    // (event, id, hit) for keys other than Enter and Space on a node
+    nodeMenu: null,   // (id, hit, event) on right-click → true when it opened a menu
+    user: [],         // (kind): the person moved the view (pan, zoom, fit, select)
+    afterRender: [],  // () after every render
+  };
+  const user = kind => { for (const f of hooks.user) f(kind); };
+  let nodeEls = new Map();
   // Below this, names are too small to read: pan instead of shrinking further.
   const MIN_ZOOM = 0.85;
   const key = OdsLineage.key;
@@ -266,7 +283,7 @@ if (typeof document !== "undefined") (async function () {
     const a = anchor(e.from, null, "out"), b = anchor(e.to, null, "in");
     if (!a || !b) return;
     const dashed = declared.has(key(e.from, e.to)) ? " declared" : "";
-    const path = el("path", { d: state.columns ? curve(a, b) : route(e.from, e.to, a, b), class: "edge model" + dashed + cls }, gEdges);
+    const path = el("path", { d: state.columns ? curve(a, b) : route(e.from, e.to, a, b), class: "edge model" + dashed + cls, "data-from": e.from, "data-to": e.to }, gEdges);
     el("title", {}, path).textContent = edgeTitle(e);
   }
 
@@ -275,6 +292,7 @@ if (typeof document !== "undefined") (async function () {
     pos = layout(visible);
     gNodes.replaceChildren(); gEdges.replaceChildren();
     targets = new Map();
+    nodeEls = new Map();
     const sel = state.sel, t = state.trace;
     const columnSel = sel && sel.column != null;
     // Nodes a column trace reaches, known or not.
@@ -337,7 +355,7 @@ if (typeof document !== "undefined") (async function () {
         const w = Math.round(label.length * 6.4 + 16);
         el("rect", { class: `pill-bg ${d.decision}`, x: 12, y: 29, width: w, height: 16, rx: 8 }, g);
         el("text", { class: `pill-text ${d.decision}`, x: 20, y: 41 }, g).textContent = label;
-      } else {
+      } else if (!hooks.decorate) {
         el("text", { class: "kindtag", x: 12, y: 41 }, g).textContent = n.kind + (n.opaque ? " · opaque" : "");
       }
       const said = [n.name, n.kind];
@@ -346,9 +364,15 @@ if (typeof document !== "undefined") (async function () {
       if (unknown(id)) said.push("may be affected: the trail can't be followed past an opaque node");
       const hit = el("rect", { class: "hit", width: W, height: HEAD, rx: 6, tabindex: 0, role: "button", "aria-label": said.join(", ") }, g);
       el("title", {}, hit).textContent = [n.name, `${n.kind} · ${n.relation}`, ...said.slice(2)].join("\n");
-      hit.addEventListener("click", ev => { ev.stopPropagation(); select(id, null); });
-      hit.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(id, null, { refocus: true }); } });
+      hit.addEventListener("click", ev => { ev.stopPropagation(); user("select"); select(id, null); });
+      hit.addEventListener("keydown", ev => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); user("select"); select(id, null, { refocus: true }); }
+        else if (hooks.nodeKey) hooks.nodeKey(ev, id, hit);
+      });
+      hit.addEventListener("contextmenu", ev => { if (hooks.nodeMenu && hooks.nodeMenu(id, hit, ev)) { ev.preventDefault(); ev.stopPropagation(); } });
       targets.set(key(id, null), hit);
+      nodeEls.set(id, g);
+      if (hooks.decorate) hooks.decorate(g, id, hit, { w: W, h: p.h });
       if (!state.columns || !n.columns.length) continue;
       el("line", { class: "rule", x1: 4, x2: W, y1: HEAD, y2: HEAD }, g);
       n.columns.forEach((c, i) => {
@@ -370,6 +394,7 @@ if (typeof document !== "undefined") (async function () {
     }
     $("lin-stats").textContent = `${visible.size} of ${doc.nodes.length} nodes · ${doc.column_edges.length} column edges`;
     legend();
+    for (const f of hooks.afterRender) f();
   }
   function onNodePath(e, sel, t) {
     const on = id => id === sel.node;
@@ -380,6 +405,7 @@ if (typeof document !== "undefined") (async function () {
   function legend() {
     const box = $("lin-legend");
     box.replaceChildren();
+    if (hooks.legend && hooks.legend(box)) return;
     // In the column view the key of edges takes the room: the decisions keep their pills
     // and say what they mean on hover, so the key stays on one row.
     const compact = state.columns;
@@ -451,6 +477,7 @@ if (typeof document !== "undefined") (async function () {
   function remember() {
     try {
       const q = new URLSearchParams();
+      if (hooks.params) hooks.params(q);
       if (state.sel) { q.set("node", state.sel.node); if (state.sel.column != null) q.set("column", state.sel.column); }
       const text = q.toString();
       history.replaceState(null, "", served ? location.pathname + (text ? "?" + text : "") : location.pathname + location.search + (text ? "#" + text : ""));
@@ -468,7 +495,7 @@ if (typeof document !== "undefined") (async function () {
     const li = h("li", null, null, ul);
     const a = h("button", label, "link", li);
     a.type = "button";
-    a.addEventListener("click", () => select(node, column, { center: true }));
+    a.addEventListener("click", () => { user("select"); select(node, column, { center: true }); });
     if (note) h("span", " " + note, "note", li);
   }
   // "Open in warehouse" (#329): where the manifest says the relation is, in the
@@ -495,6 +522,7 @@ if (typeof document !== "undefined") (async function () {
   }
 
   function panel(notice) {
+    if (hooks.panel && hooks.panel(PANEL, state.sel, notice)) return;
     PANEL.replaceChildren();
     if (!state.sel) return emptyPanel(notice);
     const { node, column } = state.sel;
@@ -807,15 +835,25 @@ if (typeof document !== "undefined") (async function () {
     apply();
   }
   let drag = null;
+  // `.lin-ui`: what a plugin lays over the canvas (chips, a minimap, a menu).
+  const OVER = ".lin-legend, .lin-corner, .lin-ui";
   canvas.addEventListener("mousedown", e => {
-    if (e.target.closest(".lin-legend, .lin-corner")) return;
-    drag = { x: e.clientX - view.x, y: e.clientY - view.y, moved: false }; canvas.classList.add("dragging");
+    if (e.button !== 0 || e.target.closest(OVER)) return;
+    drag = { x: e.clientX - view.x, y: e.clientY - view.y, x0: e.clientX, y0: e.clientY, moved: false }; canvas.classList.add("dragging");
   });
-  window.addEventListener("mousemove", e => { if (!drag) return; drag.moved = true; view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; apply(); });
+  window.addEventListener("mousemove", e => {
+    if (!drag) return;
+    // A click that wobbles a pixel isn't a pan.
+    if (!drag.moved && Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) < 4) return;
+    if (!drag.moved) { drag.moved = true; user("pan"); }
+    view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; apply();
+  });
   window.addEventListener("mouseup", () => { setTimeout(() => { drag = null; }, 0); canvas.classList.remove("dragging"); });
-  canvas.addEventListener("click", e => { if (state.sel && !(drag && drag.moved) && !e.target.closest(".lin-legend, .lin-corner")) clearSel(); });
+  canvas.addEventListener("click", e => { if (state.sel && !(drag && drag.moved) && !e.target.closest(OVER)) clearSel(); });
   canvas.addEventListener("wheel", e => {
+    if (e.target.closest(OVER)) return;
     e.preventDefault();
+    user("zoom");
     const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
     const k = Math.min(3, Math.max(0.03, view.k * Math.exp(-e.deltaY * 0.0015)));
     view.x = mx - (mx - view.x) * (k / view.k); view.y = my - (my - view.y) * (k / view.k); view.k = k; apply();
@@ -896,10 +934,13 @@ if (typeof document !== "undefined") (async function () {
     fitAll();
   });
   $("lin-focus").addEventListener("change", e => { state.focus = e.target.checked; render(); state.sel ? center(state.sel.node) : fitAll(); });
-  $("lin-fit").addEventListener("click", fitAll);
+  $("lin-fit").addEventListener("click", () => { user("fit"); fitAll(); });
   if ($("lin-overlay")) {
     if (!overlay) $("lin-overlay").disabled = true;
-    $("lin-overlay").addEventListener("change", e => { state.overlay = e.target.value; render(); panel(); });
+    $("lin-overlay").addEventListener("change", e => {
+      if (hooks.overlay && hooks.overlay(e.target.value)) return;
+      state.overlay = e.target.value; render(); panel();
+    });
   }
   if ($("lin-impact")) {
     $("lin-impact").addEventListener("click", () => {
@@ -908,6 +949,18 @@ if (typeof document !== "undefined") (async function () {
       const tab = $("lin-tab-impact");
       if (tab) tab.focus();
     });
+  }
+
+  // ---------- plugins: what they may use of the page, then they add their hooks.
+  const api = {
+    doc, byId, T, served, baseUrl, state, hooks, view, canvas, panelEl: PANEL,
+    h, rich, fit, nameOf, enc, apply, render, fitAll, center, select, clearSel, panel, legend, remember, user,
+    pos: () => pos, size: () => ({ w: W, head: HEAD }), nodeEl: id => nodeEls.get(id), target: id => targets.get(key(id, null)),
+    // Larger node boxes and spacing, e.g. for live stats; the next render lays them out.
+    setBox(w, head, gapx, gapy) { W = w; HEAD = head; GAPX = gapx; GAPY = gapy; },
+  };
+  for (const plugin of (typeof window !== "undefined" && window.OdsExplorerPlugins) || []) {
+    try { plugin(api); } catch (err) { console.error("lineage plugin failed", err); }
   }
 
   // ---------- first paint, and deep links: `?node=<id>&column=<name>` (served) or

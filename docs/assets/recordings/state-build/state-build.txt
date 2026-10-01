@@ -36,7 +36,7 @@ scope          jaffle_ods/default
 compared with  snapshot 1 in .ods/state.db
 plan           8 to build and test, 5 to reuse
 dbt            target_dir target (default)
-target         dev (jaffle_ods, fake, fake-host, jaffle_ods)
+target         dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
 ran            dbt build --select fqn:jaffle_ods.marts,resource_type:model
 fqn:jaffle_ods.staging.stg_orders,resource_type:model --target-path /tmp/ods-demo/jaffle_shop/target --write-json
 --partial-parse-file-diff --indirect-selection eager --log-format json --log-level debug

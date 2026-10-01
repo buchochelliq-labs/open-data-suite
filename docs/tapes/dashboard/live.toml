@@ -1,0 +1,67 @@
+# A run watched live on the DAG (#322): Home says a run is in progress, the Lineage page
+# follows it, a node's stats, follow off and on, a follow scope from the node menu, and
+# the failure at the end. The run is the live-run board's demo run, written to its
+# journal by scripts/ods_live_sim.py as the tour goes, so every still is the same.
+title = "A run, live on the DAG"
+theme = "light"
+live_run = "7f2f6c69-0000-4000-8000-000000000322"
+live_scope = "jaffle_ods/default"
+
+[[step]]
+run = 0.4
+goto = "/"
+caption = "While ods state build runs, Home says a run is probably in progress: its journal is still being written"
+expect = ["Run probably in progress", "inferred", "probably running"]
+pause = 3200
+still = "home-banner"
+
+[[step]]
+click = ".live-banner .live-go"
+caption = "Live on the DAG: each node's state, and follow mode keeps the running nodes in view"
+pause = 1800
+
+[[step]]
+run = 6.7
+caption = "Two threads: follow frames both running nodes, moving at most once a second"
+expect = ["Following run", "NOW RUNNING", "customer_order_rank"]
+pause = 3000
+still = "live-follow"
+
+[[step]]
+click = "g[data-node='model.jaffle_ods.orders'] rect.hit"
+caption = "A node's stats: times, rows as the adapter reported them, thread, relation"
+expect = ["Rows affected", "from the adapter response", "Follow run"]
+pause = 3600
+still = "node-stats"
+
+[[step]]
+click = "#lv-hint button"
+caption = "Selecting a node turned follow off; Follow run (or F) turns it back on"
+pause = 2400
+
+[[step]]
+focus = "g[data-node='model.jaffle_ods.customers'] rect.hit"
+press = "Shift+F10"
+caption = "The node menu, from the keyboard too (Shift+F10, the menu key or right-click)"
+expect = ["Follow this node and its downstream", "Follow just this node"]
+pause = 3200
+still = "node-menu"
+
+[[step]]
+press = "Enter"
+caption = "Following customers and its downstream: the rest of the run fades"
+expect = ["Following customers + 3 downstream"]
+pause = 3200
+
+[[step]]
+run = 13.3
+caption = "The run ends: follow stops on the final view and offers the failure"
+expect = ["Run finished in", "Jump to failure"]
+pause = 3200
+still = "finished"
+
+[[step]]
+click = ".lv-jump"
+caption = "The failed node, explained, with the node it blocked"
+expect = ["FAILED", "KeyError"]
+pause = 4200
