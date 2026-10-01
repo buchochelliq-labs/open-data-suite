@@ -191,7 +191,12 @@ impl Journals {
                     .to_str()?
                     .strip_suffix(".jsonl")?
                     .to_owned();
-                let meta = entry.metadata().ok().filter(std::fs::Metadata::is_file)?;
+                // Asked of the path, not the listing: on Windows a listing's size and time
+                // can lag a file still open for writing, so a run that finished since would
+                // look unchanged.
+                let meta = std::fs::symlink_metadata(&path)
+                    .ok()
+                    .filter(std::fs::Metadata::is_file)?;
                 usable_run_id(&run_id).then(|| JournalFile {
                     run_id,
                     modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
