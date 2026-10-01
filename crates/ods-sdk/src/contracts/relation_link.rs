@@ -11,8 +11,9 @@
 //!   guesses one. A relation named with fewer parts than the warehouse's UI needs is
 //!   [`NoRelationLink::NotQualified`], a missing setting
 //!   [`NoRelationLink::NotConfigured`].
-//! - A link is `https://` only and carries no user part, query string or fragment, so
-//!   no credential can travel in it (AGENTS rule 9). Each name is percent-encoded.
+//! - A link is `https://` only and carries no user part or fragment. A query string may
+//!   carry configuration that selects where to look (e.g. a workspace id), never a
+//!   credential (AGENTS rule 9). Each name is percent-encoded into the path.
 //! - The same relation always gives the same link.
 //! - The provider supplies the link's label for people (e.g. "Open in" and the name of its UI), so
 //!   hosts never write a warehouse's name.
@@ -36,7 +37,8 @@ pub const RELATION_LINKER: Contract = Contract {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct RelationLink {
-    /// The URL: `https://`, with no user part, query string or fragment.
+    /// The URL: `https://`, with no user part or fragment; a query string, if any,
+    /// carries only configuration, never a credential.
     pub url: String,
     /// What to call it, for people, e.g. "Open in Catalog Explorer".
     pub label: String,

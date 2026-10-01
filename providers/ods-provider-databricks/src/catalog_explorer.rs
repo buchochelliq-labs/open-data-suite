@@ -5,12 +5,15 @@
 //! shape is the one Databricks' own documentation uses for links to a table, e.g. the
 //! `databricksWorkspaceUrl` of access-request notifications
 //! (<https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/access-request-destinations#access-request-examples>).
-//! The workspace id (`?o=`) that some of those links carry is left out: a link never
-//! has a query string (AGENTS rule 9), and a workspace's own host already names it.
+//! Those links also carry the workspace id as `?o=<id>`, which selects the workspace
+//! when one host serves several. It is added when it is known: configured
+//! (`workspace_id`), or read from a host that names it (Azure's
+//! `adb-<id>.<n>.azuredatabricks.net`, GCP's `<id>.<n>.gcp.databricks.com`). A host
+//! that doesn't (AWS's `dbc-…`) gets no `?o=` rather than a guessed one.
 //!
-//! The host comes from configuration (`host`, ADR-0021); it isn't a secret, and no
-//! token ever goes into a link. Nothing is fetched: the link is where the manifest says
-//! the relation is, not proof that it exists.
+//! The host and the workspace id come from configuration (`host`, ADR-0021); neither is
+//! a secret, and no token ever goes into a link. Nothing is fetched: the link is where
+//! the manifest says the relation is, not proof that it exists.
 
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::relation_link::{
@@ -29,6 +32,8 @@ pub struct CatalogExplorer {
     instance: String,
     /// `https://<host>`, or why there is none.
     base: Result<String, NoRelationLink>,
+    /// The workspace id for `?o=`, if known, or why the configured one can't be used.
+    workspace: Result<Option<String>, NoRelationLink>,
 }
 
 impl CatalogExplorer {
@@ -37,10 +42,41 @@ impl CatalogExplorer {
     /// `/`; anything else (another scheme, a path, a query string, a user part) is
     /// refused, and every link then says why.
     pub fn new(instance: impl Into<String>, host: Option<&str>) -> Self {
+        let base = base(host);
+        let workspace = Ok(base.as_deref().ok().and_then(workspace_in_host));
         Self {
             instance: instance.into(),
-            base: base(host),
+            base,
+            workspace,
         }
+    }
+
+    /// The same, with the workspace id configured as `workspace_id`: decimal digits,
+    /// without a leading zero. `None` (not configured) keeps the id the host names, if
+    /// any. A configured id that isn't one, or that differs from the id the host names,
+    /// is refused: links then say why rather than pick one.
+    #[must_use]
+    pub fn with_workspace_id(mut self, workspace_id: Option<&str>) -> Self {
+        let Some(id) = workspace_id else {
+            return self;
+        };
+        let named = self.workspace.as_ref().ok().cloned().flatten();
+        self.workspace = checked_workspace_id(id.trim()).and_then(|id| match named {
+            Some(named) if named != id => Err(NoRelationLink::InvalidSetting {
+                setting: "workspace_id".to_owned(),
+                why: "differs from the workspace id in `host`".to_owned(),
+            }),
+            _ => Ok(Some(id)),
+        });
+        self
+    }
+
+    /// The workspace id links carry as `?o=`, if known.
+    ///
+    /// # Errors
+    /// Why the configured `workspace_id` can't be used.
+    pub fn workspace_id(&self) -> Result<Option<&str>, &NoRelationLink> {
+        self.workspace.as_ref().map(Option::as_deref)
     }
 
     /// `https://<host>`, as links are built from.
@@ -57,6 +93,41 @@ fn invalid(why: &str) -> NoRelationLink {
         setting: "host".to_owned(),
         why: why.to_owned(),
     }
+}
+
+/// A workspace id: a positive whole number in decimal digits, as written (no leading
+/// zero, so it is never rewritten).
+fn checked_workspace_id(id: &str) -> Result<String, NoRelationLink> {
+    let valid = !id.is_empty()
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && !id.starts_with('0')
+        && id.parse::<u64>().is_ok();
+    if valid {
+        Ok(id.to_owned())
+    } else {
+        Err(NoRelationLink::InvalidSetting {
+            setting: "workspace_id".to_owned(),
+            why: "must be the workspace's numeric id".to_owned(),
+        })
+    }
+}
+
+/// The workspace id a host names: `adb-<id>.<n>.azuredatabricks.net` (Azure) or
+/// `<id>.<n>.gcp.databricks.com` (GCP). Any other host names none.
+fn workspace_in_host(base: &str) -> Option<String> {
+    let authority = base.strip_prefix("https://")?;
+    let name = authority.split(':').next()?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (first, rest) = name.split_once('.')?;
+    let (second, domain) = rest.split_once('.')?;
+    let id = match domain {
+        "azuredatabricks.net" => first.strip_prefix("adb-")?,
+        "gcp.databricks.com" => first,
+        _ => return None,
+    };
+    (digits(id) && digits(second))
+        .then(|| checked_workspace_id(id).ok())
+        .flatten()
 }
 
 /// `https://<host>` from the configured `host`: HTTPS only, no trailing `/`, and no
@@ -114,6 +185,7 @@ impl Provider for CatalogExplorer {
 impl RelationLinker for CatalogExplorer {
     fn link(&self, relation: &str) -> Result<RelationLink, NoRelationLink> {
         let base = self.base.as_ref().map_err(Clone::clone)?;
+        let workspace = self.workspace.as_ref().map_err(Clone::clone)?;
         let relation = relation.trim();
         let invalid = |why: String| NoRelationLink::InvalidName {
             relation: relation.to_owned(),
@@ -136,8 +208,11 @@ impl RelationLinker for CatalogExplorer {
             .map(|p| path_segment(p))
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid)?;
+        let query = workspace
+            .as_deref()
+            .map_or_else(String::new, |id| format!("?o={id}"));
         Ok(RelationLink::new(
-            format!("{base}/explore/data/{}", path.join("/")),
+            format!("{base}/explore/data/{}{query}", path.join("/")),
             LABEL,
         ))
     }
@@ -164,11 +239,77 @@ mod tests {
         );
         assert_eq!(
             link(Some("adb-1.2.azuredatabricks.net"), "main.sales.orders"),
-            Ok("https://adb-1.2.azuredatabricks.net/explore/data/main/sales/orders".to_owned())
+            Ok("https://adb-1.2.azuredatabricks.net/explore/data/main/sales/orders?o=1".to_owned())
         );
         let explorer = CatalogExplorer::new("uc", Some("h.example"));
         assert_eq!(explorer.link("a.b.c").unwrap().label, LABEL);
         assert_eq!(explorer.info().instance, "uc");
+    }
+
+    #[test]
+    fn carries_the_workspace_id_when_it_is_known() {
+        let url = |host: &str, id: Option<&str>| {
+            CatalogExplorer::new("uc", Some(host))
+                .with_workspace_id(id)
+                .link("c.s.t")
+                .map(|l| l.url)
+        };
+        // Named by the host.
+        assert_eq!(
+            url("adb-1234567890123456.7.azuredatabricks.net", None),
+            Ok("https://adb-1234567890123456.7.azuredatabricks.net/explore/data/c/s/t?o=1234567890123456".to_owned())
+        );
+        assert_eq!(
+            url("https://1234567890.3.gcp.databricks.com", None),
+            Ok(
+                "https://1234567890.3.gcp.databricks.com/explore/data/c/s/t?o=1234567890"
+                    .to_owned()
+            )
+        );
+        // Not named by the host: no `?o=` is guessed.
+        for host in [
+            "dbc-1234.cloud.databricks.com",
+            "adb-x1.7.azuredatabricks.net",
+            "adb-1.azuredatabricks.net",
+            "1234.gcp.databricks.com",
+            "adb-1.2.azuredatabricks.net.example",
+            "h.example",
+        ] {
+            let got = url(host, None).unwrap();
+            assert!(!got.contains('?'), "{host}: {got}");
+        }
+        // Configured: used; with a host that names an id, it must be the same.
+        assert_eq!(
+            url("dbc-1234.cloud.databricks.com", Some(" 42 ")),
+            Ok("https://dbc-1234.cloud.databricks.com/explore/data/c/s/t?o=42".to_owned())
+        );
+        assert_eq!(
+            url("adb-9.2.azuredatabricks.net", Some("9")),
+            Ok("https://adb-9.2.azuredatabricks.net/explore/data/c/s/t?o=9".to_owned())
+        );
+        let other = url("adb-1.2.azuredatabricks.net", Some("9"));
+        assert!(
+            matches!(&other, Err(NoRelationLink::InvalidSetting { why, .. }) if why.contains("host")),
+            "{other:?}"
+        );
+        // A configured id that isn't one is refused, never dropped or repaired.
+        for id in [
+            "",
+            "  ",
+            "abc",
+            "12a",
+            "-1",
+            "0",
+            "0042",
+            "1&x=2",
+            "99999999999999999999999",
+        ] {
+            let got = url("h.example", Some(id));
+            assert!(
+                matches!(&got, Err(NoRelationLink::InvalidSetting { setting, .. }) if setting == "workspace_id"),
+                "{id}: {got:?}"
+            );
+        }
     }
 
     #[test]

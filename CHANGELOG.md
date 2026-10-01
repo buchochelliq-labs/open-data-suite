@@ -90,7 +90,9 @@ the changelog was introduced.
   target and the workspace `host` configured (`[providers.<name>] kind =
   "databricks"`, or `DATABRICKS_HOST`), the dashboard's model page has an **Open in
   Catalog Explorer ↗** button to
-  `https://<host>/explore/data/<catalog>/<schema>/<table>`; the lineage explorer's side
+  `https://<host>/explore/data/<catalog>/<schema>/<table>?o=<workspace id>`, with the
+  workspace id from the provider's `workspace_id` setting or an Azure or GCP host that
+  contains it (left out when neither gives it); the lineage explorer's side
   panel and a run's Nodes table have the same link. `ods lineage graph --format json`,
   `ods lineage columns --output json` and `/api/catalog/<id>` add `relation_url` and
   `relation_url_label`, or `relation_url_unavailable` with the reason there is no
