@@ -143,7 +143,9 @@ In detail:
      up. The command line is kept beside the state database in
      `<state-db>.last-run.json`, which has a `schema_version`. It holds only what was
      typed on the command line, never environment variables or configuration; those are
-     read again when retrying. Dry runs and `compile` aren't kept.
+     read again when retrying. Of what was typed, `--vars` and what follows `--` are
+     kept only as having been given, never their values, and must be given to the retry
+     again (#321, ADR-0009). Dry runs and `compile` aren't kept.
 3. **Invoked as `dbt`.** When the binary's name is `dbt` (a symlink or copy), it
    behaves as `ods dbt`. It finds the real dbt from configuration (`dbt.program`),
    `ODS_DBT`, or `PATH` *excluding itself*, and refuses to start if it would call

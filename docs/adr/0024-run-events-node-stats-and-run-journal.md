@@ -289,8 +289,8 @@ event (`RunEvent::sanitized`) before keeping or showing it. The journal never ho
 options at all. The dbt executor shows `--vars` values as `[value removed]` in every
 command line it logs or reports (`-v` logs, the report's `ran` line and
 `execution.command`), and `ods state` does the same in its `dbt` settings and warnings;
-dbt still gets them. `.last-run.json` still keeps the options as typed, for `ods state
-retry` (#321).
+dbt still gets them. Since format 1.3, `.last-run.json` doesn't keep them either: only
+that they were given, and `ods state retry` asks for them again (#321, ADR-0009).
 
 **The console is deliberately different:** it shows what dbt itself would show, at the
 level dbt would show it. dbt's own error lines (e.g. `RunResultError`) can quote values

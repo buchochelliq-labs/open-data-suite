@@ -1164,10 +1164,25 @@ ods state retry --dry-run        # plan the retry; build and record nothing
   only what failed, use `--failed` ([below](#retrying-only-what-failed)).
 - **What it keeps:** every `run`, `seed`, `snapshot`, `build` and `test` that isn't a
   dry run keeps its command line beside the state database, in
-  `.ods/state.db.last-run.json`. Only what was typed is kept, including `-- DBT_ARGS`.
-  Environment variables (`DBT_TARGET`, …) and configuration are read again when
-  retrying, as for any command, so none of their values is written down. Don't put
-  secrets on the command line: use `env_var()` in dbt.
+  `.ods/state.db.last-run.json`. Only what was typed is kept. Environment variables
+  (`DBT_TARGET`, …) and configuration are read again when retrying, as for any
+  command, so none of their values is written down.
+- **Values that may be secret aren't kept** (#321): of `--vars` and what follows `--`,
+  the file keeps only that they were given, never their values or a digest of them.
+  `retry` asks for them again, and refuses without them, or with ones the last run
+  didn't have:
+
+  ```sh
+  ods state build -s +orders --vars '{api_key: …}' -- --threads 8
+  ods state retry --vars '{api_key: …}' -- --threads 8
+  ```
+
+  The other options (`--select`, `--target`, `--dbt-profile`, paths, …) are kept as
+  typed. A last-run file written by an older ODS (before format 1.3) is read without
+  those values, and rewritten without them the first time `retry` reads it, even with
+  `--dry-run`: removing a secret is the one change a dry run makes. A file with an
+  option this ODS doesn't know is removed instead, as which of its words are values
+  can't be told.
 - **One last run per state database:** `retry` reruns whichever command ran last,
   whatever its target. It prints what it runs on stderr, e.g. retrying
   `ods state build -s +orders`. `--state-db` picks the database, as elsewhere, and the

@@ -471,8 +471,12 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert!(body.contains("--vars '<redacted>'"), "{body}");
     assert_eq!(last["last_good"], 1);
     assert_eq!(runs["failed"], 1);
-    // The retry it suggests is a command this ODS has.
-    assert_eq!(last["next"][0]["command"], "ods state retry --failed");
+    // The retry it suggests is a command this ODS has, with what the run withheld to
+    // give again as placeholders, never the values (#321).
+    assert_eq!(
+        last["next"][0]["command"],
+        "ods state retry --failed --vars '<value>' -- '<dbt arguments>'"
+    );
     let help = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(["state", "retry", "--help"])
         .output()

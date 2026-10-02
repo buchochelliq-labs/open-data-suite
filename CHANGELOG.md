@@ -18,6 +18,16 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- `ods state retry` needs `--vars` and the arguments after `--` given again when the
+  last run had them (#321). **What to do:** pass the same `--vars` and `-- …` that the
+  run had, e.g. `ods state retry --vars '{…}' -- --threads 8`; without them, or with
+  ones the run didn't have, `retry` exits 2 (`ODS-E0403`) and says what to add. The
+  last-run file (`<state-db>.last-run.json`, now format 1.3) no longer stores their
+  values, which may hold secrets, or a digest of them: only that they were given
+  (`withheld`). A file written by an older ODS is read without those values, and
+  rewritten without them the first time `retry` reads it (a dry run too); one with an
+  option this ODS doesn't know is removed. To clear an older file's secrets now, run
+  `ods state retry --dry-run` once, or delete the file.
 - `SDK_VERSION` is now 0.3 (#323): the executor contract is 0.5 (an `ErrorSummary` may
   carry the `line` the engine reported), the SQL lineage analyzer contract is 0.2 (an
   opaque `QueryLineage` names the columns it couldn't resolve, `unresolved`), and there
