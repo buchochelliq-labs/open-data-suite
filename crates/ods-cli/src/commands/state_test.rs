@@ -325,6 +325,7 @@ impl TestReport {
             before: latest.map(|l| &l.snapshot),
             state_db: &self.state_db,
             retry: None,
+            state_db_flag: super::failures::retry_state_db(settings),
             project_is_run: true,
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);

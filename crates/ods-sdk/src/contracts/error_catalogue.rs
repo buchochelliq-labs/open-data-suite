@@ -21,8 +21,10 @@
 //!   removed, so an explanation says which catalogue made it.
 //!
 //! A provider may also describe the project for explanations, as a [`ProjectIndex`]:
-//! each node's file and the macros its code calls that aren't defined. That is the
-//! provider's reading of its own project format.
+//! each node's file, the macros its code calls that aren't defined, and, for a check
+//! (e.g. a data test), what it tests ([`CheckTarget`]: the kind of test, the column and
+//! the node, never its arguments). That is the provider's reading of its own project
+//! format.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,7 +38,8 @@ use crate::provider::{Contract, Provider};
 /// The `error_catalogue` contract.
 pub const ERROR_CATALOGUE: Contract = Contract {
     name: "error_catalogue",
-    version: SchemaVersion::new(0, 1),
+    // 0.2: an indexed node may say what it checks (`IndexedNode::check`, #323).
+    version: SchemaVersion::new(0, 2),
 };
 
 /// A catalogue's name and version.
@@ -165,6 +168,38 @@ impl NameAt {
     }
 }
 
+/// What a check (e.g. a data test) tests, as the project declares it (#323). Names
+/// only: a test's arguments (e.g. the values `accepted_values` accepts) are values, so
+/// they are never kept. Each name is kept only when it is [code](is_code).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CheckTarget {
+    /// The kind of test, for a generic one (e.g. `not_null`, `unique`,
+    /// `accepted_values`, `relationships`, or a package's `dbt_utils.expression_is_true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<String>,
+    /// The column it tests, when it tests one column by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    /// The node it is declared on, by id, when the project says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+}
+
+impl CheckTarget {
+    /// A check of `test` kind on `column` of `node`; a name that isn't [code](is_code)
+    /// (e.g. a column given as an expression) is left out.
+    pub fn new(test: Option<&str>, column: Option<&str>, node: Option<&str>) -> Self {
+        let keep = |name: Option<&str>| name.filter(|n| is_code(n)).map(str::to_owned);
+        Self {
+            test: keep(test),
+            column: keep(column),
+            node: keep(node),
+        }
+    }
+}
+
 /// What explanations need to know about one node.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -182,6 +217,9 @@ pub struct IndexedNode {
     /// The language its code is in (e.g. `sql`, `python`), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// What it checks, when it is a check (e.g. a data test).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<CheckTarget>,
 }
 
 impl IndexedNode {
@@ -205,6 +243,13 @@ impl IndexedNode {
     #[must_use]
     pub fn in_language(mut self, language: Option<&str>) -> Self {
         self.language = language.map(str::to_ascii_lowercase);
+        self
+    }
+
+    /// Says it is a check, of `target`.
+    #[must_use]
+    pub fn checking(mut self, target: CheckTarget) -> Self {
+        self.check = Some(target);
         self
     }
 

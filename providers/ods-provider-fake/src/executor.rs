@@ -396,6 +396,9 @@ impl<'a> Sim<'a> {
                         check: check.clone(),
                         covers: vec![s.id.clone()],
                         status: check_status,
+                        // The fake engine says only that a source check failed.
+                        failures: None,
+                        error: None,
                     },
                 );
             }
@@ -606,6 +609,8 @@ impl<'a> Sim<'a> {
                         check: check.clone(),
                         covers: vec![id.to_owned()],
                         status: CheckStatus::Passed,
+                        failures: None,
+                        error: None,
                     },
                 );
             }

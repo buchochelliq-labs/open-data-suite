@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 use crate::SchemaVersion;
 
 /// The version of [`ErrorExplanation`] as serialized (e.g. in `--output json`).
-pub const EXPLANATION_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+/// 1.1 added [`ErrorExplanation::check`] and the [`EvidenceData::FailingRows`] and
+/// [`EvidenceData::TestTarget`] evidence (#323): optional, so 1.0 readers ignore them.
+pub const EXPLANATION_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// What kind of failure it was, for people: the chip on a failed node. Coarse on
 /// purpose, so an engine's error kinds map onto it without guessing.
@@ -409,6 +411,25 @@ pub enum EvidenceData {
         /// Their names, in the order the code calls them.
         names: Vec<String>,
     },
+    /// How many rows a check (e.g. a data test) found that don't pass, as the engine
+    /// reported it. A count, never the rows themselves.
+    FailingRows {
+        /// The count; never zero (a failed check that reported none says nothing).
+        rows: u64,
+    },
+    /// What a check tests, from the project: the kind of test, the column and the node.
+    /// Names only: a test's arguments (e.g. the values it accepts) are never kept.
+    TestTarget {
+        /// The kind of test (e.g. `not_null`), when it is a generic one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        test: Option<String>,
+        /// The column it tests, when it tests one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        column: Option<String>,
+        /// The node it tests, by id, when one is known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
+    },
 }
 
 impl EvidenceItem {
@@ -623,6 +644,48 @@ impl MissingColumn {
     }
 }
 
+/// The check (e.g. a data test) an explanation is about, when the failure is a check's
+/// rather than a node's own (#323). Renderers name it by what it tests: an engine may
+/// build a check's id from its arguments (dbt names `accepted_values` tests after the
+/// values they accept), so the id is for machines, not for headlines.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct FailedCheck {
+    /// The nodes it checks, by id, sorted. Empty when the engine didn't say.
+    pub covers: Vec<String>,
+    /// The kind of test (e.g. `not_null`), when the project says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<String>,
+    /// The column it tests, when the project says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+}
+
+impl FailedCheck {
+    /// A check of `covers`. Ids that can't be shown as [code](is_code) are left out.
+    pub fn new(mut covers: Vec<String>) -> Self {
+        covers.retain(|c| is_code(c));
+        covers.sort();
+        covers.dedup();
+        Self {
+            covers,
+            test: None,
+            column: None,
+        }
+    }
+
+    /// Names the kind of test and the column it tests, each kept only if it is
+    /// [code](is_code).
+    #[must_use]
+    pub fn testing(mut self, test: Option<&str>, column: Option<&str>) -> Self {
+        let keep = |name: Option<&str>| name.filter(|n| is_code(n)).map(str::to_owned);
+        self.test = keep(test);
+        self.column = keep(column);
+        self
+    }
+}
+
 /// Which pattern recognised the error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -651,8 +714,9 @@ impl PatternRef {
     }
 }
 
-/// A failed node, explained: what went wrong, why ODS thinks so, where, what to try,
-/// and what it blocked. Made only by [`ExplanationBuilder`], which derives the
+/// A failed node (or a failed check, with [`check`](ErrorExplanation::check)),
+/// explained: what went wrong, why ODS thinks so, where, what to try, and what it
+/// blocked. Made only by [`ExplanationBuilder`], which derives the
 /// confidence; one read back from JSON has its confidence derived again, whatever the
 /// JSON said.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,6 +724,8 @@ impl PatternRef {
 pub struct ErrorExplanation {
     schema_version: SchemaVersion,
     node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    check: Option<FailedCheck>,
     category: ErrorCategory,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     symptom: Option<Symptom>,
@@ -687,6 +753,8 @@ pub struct ErrorExplanation {
 struct Unchecked {
     schema_version: SchemaVersion,
     node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    check: Option<FailedCheck>,
     category: ErrorCategory,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     symptom: Option<Symptom>,
@@ -714,6 +782,7 @@ impl From<Unchecked> for ErrorExplanation {
             explanation: Self {
                 schema_version: u.schema_version,
                 node: u.node,
+                check: u.check,
                 category: u.category,
                 symptom: u.symptom,
                 confidence: u.confidence,
@@ -735,6 +804,12 @@ impl ErrorExplanation {
     /// The failed node's id.
     pub fn node(&self) -> &str {
         &self.node
+    }
+
+    /// The check it is about, when a check (e.g. a data test) failed rather than the
+    /// node itself: then [`node`](Self::node) is the check's id.
+    pub fn check(&self) -> Option<&FailedCheck> {
+        self.check.as_ref()
     }
 
     /// Its category.
@@ -838,6 +913,7 @@ impl ExplanationBuilder {
                 } else {
                     "[node hidden]".to_owned()
                 },
+                check: None,
                 category,
                 symptom: None,
                 confidence: Confidence::NotRecognised,
@@ -851,6 +927,14 @@ impl ExplanationBuilder {
                 engine_message: None,
             },
         }
+    }
+
+    /// Says the failure is a check's: the node is the check, and it checks `check`'s
+    /// nodes.
+    #[must_use]
+    pub fn check(mut self, check: FailedCheck) -> Self {
+        self.explanation.check = Some(check);
+        self
     }
 
     /// Marks it recognised by `pattern` as `symptom`, with the symptom's headline.
@@ -1124,5 +1208,45 @@ mod tests {
         assert_eq!(json["schema_version"]["major"], 1);
         let back: ErrorExplanation = serde_json::from_value(json).unwrap();
         assert_eq!(back, e);
+    }
+
+    /// #323: a check's explanation names what it covers and tests; names that aren't
+    /// identifier-shaped stay out, and a 1.0 explanation (no check) still reads.
+    #[test]
+    fn a_checks_explanation_carries_what_it_checks() {
+        let check = FailedCheck::new(vec![
+            "model.b".into(),
+            "model.a".into(),
+            "it's 'x'".into(),
+            "model.a".into(),
+        ])
+        .testing(Some("not_null"), Some("lower(email)"));
+        assert_eq!(check.covers, ["model.a", "model.b"]);
+        assert_eq!(
+            (check.test.as_deref(), check.column.as_deref()),
+            (Some("not_null"), None)
+        );
+        let e = ExplanationBuilder::new("test.a", ErrorCategory::TestFailure)
+            .check(check)
+            .recognised(pattern(), Symptom::TestFailed)
+            .evidence(
+                EvidenceItem::confirming(EvidenceSource::RunStats, Text::new().plain("5 rows"))
+                    .with_data(EvidenceData::FailingRows { rows: 5 }),
+            )
+            .build();
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json["schema_version"]["minor"], 1);
+        assert_eq!(json["check"]["covers"][0], "model.a");
+        assert_eq!(json["evidence"][0]["data"]["kind"], "failing_rows");
+        assert_eq!(json["evidence"][0]["data"]["rows"], 5);
+        assert_eq!(serde_json::from_value::<ErrorExplanation>(json).unwrap(), e);
+
+        let mut old = serde_json::to_value(
+            ExplanationBuilder::new("model.a", ErrorCategory::Database).build(),
+        )
+        .unwrap();
+        old["schema_version"]["minor"] = 0.into();
+        let read: ErrorExplanation = serde_json::from_value(old).unwrap();
+        assert_eq!(read.check(), None);
     }
 }

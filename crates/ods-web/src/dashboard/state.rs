@@ -1577,8 +1577,8 @@ impl Dashboard {
         runs
     }
 
-    /// Adds its explanation to each failed node of the run `row` (#323), when the
-    /// binary gave an explainer.
+    /// Adds its explanation to each failed node of the run `row`, and each failed test's
+    /// to the nodes it checks (#323), when the binary gave an explainer.
     /// Beyond loopback (`details` false), explanations carry no file paths, as the
     /// Catalog shows none (rule 9).
     fn explain_nodes(
@@ -1603,17 +1603,24 @@ impl Dashboard {
             .last_run()
             .and_then(|l| l.run_id.as_deref())
             .is_some_and(|id| id == row.run_id);
-        let by_node = explainer.explain(
+        let mut found = explainer.explain(
             &journal.summary,
             (before, after),
             &self.runs_before(&journal.summary),
             last,
         );
+        let shown = |e: ods_core::failure::ErrorExplanation| {
+            if details { e } else { e.without_paths() }
+        };
         for node in nodes {
-            node.explanation = by_node
-                .get(&node.node)
-                .cloned()
-                .map(|e| if details { e } else { e.without_paths() });
+            node.explanation = found.nodes.remove(&node.node).map(shown);
+            node.failed_tests = found
+                .tests
+                .remove(&node.node)
+                .unwrap_or_default()
+                .into_iter()
+                .map(shown)
+                .collect();
         }
     }
 
@@ -1902,7 +1909,8 @@ impl Dashboard {
                 .or_else(|| runs.first())
                 .map(|r| r.run_id.clone())
         });
-        // The selected run's failed and skipped nodes, with their redacted errors.
+        // The selected run's failed and skipped nodes, with their redacted errors, and
+        // the nodes whose tests failed (#323).
         let selected_nodes = selected
             .as_deref()
             .filter(|id| *id != "last")
@@ -1910,12 +1918,13 @@ impl Dashboard {
             .map(|(journal, row)| {
                 let mut names = names.clone();
                 names.extend(self.names());
-                let mut nodes: Vec<NodeStatsView> = journal
-                    .nodes(&|id| name_in(&names, id), &|_| None, details)
-                    .into_iter()
-                    .filter(|n| matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped))
-                    .collect();
+                let mut nodes: Vec<NodeStatsView> =
+                    journal.nodes(&|id| name_in(&names, id), &|_| None, details);
                 self.explain_nodes(row, &journal, &mut nodes, details);
+                nodes.retain(|n| {
+                    matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped)
+                        || !n.failed_tests.is_empty()
+                });
                 nodes
             })
             .unwrap_or_default();

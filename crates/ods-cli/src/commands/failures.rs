@@ -1,8 +1,8 @@
-//! Failed nodes, explained (#323, ADR-0025): gathers what ODS knows about each failure
-//! (the run's journal, earlier runs, the plan, the last committed state, the manifest
-//! and column lineage), has the dbt catalogue classify each redacted error, and
-//! renders the explanations as view nodes for `ods state run`, `build`, `test` and
-//! `history --run`.
+//! Failed nodes and failed tests, explained (#323, ADR-0025): gathers what ODS knows
+//! about each failure (the run's journal, earlier runs, the plan, the last committed
+//! state, the manifest and column lineage), has the dbt catalogue classify each
+//! redacted error, and renders the explanations as view nodes for `ods state run`,
+//! `build`, `test` and `history --run`.
 //!
 //! Explanations are computed when shown, from what is kept anyway; nothing new is
 //! stored, so an older run is explained with the current catalogue.
@@ -10,14 +10,14 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ods_core::failure::{Confidence, ErrorExplanation, Text};
+use ods_core::failure::{Confidence, ErrorExplanation, FailedCheck, Text};
 use ods_core::state::{ExecutionPlan, StateSnapshot};
 use ods_provider_dbt::error_catalogue::{DbtErrorCatalogue, project_index};
 use ods_provider_dbt::events::project_failure;
 use ods_sdk::contracts::error_catalogue::{ErrorCatalogue, ProjectIndex};
-use ods_sdk::contracts::run_events::{NodeRunStatus, RunSummary};
+use ods_sdk::contracts::run_events::RunSummary;
 use ods_sdk::run_journal::Journals;
-use ods_state::{FailureFacts, FailureStage, explain_failure};
+use ods_state::{FailureFacts, FailureStage, explain_failure, failed_checks, failed_nodes};
 
 use super::lineage::{LoadOptions, Loaded, shared_cache};
 use super::state_plan::display_name;
@@ -74,6 +74,9 @@ pub(super) struct Evidence<'a> {
     pub(super) state_db: &'a Path,
     /// The command that retries what failed, when this run can be retried.
     pub(super) retry: Option<ods_state::Retry<'a>>,
+    /// The state database commands name, when it came from a flag or the environment
+    /// (a command copied without it would use another one).
+    pub(super) state_db_flag: Option<&'a str>,
     /// Whether the manifest and lineage describe the code the run ran: right after it,
     /// or when the manifest was written by that run (its invocation is the run id).
     pub(super) project_is_run: bool,
@@ -99,15 +102,11 @@ fn earlier_runs(state_db: &Path, run: &RunSummary) -> Vec<RunSummary> {
     runs
 }
 
-/// Explains every failed node of `run`.
+/// Explains every failed node of `run`, then every failed test (check).
 pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<ErrorExplanation> {
-    let failed: Vec<&str> = run
-        .nodes
-        .iter()
-        .filter(|n| n.stats.status == NodeRunStatus::Error)
-        .map(|n| n.node.as_str())
-        .collect();
-    if failed.is_empty() {
+    let failed = failed_nodes(run);
+    let checks = failed_checks(run);
+    if failed.is_empty() && checks.is_empty() {
         return Vec::new();
     }
     let catalogue = DbtErrorCatalogue::new();
@@ -160,6 +159,26 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
         facts.index = index.as_ref();
         facts.missing_columns = &missing;
         facts.retry = evidence.retry;
+        facts.project_is_run = evidence.project_is_run;
+        explanations.push(explain_failure(&facts));
+    }
+    let state_db = evidence.state_db_flag;
+    for check in checks {
+        let classification = match &check.error {
+            Some(error) => catalogue.classify(error),
+            None => ods_sdk::contracts::error_catalogue::Classification::NotRecognised {
+                category: ods_core::failure::ErrorCategory::Unknown,
+            },
+        };
+        let mut facts = FailureFacts::new(&check.check, &classification, &info, FailureStage::Run);
+        facts.check = Some(check);
+        facts.error = check.error.as_ref();
+        facts.run = Some(run);
+        facts.plan = evidence.plan;
+        facts.before = evidence.before;
+        facts.history = &history;
+        facts.index = index.as_ref();
+        facts.state_db = state_db;
         facts.project_is_run = evidence.project_is_run;
         explanations.push(explain_failure(&facts));
     }
@@ -333,14 +352,45 @@ fn suggestions_tree(explanation: &ErrorExplanation) -> Option<ViewNode> {
     }))
 }
 
-/// One failed node's explanation, as the terminal shows it.
+/// A failed test, for people, by what it tests: `not_null on orders.customer_id`, or
+/// `a test on orders`. Never by its id, which may hold the test's arguments.
+pub(super) fn check_label(check: &FailedCheck) -> Line {
+    let mut on = check
+        .covers
+        .iter()
+        .map(|n| display_name(n))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Some(column) = &check.column {
+        if on.is_empty() {
+            on.clone_from(column);
+        } else if check.covers.len() == 1 {
+            on = format!("{on}.{column}");
+        }
+    }
+    let mut line = match &check.test {
+        Some(test) => vec![Span::toned(test.clone(), Tone::Code)],
+        None => vec![Span::plain("a test")],
+    };
+    if !on.is_empty() {
+        line.push(Span::plain(" on "));
+        line.push(Span::toned(on, Tone::Code));
+    }
+    line
+}
+
+/// One failed node's (or test's) explanation, as the terminal shows it.
 pub(super) fn view(explanation: &ErrorExplanation) -> ViewNode {
     let recognised = explanation.confidence() != Confidence::NotRecognised;
-    let mut blocks = vec![ViewNode::KeyValue(vec![
-        (
-            "failed".into(),
+    let failed = match explanation.check() {
+        Some(check) => ("failed test".to_owned(), check_label(check)),
+        None => (
+            "failed".to_owned(),
             vec![Span::toned(display_name(explanation.node()), Tone::Code)],
         ),
+    };
+    let mut blocks = vec![ViewNode::KeyValue(vec![
+        failed,
         ("what".into(), {
             let mut l = line(explanation.headline());
             for span in &mut l {
@@ -402,10 +452,18 @@ pub(super) fn section(explanations: &[ErrorExplanation]) -> Vec<ViewNode> {
     if explanations.is_empty() {
         return Vec::new();
     }
-    let mut blocks = vec![ViewNode::Heading(if explanations.len() == 1 {
-        "Why it failed".to_owned()
-    } else {
-        format!("Why {} nodes failed", explanations.len())
+    let tests = explanations.iter().filter(|e| e.check().is_some()).count();
+    let nodes = explanations.len() - tests;
+    let count = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+    let mut blocks = vec![ViewNode::Heading(match (nodes, tests) {
+        _ if explanations.len() == 1 => "Why it failed".to_owned(),
+        (_, 0) => format!("Why {} failed", count(nodes, "node")),
+        (0, _) => format!("Why {} failed", count(tests, "test")),
+        _ => format!(
+            "Why {} and {} failed",
+            count(nodes, "node"),
+            count(tests, "test")
+        ),
     })];
     blocks.extend(explanations.iter().map(view));
     blocks

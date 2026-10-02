@@ -12,7 +12,7 @@ use crate::contracts::executor::{
     RequestedNode,
 };
 use crate::contracts::run_events::{
-    CollectedEvents, NodeRunStatus, RunEvent, RunEventKind, RunOutcome,
+    CheckStatus, CollectedEvents, NodeRunStatus, RunEvent, RunEventKind, RunOutcome,
 };
 
 /// What the suite needs from an executor under test.
@@ -414,6 +414,7 @@ fn check_events(
     }
 
     check_node_events(case, request, report, events);
+    check_check_events(case, events);
     let outcome = match &events[events.len() - 1].kind {
         RunEventKind::RunFinished { outcome } => *outcome,
         _ => unreachable!("checked above"),
@@ -422,6 +423,36 @@ fn check_events(
         assert_eq!(outcome, RunOutcome::Succeeded, "{case}: outcome");
     } else {
         assert_ne!(outcome, RunOutcome::Succeeded, "{case}: outcome");
+    }
+}
+
+/// A check that passed says nothing failed it; a check's message, like a node's error,
+/// quotes nothing (#323).
+fn check_check_events(case: &str, events: &[RunEvent]) {
+    for event in events {
+        let RunEventKind::CheckFinished {
+            check,
+            status,
+            failures,
+            error,
+            ..
+        } = &event.kind
+        else {
+            continue;
+        };
+        if *status == CheckStatus::Passed {
+            assert!(
+                failures.is_none() && error.is_none(),
+                "{case}: {check} passed, so nothing failed it: {event:?}"
+            );
+        }
+        if let Some(error) = error {
+            assert_eq!(
+                ods_core::redact::summary_line(error.message(), usize::MAX).as_deref(),
+                Some(error.message()),
+                "{case}: a check's message quotes nothing: {error:?}"
+            );
+        }
     }
 }
 

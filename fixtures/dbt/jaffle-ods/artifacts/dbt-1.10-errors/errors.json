@@ -76,5 +76,11 @@
     "message": "Got 5 results, configured to fail if != 0",
     "name": "test-failure",
     "node": "test.jaffle_ods.only_placed_orders"
+  },
+  {
+    "command": "dbt build",
+    "message": "Got 3 results, configured to fail if != 0",
+    "name": "accepted-values",
+    "node": "test.jaffle_ods.accepted_values_orders_status__completed__sk_live_SENTINEL_42.efdbb4986a"
   }
 ]

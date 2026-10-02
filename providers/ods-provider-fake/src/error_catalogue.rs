@@ -29,6 +29,7 @@ impl Default for FakeErrorCatalogue {
                 ("no such node", Symptom::MissingRef),
                 ("not allowed", Symptom::PermissionDenied),
                 ("took too long", Symptom::QueryTimeout),
+                ("rows failed the test", Symptom::TestFailed),
             ],
         }
     }

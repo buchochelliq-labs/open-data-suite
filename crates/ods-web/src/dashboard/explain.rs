@@ -1,5 +1,5 @@
-//! Failed nodes, explained on the Run page and in the Runs side panel (#323,
-//! ADR-0025).
+//! Failed nodes and failed tests, explained on the Run page and in the Runs side panel
+//! (#323, ADR-0025). A failed test is shown under each node it checks.
 //!
 //! The binary hands in an [`Explainer`]: a provider's error catalogue and what the
 //! project says now (its index, parents and missing columns from column lineage). The
@@ -13,8 +13,19 @@ use std::sync::Arc;
 use ods_core::failure::{ErrorExplanation, MissingColumn};
 use ods_core::state::StateSnapshot;
 use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue, ProjectIndex};
-use ods_sdk::contracts::run_events::{NodeRunStatus, RunSummary};
-use ods_state::{FailureFacts, FailureStage, explain_failure, plan_from_states};
+use ods_sdk::contracts::run_events::RunSummary;
+use ods_state::{
+    FailureFacts, FailureStage, explain_failure, failed_checks, failed_nodes, plan_from_states,
+};
+
+/// A run's failures, explained.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Explained {
+    /// Each failed node's explanation, by node id.
+    pub(crate) nodes: BTreeMap<String, ErrorExplanation>,
+    /// Each failed test's explanation, under every node it checks, by node id.
+    pub(crate) tests: BTreeMap<String, Vec<ErrorExplanation>>,
+}
 
 /// What explains failed nodes, beyond their runs: set by the binary, which picks the
 /// provider.
@@ -92,29 +103,27 @@ impl Explainer {
         self
     }
 
-    /// Explains each failed node of `run`, by node id. `before` and `after` are the
-    /// states around it, `earlier` the runs before it (newest first), and `last` whether
-    /// it is the last run, the one a retry retries.
+    /// Explains each failed node and failed test of `run`. `before` and `after` are the
+    /// states around it, `earlier` the runs before it (newest first), and `last`
+    /// whether it is the last run, the one a retry retries.
     pub(crate) fn explain(
         &self,
         run: &RunSummary,
         (before, after): (Option<&StateSnapshot>, Option<&StateSnapshot>),
         earlier: &[RunSummary],
         last: bool,
-    ) -> BTreeMap<String, ErrorExplanation> {
-        let failed: Vec<&str> = run
-            .nodes
-            .iter()
-            .filter(|n| n.stats.status == NodeRunStatus::Error)
-            .map(|n| n.node.as_str())
-            .collect();
-        if failed.is_empty() {
-            return BTreeMap::new();
+    ) -> Explained {
+        let failed = failed_nodes(run);
+        let checks = failed_checks(run);
+        if failed.is_empty() && checks.is_empty() {
+            return Explained::default();
         }
         let parents = |id: &str| self.parents.get(id).cloned().unwrap_or_default();
         let plan = plan_from_states(run, before, after, &parents);
         let info = self.catalogue.catalogue();
-        let mut explained = BTreeMap::new();
+        let project_is_run =
+            self.invocation.is_some() && self.invocation.as_deref() == run.run_id.as_deref();
+        let mut explained = Explained::default();
         for node in failed {
             let Some(summary) = run.get(node) else {
                 continue;
@@ -135,9 +144,37 @@ impl Explainer {
             facts.index = self.index.as_deref();
             facts.missing_columns = self.missing.get(node).map_or(&[], Vec::as_slice);
             facts.retry = last.then(|| ods_state::Retry::new(self.state_db.as_deref()));
-            facts.project_is_run =
-                self.invocation.is_some() && self.invocation.as_deref() == run.run_id.as_deref();
-            explained.insert(node.to_owned(), explain_failure(&facts));
+            facts.project_is_run = project_is_run;
+            explained
+                .nodes
+                .insert(node.to_owned(), explain_failure(&facts));
+        }
+        for check in checks {
+            let classification = match &check.error {
+                Some(error) => self.catalogue.classify(error),
+                None => Classification::NotRecognised {
+                    category: ods_core::failure::ErrorCategory::Unknown,
+                },
+            };
+            let mut facts =
+                FailureFacts::new(&check.check, &classification, &info, FailureStage::Run);
+            facts.check = Some(check);
+            facts.error = check.error.as_ref();
+            facts.run = Some(run);
+            facts.plan = Some(&plan);
+            facts.before = before;
+            facts.history = earlier;
+            facts.index = self.index.as_deref();
+            facts.state_db = self.state_db.as_deref();
+            facts.project_is_run = project_is_run;
+            let explanation = explain_failure(&facts);
+            for node in &check.covers {
+                explained
+                    .tests
+                    .entry(node.clone())
+                    .or_default()
+                    .push(explanation.clone());
+            }
         }
         explained
     }

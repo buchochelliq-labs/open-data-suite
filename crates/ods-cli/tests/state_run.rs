@@ -3850,6 +3850,102 @@ fn a_failed_node_is_explained_without_values() {
     insta::assert_snapshot!("failure_explained_plain", redact(&section));
 }
 
+/// What dbt says when a test returns rows, with a secret where a value would be.
+const TEST_FAILED: &str = "Got 5 results, configured to fail if != 0 (first: 'sk_live_SENTINEL_5')";
+
+/// #323: a failed test is explained: which test, on which column of which model, and
+/// how many rows don't pass, with how to see them. The secret in dbt's message never
+/// reaches the report, the journal, the history or the terminal. `ods state test` and
+/// `ods state history --run` explain it the same way, and not as a failed model.
+#[test]
+fn a_failed_test_is_explained_without_values() {
+    let project = Project::new("test-explained");
+    project.run_ok(&["--test"]);
+    project.change_code("model.jaffle_ods.customers");
+    let project = project
+        .with("FAKE_DBT_FAIL_TEST", "not_null_customers_customer_id")
+        .with("FAKE_DBT_TEST_FAILURES", "not_null_customers_customer_id=5")
+        .with("FAKE_DBT_FAIL_TEST_MESSAGE", TEST_FAILED);
+    let (code, json) = project.run(&["--test"]);
+    assert_eq!(code, 1, "{json:#}");
+    let leaks = |text: &str| text.contains("SENTINEL");
+    assert!(!leaks(&json.to_string()), "{json:#}");
+    let result = &json["result"];
+    let (path, events) = journal_of(&project, result);
+    assert!(!leaks(&std::fs::read_to_string(path).unwrap()));
+    let check = events
+        .iter()
+        .find(|e| e["kind"] == "check_finished" && e["status"] == "failed")
+        .unwrap();
+    assert_eq!(check["failures"], 5);
+    assert_eq!(check["schema_version"]["minor"], 1);
+
+    let failures = result["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1, "{json:#}");
+    let failure = &failures[0];
+    let test = "test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d";
+    assert_eq!(failure["node"], test);
+    assert_eq!(failure["check"]["covers"][0], "model.jaffle_ods.customers");
+    assert_eq!(failure["category"], "test_failure");
+    assert_eq!(failure["confidence"], "known_pattern_with_evidence");
+    assert_eq!(
+        failure["headline"],
+        "The `not_null` test on `customer_id` of `customers` failed: 5 rows don't pass"
+    );
+    let db = project.db();
+    let redact = |text: &str| {
+        text.replace(db.to_str().unwrap(), "<state-db>")
+            .replace(project.dir.to_str().unwrap(), "<project>")
+    };
+    insta::assert_snapshot!(
+        "test_failure_explained_json",
+        redact(&serde_json::to_string_pretty(failure).unwrap())
+    );
+
+    // The run, from its journal.
+    let run_id = result["execution"]["run_id"].as_str().unwrap().to_owned();
+    let (code, shown) = project.ods(&["state", "history", "--run", &run_id]);
+    assert_eq!(code, 0, "{shown:#}");
+    assert!(!leaks(&shown.to_string()), "{shown:#}");
+    assert_eq!(
+        shown["result"]["failures"][0]["headline"],
+        failure["headline"]
+    );
+
+    // `ods state test` tests `customers` again: its test is explained, not the model.
+    let (code, tested) = project.test(&[]);
+    assert_eq!(code, 1, "{tested:#}");
+    assert!(!leaks(&tested.to_string()), "{tested:#}");
+    let failures = tested["result"]["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1, "{tested:#}");
+    assert_eq!(failures[0]["node"], test);
+    assert_eq!(failures[0]["headline"], failure["headline"]);
+    // The same test failed in the build before: run history says so.
+    assert!(
+        failures[0]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["text"] == "This test failed in 1 of its last 2 runs too."),
+        "{tested:#}"
+    );
+
+    let (code, plain) = project.ods_plain_status(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ]);
+    assert_eq!(code, 1, "{plain}");
+    assert!(!leaks(&plain), "{plain}");
+    insta::assert_snapshot!(
+        "test_failure_explained_plain",
+        redact(&why_it_failed(&plain))
+    );
+}
+
 /// #323: when `dbt compile` fails in the prepare step, nothing runs; the report says
 /// so and explains dbt's error from the manifest: the macro the model calls isn't
 /// defined, and one with a close name is.

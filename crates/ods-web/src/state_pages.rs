@@ -1670,9 +1670,13 @@ fn no_snapshot_why(outcome: RunOutcome) -> &'static str {
 /// Failed and skipped nodes from a run's journal: each failed node's error as the
 /// journal keeps it (redacted), and what stopped each skipped one.
 fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str, compact: bool) {
+    // A node failed only by its tests (as in a test run) is shown with its tests.
     let failed: Vec<&NodeStatsView> = nodes
         .iter()
-        .filter(|n| n.status == NodeRunStatus::Error)
+        .filter(|n| {
+            n.status == NodeRunStatus::Error
+                && (n.explanation.is_some() || n.failed_tests.is_empty())
+        })
         .collect();
     if !failed.is_empty() {
         let _ = write!(
@@ -1711,6 +1715,7 @@ fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str, compact: bo
         }
         b.push_str("</div>");
     }
+    failed_tests(b, nodes, root, compact);
     let skipped: Vec<&NodeStatsView> = nodes
         .iter()
         .filter(|n| n.status == NodeRunStatus::Skipped)
@@ -1736,6 +1741,71 @@ fn failed_nodes(b: &mut String, nodes: &[NodeStatsView], root: &str, compact: bo
         }
         b.push_str("</div>");
     }
+}
+
+/// Failed tests, each once, under the first node it checks (#323): named by what they
+/// test, never by their id, which may hold the test's arguments.
+fn failed_tests(b: &mut String, nodes: &[NodeStatsView], root: &str, compact: bool) {
+    let mut seen = std::collections::BTreeSet::new();
+    let tests: Vec<(&NodeStatsView, &ods_core::failure::ErrorExplanation)> = nodes
+        .iter()
+        .flat_map(|n| n.failed_tests.iter().map(move |e| (n, e)))
+        .filter(|(_, e)| seen.insert(e.node()))
+        .collect();
+    if tests.is_empty() {
+        return;
+    }
+    let _ = write!(
+        b,
+        r#"<div class="st-side-sec"><h3 class="st-label">{}</h3>"#,
+        if tests.len() == 1 {
+            "Failed test"
+        } else {
+            "Failed tests"
+        }
+    );
+    for (node, e) in tests {
+        let _ = write!(
+            b,
+            r#"<div class="st-failed-node"><span class="st-bar" aria-hidden="true"></span>{label}<span class="st-small">on {name}</span></div>"#,
+            label = e.check().map_or_else(|| "a test".to_owned(), check_label),
+            name = node_name(&node.node, &node.name, root),
+        );
+        if compact {
+            let _ = write!(
+                b,
+                r##"<p class="st-explain-brief">{} <a href="#why-{}">Why it failed</a></p>"##,
+                explained_text(e.headline()),
+                attr(&node.node),
+            );
+        } else {
+            explanation_box(b, e, None, nodes);
+        }
+    }
+    b.push_str("</div>");
+}
+
+/// A failed test, for people, by what it tests: `<code>not_null</code> test on
+/// <code>orders.customer_id</code>`, escaped.
+fn check_label(check: &ods_core::failure::FailedCheck) -> String {
+    let covers: Vec<String> = check
+        .covers
+        .iter()
+        .map(|n| n.rsplit('.').next().unwrap_or(n).to_owned())
+        .collect();
+    let on = match (&check.column, covers.as_slice()) {
+        (Some(column), [one]) => format!("{one}.{column}"),
+        (Some(column), []) => column.clone(),
+        (_, many) => many.join(", "),
+    };
+    let mut label = match &check.test {
+        Some(test) => format!("<code>{}</code> test", text(test)),
+        None => "A test".to_owned(),
+    };
+    if !on.is_empty() {
+        let _ = write!(label, " on <code>{}</code>", text(&on));
+    }
+    label
 }
 
 /// What is removed from an engine's message before ODS keeps it, said the same way in
@@ -1789,10 +1859,22 @@ fn explained_text(t: &ods_core::failure::Text) -> String {
 /// and the engine's own redacted message one click away. An unrecognised error gets no
 /// cause, only facts.
 fn explanation_card(b: &mut String, node: &NodeStatsView, nodes: &[NodeStatsView]) {
-    use ods_core::failure::Confidence;
     let Some(e) = &node.explanation else {
         return error_box(b, node);
     };
+    let details_at = node.error.as_ref().and_then(|e| e.details_at.as_deref());
+    explanation_box(b, e, details_at, nodes);
+}
+
+/// One explanation, a failed node's or a failed test's (#323). `details_at` is where
+/// the engine's full message is, when the journal says.
+fn explanation_box(
+    b: &mut String,
+    e: &ods_core::failure::ErrorExplanation,
+    details_at: Option<&str>,
+    nodes: &[NodeStatsView],
+) {
+    use ods_core::failure::Confidence;
     let recognised = e.confidence() != Confidence::NotRecognised;
     let (confidence, class) = match e.confidence() {
         Confidence::KnownPatternWithEvidence => ("known_pattern_with_evidence", "evidence"),
@@ -1806,6 +1888,13 @@ fn explanation_card(b: &mut String, node: &NodeStatsView, nodes: &[NodeStatsView
         label = text(e.confidence().label()),
         head = explained_text(e.headline()),
     );
+    if let Some(check) = e.check() {
+        let _ = write!(
+            b,
+            r#"<p class="st-explain-detail st-small">Failed test: {}</p>"#,
+            check_label(check)
+        );
+    }
     if let Some(detail) = e.detail() {
         let _ = write!(
             b,
@@ -1817,7 +1906,7 @@ fn explanation_card(b: &mut String, node: &NodeStatsView, nodes: &[NodeStatsView
     explanation_where(b, e);
     explanation_steps(b, e, recognised);
     explanation_impact(b, e, nodes);
-    explanation_said(b, e, node, recognised);
+    explanation_said(b, e, details_at, recognised);
     b.push_str("</div>");
 }
 
@@ -1943,7 +2032,7 @@ fn explanation_impact(
 fn explanation_said(
     b: &mut String,
     e: &ods_core::failure::ErrorExplanation,
-    node: &NodeStatsView,
+    details_at: Option<&str>,
     recognised: bool,
 ) {
     let Some(said) = e.engine_message() else {
@@ -1966,10 +2055,8 @@ fn explanation_said(
             .as_deref()
             .map_or_else(String::new, |k| format!("<strong>{}</strong>\n", text(k))),
         message = text(message),
-        at = node
-            .error
-            .as_ref()
-            .and_then(|e| e.details_at.as_deref())
+        at = details_at
+            .or(said.details_at.as_deref())
             .map_or_else(String::new, |at| format!(
                 " Full text: {}",
                 pointer_html(at)
@@ -2863,13 +2950,21 @@ fn nodes_table(b: &mut String, view: &RunPageView) {
                 |w| text(w).into_owned(),
             ),
         );
-        if n.status == NodeRunStatus::Error {
+        // A node failed only by its tests (as in a test run) shows just its tests.
+        let own = n.status == NodeRunStatus::Error
+            && (n.explanation.is_some() || n.failed_tests.is_empty());
+        if own || !n.failed_tests.is_empty() {
             let _ = write!(
                 b,
                 r#"<tr class="failed st-err-row" id="why-{}" tabindex="-1"><td colspan="8">"#,
                 attr(&n.node)
             );
-            explanation_card(b, n, &view.nodes);
+            if own {
+                explanation_card(b, n, &view.nodes);
+            }
+            for test in &n.failed_tests {
+                explanation_box(b, test, None, &view.nodes);
+            }
             b.push_str("</td></tr>");
         }
     }

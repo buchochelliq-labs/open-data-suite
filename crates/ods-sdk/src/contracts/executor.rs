@@ -65,7 +65,8 @@ use crate::provider::{Contract, Provider};
 pub const EXECUTOR: Contract = Contract {
     name: "executor",
     // 0.5: an error summary may carry the line the engine reported (#323).
-    version: SchemaVersion::new(0, 5),
+    // 0.6: a finished check may carry its failing rows and redacted message (#323).
+    version: SchemaVersion::new(0, 6),
 };
 
 /// What [`Executor::prepare`] should do besides refreshing metadata.

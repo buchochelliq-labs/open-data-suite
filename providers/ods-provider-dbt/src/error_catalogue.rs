@@ -19,13 +19,16 @@
 //! Anything else is not recognised: the catalogue gives only the category dbt's (or the
 //! adapter's) kind implies, and ODS doesn't guess a cause.
 //!
-//! [`project_index`] describes a project for explanations: each node's files and the
-//! macros its code calls that the manifest doesn't define.
+//! [`project_index`] describes a project for explanations: each node's files, the
+//! macros its code calls that the manifest doesn't define, and what each data test
+//! tests (its `test_metadata` name, `column_name` and `attached_node`; never its
+//! `kwargs`, which hold values such as the ones `accepted_values` accepts).
 
 use ods_core::failure::{ErrorCategory, Suggestion, Symptom, Text, is_code};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::error_catalogue::{
-    CatalogueInfo, Classification, ErrorCatalogue, IndexedNode, NameAt, PatternMatch, ProjectIndex,
+    CatalogueInfo, CheckTarget, Classification, ErrorCatalogue, IndexedNode, NameAt, PatternMatch,
+    ProjectIndex,
 };
 use ods_sdk::contracts::run_events::ErrorSummary;
 use ods_sdk::{Provider, ProviderInfo};
@@ -679,12 +682,14 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
             continue;
         };
         let file = node.original_file_path.as_deref();
+        // A generic test compiles to a file named after the test (and so, maybe, its
+        // arguments) under its YAML file: no compiled file is named for it.
         let compiled = match (target, node.fqn.first(), file) {
             (Some(target), Some(package), Some(file))
                 if matches!(
                     node.resource_type,
-                    ResourceType::Model | ResourceType::Snapshot | ResourceType::Test
-                ) =>
+                    ResourceType::Model | ResourceType::Snapshot
+                ) || (node.resource_type == ResourceType::Test && node.test.is_none()) =>
             {
                 Some(format!("{target}/compiled/{package}/{file}"))
             }
@@ -698,15 +703,39 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
             .into_iter()
             .filter(|c| is_code(&c.name) && !defined(&c.name, &index, &packaged, &namespaces))
             .collect();
-        index = index.with_node(
-            node.unique_id.clone(),
-            IndexedNode::new(name)
-                .in_file(file, compiled.as_deref())
-                .in_language(node.language.as_deref())
-                .calling_undefined(undefined),
-        );
+        let mut indexed = IndexedNode::new(name)
+            .in_file(file, compiled.as_deref())
+            .in_language(node.language.as_deref())
+            .calling_undefined(undefined);
+        if node.resource_type == ResourceType::Test {
+            indexed = indexed.checking(check_target(node));
+        }
+        index = index.with_node(node.unique_id.clone(), indexed);
     }
     index
+}
+
+/// What a data test tests: a generic test's name (with its package, e.g.
+/// `dbt_utils.expression_is_true`), column and the node it is attached to; a singular
+/// test's node when it reads exactly one. Its arguments are never read.
+fn check_target(node: &crate::ManifestNode) -> CheckTarget {
+    match &node.test {
+        Some(test) => {
+            let name = match &test.namespace {
+                Some(namespace) => format!("{namespace}.{}", test.name),
+                None => test.name.clone(),
+            };
+            CheckTarget::new(
+                Some(&name),
+                test.column_name.as_deref(),
+                test.attached_node.as_deref(),
+            )
+        }
+        None => match node.depends_on.as_slice() {
+            [one] => CheckTarget::new(None, None, Some(one)),
+            _ => CheckTarget::default(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -765,6 +794,7 @@ mod tests {
             ("python-exception", Some(Symptom::PythonException)),
             ("dependent-objects", Some(Symptom::DependentObjects)),
             ("test-failure", Some(Symptom::TestFailed)),
+            ("accepted-values", Some(Symptom::TestFailed)),
         ];
         for version in VERSIONS {
             let recorded = recorded(version);
@@ -948,6 +978,60 @@ mod tests {
         // `ref`, `config`, loops and filters are not macros; nothing else is undefined.
         let orders = &index.nodes["model.jaffle_ods.orders"];
         assert!(orders.undefined_calls.is_empty(), "{orders:?}");
+    }
+
+    /// #323: a data test's kind, column and node come from the manifest; its
+    /// arguments (here the values `accepted_values` accepts, one a secret) never do,
+    /// and a generic test gets no compiled file (dbt names it after its arguments).
+    #[test]
+    fn the_index_says_what_a_test_tests_without_its_arguments() {
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/dbt/jaffle-ods/artifacts"
+        );
+        let mut manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("{dir}/dbt-1.10/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        // The test as dbt 1.10 declared it (`capture-errors.sh`, accepted-values), over
+        // another test's node for the fields the scenario didn't keep.
+        let recorded: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("{dir}/dbt-1.10-errors/accepted-values-node.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let nodes = manifest["nodes"].as_object_mut().unwrap();
+        let mut node = nodes["test.jaffle_ods.not_null_orders_order_id.cf6c17daed"].clone();
+        for (key, value) in recorded.as_object().unwrap() {
+            node[key] = value.clone();
+        }
+        let id = recorded["unique_id"].as_str().unwrap().to_owned();
+        nodes.insert(id.clone(), node);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), manifest.to_string()).unwrap();
+        let index = project_index(&crate::Manifest::read(file.path()).unwrap(), Some("target"));
+
+        let test = &index.nodes[&id];
+        assert_eq!(
+            test.check,
+            Some(CheckTarget::new(
+                Some("accepted_values"),
+                Some("status"),
+                Some("model.jaffle_ods.orders")
+            ))
+        );
+        assert_eq!(test.compiled_file, None);
+        let check = serde_json::to_string(&test.check).unwrap();
+        assert!(!check.contains(SENTINEL), "{check}");
+        // A model isn't a check; a test from dbt's own fixture is.
+        assert_eq!(index.nodes["model.jaffle_ods.orders"].check, None);
+        assert_eq!(
+            index.nodes["test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d"]
+                .check
+                .as_ref()
+                .and_then(|c| c.column.as_deref()),
+            Some("customer_id")
+        );
     }
 
     #[test]

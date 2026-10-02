@@ -9,7 +9,8 @@
 //!   and [`node_finished`](RunEventKind::NodeFinished) per node, in that order, with
 //!   the node's [`NodeRunStats`] on the finish;
 //! - [`check_finished`](RunEventKind::CheckFinished) per check (e.g. a data test), with
-//!   the nodes it covers, so each node can count its tests;
+//!   the nodes it covers, so each node can count its tests, and, when it didn't pass,
+//!   how many rows failed it and the engine's redacted message;
 //! - [`run_finished`](RunEventKind::RunFinished), last, exactly once, also when the
 //!   execution ends in an error after it started.
 //!
@@ -43,8 +44,11 @@ use serde::{Deserialize, Serialize};
 
 use super::executor::{ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus};
 
-/// The version of [`RunEvent`], carried by every event and every journal line.
-pub const RUN_EVENTS_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+/// The version of [`RunEvent`], carried by every event and every journal line. 1.1
+/// added a check's [`failures`](RunEventKind::CheckFinished::failures) and
+/// [`error`](RunEventKind::CheckFinished::error) (#323): optional, so a 1.0 journal
+/// reads as before, with neither.
+pub const RUN_EVENTS_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// The longest an [`ErrorSummary`] message is, in characters.
 pub const MAX_SUMMARY_CHARS: usize = 200;
@@ -107,6 +111,19 @@ impl RunEvent {
             RunEventKind::NodeFinished { node, stats } => RunEventKind::NodeFinished {
                 node,
                 stats: stats.sanitized(),
+            },
+            RunEventKind::CheckFinished {
+                check,
+                covers,
+                status,
+                failures,
+                error,
+            } => RunEventKind::CheckFinished {
+                check,
+                covers,
+                status,
+                failures,
+                error: error.map(ErrorSummary::sanitized),
             },
             other => other,
         };
@@ -171,6 +188,15 @@ pub enum RunEventKind {
         covers: Vec<String>,
         /// How it ended.
         status: CheckStatus,
+        /// How many rows it found that don't pass, when it didn't pass and the engine
+        /// said (#323). A count, not data, so it may be shown; `None` when not
+        /// reported, never zero for "unknown".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failures: Option<u64>,
+        /// The engine's message, redacted, when it failed, warned or errored (#323):
+        /// made only by [`ErrorSummary::from_message`], like a node's error.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<ErrorSummary>,
     },
     /// The run finished. Nodes that hadn't finished by then are `unknown`.
     RunFinished {
@@ -665,6 +691,9 @@ pub fn events_from_report(request: &ExecutionRequest, report: &ExecutionReport) 
                 check: check.to_owned(),
                 covers,
                 status,
+                // A report says only which checks failed, never how.
+                failures: None,
+                error: None,
             },
         ));
     }
@@ -703,6 +732,25 @@ pub struct NodeSummary {
     pub requested: bool,
     /// Its latest stats.
     pub stats: NodeRunStats,
+}
+
+/// One check's part in a run, as its events tell it (#323).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CheckSummary {
+    /// The check's id.
+    pub check: String,
+    /// The nodes it checks, sorted. Empty when the executor can't tell.
+    pub covers: Vec<String>,
+    /// How it ended.
+    pub status: CheckStatus,
+    /// How many rows didn't pass, if the engine said.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failures: Option<u64>,
+    /// The engine's redacted message, if it gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorSummary>,
 }
 
 /// A run's totals.
@@ -759,6 +807,10 @@ pub struct RunSummary {
     pub outcome: Option<RunOutcome>,
     /// Every node, requested ones first in request order, then others as first seen.
     pub nodes: Vec<NodeSummary>,
+    /// Every check that finished, in the order they first finished; a check that
+    /// finishes again keeps its place and takes the later outcome (#323).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<CheckSummary>,
     /// Its totals, over [`nodes`](Self::nodes).
     pub totals: RunTotals,
 }
@@ -775,6 +827,7 @@ impl RunSummary {
             finished_at: None,
             outcome: None,
             nodes: Vec::new(),
+            checks: Vec::new(),
             totals: RunTotals::default(),
         };
         let mut index: BTreeMap<String, usize> = BTreeMap::new();
@@ -808,17 +861,22 @@ impl RunSummary {
                     let entry = run.node(&mut index, node, false);
                     entry.stats = finish_over(&entry.stats, stats.clone());
                 }
-                RunEventKind::CheckFinished { covers, status, .. } => {
-                    for node in covers {
-                        if let Some(&i) = index.get(node) {
-                            run.nodes[i]
-                                .stats
-                                .tests
-                                .get_or_insert_with(TestCounts::default)
-                                .add(*status);
-                        }
-                    }
-                }
+                RunEventKind::CheckFinished {
+                    check,
+                    covers,
+                    status,
+                    failures,
+                    error,
+                } => run.check_finished(
+                    &index,
+                    CheckSummary {
+                        check: check.clone(),
+                        covers: covers.clone(),
+                        status: *status,
+                        failures: *failures,
+                        error: error.clone(),
+                    },
+                ),
                 RunEventKind::RunFinished { outcome } => {
                     run.outcome = Some(*outcome);
                     run.finished_at = Some(event.at);
@@ -859,6 +917,24 @@ impl RunSummary {
         run
     }
 
+    /// A check finished: it is kept (its latest outcome), and counted on every node it
+    /// covers that the run knows.
+    fn check_finished(&mut self, index: &BTreeMap<String, usize>, summary: CheckSummary) {
+        for node in &summary.covers {
+            if let Some(&i) = index.get(node) {
+                self.nodes[i]
+                    .stats
+                    .tests
+                    .get_or_insert_with(TestCounts::default)
+                    .add(summary.status);
+            }
+        }
+        match self.checks.iter_mut().find(|c| c.check == summary.check) {
+            Some(seen) => *seen = summary,
+            None => self.checks.push(summary),
+        }
+    }
+
     fn node(
         &mut self,
         index: &mut BTreeMap<String, usize>,
@@ -879,6 +955,11 @@ impl RunSummary {
     /// The node's summary, if it is in the run.
     pub fn get(&self, node: &str) -> Option<&NodeSummary> {
         self.nodes.iter().find(|n| n.node == node)
+    }
+
+    /// The check's summary, if it finished in the run.
+    pub fn check(&self, check: &str) -> Option<&CheckSummary> {
+        self.checks.iter().find(|c| c.check == check)
     }
 }
 
@@ -1080,6 +1161,8 @@ mod tests {
                     check: "test.a".into(),
                     covers: vec!["a".into()],
                     status: CheckStatus::Passed,
+                    failures: None,
+                    error: None,
                 },
             ),
             event(
@@ -1247,6 +1330,8 @@ mod tests {
                     check: "test.a".into(),
                     covers: vec!["a".into(), "elsewhere".into()],
                     status: CheckStatus::Passed,
+                    failures: None,
+                    error: None,
                 },
             ),
             event(3000, finished("b", NodeRunStatus::Success, None)),
@@ -1374,5 +1459,106 @@ mod tests {
         for node in ["a", "b"] {
             assert_eq!(run.get(node).unwrap().stats.status, NodeRunStatus::Unknown);
         }
+    }
+
+    /// #323: a 1.0 journal's `check_finished` (no failures, no error) still reads, and
+    /// a 1.1 one carries the count and the redacted message.
+    #[test]
+    fn checks_read_from_1_0_and_carry_failures_from_1_1() {
+        let old = serde_json::json!({
+            "schema_version": {"major": 1, "minor": 0},
+            "run_id": "run-1",
+            "scope": null,
+            "at": "2026-09-21T13:46:40.000Z",
+            "kind": "check_finished",
+            "check": "test.a",
+            "covers": ["a"],
+            "status": "failed",
+        });
+        let read: RunEvent = serde_json::from_value(old).unwrap();
+        assert!(RUN_EVENTS_SCHEMA_VERSION.can_read(read.schema_version));
+        let RunEventKind::CheckFinished {
+            failures, error, ..
+        } = &read.kind
+        else {
+            panic!("{read:?}")
+        };
+        assert_eq!((failures, error), (&None, &None));
+
+        let new = event(
+            10,
+            RunEventKind::CheckFinished {
+                check: "test.a".into(),
+                covers: vec!["a".into()],
+                status: CheckStatus::Failed,
+                failures: Some(5),
+                error: ErrorSummary::from_message("Got 5 results, configured to fail if != 0"),
+            },
+        );
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["schema_version"]["minor"], 1);
+        assert_eq!(json["failures"], 5);
+        assert_eq!(
+            json["error"]["message"],
+            "Got [value removed] results, configured to fail if != [value removed]"
+        );
+        assert_eq!(serde_json::from_value::<RunEvent>(json).unwrap(), new);
+        // A passed check says neither.
+        let passed = event(
+            10,
+            RunEventKind::CheckFinished {
+                check: "test.b".into(),
+                covers: Vec::new(),
+                status: CheckStatus::Passed,
+                failures: None,
+                error: None,
+            },
+        );
+        let json = serde_json::to_value(&passed).unwrap();
+        assert!(json.get("failures").is_none() && json.get("error").is_none());
+    }
+
+    /// #323: a check's message is redacted again before it is kept, and the run's
+    /// summary keeps each check's latest outcome.
+    #[test]
+    fn check_errors_are_sanitized_and_summarised() {
+        let raw: ErrorSummary = serde_json::from_value(serde_json::json!({
+            "message": "Binder Error: column 'sk_live_SENTINEL' not found"
+        }))
+        .unwrap();
+        let check = |status, failures, error| {
+            event(
+                10,
+                RunEventKind::CheckFinished {
+                    check: "test.a".into(),
+                    covers: vec!["a".into()],
+                    status,
+                    failures,
+                    error,
+                },
+            )
+        };
+        let kept = check(CheckStatus::Failed, None, Some(raw)).sanitized();
+        assert!(!format!("{kept:?}").contains("SENTINEL"), "{kept:?}");
+        let events = [
+            event(
+                0,
+                RunEventKind::RunStarted {
+                    nodes: vec!["a".into()],
+                    mode: ExecutionMode::Test,
+                    live: true,
+                },
+            ),
+            check(CheckStatus::Skipped, None, None),
+            check(CheckStatus::Failed, Some(3), None),
+        ];
+        let run = RunSummary::from_events(&events);
+        assert_eq!(run.checks.len(), 1);
+        let summary = run.check("test.a").unwrap();
+        assert_eq!(
+            (summary.status, summary.failures),
+            (CheckStatus::Failed, Some(3))
+        );
+        assert_eq!(summary.covers, ["a"]);
     }
 }

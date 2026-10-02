@@ -1105,12 +1105,7 @@ fn explain_history(
     settings: &StateSettings,
     run: &ods_sdk::contracts::run_events::RunSummary,
 ) -> Vec<ods_core::failure::ErrorExplanation> {
-    use ods_sdk::contracts::run_events::NodeRunStatus;
-    if !run
-        .nodes
-        .iter()
-        .any(|n| n.stats.status == NodeRunStatus::Error)
-    {
+    if ods_state::failed_nodes(run).is_empty() && ods_state::failed_checks(run).is_empty() {
         return Vec::new();
     }
     let state_db = settings.state_db();
@@ -1142,6 +1137,7 @@ fn explain_history(
         before: before.as_ref(),
         state_db: &state_db,
         retry: None,
+        state_db_flag: super::failures::retry_state_db(settings),
         // The manifest describes this run's code only if this run wrote it (dbt's
         // invocation is the run id); otherwise it is the project as it is now.
         project_is_run: ws

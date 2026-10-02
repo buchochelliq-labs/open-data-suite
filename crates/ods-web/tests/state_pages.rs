@@ -1237,6 +1237,8 @@ mod journals {
                         check: "test.not_null_customers_id".into(),
                         covers: vec!["model.customers".into()],
                         status: CheckStatus::Passed,
+                        failures: None,
+                        error: None,
                     },
                 ),
                 node_started(
@@ -1862,6 +1864,133 @@ mod journals {
             format!("/state/runs?run={RUN_7}"),
             format!("/api/state/runs/{RUN_7}"),
             format!("/api/state/runs?run={RUN_7}"),
+        ] {
+            let (status, body) = get(addr, &path);
+            assert_eq!(status, 200, "{path}");
+            assert!(!body.contains("SENTINEL"), "{path}: {body}");
+        }
+    }
+
+    const RUN_8: &str = "8e8e8e8e-0000-4000-8000-000000000008";
+
+    /// #323: a failed test is explained under the node it checks, on the Run page and
+    /// in the Runs side panel: which test, which column, how many rows, and the
+    /// commands to see them. It is named by what it tests, and nothing from the
+    /// engine's message (a value, markup) gets through unescaped.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one journal, then the view model, the pages and the API, top to bottom"
+    )]
+    fn a_failed_test_is_explained_under_its_node() {
+        use ods_core::failure::Confidence;
+        use ods_sdk::contracts::error_catalogue::{CheckTarget, IndexedNode, ProjectIndex};
+        use ods_web::dashboard::explain::Explainer;
+
+        const TEST: &str = "test.not_null_customers_customer_id";
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        write(
+            &dir,
+            RUN_8,
+            &[
+                started(
+                    RUN_8,
+                    SCOPE,
+                    "2026-09-29T00:09:00.000Z",
+                    &["model.customers"],
+                ),
+                finished(
+                    RUN_8,
+                    "2026-09-29T00:09:01.000Z",
+                    "model.customers",
+                    success("2026-09-29T00:09:01.000Z"),
+                ),
+                event(
+                    RUN_8,
+                    SCOPE,
+                    "2026-09-29T00:09:01.500Z",
+                    RunEventKind::CheckFinished {
+                        check: TEST.into(),
+                        covers: vec!["model.customers".into()],
+                        status: CheckStatus::Failed,
+                        failures: Some(4),
+                        error: ErrorSummary::from_message(
+                            "rows failed the test: <b>4</b> & 'SENTINEL-8888'",
+                        ),
+                    },
+                ),
+                ended(RUN_8, "2026-09-29T00:09:02.000Z", Ended::Failed),
+            ],
+            "",
+        );
+        let explainer = Explainer::new(std::sync::Arc::new(
+            ods_provider_fake::FakeErrorCatalogue::new(),
+        ))
+        .with_artifacts_from(Some(RUN_8.to_owned()))
+        .with_index(
+            ProjectIndex::new(Vec::<String>::new())
+                .with_node("model.customers", IndexedNode::new("customers"))
+                .with_node(
+                    TEST,
+                    IndexedNode::new("not_null_customers_customer_id")
+                        .in_file(Some("models/schema.yml"), None)
+                        .checking(CheckTarget::new(
+                            Some("not_null"),
+                            Some("customer_id"),
+                            Some("model.customers"),
+                        )),
+                ),
+        );
+        let dashboard = recorded(
+            History::new(snapshots())
+                .with_journals(Journals::in_dir(&dir))
+                .with_explainer(explainer),
+            plan(),
+        );
+        let view = dashboard.run_view(true, RUN_8, &BTreeMap::new()).unwrap();
+        let customers = view
+            .nodes
+            .iter()
+            .find(|n| n.node == "model.customers")
+            .unwrap();
+        assert_eq!(customers.status, NodeRunStatus::Success);
+        assert!(customers.explanation.is_none());
+        let [test] = customers.failed_tests.as_slice() else {
+            panic!("{customers:?}")
+        };
+        assert_eq!(test.node(), TEST);
+        assert_eq!(test.confidence(), Confidence::KnownPatternWithEvidence);
+        assert_eq!(
+            test.headline().as_str(),
+            "The `not_null` test on `customer_id` of `customers` failed: 4 rows don't pass"
+        );
+
+        let addr = start(dashboard);
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_8}?tab=nodes"));
+        let row = page
+            .split(r#"<tr class="failed st-err-row" id="why-model.customers""#)
+            .nth(1)
+            .and_then(|rest| rest.split("</tr>").next())
+            .unwrap_or_else(|| panic!("{page}"));
+        insta::assert_snapshot!("run_failed_test_explained", row);
+        assert!(row.contains(
+            "Failed test: <code>not_null</code> test on <code>customers.customer_id</code>"
+        ));
+        assert!(
+            row.contains(r#"data-copy="ods state test --select customers -- --store-failures""#)
+        );
+        assert!(!page.contains("<b>4</b>"), "{page}");
+        let (_, panel) = get(addr, &format!("/state/runs?run={RUN_8}"));
+        assert!(panel.contains("Failed test"), "{panel}");
+        assert!(
+            panel.contains("4 rows don&#39;t pass") || panel.contains("4 rows don't pass"),
+            "{panel}"
+        );
+        for path in [
+            format!("/state/runs/{RUN_8}?tab=nodes"),
+            format!("/state/runs?run={RUN_8}"),
+            format!("/api/state/runs/{RUN_8}"),
+            format!("/api/state/runs?run={RUN_8}"),
         ] {
             let (status, body) = get(addr, &path);
             assert_eq!(status, 200, "{path}");

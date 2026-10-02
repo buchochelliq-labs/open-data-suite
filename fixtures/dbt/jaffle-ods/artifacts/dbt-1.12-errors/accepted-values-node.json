@@ -1,0 +1,37 @@
+{
+  "attached_node": "model.jaffle_ods.orders",
+  "column_name": "status",
+  "depends_on": {
+    "macros": [
+      "macro.dbt.test_accepted_values",
+      "macro.dbt.get_where_subquery",
+      "macro.dbt.get_limit_subquery_sql",
+      "macro.dbt.should_store_failures",
+      "macro.dbt.statement"
+    ],
+    "nodes": [
+      "model.jaffle_ods.orders"
+    ]
+  },
+  "fqn": [
+    "jaffle_ods",
+    "accepted_values_orders_status__completed__sk_live_SENTINEL_42"
+  ],
+  "name": "accepted_values_orders_status__completed__sk_live_SENTINEL_42",
+  "original_file_path": "models/schema.yml",
+  "path": "accepted_values_orders_status__completed__sk_live_SENTINEL_42.sql",
+  "resource_type": "test",
+  "test_metadata": {
+    "kwargs": {
+      "column_name": "status",
+      "model": "{{ get_where_subquery(ref('orders')) }}",
+      "values": [
+        "completed",
+        "sk_live_SENTINEL_42"
+      ]
+    },
+    "name": "accepted_values",
+    "namespace": null
+  },
+  "unique_id": "test.jaffle_ods.accepted_values_orders_status__completed__sk_live_SENTINEL_42.efdbb4986a"
+}

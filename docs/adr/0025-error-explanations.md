@@ -232,6 +232,45 @@ graph LR
   explanation --> web[ods-web: Run page]
 ```
 
+### Failed tests (amended 2026-10-02, #323)
+A failed check (data test) is explained too, from its `check_finished` event (failing
+rows and redacted message, ADR-0024 1.1) and the project:
+- **What it tests:** `IndexedNode::check` (`CheckTarget`: the kind of test, the column
+  and the node it is declared on; error-catalogue contract **0.2**). The dbt provider
+  reads them from the manifest's `test_metadata.name` (with its `namespace`),
+  `column_name` and `attached_node` (a singular test: the one node it reads), never
+  `test_metadata.kwargs`, which hold values such as the ones `accepted_values` accepts.
+  A column given as an expression isn't identifier-shaped and is left out. dbt names a
+  generic test after its arguments (`accepted_values_orders_status__completed__…`), so
+  an explanation names a check by kind, column and node, and uses a test's own name only
+  for a singular test (named by its file). A generic test gets no compiled file, which
+  dbt names after the test.
+- **Failing rows:** the check found rows when the catalogue recognises its message as a
+  failed test (`dbt-test-failed`), or, with no message ODS recognises, when the engine
+  counted failing rows (ODS's own pattern `ods`/`check-failing-rows`, from the event's
+  structured count, not from text). The headline: "The `not_null` test on `customer_id`
+  of `orders` failed: 5 rows don't pass", or "…; dbt didn't say how many rows don't
+  pass", never 0. Category `test failure`; the reported count **confirms** it
+  (`known pattern + evidence`), otherwise `known pattern`.
+- **Errored checks:** a check whose message is another recognised error (e.g. a missing
+  column in the test's query) is explained like a node's error, with "the test …
+  couldn't run, so it says nothing about the data yet", never as rows that failed. With
+  no message and no count, it is `not recognised`, category `test failure`.
+- **Warned checks** aren't explained: they failed nothing.
+- **Context:** what the project declares it tests; whether the tested node changed in
+  this run (or which run's build a test run checked); how the same check did in earlier
+  runs ("This test failed in 2 of its last 3 runs too"); the nodes downstream of the
+  tested node that were skipped. **What to try:** `ods state test --select <node> --
+  --store-failures` to keep the failing rows in the warehouse (a pass-through dbt
+  option), then `ods state test --select <node>`.
+- A node that failed only because its checks did (as in `ods state test`, where nothing
+  is built) is explained by its checks, not as a failed node (`ods_state::failed_nodes`,
+  `failed_checks`).
+- `ErrorExplanation` 1.1 adds `check` (`covers`, `test`, `column`) and the evidence data
+  `failing_rows` and `test_target`; `node` is the check's id. The terminal labels it
+  "failed test: not_null on orders.customer_id", and the dashboard shows it under each
+  node it checks (`failed_tests`).
+
 ## Consequences
 - Positive:
   - A failed node says what went wrong, why ODS thinks so and what to try, in the same
@@ -255,7 +294,8 @@ graph LR
     recorded fixtures. (dbt 1.11 and 1.12 are now recorded as well as 1.10, and every
     recorded message is checked on each: 1.12 rewords the missing-packages error, which
     the catalogue's version 2 recognises.)
-  - Test failures explained per check (which test, on which column, failing rows).
+  - Hiding check ids that hold a generic test's arguments wherever ODS shows them
+    (`checks_failed`, the journal), not only in explanations.
   - `ods doctor` checks as evidence for configuration errors.
   - "Ask the ODS agent to investigate" (M6) and an MCP tool `explain_failure`.
 
