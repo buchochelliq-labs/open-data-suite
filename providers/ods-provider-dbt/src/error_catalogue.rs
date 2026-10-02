@@ -8,7 +8,8 @@
 //!   calling a macro that does not exist`, `depends on a node named … which was not
 //!   found`, `dbt found N package(s) specified in packages.yml, but only M …`;
 //! - `DuckDB`'s error kinds and messages (MIT), as dbt-duckdb 1.10 reports them: every one
-//!   is recorded from a real run in `fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-errors`;
+//!   is recorded from real runs of dbt 1.10, 1.11 and 1.12 in
+//!   `fixtures/dbt/jaffle-ods/artifacts/dbt-<version>-errors`;
 //! - PostgreSQL's documented messages (`column … does not exist`, `relation … does not
 //!   exist`, `permission denied for …`);
 //! - Apache Spark's public error conditions (`[UNRESOLVED_COLUMN…]`,
@@ -32,7 +33,7 @@ use ods_sdk::{Provider, ProviderInfo};
 use crate::{Manifest, ResourceType};
 
 /// The catalogue's version: bumped whenever a pattern is added, changed or removed.
-pub const CATALOGUE_VERSION: &str = "1";
+pub const CATALOGUE_VERSION: &str = "2";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly), and phrases its
 /// lowercased message must hold, all of them.
@@ -80,6 +81,16 @@ const PATTERNS: &[Pattern] = &[
         Symptom::PackagesMissing,
         None,
         &["specified in packages.yml, but only", "installed in"],
+    ),
+    // dbt 1.12's wording of the same failure (recorded in `dbt-1.12-errors`).
+    p(
+        "dbt-packages-expected",
+        Symptom::PackagesMissing,
+        None,
+        &[
+            "based on packages specified in packages.yml, but found only",
+            "installed in",
+        ],
     ),
     p(
         "dbt-profile-not-found",
@@ -705,11 +716,15 @@ mod tests {
     use super::*;
     use crate::events::{error_summary, project_failure};
 
-    /// The messages real dbt 1.10 + `DuckDB` runs gave (`capture-errors.sh`).
-    fn recorded() -> Vec<(String, Option<String>, String)> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-errors/errors.json"
+    /// The dbt minors whose messages are recorded (`capture-errors.sh`): 1.10, and the
+    /// two the real-dbt CI job runs.
+    const VERSIONS: [&str; 3] = ["1.10", "1.11", "1.12"];
+
+    /// The messages real dbt `version` + `DuckDB` runs gave (`capture-errors.sh`).
+    fn recorded(version: &str) -> Vec<(String, Option<String>, String)> {
+        let path = format!(
+            "{}/../../fixtures/dbt/jaffle-ods/artifacts/dbt-{version}-errors/errors.json",
+            env!("CARGO_MANIFEST_DIR")
         );
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -751,77 +766,95 @@ mod tests {
             ("dependent-objects", Some(Symptom::DependentObjects)),
             ("test-failure", Some(Symptom::TestFailed)),
         ];
-        let recorded = recorded();
-        assert_eq!(recorded.len(), expected.len(), "every scenario is checked");
-        for (name, node, message) in &recorded {
-            let (_, want) = expected
-                .iter()
-                .find(|(n, _)| n == name)
-                .unwrap_or_else(|| panic!("{name} isn't expected"));
-            let summary = summary_of(node.as_ref(), message);
-            let got = DbtErrorCatalogue.classify(&summary);
-            match (&got, want) {
-                (Classification::Recognised(m), Some(want)) => {
-                    assert_eq!(m.symptom, *want, "{name}: {summary:?}");
+        for version in VERSIONS {
+            let recorded = recorded(version);
+            assert_eq!(
+                recorded.len(),
+                expected.len(),
+                "{version}: every scenario is checked"
+            );
+            for (name, node, message) in &recorded {
+                let (_, want) = expected
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .unwrap_or_else(|| panic!("{version} {name} isn't expected"));
+                let summary = summary_of(node.as_ref(), message);
+                let got = DbtErrorCatalogue.classify(&summary);
+                match (&got, want) {
+                    (Classification::Recognised(m), Some(want)) => {
+                        assert_eq!(m.symptom, *want, "{version} {name}: {summary:?}");
+                    }
+                    (Classification::NotRecognised { category }, None) => {
+                        assert_eq!(*category, ErrorCategory::Database, "{version} {name}");
+                    }
+                    _ => panic!("{version} {name}: {summary:?} gave {got:?}"),
                 }
-                (Classification::NotRecognised { category }, None) => {
-                    assert_eq!(*category, ErrorCategory::Database, "{name}");
-                }
-                _ => panic!("{name}: {summary:?} gave {got:?}"),
+                let json = serde_json::to_string(&(&summary, &got)).unwrap();
+                assert!(!json.contains(SENTINEL), "{version} {name}: {json}");
+                // What dbt 1.12 colours in its log never reaches a summary.
+                assert!(
+                    !json.contains('\u{1b}') && !json.contains("\\u001b"),
+                    "{version} {name}: {json}"
+                );
             }
-            let json = serde_json::to_string(&(&summary, &got)).unwrap();
-            assert!(!json.contains(SENTINEL), "{name}: {json}");
         }
+    }
+
+    /// dbt 1.11 and 1.12 put the failing line one earlier than 1.10 in these models.
+    fn column_line(version: &str) -> u32 {
+        if version == "1.10" { 25 } else { 24 }
     }
 
     #[test]
     fn summaries_keep_the_line_and_a_python_exception() {
-        let recorded = recorded();
-        let get = |name: &str| {
-            let (_, node, message) = recorded.iter().find(|(n, _, _)| n == name).unwrap();
-            summary_of(node.as_ref(), message)
-        };
-        let column = get("missing-column");
-        assert_eq!(column.kind(), Some("Binder Error"));
-        assert_eq!(column.line(), Some(25));
-        assert_eq!(
-            column.message(),
-            "Binder Error: Values list [value removed] does not have a column named [value removed]"
-        );
-        let python = get("python-exception");
-        assert_eq!(
-            python.message(),
-            "Python model failed: KeyError: [value removed]"
-        );
-        assert_eq!(python.line(), Some(6));
-        let Classification::Recognised(m) = DbtErrorCatalogue.classify(&python) else {
-            panic!()
-        };
-        assert_eq!(m.subject.as_deref(), Some("KeyError"));
-        let macro_failure = project_failure(
-            &recorded
-                .iter()
-                .find(|(n, _, _)| n == "unknown-macro")
-                .unwrap()
-                .2,
-        )
-        .unwrap();
-        assert_eq!(macro_failure.node_name.as_deref(), Some("stg_payments"));
-        assert_eq!(
-            macro_failure.file.as_deref(),
-            Some("models/staging/stg_payments.sql")
-        );
-        assert_eq!(macro_failure.summary.kind(), Some("Compilation Error"));
-        let missing_ref = project_failure(
-            &recorded
-                .iter()
-                .find(|(n, _, _)| n == "missing-ref")
-                .unwrap()
-                .2,
-        )
-        .unwrap();
-        assert_eq!(missing_ref.node_name, None);
-        assert_eq!(missing_ref.summary.kind(), Some("Compilation Error"));
+        for version in VERSIONS {
+            let recorded = recorded(version);
+            let get = |name: &str| {
+                let (_, node, message) = recorded.iter().find(|(n, _, _)| n == name).unwrap();
+                summary_of(node.as_ref(), message)
+            };
+            let column = get("missing-column");
+            assert_eq!(column.kind(), Some("Binder Error"));
+            assert_eq!(column.line(), Some(column_line(version)), "{version}");
+            assert_eq!(
+                column.message(),
+                "Binder Error: Values list [value removed] does not have a column named [value removed]"
+            );
+            let python = get("python-exception");
+            assert_eq!(
+                python.message(),
+                "Python model failed: KeyError: [value removed]"
+            );
+            assert_eq!(python.line(), Some(6));
+            let Classification::Recognised(m) = DbtErrorCatalogue.classify(&python) else {
+                panic!()
+            };
+            assert_eq!(m.subject.as_deref(), Some("KeyError"));
+            let macro_failure = project_failure(
+                &recorded
+                    .iter()
+                    .find(|(n, _, _)| n == "unknown-macro")
+                    .unwrap()
+                    .2,
+            )
+            .unwrap();
+            assert_eq!(macro_failure.node_name.as_deref(), Some("stg_payments"));
+            assert_eq!(
+                macro_failure.file.as_deref(),
+                Some("models/staging/stg_payments.sql")
+            );
+            assert_eq!(macro_failure.summary.kind(), Some("Compilation Error"));
+            let missing_ref = project_failure(
+                &recorded
+                    .iter()
+                    .find(|(n, _, _)| n == "missing-ref")
+                    .unwrap()
+                    .2,
+            )
+            .unwrap();
+            assert_eq!(missing_ref.node_name, None);
+            assert_eq!(missing_ref.summary.kind(), Some("Compilation Error"));
+        }
     }
 
     #[test]
@@ -993,18 +1026,22 @@ mod tests {
                 ("python-exception", Some(Symptom::PythonException)),
                 ("missing-function", None),
             ];
-            let recorded = recorded();
-            names
+            VERSIONS
                 .iter()
-                .map(|(name, expected)| {
-                    let (n, node, message) = recorded.iter().find(|(n, _, _)| n == name).unwrap();
-                    let name: &'static str = Box::leak(n.clone().into_boxed_str());
-                    Sample {
-                        name,
-                        summary: summary_of(node.as_ref(), message),
-                        expected: *expected,
-                        sentinel: Some(SENTINEL),
-                    }
+                .flat_map(|version| {
+                    let recorded = recorded(version);
+                    names.iter().map(move |(name, expected)| {
+                        let (n, node, message) =
+                            recorded.iter().find(|(n, _, _)| n == name).unwrap();
+                        let name: &'static str =
+                            Box::leak(format!("{version} {n}").into_boxed_str());
+                        Sample {
+                            name,
+                            summary: summary_of(node.as_ref(), message),
+                            expected: *expected,
+                            sentinel: Some(SENTINEL),
+                        }
+                    })
                 })
                 .collect()
         }

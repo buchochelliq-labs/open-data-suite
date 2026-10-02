@@ -362,6 +362,10 @@ the changelog was introduced.
   unchanged (ADR-0003).
 
 ### Fixed
+- dbt 1.12's missing-packages error ("dbt expects 1 package(s) based on packages
+  specified in packages.yml, but found only 0…") is recognised again as packages not
+  installed, with `dbt deps` to try (#323). The error catalogue is now version 2, and
+  its tests check every recorded message on dbt 1.10, 1.11 and 1.12.
 - Lineage diagnostics no longer quote the SQL they couldn't analyze. The SQL is dbt's
   compiled code, which can hold values resolved from `env_var()`, `var()` or macros,
   credentials included, and the diagnostics reach `ods lineage` output, the offline

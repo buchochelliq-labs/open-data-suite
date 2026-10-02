@@ -4,6 +4,10 @@
 #   python3 -m venv .venv && .venv/bin/pip install "dbt-core~=1.10.0" "dbt-duckdb~=1.10.0"
 #   DBT=.venv/bin/dbt ./capture-errors.sh
 #
+# For the minors the real-dbt CI job runs, install the pinned set instead:
+#   .venv/bin/pip install --no-deps -r ../../../.github/dbt/requirements-1.12.txt
+# Recorded so far: 1.10, 1.11 and 1.12; the catalogue's tests check each.
+#
 # Each scenario breaks a fresh copy of this project in one way, runs dbt, and keeps the
 # message dbt gave: from `run_results.json` when a node failed, or from dbt's output when
 # the whole project failed (e.g. at parse). Machine-specific paths become <project_root>.

@@ -252,7 +252,9 @@ graph LR
     knows the line itself (an undefined macro's call).
 - Follow-up issues:
   - Patterns for more adapters (Snowflake, BigQuery, Databricks SQL warehouses) with
-    recorded fixtures, and dbt 1.11/1.12 in the real-dbt CI job.
+    recorded fixtures. (dbt 1.11 and 1.12 are now recorded as well as 1.10, and every
+    recorded message is checked on each: 1.12 rewords the missing-packages error, which
+    the catalogue's version 2 recognises.)
   - Test failures explained per check (which test, on which column, failing rows).
   - `ods doctor` checks as evidence for configuration errors.
   - "Ask the ODS agent to investigate" (M6) and an MCP tool `explain_failure`.
