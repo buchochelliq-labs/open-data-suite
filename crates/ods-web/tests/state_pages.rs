@@ -1915,7 +1915,7 @@ mod journals {
                         status: CheckStatus::Failed,
                         failures: Some(4),
                         error: ErrorSummary::from_message(
-                            "rows failed the test: <b>4</b> & 'SENTINEL-8888'",
+                            "rows failed the test (<b>4</b> & 'SENTINEL-8888')",
                         ),
                     },
                 ),
@@ -1958,7 +1958,7 @@ mod journals {
         let [test] = customers.failed_tests.as_slice() else {
             panic!("{customers:?}")
         };
-        assert_eq!(test.node(), TEST);
+        assert_eq!(test.node(), ods_core::failure::check_handle(TEST));
         assert_eq!(test.confidence(), Confidence::KnownPatternWithEvidence);
         assert_eq!(
             test.headline().as_str(),
@@ -1977,7 +1977,7 @@ mod journals {
             "Failed test: <code>not_null</code> test on <code>customers.customer_id</code>"
         ));
         assert!(
-            row.contains(r#"data-copy="ods state test --select customers -- --store-failures""#)
+            row.contains(r#"data-copy="ods state test --select customers -- --keep-failing-rows""#)
         );
         assert!(!page.contains("<b>4</b>"), "{page}");
         let (_, panel) = get(addr, &format!("/state/runs?run={RUN_8}"));
@@ -1996,6 +1996,156 @@ mod journals {
             assert_eq!(status, 200, "{path}");
             assert!(!body.contains("SENTINEL"), "{path}: {body}");
         }
+    }
+
+    const RUN_9: &str = "9f9f9f9f-0000-4000-8000-000000000009";
+
+    /// #323: dbt names a generic test after its arguments (here the recorded
+    /// `accepted_values` test, which accepts a secret): its id reaches neither the Run
+    /// page, nor the Runs side panel, nor their JSON, here or beyond loopback; each
+    /// failed test is keyed by its handle. A failed test the engine didn't say the node
+    /// of is listed for the run, in its own "Failed tests" section, escaped.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one journal, then the view model, the pages and the API, top to bottom"
+    )]
+    fn a_tests_arguments_never_reach_the_dashboard() {
+        use ods_core::failure::check_handle;
+        use ods_sdk::contracts::error_catalogue::{CheckTarget, IndexedNode, ProjectIndex};
+        use ods_web::dashboard::explain::Explainer;
+
+        const SENTINEL: &str = "sk_live_SENTINEL_42";
+        let recorded_node: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-errors/accepted-values-node.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let accepted = recorded_node["unique_id"].as_str().unwrap().to_owned();
+        let name = recorded_node["name"].as_str().unwrap().to_owned();
+        assert!(accepted.contains(SENTINEL), "{accepted}");
+        // The same kind of test, with nothing said about what it checks.
+        let unattached = accepted.replace("orders_status", "payments_method");
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        let failed_check = |check: &str, covers: Vec<String>| {
+            event(
+                RUN_9,
+                SCOPE,
+                "2026-09-29T00:10:01.500Z",
+                RunEventKind::CheckFinished {
+                    check: check.to_owned(),
+                    covers,
+                    status: CheckStatus::Failed,
+                    failures: Some(3),
+                    error: ErrorSummary::from_message(
+                        "rows failed the test (3 like <b>'sk_live_SENTINEL_42'</b>)",
+                    ),
+                },
+            )
+        };
+        write(
+            &dir,
+            RUN_9,
+            &[
+                started(
+                    RUN_9,
+                    SCOPE,
+                    "2026-09-29T00:10:00.000Z",
+                    &["model.customers"],
+                ),
+                finished(
+                    RUN_9,
+                    "2026-09-29T00:10:01.000Z",
+                    "model.customers",
+                    success("2026-09-29T00:10:01.000Z"),
+                ),
+                failed_check(&accepted, vec!["model.customers".into()]),
+                failed_check(&unattached, Vec::new()),
+                ended(RUN_9, "2026-09-29T00:10:02.000Z", Ended::Failed),
+            ],
+            "",
+        );
+        let explainer = Explainer::new(std::sync::Arc::new(
+            ods_provider_fake::FakeErrorCatalogue::new(),
+        ))
+        .with_artifacts_from(Some(RUN_9.to_owned()))
+        .with_index(
+            ProjectIndex::new(Vec::<String>::new())
+                .with_node("model.customers", IndexedNode::new("customers"))
+                .with_node(
+                    &accepted,
+                    IndexedNode::new(name.clone())
+                        .in_file(Some("models/schema.yml"), None)
+                        .checking(CheckTarget::new(
+                            Some("accepted_values"),
+                            Some("status"),
+                            Some("model.customers"),
+                        )),
+                )
+                .with_node(
+                    &unattached,
+                    IndexedNode::new(name.replace("orders_status", "payments_method")).checking(
+                        CheckTarget::new(Some("accepted_values"), Some("method"), None),
+                    ),
+                ),
+        );
+        let dashboard = recorded(
+            History::new(snapshots())
+                .with_journals(Journals::in_dir(&dir))
+                .with_explainer(explainer),
+            plan(),
+        );
+        for details in [true, false] {
+            let view = dashboard
+                .run_view(details, RUN_9, &BTreeMap::new())
+                .unwrap();
+            let json = serde_json::to_string(&view).unwrap();
+            assert!(!json.contains(SENTINEL), "{details}: {json}");
+            let customers = view
+                .nodes
+                .iter()
+                .find(|n| n.node == "model.customers")
+                .unwrap();
+            let [test] = customers.failed_tests.as_slice() else {
+                panic!("{customers:?}")
+            };
+            assert_eq!(test.node(), check_handle(&accepted));
+            let [alone] = view.failed_tests.as_slice() else {
+                panic!("{:?}", view.failed_tests)
+            };
+            assert_eq!(alone.node(), check_handle(&unattached));
+            assert_eq!(
+                alone.headline().as_str(),
+                "The `accepted_values` test on `method` failed: 3 rows don't pass"
+            );
+        }
+
+        let addr = start(dashboard);
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_9}"));
+        let section = page
+            .split(r#"<div class="st-side-sec" id="failed-tests""#)
+            .nth(1)
+            .and_then(|rest| rest.split(r#"<div class="st-side-sec" id="built""#).next())
+            .unwrap_or_else(|| panic!("{page}"));
+        insta::assert_snapshot!("run_failed_tests_without_a_node", section);
+        assert!(!page.contains("<b>"), "{page}");
+        for path in [
+            format!("/state/runs/{RUN_9}"),
+            format!("/state/runs/{RUN_9}?tab=nodes"),
+            format!("/state/runs?run={RUN_9}"),
+            format!("/api/state/runs/{RUN_9}"),
+            format!("/api/state/runs?run={RUN_9}"),
+        ] {
+            let (status, body) = get(addr, &path);
+            assert_eq!(status, 200, "{path}");
+            assert!(!body.contains("SENTINEL"), "{path}: {body}");
+            assert!(!body.contains(&name), "{path}: {body}");
+        }
+        let (_, api) = get(addr, &format!("/api/state/runs/{RUN_9}"));
+        assert!(api.contains(&check_handle(&unattached)), "{api}");
     }
 
     /// The demo's snapshots, with only the journals `journals` writes.

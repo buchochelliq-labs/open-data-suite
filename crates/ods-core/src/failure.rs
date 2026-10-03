@@ -644,10 +644,26 @@ impl MissingColumn {
     }
 }
 
+/// How many hex digits of a check's digest its [handle](check_handle) keeps: 48 bits,
+/// so two checks of one project share a handle only by a vanishingly rare collision.
+const CHECK_HANDLE_HEX: usize = 12;
+
+/// A check's handle where ODS shows or serializes it (#323): `check-` and the first 12
+/// hex digits of the SHA-256 of its id, e.g. `check-1f0c2a9e3b7d`. An engine may build a
+/// check's id from its arguments (dbt names an `accepted_values` test after the values
+/// it accepts, which may be secrets), so the id itself never leaves ODS's own records;
+/// the handle is the same for the same id in every run and on every surface, so it
+/// keys, de-duplicates and correlates checks without saying anything about them.
+pub fn check_handle(id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(id.as_bytes()));
+    format!("check-{}", &digest[..CHECK_HANDLE_HEX])
+}
+
 /// The check (e.g. a data test) an explanation is about, when the failure is a check's
-/// rather than a node's own (#323). Renderers name it by what it tests: an engine may
-/// build a check's id from its arguments (dbt names `accepted_values` tests after the
-/// values they accept), so the id is for machines, not for headlines.
+/// rather than a node's own (#323). Renderers name it by what it tests, and the
+/// explanation's [`node`](ErrorExplanation::node) is its [handle](check_handle), never
+/// its id, which an engine may build from the test's arguments.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -807,7 +823,7 @@ impl ErrorExplanation {
     }
 
     /// The check it is about, when a check (e.g. a data test) failed rather than the
-    /// node itself: then [`node`](Self::node) is the check's id.
+    /// node itself: then [`node`](Self::node) is the check's [handle](check_handle).
     pub fn check(&self) -> Option<&FailedCheck> {
         self.check.as_ref()
     }
@@ -929,11 +945,21 @@ impl ExplanationBuilder {
         }
     }
 
-    /// Says the failure is a check's: the node is the check, and it checks `check`'s
-    /// nodes.
+    /// Says the failure is a check's: the node is the check (by its
+    /// [handle](check_handle)), and it checks `check`'s nodes. Until a pattern
+    /// recognises it, a test failure's or an unknown error's headline says a test
+    /// failed, not "this node": the node is the test.
     #[must_use]
     pub fn check(mut self, check: FailedCheck) -> Self {
         self.explanation.check = Some(check);
+        if !self.is_recognised()
+            && matches!(
+                self.explanation.category,
+                ErrorCategory::TestFailure | ErrorCategory::Unknown
+            )
+        {
+            self.explanation.headline = Text::new().plain("A test failed");
+        }
         self
     }
 
@@ -1248,5 +1274,34 @@ mod tests {
         old["schema_version"]["minor"] = 0.into();
         let read: ErrorExplanation = serde_json::from_value(old).unwrap();
         assert_eq!(read.check(), None);
+    }
+
+    /// #323: a check's handle is derived from its id alone, deterministically, says
+    /// nothing of it (an id may hold a test's arguments), and is shown as code; a check
+    /// nothing recognised says a test failed, not "this node".
+    #[test]
+    fn a_checks_handle_hides_its_id() {
+        let id =
+            "test.shop.accepted_values_orders_status__completed__sk_live_SENTINEL_42.efdbb4986a";
+        let handle = check_handle(id);
+        assert_eq!(handle, check_handle(id));
+        assert_ne!(handle, check_handle("test.shop.not_null_orders_id.ab12"));
+        assert!(handle.starts_with("check-") && handle.len() == "check-".len() + 12);
+        assert!(
+            handle["check-".len()..]
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
+        assert!(is_code(&handle) && !handle.contains("SENTINEL"));
+
+        let e = ExplanationBuilder::new(handle.clone(), ErrorCategory::TestFailure)
+            .check(FailedCheck::new(vec!["model.orders".into()]))
+            .build();
+        assert_eq!(e.node(), handle);
+        assert_eq!(e.headline().as_str(), "A test failed");
+        let e = ExplanationBuilder::new(handle, ErrorCategory::Database)
+            .check(FailedCheck::default())
+            .build();
+        assert_eq!(e.headline().as_str(), "The warehouse rejected the query");
     }
 }

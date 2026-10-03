@@ -834,6 +834,11 @@ pub struct RunPageView {
     /// Each node the run ran, with its stats, from its journal (#322); empty without
     /// one.
     pub nodes: Vec<NodeStatsView>,
+    /// Failed tests, explained, that are under none of [`nodes`](Self::nodes): the
+    /// engine didn't say what they check, or they check nodes the run didn't run
+    /// (#323). Each is keyed by its check's handle, never its id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed_tests: Vec<ods_core::failure::ErrorExplanation>,
     /// Why each built node was built.
     pub built: Vec<BuiltWhy>,
     /// What failed, if this is the last run and its outcome is known.
@@ -1578,7 +1583,9 @@ impl Dashboard {
     }
 
     /// Adds its explanation to each failed node of the run `row`, and each failed test's
-    /// to the nodes it checks (#323), when the binary gave an explainer.
+    /// to the nodes it checks (#323), when the binary gave an explainer. Returns the
+    /// failed tests none of `nodes` has (the engine didn't say what they check, or
+    /// they check nodes the run didn't run), each once, in the order they failed.
     /// Beyond loopback (`details` false), explanations carry no file paths, as the
     /// Catalog shows none (rule 9).
     fn explain_nodes(
@@ -1587,9 +1594,9 @@ impl Dashboard {
         journal: &JournalRun,
         nodes: &mut [NodeStatsView],
         details: bool,
-    ) {
+    ) -> Vec<ods_core::failure::ErrorExplanation> {
         let Some(explainer) = self.history().and_then(|h| h.explainer.as_ref()) else {
-            return;
+            return Vec::new();
         };
         let snapshots = self.snapshots();
         let find = |id: Option<u64>| {
@@ -1612,6 +1619,7 @@ impl Dashboard {
         let shown = |e: ods_core::failure::ErrorExplanation| {
             if details { e } else { e.without_paths() }
         };
+        let mut shown_under: BTreeSet<String> = BTreeSet::new();
         for node in nodes {
             node.explanation = found.nodes.remove(&node.node).map(shown);
             node.failed_tests = found
@@ -1621,7 +1629,14 @@ impl Dashboard {
                 .into_iter()
                 .map(shown)
                 .collect();
+            shown_under.extend(node.failed_tests.iter().map(|e| e.node().to_owned()));
         }
+        let mut rest = found.unattached;
+        rest.extend(found.tests.into_values().flatten());
+        rest.into_iter()
+            .filter(|e| shown_under.insert(e.node().to_owned()))
+            .map(shown)
+            .collect()
     }
 
     /// Every listed run, newest first: the snapshots' runs, each with its journal if
@@ -1920,7 +1935,7 @@ impl Dashboard {
                 names.extend(self.names());
                 let mut nodes: Vec<NodeStatsView> =
                     journal.nodes(&|id| name_in(&names, id), &|_| None, details);
-                self.explain_nodes(row, &journal, &mut nodes, details);
+                let _ = self.explain_nodes(row, &journal, &mut nodes, details);
                 nodes.retain(|n| {
                     matches!(n.status, NodeRunStatus::Error | NodeRunStatus::Skipped)
                         || !n.failed_tests.is_empty()
@@ -2038,9 +2053,10 @@ impl Dashboard {
             .as_ref()
             .map(|j| j.nodes(&|id| name_in(&names, id), &kind, details))
             .unwrap_or_default();
-        if let Some(j) = &journal {
-            self.explain_nodes(&this, j, &mut nodes, details);
-        }
+        let failed_tests = journal
+            .as_ref()
+            .map(|j| self.explain_nodes(&this, j, &mut nodes, details))
+            .unwrap_or_default();
         let stats_of = |id: &str| nodes.iter().find(|n| n.node == id);
         let mut timeline: Vec<TimelineRow> = snapshot
             .map(|s| {
@@ -2136,6 +2152,7 @@ impl Dashboard {
             started_at: journal.as_ref().and_then(|j| j.started()),
             timeline,
             nodes,
+            failed_tests,
             built: built_why,
             last_run,
             state_rule,

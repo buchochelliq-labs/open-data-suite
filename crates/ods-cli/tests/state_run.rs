@@ -3883,7 +3883,9 @@ fn a_failed_test_is_explained_without_values() {
     let failures = result["failures"].as_array().unwrap();
     assert_eq!(failures.len(), 1, "{json:#}");
     let failure = &failures[0];
-    let test = "test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d";
+    let test = ods_core::failure::check_handle(
+        "test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d",
+    );
     assert_eq!(failure["node"], test);
     assert_eq!(failure["check"]["covers"][0], "model.jaffle_ods.customers");
     assert_eq!(failure["category"], "test_failure");
@@ -3944,6 +3946,127 @@ fn a_failed_test_is_explained_without_values() {
         "test_failure_explained_plain",
         redact(&why_it_failed(&plain))
     );
+}
+
+/// #323: dbt names a generic test after its arguments: the recorded `accepted_values`
+/// test (dbt 1.10, `capture-errors.sh`) accepts a secret, so its name and id hold it.
+/// When it fails, its explanation names it by what it tests and its handle, in
+/// `ods state build` (with tests), `ods state test` and `ods state history --run`, JSON
+/// and plain. The id stays only where ODS kept it before #323: the journal's
+/// `check_finished` events and the executor's `checks_failed` (the report's
+/// `execution`, and the per-node line and the warning the terminal prints from it).
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one failing test, through each command and output, top to bottom"
+)]
+fn a_failed_tests_arguments_never_reach_its_explanation() {
+    const SENTINEL: &str = "sk_live_SENTINEL_42";
+    let node = fixture("jaffle-ods/artifacts/dbt-1.10-errors/accepted-values-node.json");
+    let recorded: Value = serde_json::from_slice(&std::fs::read(&node).unwrap()).unwrap();
+    let id = recorded["unique_id"].as_str().unwrap();
+    let name = recorded["name"].as_str().unwrap();
+    assert!(id.contains(SENTINEL), "{id}");
+    let handle = ods_core::failure::check_handle(id);
+    let project =
+        Project::new("test-arguments").with("FAKE_DBT_EXTRA_TEST", node.to_str().unwrap());
+    project.run_ok(&["--test"]);
+    project.change_code("model.jaffle_ods.orders");
+    let project = project
+        .with("FAKE_DBT_FAIL_TEST", name)
+        .with("FAKE_DBT_TEST_FAILURES", &format!("{name}=3"));
+    let leaks = |text: &str| text.contains(SENTINEL);
+    // The explanation of the failed test, and nothing else in `failures`.
+    let explained = |failures: &Value| {
+        assert!(!leaks(&failures.to_string()), "{failures:#}");
+        let [failure] = failures.as_array().unwrap().as_slice() else {
+            panic!("{failures:#}")
+        };
+        assert_eq!(failure["node"], handle.as_str());
+        assert_eq!(failure["check"]["test"], "accepted_values");
+        assert_eq!(failure["check"]["covers"][0], "model.jaffle_ods.orders");
+        assert_eq!(
+            failure["headline"],
+            "The `accepted_values` test on `status` of `orders` failed: 3 rows don't pass"
+        );
+        failure.clone()
+    };
+    // What ODS kept before #323 (the executor's `checks_failed`), and nothing else.
+    let without_checks_failed = |result: &Value| {
+        let mut result = result.clone();
+        let execution = &mut result["execution"];
+        assert!(
+            leaks(&execution["checks_failed"].to_string()),
+            "{execution:#}"
+        );
+        execution["checks_failed"] = Value::Null;
+        for n in execution["nodes"].as_array_mut().unwrap() {
+            n["checks_failed"] = Value::Null;
+        }
+        result
+    };
+
+    // `ods state build --test`.
+    let (code, json) = project.run(&["--test"]);
+    assert_eq!(code, 1, "{json:#}");
+    let result = &json["result"];
+    explained(&result["failures"]);
+    let rest = without_checks_failed(result);
+    assert!(!leaks(&rest.to_string()), "{rest:#}");
+    let (_, events) = journal_of(&project, result);
+    let check = events
+        .iter()
+        .find(|e| e["kind"] == "check_finished" && e["status"] == "failed")
+        .unwrap();
+    assert_eq!(
+        check["check"], id,
+        "the journal keeps the id, as before #323"
+    );
+    assert_eq!(check["failures"], 3);
+    let mut said = check.clone();
+    said["check"] = Value::Null;
+    assert!(!leaks(&said.to_string()), "{said:#}");
+
+    // `ods state history --run`: the run's summary and explanations, whole.
+    let run_id = result["execution"]["run_id"].as_str().unwrap().to_owned();
+    let (code, shown) = project.ods(&["state", "history", "--run", &run_id]);
+    assert_eq!(code, 0, "{shown:#}");
+    assert!(!leaks(&shown.to_string()), "{shown:#}");
+    explained(&shown["result"]["failures"]);
+    let history = project.ods_plain(&["state", "history", "--run", &run_id]);
+    assert!(!leaks(&history), "{history}");
+    assert!(
+        history.contains("failed test: accepted_values on orders.status"),
+        "{history}"
+    );
+
+    // `ods state test`.
+    let (code, tested) = project.test(&[]);
+    assert_eq!(code, 1, "{tested:#}");
+    explained(&tested["result"]["failures"]);
+
+    // Plain: the explanation, whole; the rest only as before #323.
+    let dbt = fixture("fake-dbt/dbt");
+    let dbt = dbt.to_str().unwrap();
+    for command in ["build", "test"] {
+        let (code, plain) =
+            project.ods_plain_status(&["state", command, "--dbt", dbt, "--dbt-output", "capture"]);
+        assert_eq!(code, 1, "{plain}");
+        let why = why_it_failed(&plain);
+        assert!(
+            why.contains("failed test: accepted_values on orders.status"),
+            "{why}"
+        );
+        assert!(!leaks(&why), "{command}: {why}");
+        let elsewhere: Vec<&str> = plain.lines().filter(|l| leaks(l)).collect();
+        // Before #323: the per-node line (`failed: <check>`) and the run's warning
+        // (`failed checks: <check>`), from `checks_failed`.
+        assert!(
+            elsewhere.iter().all(|l| !why.contains(*l)
+                && (l.contains("failed: ") || l.starts_with("warning: failed checks: "))),
+            "{command}: {elsewhere:?}"
+        );
+    }
 }
 
 /// #323: when `dbt compile` fails in the prepare step, nothing runs; the report says

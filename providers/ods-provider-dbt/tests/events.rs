@@ -411,82 +411,93 @@ fn real_failures_are_summarised_and_recognised() {
     }
 }
 
-/// #323: a real dbt 1.10 build whose `accepted_values` test fails
-/// (`capture-errors.sh`, accepted-values): the check finishes failed, with the rows
-/// dbt counted (`num_failures` in the log, `failures` in `run_results.json`) and its
-/// message redacted, which the catalogue recognises as a failed test. The values the
-/// test accepts (one a secret) are in neither: only in dbt's own name for the test.
+/// Each dbt version whose errors are recorded (`capture-errors.sh`).
+const ERROR_VERSIONS: [&str; 3] = ["1.10", "1.11", "1.12"];
+
+/// #323: a real dbt build whose `accepted_values` test fails (`capture-errors.sh`,
+/// accepted-values), with each recorded version: the check finishes failed, with the
+/// rows dbt counted (`num_failures` in the log, `failures` in `run_results.json`) and
+/// its message redacted, which the catalogue recognises as a failed test. The values
+/// the test accepts (one a secret) are in dbt's id for the test, which the journal
+/// keeps as the event's `check` (as before #323); they are in nothing this adds: the
+/// count, the message, or the run's summary as it is serialized.
 #[test]
 fn a_failing_test_reports_its_failing_rows_and_message() {
     use ods_core::failure::Symptom;
     use ods_provider_dbt::error_catalogue::DbtErrorCatalogue;
     use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue};
-    use ods_sdk::contracts::run_events::{CheckStatus, ErrorSummary};
+    use ods_sdk::contracts::run_events::{CheckStatus, CheckSummary, ErrorSummary, RunEvent};
 
     const SENTINEL: &str = "sk_live_SENTINEL_42";
-    let run =
-        RunResults::read(&fixture("dbt-1.10-errors/accepted-values-run_results.json")).unwrap();
-    let failing = run.results.iter().find(|r| r.raw_status == "fail").unwrap();
-    assert_eq!(failing.details.failures, Some(3));
-    let test = failing.unique_id.clone();
-    let (request, report) = request_and_report(&run);
-    let manifest = Manifest::read(&fixture("dbt-1.10-build/manifest.json")).unwrap();
+    for version in ERROR_VERSIONS {
+        let dir = format!("dbt-{version}-errors");
+        let run =
+            RunResults::read(&fixture(&format!("{dir}/accepted-values-run_results.json"))).unwrap();
+        let failing = run.results.iter().find(|r| r.raw_status == "fail").unwrap();
+        assert_eq!(failing.details.failures, Some(3), "{version}");
+        let test = failing.unique_id.clone();
+        assert!(test.contains(SENTINEL), "{version}: {test}");
+        let (request, report) = request_and_report(&run);
+        let manifest = Manifest::read(&fixture("dbt-1.10-build/manifest.json")).unwrap();
 
-    let check_of = |events: &[ods_sdk::contracts::run_events::RunEvent]| {
-        let summary = RunSummary::from_events(events);
-        let check = summary.check(&test).cloned().unwrap();
-        // Nothing but the check id names the test's arguments.
-        let mut said = serde_json::to_value(&check).unwrap();
-        said.as_object_mut().unwrap().remove("check");
-        assert!(!said.to_string().contains(SENTINEL), "{said}");
+        let check_of = |events: &[RunEvent]| -> CheckSummary {
+            let summary = RunSummary::from_events(events);
+            // The summary as it is shown (e.g. `ods state history --run`), whole.
+            let shown = serde_json::to_string(&summary).unwrap();
+            assert!(!shown.contains(SENTINEL), "{version}: {shown}");
+            let check = summary.check(&test).cloned().unwrap();
+            let said = format!("{:?} {:?}", check.failures, check.error);
+            assert!(!said.contains(SENTINEL), "{version}: {said}");
+            assert!(!said.to_lowercase().contains("select"), "{version}: {said}");
+            check
+        };
+        let expect = |error: Option<&ErrorSummary>| {
+            let error = error.unwrap();
+            assert_eq!(
+                error.message(),
+                "Got [value removed] results, configured to fail if != [value removed]",
+                "{version}"
+            );
+            assert!(matches!(
+                DbtErrorCatalogue.classify(error),
+                Classification::Recognised(m) if m.symptom == Symptom::TestFailed
+            ));
+        };
+
+        // Live, from dbt's log.
+        let log =
+            std::fs::read_to_string(fixture(&format!("{dir}/accepted-values.jsonl"))).unwrap();
+        let sink = CollectedEvents::new();
+        let mut bridge = Bridge::new(&sink, &request, coverage(&manifest), LogLevel::Info);
+        for line in log.lines() {
+            bridge.line(line);
+        }
+        bridge.finish(&report, &run);
+        let events = sink.events();
+        let check = check_of(&events);
+        assert_eq!(check.status, CheckStatus::Failed, "{version}");
+        assert_eq!(check.failures, Some(3), "{version}");
+        expect(check.error.as_ref());
+        // The tests that passed say nothing failed them.
+        let summary = RunSummary::from_events(&events);
         assert!(
-            !said.to_string().to_lowercase().contains("select"),
-            "{said}"
+            summary
+                .checks
+                .iter()
+                .filter(|c| c.status == CheckStatus::Passed)
+                .all(|c| c.failures.is_none() && c.error.is_none())
         );
-        check
-    };
-    let expect = |error: Option<&ErrorSummary>| {
-        let error = error.unwrap();
+
+        // From `run_results.json` alone.
+        let sink = CollectedEvents::new();
+        let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
+        bridge.finish(&report, &run);
+        let check = check_of(&sink.events());
         assert_eq!(
-            error.message(),
-            "Got [value removed] results, configured to fail if != [value removed]"
+            (check.status, check.failures),
+            (CheckStatus::Failed, Some(3)),
+            "{version}"
         );
-        assert!(matches!(
-            DbtErrorCatalogue.classify(error),
-            Classification::Recognised(m) if m.symptom == Symptom::TestFailed
-        ));
-    };
-
-    // Live, from dbt's log.
-    let log = std::fs::read_to_string(fixture("dbt-1.10-errors/accepted-values.jsonl")).unwrap();
-    let sink = CollectedEvents::new();
-    let mut bridge = Bridge::new(&sink, &request, coverage(&manifest), LogLevel::Info);
-    for line in log.lines() {
-        bridge.line(line);
+        expect(check.error.as_ref());
     }
-    bridge.finish(&report, &run);
-    let check = check_of(&sink.events());
-    assert_eq!(check.status, CheckStatus::Failed);
-    assert_eq!(check.failures, Some(3));
-    expect(check.error.as_ref());
-    // The tests that passed say nothing failed them.
-    let summary = RunSummary::from_events(&sink.events());
-    assert!(
-        summary
-            .checks
-            .iter()
-            .filter(|c| c.status == CheckStatus::Passed)
-            .all(|c| c.failures.is_none() && c.error.is_none())
-    );
-
-    // From `run_results.json` alone.
-    let sink = CollectedEvents::new();
-    let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
-    bridge.finish(&report, &run);
-    let check = check_of(&sink.events());
-    assert_eq!(
-        (check.status, check.failures),
-        (CheckStatus::Failed, Some(3))
-    );
-    expect(check.error.as_ref());
 }

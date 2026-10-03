@@ -26,19 +26,22 @@
 //! test) is explained like a node's error, never as rows that failed. Checks that only
 //! warned aren't explained: they didn't fail anything. A check is named by what it
 //! tests, never by its id, which an engine may build from the test's arguments (dbt
-//! names `accepted_values` tests after the values they accept).
+//! names `accepted_values` tests after the values they accept): its explanation's node
+//! is the check's [handle](ods_core::failure::check_handle). The steps it offers are
+//! neutral (test the node again), plus what the provider's pattern offers for running
+//! it again (e.g. dbt's `--store-failures`, [`Rerun`]).
 
 use ods_core::FreshnessPolicy;
 use ods_core::failure::{
     EngineMessage, ErrorCategory, ErrorExplanation, EvidenceData, EvidenceItem, EvidenceSource,
     ExplanationBuilder, FailedCheck, Location, MissingColumn, PatternRef, Suggestion, Symptom,
-    Text, is_code,
+    Text, check_handle, is_code,
 };
 use ods_core::state::{
     ExecutionPlan, NodeState, PlanAction, PlanEntry, Reason, ReasonCode, StateSnapshot, Timestamp,
 };
 use ods_sdk::contracts::error_catalogue::{
-    CatalogueInfo, CheckTarget, Classification, IndexedNode, NameAt, ProjectIndex,
+    CatalogueInfo, CheckTarget, Classification, IndexedNode, NameAt, ProjectIndex, Rerun,
 };
 use ods_sdk::contracts::run_events::{
     CheckStatus, CheckSummary, ErrorSummary, NodeRunStats, NodeRunStatus, RunSummary,
@@ -62,22 +65,20 @@ impl<'a> Retry<'a> {
         Self { state_db }
     }
 
-    /// Testing `node` again (`ods state test --select <node>`), with `-- --store-failures`
-    /// when the failing rows should be kept to look at.
-    fn test_again(self, text: Text, node: &str, store_failures: bool) -> Suggestion {
+    /// Testing `node` again (`ods state test --select <node>`), with the engine's
+    /// `passthrough` argument after `--` when the provider offered one ([`Rerun`]).
+    fn test_again(self, text: Text, node: &str, passthrough: Option<&str>) -> Suggestion {
         let s = Suggestion::new(text);
-        match (self.state_db, store_failures) {
-            (Some(db), true) => s.with_command(
-                "ods state test --select {} --state-db {} -- --store-failures",
-                &[node, db],
+        match (self.state_db, passthrough) {
+            (Some(db), Some(arg)) => s.with_command(
+                "ods state test --select {} --state-db {} -- {}",
+                &[node, db, arg],
             ),
-            (Some(db), false) => {
+            (Some(db), None) => {
                 s.with_command("ods state test --select {} --state-db {}", &[node, db])
             }
-            (None, true) => {
-                s.with_command("ods state test --select {} -- --store-failures", &[node])
-            }
-            (None, false) => s.with_command("ods state test --select {}", &[node]),
+            (None, Some(arg)) => s.with_command("ods state test --select {} -- {}", &[node, arg]),
+            (None, None) => s.with_command("ods state test --select {}", &[node]),
         }
     }
 
@@ -238,7 +239,7 @@ pub fn explain_failure(facts: &FailureFacts<'_>) -> ErrorExplanation {
         }
         _ => facts.classification.category(),
     };
-    let mut builder = ExplanationBuilder::new(facts.node, category);
+    let mut builder = ExplanationBuilder::new(shown_id(facts), category);
     if let Some(check) = facts.check {
         builder = builder.check(failed_check(facts, check));
         // Another recognised error than failing rows: the check errored.
@@ -325,6 +326,15 @@ pub fn explain_failure(facts: &FailureFacts<'_>) -> ErrorExplanation {
     builder.build()
 }
 
+/// The failed node's id, or a failed check's [handle](check_handle): a check's id may
+/// hold its arguments.
+fn shown_id(facts: &FailureFacts<'_>) -> String {
+    match facts.check {
+        Some(_) => check_handle(facts.node),
+        None => facts.node.to_owned(),
+    }
+}
+
 /// ODS's own pattern for a check whose engine reported failing rows without a message
 /// the catalogue recognises: the count is the engine's structured report, not its text.
 const FAILING_ROWS_PATTERN: (&str, &str, &str) = ("ods", "1", "check-failing-rows");
@@ -370,12 +380,13 @@ fn failed_check(facts: &FailureFacts<'_>, check: &CheckSummary) -> FailedCheck {
 
 /// The check, for people: "the `not_null` test on `customer_id` of `orders`", "the
 /// test `only_placed_orders` on `orders`", or "a test on `orders`". A test's own name
-/// is used only for one the project declares without a kind (a singular test, named by
-/// its file): a generic test's name may hold its arguments.
+/// is used only for one the provider says is [singular](CheckTarget::singular) (named
+/// by its file): a generic test's name may hold its arguments.
 fn test_phrase(facts: &FailureFacts<'_>, check: &CheckSummary, start: bool) -> Text {
     let the = if start { "The " } else { "the " };
     let target = check_target(facts);
     let node = tested_node(facts, check).map(|n| facts.name(n));
+    let a_test = if start { "A test" } else { "a test" };
     let mut text = Text::new();
     match target {
         Some(CheckTarget {
@@ -383,14 +394,14 @@ fn test_phrase(facts: &FailureFacts<'_>, check: &CheckSummary, start: bool) -> T
         }) => {
             text = text.plain(the).code(kind).plain(" test");
         }
-        Some(_) => {
+        Some(CheckTarget { singular: true, .. }) => {
             let name = facts.indexed(facts.node).map(|n| n.name.as_str());
             text = match name.filter(|n| !n.is_empty()) {
                 Some(name) => text.plain(the).plain("test ").code(name),
-                None => text.plain(if start { "A test" } else { "a test" }),
+                None => text.plain(a_test),
             };
         }
-        None => text = text.plain(if start { "A test" } else { "a test" }),
+        _ => text = text.plain(a_test),
     }
     let column = target.and_then(|t| t.column.as_deref());
     match (column, node) {
@@ -420,10 +431,15 @@ fn explain_failing_rows(facts: &FailureFacts<'_>, check: &CheckSummary) -> Error
         Some(n) => format!(" failed: {n} rows don't pass"),
         None => format!(" failed; {engine} didn't say how many rows don't pass"),
     });
-    let mut builder = ExplanationBuilder::new(facts.node, ErrorCategory::TestFailure)
+    let mut builder = ExplanationBuilder::new(shown_id(facts), ErrorCategory::TestFailure)
         .check(failed_check(facts, check))
         .recognised(pattern, Symptom::TestFailed)
         .headline(headline);
+    if let Classification::Recognised(found) = facts.classification {
+        for suggestion in &found.suggestions {
+            builder = builder.suggest(suggestion.clone());
+        }
+    }
     if let Some(rows) = rows {
         builder = builder.evidence(
             EvidenceItem::confirming(
@@ -466,9 +482,10 @@ fn check_context(
         } else {
             "As the project is now, it is "
         });
-        text = match &target.test {
-            Some(kind) => text.plain("a ").code(kind).plain(" test"),
-            None => text.plain("a test of its own (no generic test kind)"),
+        text = match (&target.test, target.singular) {
+            (Some(kind), _) => text.plain("a ").code(kind).plain(" test"),
+            (None, true) => text.plain("a test of its own (a singular test)"),
+            (None, false) => text.plain("a test"),
         };
         if let Some(column) = &target.column {
             text = text.plain(" of column ").code(column);
@@ -510,11 +527,12 @@ fn check_context(
                         .code(&name)
                         .plain(" was rebuilt in this run, but its code didn't change since its last successful build.")
                 }),
+            // Not built in this run: what ODS recorded, not which build the test read.
             (None, None) => facts.last_good(node).map(|last| {
                 Text::new()
-                    .plain("The test checked the build of ")
+                    .plain("The last build ODS recorded for ")
                     .code(&name)
-                    .plain(" from run ")
+                    .plain(" is from run ")
                     .code(short_run(&last.run_id))
                     .plain(".")
             }),
@@ -567,8 +585,9 @@ fn check_history(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> Expla
     ))
 }
 
-/// What to try for a failed check: look at the rows that fail it, then test the node
-/// again; for one that errored or isn't recognised, read the engine's message first.
+/// What to try for a failed check: look at the rows that fail it, when the provider's
+/// pattern offers a way ([`Rerun`]), then test the node again; for one that errored or
+/// isn't recognised, read the engine's message first.
 fn check_steps(
     facts: &FailureFacts<'_>,
     check: &CheckSummary,
@@ -587,13 +606,15 @@ fn check_steps(
         return builder;
     };
     let name = facts.name(node);
-    if rows {
+    let rerun: Option<&Rerun> = match facts.classification {
+        Classification::Recognised(found) if rows => found.rerun.as_ref(),
+        _ => None,
+    };
+    if let Some(rerun) = rerun {
         builder = builder.suggest(commands.test_again(
-            Text::new().plain(
-                "See the rows that fail: run the test again, keeping them in a table in the warehouse:",
-            ),
+            rerun.text.clone(),
             &name,
-            true,
+            Some(&rerun.passthrough),
         ));
     }
     builder.suggest(
@@ -607,7 +628,7 @@ fn check_steps(
                 .code(&name)
                 .plain(" again:"),
             &name,
-            false,
+            None,
         ),
     )
 }
@@ -1897,6 +1918,16 @@ mod tests {
         failures: Option<u64>,
         error: Option<ErrorSummary>,
     ) -> RunSummary {
+        tested_as(TEST, status, failures, error)
+    }
+
+    /// A run of `orders` and its test `check`, which ended as `status`.
+    fn tested_as(
+        check: &str,
+        status: CheckStatus,
+        failures: Option<u64>,
+        error: Option<ErrorSummary>,
+    ) -> RunSummary {
         let at = TimestampMs::from_unix_millis(1_000);
         let events = [
             RunEvent::new(
@@ -1923,7 +1954,7 @@ mod tests {
                 None,
                 at,
                 RunEventKind::CheckFinished {
-                    check: TEST.to_owned(),
+                    check: check.to_owned(),
                     covers: vec![ORDERS.to_owned()],
                     status,
                     failures,
@@ -1985,12 +2016,16 @@ mod tests {
     /// message never reach the explanation.
     #[test]
     fn a_failed_test_names_the_test_column_and_rows() {
-        let error = summary(&format!("rows failed the test: 5 like '{SENTINEL}'"));
+        let error = summary(&format!("rows failed the test (5 like '{SENTINEL}')"));
         let run = tested(CheckStatus::Failed, Some(5), Some(error));
         let index = test_index();
         let e = explain_check(&run, Some(&index), &[]);
-        assert_eq!(e.node(), TEST);
+        assert_eq!(e.node(), check_handle(TEST));
         assert_eq!(e.confidence(), Confidence::KnownPatternWithEvidence);
+        assert_eq!(
+            e.pattern().map(|p| p.id.as_str()),
+            Some("rows-failed-the-test")
+        );
         assert_eq!(e.chip(), "test failure · test failed");
         assert_eq!(
             e.headline().as_str(),
@@ -2017,7 +2052,7 @@ mod tests {
         assert_eq!(
             commands(&e),
             [
-                "ods state test --select orders -- --store-failures",
+                "ods state test --select orders -- --keep-failing-rows",
                 "ods state test --select orders"
             ]
         );
@@ -2072,7 +2107,9 @@ mod tests {
         let e = explain_check(&silent, Some(&index), &[]);
         assert_eq!(e.confidence(), Confidence::NotRecognised);
         assert_eq!(e.category(), ErrorCategory::TestFailure);
-        assert_eq!(e.headline().as_str(), "A test on this node failed");
+        assert_eq!(e.headline().as_str(), "A test failed");
+        // Not recognised, so the provider's way to keep the rows isn't offered.
+        assert_eq!(commands(&e), ["ods state test --select orders"]);
     }
 
     /// #323: a test that errored (here, a missing column in the test's query) is
@@ -2167,8 +2204,9 @@ mod tests {
         assert_eq!(failed_checks(&run).len(), 1);
     }
 
-    /// #323: a test's own name is used only for a singular test (named by its file),
-    /// never for a generic one, whose name may hold its arguments.
+    /// #323: a test's own name is used only for a test the provider says is singular
+    /// (named by its file), never for a generic one, whose name may hold its arguments;
+    /// nor is the check's id, which may too: the explanation carries its handle.
     #[test]
     fn only_a_singular_tests_name_is_shown() {
         let run = tested(CheckStatus::Failed, Some(3), None);
@@ -2176,31 +2214,96 @@ mod tests {
             .with_node(ORDERS, IndexedNode::new("orders"))
             .with_node(
                 TEST,
-                IndexedNode::new("only_placed_orders").checking(CheckTarget::new(
-                    None,
-                    None,
-                    Some(ORDERS),
-                )),
+                IndexedNode::new("only_placed_orders")
+                    .checking(CheckTarget::new(None, None, Some(ORDERS)).singular()),
             );
         let e = explain_check(&run, Some(&singular), &[]);
         assert_eq!(
             e.headline().as_str(),
             "The test `only_placed_orders` on `orders` failed: 3 rows don't pass"
         );
-        let generic = ProjectIndex::new(Vec::<String>::new()).with_node(
-            TEST,
-            IndexedNode::new(format!("accepted_values_orders_status__{SENTINEL}")).checking(
-                CheckTarget::new(Some("accepted_values"), Some("status"), Some(ORDERS)),
-            ),
-        );
+        assert!(e.evidence().iter().any(|i| i.text.as_str()
+            == "The project declares it as a test of its own (a singular test) on `orders`."));
+
+        // dbt's id for an `accepted_values` test, as recorded: the values it accepts
+        // (one a secret) are in its name and its id.
+        let id =
+            format!("test.shop.accepted_values_orders_status__completed__{SENTINEL}.efdbb4986a");
+        let run = tested_as(&id, CheckStatus::Failed, Some(3), None);
+        let named = |target: CheckTarget| {
+            ProjectIndex::new(Vec::<String>::new())
+                .with_node(ORDERS, IndexedNode::new("orders"))
+                .with_node(
+                    &id,
+                    IndexedNode::new(format!(
+                        "accepted_values_orders_status__completed__{SENTINEL}"
+                    ))
+                    .checking(target),
+                )
+        };
+        let generic = named(CheckTarget::new(
+            Some("accepted_values"),
+            Some("status"),
+            Some(ORDERS),
+        ));
         let e = explain_check(&run, Some(&generic), &[]);
-        let mut shown = serde_json::to_value(&e).unwrap();
-        // The id is for machines (and an engine's test id may hold its arguments).
-        shown.as_object_mut().unwrap().remove("node");
-        assert!(!shown.to_string().contains(SENTINEL), "{shown}");
+        assert!(!json(&e).contains(SENTINEL), "{}", json(&e));
+        assert_eq!(e.node(), check_handle(&id));
         assert_eq!(
             e.headline().as_str(),
             "The `accepted_values` test on `status` of `orders` failed: 3 rows don't pass"
+        );
+        // A generic test whose kind isn't a name ODS shows: still not named by its name.
+        let unnamed = named(CheckTarget::new(
+            Some("odd kind!"),
+            Some("status"),
+            Some(ORDERS),
+        ));
+        let e = explain_check(&run, Some(&unnamed), &[]);
+        assert!(!json(&e).contains(SENTINEL), "{}", json(&e));
+        assert_eq!(
+            e.headline().as_str(),
+            "A test on `status` of `orders` failed: 3 rows don't pass"
+        );
+        // Without the project, too.
+        let e = explain_check(&run, None, &[]);
+        assert!(!json(&e).contains(SENTINEL), "{}", json(&e));
+    }
+
+    /// #323: for a test of a node this run didn't build, ODS says which build it last
+    /// recorded, not which one the test read.
+    #[test]
+    fn a_test_of_a_node_not_built_says_what_ods_recorded() {
+        let at = TimestampMs::from_unix_millis(1_000);
+        let run = RunSummary::from_events(&[RunEvent::new(
+            "run-3",
+            None,
+            at,
+            RunEventKind::CheckFinished {
+                check: TEST.to_owned(),
+                covers: vec![CUSTOMERS.to_owned()],
+                status: CheckStatus::Failed,
+                failures: Some(2),
+                error: None,
+            },
+        )]);
+        let catalogue = catalogue();
+        let classification = Classification::NotRecognised {
+            category: ErrorCategory::Unknown,
+        };
+        let info = catalogue.catalogue();
+        let before = before();
+        let check = failed_checks(&run)[0];
+        let mut facts = FailureFacts::new(TEST, &classification, &info, FailureStage::Run);
+        facts.check = Some(check);
+        facts.run = Some(&run);
+        facts.before = Some(&before);
+        let e = explain_failure(&facts);
+        assert!(
+            e.evidence().iter().any(|i| i.text.as_str()
+                == "The last build ODS recorded for `customers` is from run `b6802661`."),
+            "{:?}",
+            e.evidence()
         );
     }
 }

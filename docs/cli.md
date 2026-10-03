@@ -1461,7 +1461,12 @@ dbt said: Got [value removed] results, configured to fail if != [value removed] 
 - A test that only **warned** (`severity: warn`) isn't explained: it failed nothing.
 - In `ods state test`, where nothing is built, a model that is untested because its
   test failed is explained by the test, not as a failed model.
-- `--store-failures` is one of the dbt options ODS passes through after `--`.
+- `--store-failures` is one of the dbt options ODS passes through after `--`; the dbt
+  provider offers it for a failed test (other engines may offer their own, or none).
+- When the run didn't build the tested model (e.g. in `ods state test`), the evidence
+  says which build of it ODS last recorded ("The last build ODS recorded for `customers`
+  is from run `…`"), not which one the test read.
+- With no message from dbt and no count, the headline is just "A test failed".
 
 When dbt fails before any node runs (e.g. `dbt compile` can't compile a model that
 calls an undefined macro), the report says `failed before any node ran: nothing was
@@ -1474,12 +1479,16 @@ panel (`explanation` on each failed node in `/api/state/runs/<run_id>` and
 `/api/state/runs`, and `failed_tests` on each node a failed test checks), with Copy
 buttons for the commands; on the Nodes tab the side panel gives each failed node's (and
 failed test's) headline with a link to its row. A failed test is shown under each node
-it checks. `ods state retry --failed` is
+it checks; one that checks no node the run shows (dbt didn't say which, or it checks a
+node the run didn't run) is listed in the Run page's **Failed tests** section
+(`failed_tests` in `/api/state/runs/<run_id>`). `ods state retry --failed` is
 offered only for the last run, which is what it retries. Beyond loopback, explanations
 leave out file paths and where dbt's full message is, as the Catalog does.
 
 `--output json` includes the explanations as `failures` (in `ods state history --run`, too):
-each has `schema_version` (1.1), `node` (a failed test's own id for a test), `check`
+each has `schema_version` (1.1), `node` (for a failed test, its handle,
+`check-<12 hex digits>`, the same for the same test in every run: never dbt's id for
+it, which holds a generic test's arguments), `check`
 (for a failed test: `covers`, the nodes it checks, and its `test` kind and `column`
 when the manifest says), `category`, `symptom` (when recognised),
 `confidence` (`known_pattern_with_evidence`, `known_pattern`, `not_recognised`),

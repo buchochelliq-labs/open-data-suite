@@ -194,7 +194,9 @@ pub enum RunEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failures: Option<u64>,
         /// The engine's message, redacted, when it failed, warned or errored (#323):
-        /// made only by [`ErrorSummary::from_message`], like a node's error.
+        /// made only by [`ErrorSummary::from_message`], like a node's error. A check
+        /// that passed, was skipped or whose outcome is unknown carries none, whatever
+        /// the engine said (nor a count).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<ErrorSummary>,
     },
@@ -734,9 +736,9 @@ pub struct NodeSummary {
     pub stats: NodeRunStats,
 }
 
-/// One check's part in a run, as its events tell it (#323).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// One check's part in a run, as its events tell it (#323). Not serialized: its id may
+/// hold the check's arguments (see [`check_handle`](ods_core::failure::check_handle)).
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CheckSummary {
     /// The check's id.
@@ -746,10 +748,8 @@ pub struct CheckSummary {
     /// How it ended.
     pub status: CheckStatus,
     /// How many rows didn't pass, if the engine said.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub failures: Option<u64>,
     /// The engine's redacted message, if it gave one.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorSummary>,
 }
 
@@ -808,8 +808,10 @@ pub struct RunSummary {
     /// Every node, requested ones first in request order, then others as first seen.
     pub nodes: Vec<NodeSummary>,
     /// Every check that finished, in the order they first finished; a check that
-    /// finishes again keeps its place and takes the later outcome (#323).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// finishes again keeps its place and takes the later outcome (#323). For
+    /// explaining failed checks, never serialized: a check's id may hold its arguments
+    /// (each node's [test counts](NodeRunStats::tests) say how its checks did).
+    #[serde(skip)]
     pub checks: Vec<CheckSummary>,
     /// Its totals, over [`nodes`](Self::nodes).
     pub totals: RunTotals,

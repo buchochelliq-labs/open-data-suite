@@ -1,5 +1,7 @@
 //! Failed nodes and failed tests, explained on the Run page and in the Runs side panel
-//! (#323, ADR-0025). A failed test is shown under each node it checks.
+//! (#323, ADR-0025). A failed test is shown under each node it checks; one that checks
+//! no node the run shows is listed on its own on the Run page. A test is keyed by its
+//! [handle](ods_core::failure::check_handle), never by its id.
 //!
 //! The binary hands in an [`Explainer`]: a provider's error catalogue and what the
 //! project says now (its index, parents and missing columns from column lineage). The
@@ -25,6 +27,8 @@ pub(crate) struct Explained {
     pub(crate) nodes: BTreeMap<String, ErrorExplanation>,
     /// Each failed test's explanation, under every node it checks, by node id.
     pub(crate) tests: BTreeMap<String, Vec<ErrorExplanation>>,
+    /// Failed tests the engine didn't say the nodes of.
+    pub(crate) unattached: Vec<ErrorExplanation>,
 }
 
 /// What explains failed nodes, beyond their runs: set by the binary, which picks the
@@ -168,6 +172,10 @@ impl Explainer {
             facts.state_db = self.state_db.as_deref();
             facts.project_is_run = project_is_run;
             let explanation = explain_failure(&facts);
+            if check.covers.is_empty() {
+                explained.unattached.push(explanation);
+                continue;
+            }
             for node in &check.covers {
                 explained
                     .tests

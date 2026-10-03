@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ods_core::SchemaVersion;
-use ods_core::failure::{ErrorCategory, Suggestion, Symptom, is_code};
+use ods_core::failure::{ErrorCategory, Suggestion, Symptom, Text, is_code};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::run_events::ErrorSummary;
@@ -38,7 +38,8 @@ use crate::provider::{Contract, Provider};
 /// The `error_catalogue` contract.
 pub const ERROR_CATALOGUE: Contract = Contract {
     name: "error_catalogue",
-    // 0.2: an indexed node may say what it checks (`IndexedNode::check`, #323).
+    // 0.2: an indexed node may say what it checks (`IndexedNode::check`), and a pattern
+    // may offer a step for running it again (`PatternMatch::rerun`) (#323).
     version: SchemaVersion::new(0, 2),
 };
 
@@ -87,6 +88,24 @@ pub struct PatternMatch {
     /// identifier-shaped names are kept ([`is_code`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// A step for when what failed runs again, with an argument for the engine (#323).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun: Option<Rerun>,
+}
+
+/// A step that runs what failed again with one more argument for the engine, passed
+/// through after `--` (#323): e.g. dbt's `--store-failures`, which keeps a failed test's
+/// rows in a table to look at. The catalogue knows the engine's argument, not ODS's
+/// command or the node: the host builds the command for the node it would run again
+/// (e.g. `ods state test --select orders -- --store-failures`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct Rerun {
+    /// What it does, for people; the host's command follows it.
+    pub text: Text,
+    /// The engine's argument; always [code](is_code).
+    pub passthrough: String,
 }
 
 impl PatternMatch {
@@ -98,6 +117,7 @@ impl PatternMatch {
             category: symptom.category(),
             suggestions: Vec::new(),
             subject: None,
+            rerun: None,
         }
     }
 
@@ -119,6 +139,17 @@ impl PatternMatch {
     #[must_use]
     pub fn suggest(mut self, suggestion: Suggestion) -> Self {
         self.suggestions.push(suggestion);
+        self
+    }
+
+    /// Offers running it again with the engine's argument `passthrough`, which does
+    /// what `text` says. An argument that isn't [code](is_code) is dropped.
+    #[must_use]
+    pub fn rerun_with(mut self, text: Text, passthrough: &str) -> Self {
+        self.rerun = is_code(passthrough).then(|| Rerun {
+            text,
+            passthrough: passthrough.to_owned(),
+        });
         self
     }
 }
@@ -185,6 +216,11 @@ pub struct CheckTarget {
     /// The node it is declared on, by id, when the project says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// Whether the project declares it as a test of its own (a singular test, named by
+    /// its file), rather than an instance of a generic test. Only a singular test's
+    /// name may be shown: a generic test's may be made of its arguments.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub singular: bool,
 }
 
 impl CheckTarget {
@@ -196,7 +232,15 @@ impl CheckTarget {
             test: keep(test),
             column: keep(column),
             node: keep(node),
+            singular: false,
         }
+    }
+
+    /// Says it is a singular test: one of its own, not a generic test's instance.
+    #[must_use]
+    pub fn singular(mut self) -> Self {
+        self.singular = true;
+        self
     }
 }
 

@@ -1785,6 +1785,31 @@ fn failed_tests(b: &mut String, nodes: &[NodeStatsView], root: &str, compact: bo
     b.push_str("</div>");
 }
 
+/// Failed tests under no node the run shows (#323): the engine didn't say what they
+/// check, or they check nodes the run didn't run. Listed for the run, each explained
+/// in full (there is no node row to link to), named by what they test.
+fn run_failed_tests(
+    b: &mut String,
+    tests: &[ods_core::failure::ErrorExplanation],
+    nodes: &[NodeStatsView],
+) {
+    if tests.is_empty() {
+        return;
+    }
+    b.push_str(
+        r#"<div class="st-side-sec" id="failed-tests" tabindex="-1"><h3 class="st-label">Failed tests</h3>"#,
+    );
+    for e in tests {
+        let _ = write!(
+            b,
+            r#"<div class="st-failed-node"><span class="st-bar" aria-hidden="true"></span>{}</div>"#,
+            e.check().map_or_else(|| "A test".to_owned(), check_label),
+        );
+        explanation_box(b, e, None, nodes);
+    }
+    b.push_str("</div>");
+}
+
 /// A failed test, for people, by what it tests: `<code>not_null</code> test on
 /// <code>orders.customer_id</code>`, escaped.
 fn check_label(check: &ods_core::failure::FailedCheck) -> String {
@@ -3058,6 +3083,7 @@ fn run_side(b: &mut String, view: &RunPageView, nodes_tab: bool) {
     );
     // On the Nodes tab the full explanation is in the table: the aside links to it.
     failed_nodes(b, &view.nodes, "../../", nodes_tab);
+    run_failed_tests(b, &view.failed_tests, &view.nodes);
     b.push_str(r#"<div class="st-side-sec" id="built" tabindex="-1"><h2>Built in this run</h2>"#);
     if view.built.is_empty() {
         b.push_str(if run.snapshot.is_some() {

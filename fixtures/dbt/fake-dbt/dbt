@@ -13,6 +13,10 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
                  [default: 1] (#323)
   FAKE_DBT_FAIL_TEST_MESSAGE  the message a failing test gives [default: dbt's own,
                  `Got <rows> results, configured to fail if != 0`] (#323)
+  FAKE_DBT_EXTRA_TEST  JSON file with a data test's manifest node as dbt wrote it (e.g. a
+                 recorded `accepted-values-node.json`, whose name and id hold the values
+                 it accepts), added to the manifest over a copy of
+                 `not_null_orders_order_id` for the fields it doesn't have (#323)
   FAKE_DBT_SKIP_TEST  comma-separated test names reported as skipped (as after --fail-fast)
   FAKE_DBT_LOG   file to append the ids of built nodes to, one per line
   FAKE_DBT_EXIT  exit with this status after writing nothing (e.g. a connection failure)
@@ -261,6 +265,15 @@ def add_sources(manifest):
         nodes[f"model.jaffle_ods.{reader}"]["depends_on"]["nodes"].append(source_id)
 
 
+def add_test(manifest, path):
+    """FAKE_DBT_EXTRA_TEST: a recorded test node, over another test's for what it lacks."""
+    with open(path) as f:
+        recorded = json.load(f)
+    test = json.loads(json.dumps(manifest["nodes"]["test.jaffle_ods.not_null_orders_order_id.cf6c17daed"]))
+    test.update(recorded)
+    manifest["nodes"][test["unique_id"]] = test
+
+
 def loaded_at():
     """FAKE_DBT_LOADED_AT, by source name."""
     pairs = (p.split("=", 1) for p in os.environ.get("FAKE_DBT_LOADED_AT", "").split(",") if "=" in p)
@@ -388,6 +401,8 @@ def main():
         manifest["metadata"]["adapter_type"] = os.environ["FAKE_DBT_ADAPTER"]
     if os.environ.get("FAKE_DBT_SOURCES"):
         add_sources(manifest)
+    if os.environ.get("FAKE_DBT_EXTRA_TEST"):
+        add_test(manifest, os.environ["FAKE_DBT_EXTRA_TEST"])
     if os.environ.get("FAKE_DBT_RAW_CODE"):
         name, path = os.environ["FAKE_DBT_RAW_CODE"].split("=", 1)
         with open(path) as f:

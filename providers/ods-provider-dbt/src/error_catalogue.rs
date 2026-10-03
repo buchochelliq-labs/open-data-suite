@@ -363,6 +363,13 @@ fn steps(found: PatternMatch) -> PatternMatch {
             Suggestion::new(Text::new().plain("Check that dbt can connect with this profile:"))
                 .with_command("dbt debug", &[]),
         ),
+        // dbt keeps a test's failing rows in a table when asked (`--store-failures`).
+        Symptom::TestFailed => found.rerun_with(
+            Text::new().plain(
+                "See the rows that fail: run the test again, keeping them in a table in the warehouse:",
+            ),
+            "--store-failures",
+        ),
         _ => found,
     }
 }
@@ -731,10 +738,12 @@ fn check_target(node: &crate::ManifestNode) -> CheckTarget {
                 test.attached_node.as_deref(),
             )
         }
+        // No `test_metadata`: a singular test, named by its file.
         None => match node.depends_on.as_slice() {
             [one] => CheckTarget::new(None, None, Some(one)),
             _ => CheckTarget::default(),
-        },
+        }
+        .singular(),
     }
 }
 
@@ -813,6 +822,12 @@ mod tests {
                 match (&got, want) {
                     (Classification::Recognised(m), Some(want)) => {
                         assert_eq!(m.symptom, *want, "{version} {name}: {summary:?}");
+                        // A failed test can be run again keeping its rows (#323).
+                        assert_eq!(
+                            m.rerun.as_ref().map(|r| r.passthrough.as_str()),
+                            (*want == Symptom::TestFailed).then_some("--store-failures"),
+                            "{version} {name}"
+                        );
                     }
                     (Classification::NotRecognised { category }, None) => {
                         assert_eq!(*category, ErrorCategory::Database, "{version} {name}");
@@ -983,55 +998,74 @@ mod tests {
     /// #323: a data test's kind, column and node come from the manifest; its
     /// arguments (here the values `accepted_values` accepts, one a secret) never do,
     /// and a generic test gets no compiled file (dbt names it after its arguments).
+    /// The test as each recorded dbt version declared it; a test without
+    /// `test_metadata` is singular.
     #[test]
     fn the_index_says_what_a_test_tests_without_its_arguments() {
         let dir = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/dbt/jaffle-ods/artifacts"
         );
-        let mut manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(format!("{dir}/dbt-1.10/manifest.json")).unwrap(),
-        )
-        .unwrap();
-        // The test as dbt 1.10 declared it (`capture-errors.sh`, accepted-values), over
-        // another test's node for the fields the scenario didn't keep.
-        let recorded: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(format!("{dir}/dbt-1.10-errors/accepted-values-node.json"))
+        for version in VERSIONS {
+            let mut manifest: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(format!("{dir}/dbt-1.10/manifest.json")).unwrap(),
+            )
+            .unwrap();
+            // The test as dbt declared it (`capture-errors.sh`, accepted-values), over
+            // another test's node for the fields the scenario didn't keep.
+            let recorded: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(format!(
+                    "{dir}/dbt-{version}-errors/accepted-values-node.json"
+                ))
                 .unwrap(),
-        )
-        .unwrap();
-        let nodes = manifest["nodes"].as_object_mut().unwrap();
-        let mut node = nodes["test.jaffle_ods.not_null_orders_order_id.cf6c17daed"].clone();
-        for (key, value) in recorded.as_object().unwrap() {
-            node[key] = value.clone();
-        }
-        let id = recorded["unique_id"].as_str().unwrap().to_owned();
-        nodes.insert(id.clone(), node);
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), manifest.to_string()).unwrap();
-        let index = project_index(&crate::Manifest::read(file.path()).unwrap(), Some("target"));
+            )
+            .unwrap();
+            let nodes = manifest["nodes"].as_object_mut().unwrap();
+            let mut node = nodes["test.jaffle_ods.not_null_orders_order_id.cf6c17daed"].clone();
+            for (key, value) in recorded.as_object().unwrap() {
+                node[key] = value.clone();
+            }
+            let id = recorded["unique_id"].as_str().unwrap().to_owned();
+            assert!(id.contains(SENTINEL), "{version}: {id}");
+            nodes.insert(id.clone(), node);
+            // A singular test: its own SQL file, no `test_metadata`.
+            let mut singular = nodes["test.jaffle_ods.unique_orders_order_id.fed79b3a6e"].clone();
+            singular.as_object_mut().unwrap().remove("test_metadata");
+            singular["name"] = "only_placed_orders".into();
+            singular["unique_id"] = "test.jaffle_ods.only_placed_orders".into();
+            singular["original_file_path"] = "tests/only_placed_orders.sql".into();
+            nodes.insert("test.jaffle_ods.only_placed_orders".to_owned(), singular);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), manifest.to_string()).unwrap();
+            let index = project_index(&crate::Manifest::read(file.path()).unwrap(), Some("target"));
 
-        let test = &index.nodes[&id];
-        assert_eq!(
-            test.check,
-            Some(CheckTarget::new(
-                Some("accepted_values"),
-                Some("status"),
-                Some("model.jaffle_ods.orders")
-            ))
-        );
-        assert_eq!(test.compiled_file, None);
-        let check = serde_json::to_string(&test.check).unwrap();
-        assert!(!check.contains(SENTINEL), "{check}");
-        // A model isn't a check; a test from dbt's own fixture is.
-        assert_eq!(index.nodes["model.jaffle_ods.orders"].check, None);
-        assert_eq!(
-            index.nodes["test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d"]
+            let test = &index.nodes[&id];
+            assert_eq!(
+                test.check,
+                Some(CheckTarget::new(
+                    Some("accepted_values"),
+                    Some("status"),
+                    Some("model.jaffle_ods.orders")
+                )),
+                "{version}"
+            );
+            assert_eq!(test.compiled_file, None, "{version}");
+            let check = serde_json::to_string(&test.check).unwrap();
+            assert!(!check.contains(SENTINEL), "{version}: {check}");
+            // A model isn't a check; a test from dbt's own fixture is, and a generic one.
+            assert_eq!(index.nodes["model.jaffle_ods.orders"].check, None);
+            let not_null = index.nodes["test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d"]
                 .check
                 .as_ref()
-                .and_then(|c| c.column.as_deref()),
-            Some("customer_id")
-        );
+                .unwrap();
+            assert_eq!(not_null.column.as_deref(), Some("customer_id"));
+            assert!(!not_null.singular && !test.check.as_ref().unwrap().singular);
+            assert_eq!(
+                index.nodes["test.jaffle_ods.only_placed_orders"].check,
+                Some(CheckTarget::new(None, None, Some("model.jaffle_ods.orders")).singular()),
+                "{version}"
+            );
+        }
     }
 
     #[test]

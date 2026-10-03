@@ -7,7 +7,7 @@ expression: "redact(&serde_json::to_string_pretty(failure).unwrap())"
     "major": 1,
     "minor": 1
   },
-  "node": "test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d",
+  "node": "check-62fd3f12487f",
   "check": {
     "covers": [
       "model.jaffle_ods.customers"
