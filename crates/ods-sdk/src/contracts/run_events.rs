@@ -299,6 +299,17 @@ impl TestCounts {
         };
         *count = count.saturating_add(1);
     }
+
+    /// Takes back one check that ended as `status`, as [`add`](Self::add) counted it.
+    fn remove(&mut self, status: CheckStatus) {
+        let count = match status {
+            CheckStatus::Passed => &mut self.passed,
+            CheckStatus::Failed => &mut self.failed,
+            CheckStatus::Warned => &mut self.warned,
+            CheckStatus::Skipped | CheckStatus::Unknown => &mut self.skipped,
+        };
+        *count = count.saturating_sub(1);
+    }
 }
 
 /// A failed node's error, safe to keep and show: its kind and the first line of the
@@ -920,8 +931,19 @@ impl RunSummary {
     }
 
     /// A check finished: it is kept (its latest outcome), and counted on every node it
-    /// covers that the run knows.
+    /// covers that the run knows. A check that finishes again (a correction) replaces
+    /// its earlier outcome in those counts too, so each check is counted once.
     fn check_finished(&mut self, index: &BTreeMap<String, usize>, summary: CheckSummary) {
+        if let Some(earlier) = self.checks.iter().find(|c| c.check == summary.check) {
+            for node in &earlier.covers {
+                if let Some(tests) = index
+                    .get(node)
+                    .and_then(|&i| self.nodes[i].stats.tests.as_mut())
+                {
+                    tests.remove(earlier.status);
+                }
+            }
+        }
         for node in &summary.covers {
             if let Some(&i) = index.get(node) {
                 self.nodes[i]
@@ -1562,5 +1584,39 @@ mod tests {
             (CheckStatus::Failed, Some(3))
         );
         assert_eq!(summary.covers, ["a"]);
+        // Counted once, as it ended: the correction replaces the skip on its node.
+        let tests = run.get("a").unwrap().stats.tests.unwrap();
+        assert_eq!((tests.failed, tests.skipped), (1, 0), "{tests:?}");
+
+        // A correction that covers another node moves the count there.
+        let moved = |covers: &[&str], status| {
+            event(
+                10,
+                RunEventKind::CheckFinished {
+                    check: "test.a".into(),
+                    covers: covers.iter().map(|c| (*c).to_owned()).collect(),
+                    status,
+                    failures: None,
+                    error: None,
+                },
+            )
+        };
+        let events = [
+            event(
+                0,
+                RunEventKind::RunStarted {
+                    nodes: vec!["a".into(), "b".into()],
+                    mode: ExecutionMode::Test,
+                    live: true,
+                },
+            ),
+            moved(&["a"], CheckStatus::Passed),
+            moved(&["b"], CheckStatus::Failed),
+        ];
+        let run = RunSummary::from_events(&events);
+        let a = run.get("a").unwrap().stats.tests.unwrap();
+        let b = run.get("b").unwrap().stats.tests.unwrap();
+        assert_eq!((a.passed, a.failed), (0, 0), "{a:?}");
+        assert_eq!((b.passed, b.failed), (0, 1), "{b:?}");
     }
 }
