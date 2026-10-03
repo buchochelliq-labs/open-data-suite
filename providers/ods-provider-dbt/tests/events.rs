@@ -342,7 +342,7 @@ fn a_log_without_node_events_is_not_live() {
     assert_eq!(summary.run_id.as_deref(), Some(report.run_id.as_str()));
 }
 
-/// #323: real dbt 1.10 + `DuckDB` logs of two broken builds
+/// #323: real dbt 1.10, 1.11 and 1.12 + `DuckDB` logs of two broken builds
 /// (`fixtures/dbt/jaffle-ods/capture-errors.sh`): the failed node's summary keeps the
 /// line `DuckDB` reported and is recognised; a compile that stopped the project is found
 /// in what dbt printed.
@@ -353,50 +353,151 @@ fn real_failures_are_summarised_and_recognised() {
     use ods_provider_dbt::events::project_failure;
     use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue};
 
-    let log = std::fs::read_to_string(fixture("dbt-1.10-errors/missing-column.jsonl")).unwrap();
-    let nodes: Vec<RequestedNode> = log
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter(|l| l["info"]["name"] == "NodeFinished")
-        .filter_map(|l| {
-            l["data"]["node_info"]["unique_id"]
-                .as_str()
-                .map(str::to_owned)
-        })
-        .filter(|id| !is_check(id))
-        .map(|id| RequestedNode::new(id.clone(), id))
-        .collect();
-    let request = ExecutionRequest::new(nodes, ExecutionMode::Build);
-    let sink = CollectedEvents::new();
-    let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
-    for line in log.lines() {
-        bridge.line(line);
-    }
-    let run = RunSummary::from_events(&sink.events());
-    let customers = run.get("model.jaffle_ods.customers").unwrap();
-    assert_eq!(customers.stats.status, NodeRunStatus::Error);
-    let error = customers.stats.error.as_ref().unwrap();
-    assert_eq!(error.kind(), Some("Binder Error"));
-    assert_eq!(error.line(), Some(25));
-    assert!(!error.message().contains("first_name"), "{error:?}");
-    assert!(matches!(
-        DbtErrorCatalogue.classify(error),
-        Classification::Recognised(m) if m.symptom == Symptom::MissingColumn
-    ));
+    for version in ["1.10", "1.11", "1.12"] {
+        let log = std::fs::read_to_string(fixture(&format!(
+            "dbt-{version}-errors/missing-column.jsonl"
+        )))
+        .unwrap();
+        let nodes: Vec<RequestedNode> = log
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|l| l["info"]["name"] == "NodeFinished")
+            .filter_map(|l| {
+                l["data"]["node_info"]["unique_id"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .filter(|id| !is_check(id))
+            .map(|id| RequestedNode::new(id.clone(), id))
+            .collect();
+        let request = ExecutionRequest::new(nodes, ExecutionMode::Build);
+        let sink = CollectedEvents::new();
+        let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
+        for line in log.lines() {
+            bridge.line(line);
+        }
+        let run = RunSummary::from_events(&sink.events());
+        let customers = run.get("model.jaffle_ods.customers").unwrap();
+        assert_eq!(customers.stats.status, NodeRunStatus::Error);
+        let error = customers.stats.error.as_ref().unwrap();
+        assert_eq!(error.kind(), Some("Binder Error"));
+        // dbt 1.11 and 1.12 put the failing line one earlier than 1.10 here.
+        let line = if version == "1.10" { 25 } else { 24 };
+        assert_eq!(error.line(), Some(line), "{version}");
+        assert!(!error.message().contains("first_name"), "{error:?}");
+        assert!(matches!(
+            DbtErrorCatalogue.classify(error),
+            Classification::Recognised(m) if m.symptom == Symptom::MissingColumn
+        ));
 
-    // `dbt compile` stopped at the undefined macro: what people were shown holds it.
-    let log = std::fs::read_to_string(fixture("dbt-1.10-errors/unknown-macro.jsonl")).unwrap();
-    let request = ExecutionRequest::new(Vec::new(), ExecutionMode::Build);
-    let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
-    let shown: Vec<String> = log
-        .lines()
-        .filter_map(|l| bridge.line(l))
-        .map(|l| l.text)
-        .collect();
-    let failure = project_failure(&shown.join("\n")).unwrap();
-    assert_eq!(failure.node_name.as_deref(), Some("stg_payments"));
-    assert!(matches!(
-        DbtErrorCatalogue.classify(&failure.summary),
-        Classification::Recognised(m) if m.symptom == Symptom::UnknownMacro
-    ));
+        // `dbt compile` stopped at the undefined macro: what people were shown holds it.
+        let log = std::fs::read_to_string(fixture(&format!(
+            "dbt-{version}-errors/unknown-macro.jsonl"
+        )))
+        .unwrap();
+        let request = ExecutionRequest::new(Vec::new(), ExecutionMode::Build);
+        let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
+        let shown: Vec<String> = log
+            .lines()
+            .filter_map(|l| bridge.line(l))
+            .map(|l| l.text)
+            .collect();
+        let failure = project_failure(&shown.join("\n")).unwrap();
+        assert_eq!(failure.node_name.as_deref(), Some("stg_payments"));
+        assert!(matches!(
+            DbtErrorCatalogue.classify(&failure.summary),
+            Classification::Recognised(m) if m.symptom == Symptom::UnknownMacro
+        ));
+    }
+}
+
+/// Each dbt version whose errors are recorded (`capture-errors.sh`).
+const ERROR_VERSIONS: [&str; 3] = ["1.10", "1.11", "1.12"];
+
+/// #323: a real dbt build whose `accepted_values` test fails (`capture-errors.sh`,
+/// accepted-values), with each recorded version: the check finishes failed, with the
+/// rows dbt counted (`num_failures` in the log, `failures` in `run_results.json`) and
+/// its message redacted, which the catalogue recognises as a failed test. The values
+/// the test accepts (one a secret) are in dbt's id for the test, which the journal
+/// keeps as the event's `check` (as before #323); they are in nothing this adds: the
+/// count, the message, or the run's summary as it is serialized.
+#[test]
+fn a_failing_test_reports_its_failing_rows_and_message() {
+    use ods_core::failure::Symptom;
+    use ods_provider_dbt::error_catalogue::DbtErrorCatalogue;
+    use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue};
+    use ods_sdk::contracts::run_events::{CheckStatus, CheckSummary, ErrorSummary, RunEvent};
+
+    const SENTINEL: &str = "sk_live_SENTINEL_42";
+    for version in ERROR_VERSIONS {
+        let dir = format!("dbt-{version}-errors");
+        let run =
+            RunResults::read(&fixture(&format!("{dir}/accepted-values-run_results.json"))).unwrap();
+        let failing = run.results.iter().find(|r| r.raw_status == "fail").unwrap();
+        assert_eq!(failing.details.failures, Some(3), "{version}");
+        let test = failing.unique_id.clone();
+        assert!(test.contains(SENTINEL), "{version}: {test}");
+        let (request, report) = request_and_report(&run);
+        let manifest = Manifest::read(&fixture("dbt-1.10-build/manifest.json")).unwrap();
+
+        let check_of = |events: &[RunEvent]| -> CheckSummary {
+            let summary = RunSummary::from_events(events);
+            // The summary as it is shown (e.g. `ods state history --run`), whole.
+            let shown = serde_json::to_string(&summary).unwrap();
+            assert!(!shown.contains(SENTINEL), "{version}: {shown}");
+            let check = summary.check(&test).cloned().unwrap();
+            let said = format!("{:?} {:?}", check.failures, check.error);
+            assert!(!said.contains(SENTINEL), "{version}: {said}");
+            assert!(!said.to_lowercase().contains("select"), "{version}: {said}");
+            check
+        };
+        let expect = |error: Option<&ErrorSummary>| {
+            let error = error.unwrap();
+            assert_eq!(
+                error.message(),
+                "Got [value removed] results, configured to fail if != [value removed]",
+                "{version}"
+            );
+            assert!(matches!(
+                DbtErrorCatalogue.classify(error),
+                Classification::Recognised(m) if m.symptom == Symptom::TestFailed
+            ));
+        };
+
+        // Live, from dbt's log.
+        let log =
+            std::fs::read_to_string(fixture(&format!("{dir}/accepted-values.jsonl"))).unwrap();
+        let sink = CollectedEvents::new();
+        let mut bridge = Bridge::new(&sink, &request, coverage(&manifest), LogLevel::Info);
+        for line in log.lines() {
+            bridge.line(line);
+        }
+        bridge.finish(&report, &run);
+        let events = sink.events();
+        let check = check_of(&events);
+        assert_eq!(check.status, CheckStatus::Failed, "{version}");
+        assert_eq!(check.failures, Some(3), "{version}");
+        expect(check.error.as_ref());
+        // The tests that passed say nothing failed them.
+        let summary = RunSummary::from_events(&events);
+        assert!(
+            summary
+                .checks
+                .iter()
+                .filter(|c| c.status == CheckStatus::Passed)
+                .all(|c| c.failures.is_none() && c.error.is_none())
+        );
+
+        // From `run_results.json` alone.
+        let sink = CollectedEvents::new();
+        let mut bridge = Bridge::new(&sink, &request, BTreeMap::new(), LogLevel::Info);
+        bridge.finish(&report, &run);
+        let check = check_of(&sink.events());
+        assert_eq!(
+            (check.status, check.failures),
+            (CheckStatus::Failed, Some(3)),
+            "{version}"
+        );
+        expect(check.error.as_ref());
+    }
 }

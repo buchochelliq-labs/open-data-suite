@@ -4,6 +4,10 @@
 #   python3 -m venv .venv && .venv/bin/pip install "dbt-core~=1.10.0" "dbt-duckdb~=1.10.0"
 #   DBT=.venv/bin/dbt ./capture-errors.sh
 #
+# For the minors the real-dbt CI job runs, install the pinned set instead:
+#   .venv/bin/pip install --no-deps -r ../../../.github/dbt/requirements-1.12.txt
+# Recorded so far: 1.10, 1.11 and 1.12; the catalogue's tests check each.
+#
 # Each scenario breaks a fresh copy of this project in one way, runs dbt, and keeps the
 # message dbt gave: from `run_results.json` when a node failed, or from dbt's output when
 # the whole project failed (e.g. at parse). Machine-specific paths become <project_root>.
@@ -16,6 +20,10 @@
 #   - missing-column: `stg_customers` renames `first_name` to `given_name`, so
 #     `customers` fails in `dbt build`;
 #   - unknown-macro: `stg_payments` calls `cent_to_dollars`, so `dbt compile` fails.
+# A third keeps dbt's JSON log, its run_results.json and the manifest's node for a
+# generic test that fails (#323):
+#   - accepted-values: an `accepted_values` test on `orders.status` that accepts only
+#     `completed` and a secret sentinel, so it fails on the other statuses.
 #
 # Everything runs locally against DuckDB; no network is used by dbt itself.
 set -euo pipefail
@@ -135,6 +143,20 @@ for r in run["results"]:
 PY
 scenario test-failure build \
   "mkdir -p tests && printf \"select * from {{ ref('stg_orders') }} where status <> 'placed'\n\" > tests/only_placed_orders.sql"
+scenario accepted-values build \
+  "python3 -c \"p='models/schema.yml'; s=open(p).read(); s=s.replace('      - {name: status, data_type: varchar}', '      - name: status\\n        data_type: varchar\\n        data_tests:\\n          - accepted_values:\\n              arguments:\\n                values: [completed, sk_live_SENTINEL_42]'); open(p, 'w').write(s)\""
+keep_log accepted-values
+python3 - "$work/accepted-values" "$out" <<'PY'
+import json, pathlib, sys
+dir, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+root = str(dir)
+run = (dir / "target" / "run_results.json").read_text().replace(root, "<project_root>")
+(out / "accepted-values-run_results.json").write_text(run)
+m = json.loads((dir / "target" / "manifest.json").read_text())
+test = next(n for n in m["nodes"].values() if n["resource_type"] == "test" and n["name"].startswith("accepted_values_orders_status"))
+keep = {k: test[k] for k in ("unique_id", "name", "resource_type", "original_file_path", "path", "fqn", "test_metadata", "column_name", "attached_node", "depends_on")}
+(out / "accepted-values-node.json").write_text(json.dumps(keep, indent=2, sort_keys=True) + "\n")
+PY
 
 python3 - "$work/messages.jsonl" "$out/errors.json" <<'PY'
 import json, sys

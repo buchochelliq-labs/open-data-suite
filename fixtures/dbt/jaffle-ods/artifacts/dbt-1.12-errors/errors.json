@@ -1,0 +1,86 @@
+[
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model customers (models/marts/customers.sql)\n  Binder Error: Values list \"c\" does not have a column named \"first_name\"\n  \n  LINE 24:     c.first_name,\n               ^",
+    "name": "missing-column",
+    "node": "model.jaffle_ods.customers"
+  },
+  {
+    "command": "dbt compile",
+    "message": "[\u001b[31mERROR\u001b[0m]: Encountered an error:\nRuntime Error\n  Compilation Error in model stg_payments (models/staging/stg_payments.sql)\n    'cent_to_dollars' is undefined. This can happen when calling a macro that does not exist. Check for typos and/or install package dependencies with \"dbt deps\".",
+    "name": "unknown-macro",
+    "node": null
+  },
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model customers (models/marts/customers.sql)\n  Binder Error: Referenced column \"order_ref\" not found in FROM clause!\n  Candidate bindings: \"order_date\", \"order_id\", \"customer_id\"\n  \n  LINE 15:         count(order_ref) as number_of_orders,\n                         ^",
+    "name": "unqualified-column",
+    "node": "model.jaffle_ods.customers"
+  },
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model broken (models/marts/broken.sql)\n  Catalog Error: Table with name no_such_table does not exist!\n  Did you mean \"duckdb_tables\"?\n  \n  LINE 10:       select * from main.no_such_table\n                               ^",
+    "name": "missing-relation",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt build",
+    "message": "[\u001b[31mERROR\u001b[0m]: Encountered an error:\nCompilation Error\n  Model 'model.jaffle_ods.broken' (models/marts/broken.sql) depends on a node named 'no_such_model' which was not found",
+    "name": "missing-ref",
+    "node": null
+  },
+  {
+    "command": "dbt build",
+    "message": "[\u001b[31mERROR\u001b[0m]: Encountered an error:\nCompilation Error in model broken (models/marts/broken.sql)\n  unexpected '}', expected ')'\n    line 1\n      select * from {{ ref('orders' }}",
+    "name": "template-syntax",
+    "node": null
+  },
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model broken (models/marts/broken.sql)\n  Conversion Error: Could not convert string 'sk_live_SENTINEL_42' to INT32\n  \n  LINE 10:       select cast('sk_live_SENTINEL_42' as integer) as id\n                        ^",
+    "name": "type-mismatch",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model broken (models/marts/broken.sql)\n  Catalog Error: Scalar Function with name no_such_function does not exist!\n  Did you mean \"json_contains\"?\n  \n  LINE 10:       select no_such_function(order_id) as x from \"jaffle_ods\".\"main...\n                        ^",
+    "name": "missing-function",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt build",
+    "message": "[\u001b[31mERROR\u001b[0m]: Encountered an error:\nCompilation Error\n  dbt expects 1 package(s) based on packages specified in packages.yml, but found only 0 package(s) installed in dbt_packages. Run \"dbt deps\" to install package dependencies.",
+    "name": "packages-missing",
+    "node": null
+  },
+  {
+    "command": "dbt build",
+    "message": "[\u001b[31mERROR\u001b[0m]: Encountered an error:\nRuntime Error\n  Could not find profile named 'no_such_profile'",
+    "name": "profile-missing",
+    "node": null
+  },
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model customer_segments (models/marts/customer_segments.py)\n  Python model failed:\n  Traceback (most recent call last):\n    File \"<site-packages>/dbt/adapters/duckdb/environments/__init__.py\", line 286, in run_python_job\n      df = module.model(dbt, con)\n           ^^^^^^^^^^^^^^^^^^^^^^\n    File \"<temporary file>.py\", line 6, in model\n      raise KeyError(\"sk_live_SENTINEL_42\")\n  KeyError: 'sk_live_SENTINEL_42'\n  ",
+    "name": "python-exception",
+    "node": "model.jaffle_ods.customer_segments"
+  },
+  {
+    "command": "dbt build",
+    "message": "Runtime Error in model orders (models/marts/orders.sql)\n  Dependency Error: Cannot alter entry \"orders\" because there are entries that depend on it.",
+    "name": "dependent-objects",
+    "node": "model.jaffle_ods.orders"
+  },
+  {
+    "command": "dbt build",
+    "message": "Got 5 results, configured to fail if != 0",
+    "name": "test-failure",
+    "node": "test.jaffle_ods.only_placed_orders"
+  },
+  {
+    "command": "dbt build",
+    "message": "Got 3 results, configured to fail if != 0",
+    "name": "accepted-values",
+    "node": "test.jaffle_ods.accepted_values_orders_status__completed__sk_live_SENTINEL_42.efdbb4986a"
+  }
+]

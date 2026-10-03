@@ -235,6 +235,10 @@ pub struct NodeStatsView {
     /// Why it failed, explained (#323, ADR-0025), when the binary gave an explainer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<ods_core::failure::ErrorExplanation>,
+    /// Its failed tests, explained (#323): a test that checks several nodes is under
+    /// each of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed_tests: Vec<ods_core::failure::ErrorExplanation>,
 }
 
 /// A duration, for people: `850ms`, `4.2s`, `2m 05s` (as `ods state run` says it).
@@ -472,6 +476,7 @@ impl JournalRun {
                         })
                         .collect(),
                     explanation: None,
+                    failed_tests: Vec::new(),
                 }
             })
             .collect()

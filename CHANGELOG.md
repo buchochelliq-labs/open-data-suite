@@ -28,6 +28,20 @@ the changelog was introduced.
   rewritten without them the first time `retry` reads it (a dry run too); one with an
   option this ODS doesn't know is removed. To clear an older file's secrets now, run
   `ods state retry --dry-run` once, or delete the file.
+- In `ods state test --output json`, a model whose test failed is no longer in
+  `failures` as a failed model (#323): the failed test is, with its own explanation
+  (`node` is the test's handle, `check-<12 hex digits>`, and `check` says what it tests).
+  A model that failed with an error of its own is still listed as before. **What to
+  do:** read failed tests from the entries with a `check` (`check.covers` names the
+  models they test) instead of looking for the model's entry.
+- `SDK_VERSION` is now 0.4 (#323): the executor contract is 0.6 (a run's
+  `check_finished` event may carry `failures`, the rows a failed check found, and
+  `error`, its redacted message), and the `error_catalogue` contract is 0.2 (a
+  `ProjectIndex` node may say what it checks, `IndexedNode::check`, including whether it
+  is a `singular` test, and a pattern may offer a step that runs what failed again with
+  an engine argument, `PatternMatch::rerun`). **What to do:** rebuild out-of-process
+  plugins against it; one that builds `RunEventKind::CheckFinished` sets the two new
+  fields (`None` when it doesn't know).
 - `SDK_VERSION` is now 0.3 (#323): the executor contract is 0.5 (an `ErrorSummary` may
   carry the `line` the engine reported), the SQL lineage analyzer contract is 0.2 (an
   opaque `QueryLineage` names the columns it couldn't resolve, `unresolved`), and there
@@ -54,6 +68,28 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- A failed test is explained (#323, ADR-0025): `ods state build`, `ods state test`
+  and `ods state history --run` say which test failed, on which column of which model,
+  and how many rows don't pass ("The `not_null` test on `customer_id` of `customers`
+  failed: 5 rows don't pass"), with what changed in the run, whether the test failed
+  before, and what to try: `ods state test --select <model> -- --store-failures` to keep
+  the failing rows, then `ods state test --select <model>`. The count comes from dbt
+  (`failures`); when dbt didn't give one, the headline says so, never `0`. A test that
+  couldn't run (e.g. a compile error in it) is explained as that error, not as failing
+  rows; a test that only warned isn't explained. A test is named by its kind, column and
+  model, never by its arguments (e.g. the values `accepted_values` accepts), which dbt
+  puts in the test's name and id. In `ods state test`, a model untested because its
+  test failed is explained by the test, not as a failed model (see **Breaking**).
+  `--output json`'s `failures` include them, with `node` (the test's handle,
+  `check-<12 hex digits>`: the same for the same test in every run, never its id) and
+  `check` (`covers`, `test`, `column`), and evidence `data` of kind `failing_rows`
+  (`rows`) and `test_target` (`test`, `column`, `node`); explanations are now
+  `schema_version` 1.1. `ods serve` shows them under each node a failed test checks
+  (`failed_tests` on each node in `/api/state/runs…`), and a failed test that checks no
+  node the run shows in a "Failed tests" section of the Run page (`failed_tests` in
+  `/api/state/runs/<run_id>`). The run journal is now format 1.1: a `check_finished`
+  that didn't pass may carry `failures` and `error` (redacted); 1.0 journals read as
+  before.
 - The live run view (#322): `ods serve`'s Lineage page shows a run as it goes
   (`/lineage?live=<run_id>`), with each node's state, time and rows, the run's progress
   and events, and each node's stats card (the Run page's, with a failed node explained).
@@ -362,6 +398,10 @@ the changelog was introduced.
   unchanged (ADR-0003).
 
 ### Fixed
+- dbt 1.12's missing-packages error ("dbt expects 1 package(s) based on packages
+  specified in packages.yml, but found only 0…") is recognised again as packages not
+  installed, with `dbt deps` to try (#323). The error catalogue is now version 2, and
+  its tests check every recorded message on dbt 1.10, 1.11 and 1.12.
 - Lineage diagnostics no longer quote the SQL they couldn't analyze. The SQL is dbt's
   compiled code, which can hold values resolved from `env_var()`, `var()` or macros,
   credentials included, and the diagnostics reach `ods lineage` output, the offline

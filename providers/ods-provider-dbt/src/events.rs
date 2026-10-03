@@ -6,8 +6,8 @@
 //! definitions:
 //! - `NodeStart`: a node started (`data.node_info.unique_id`, on `info.thread`);
 //! - `NodeFinished`: it finished, with `data.run_result`: `status`, `message`,
-//!   `timing_info` (the `compile` and `execute` steps), `thread`, `execution_time` and
-//!   `adapter_response`.
+//!   `timing_info` (the `compile` and `execute` steps), `thread`, `execution_time`,
+//!   `adapter_response` and, for a test, `num_failures`.
 //!
 //! Both are debug-level, so the executor asks for `--log-level debug` and prints only
 //! the lines at `info` and above, as dbt would have. Nothing else in a line is read or
@@ -282,12 +282,17 @@ impl<'a> Bridge<'a> {
         if is_check(&id) {
             if self.checks.insert(id.clone()) {
                 let covers = self.covers(&id);
+                let status = check_status(status);
+                let details = result.map(log_details).unwrap_or_default();
+                let (failures, error) = check_outcome(status, &details);
                 self.emit(
                     ts,
                     RunEventKind::CheckFinished {
                         check: id,
                         covers,
-                        status: check_status(status),
+                        status,
+                        failures,
+                        error,
                     },
                 );
             }
@@ -376,12 +381,16 @@ impl<'a> Bridge<'a> {
             if is_check(&result.unique_id) && !self.checks.contains(&result.unique_id) {
                 self.checks.insert(result.unique_id.clone());
                 let covers = self.covers(&result.unique_id);
+                let status = check_status(&result.raw_status);
+                let (failures, error) = check_outcome(status, &result.details);
                 self.emit(
                     Some(at),
                     RunEventKind::CheckFinished {
                         check: result.unique_id.clone(),
                         covers,
-                        status: check_status(&result.raw_status),
+                        status,
+                        failures,
+                        error,
                     },
                 );
             }
@@ -469,6 +478,22 @@ fn check_status(status: &str) -> CheckStatus {
     }
 }
 
+/// What a check that didn't pass reports (#323): the rows its query returned, and
+/// dbt's message, summarised as a node's error is (values removed). Nothing for a
+/// check that passed, was skipped, or ended in a way dbt didn't say.
+fn check_outcome(
+    status: CheckStatus,
+    details: &ResultDetails,
+) -> (Option<u64>, Option<ErrorSummary>) {
+    match status {
+        CheckStatus::Failed | CheckStatus::Warned => (
+            details.failures,
+            details.message.as_deref().and_then(error_summary),
+        ),
+        _ => (None, None),
+    }
+}
+
 /// A log event's `run_result`, read as `run_results.json`'s fields are.
 fn log_details(result: &Value) -> ResultDetails {
     let text = |key: &str| {
@@ -500,6 +525,10 @@ fn log_details(result: &Value) -> ResultDetails {
         thread: text("thread"),
         adapter_response: result.get("adapter_response").cloned(),
         message: text("message"),
+        failures: result
+            .get("num_failures")
+            .and_then(whole_number)
+            .and_then(|f| u64::try_from(f).ok()),
     }
 }
 

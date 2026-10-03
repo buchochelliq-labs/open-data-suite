@@ -13,7 +13,7 @@ use crate::KIND;
 /// A catalogue of a few fake patterns, for tests of what hosts do with a
 /// classification. A message recognised by `(phrase, symptom)` starts with the
 /// phrase, in any case; the kind `Query Error` is a database error and `Build Error`
-/// a compilation error.
+/// a compilation error. A failed test can be run again with `--keep-failing-rows`.
 #[derive(Debug, Clone)]
 pub struct FakeErrorCatalogue {
     patterns: Vec<(&'static str, Symptom)>,
@@ -29,6 +29,7 @@ impl Default for FakeErrorCatalogue {
                 ("no such node", Symptom::MissingRef),
                 ("not allowed", Symptom::PermissionDenied),
                 ("took too long", Symptom::QueryTimeout),
+                ("rows failed the test", Symptom::TestFailed),
             ],
         }
     }
@@ -77,6 +78,12 @@ impl ErrorCatalogue for FakeErrorCatalogue {
                     found = found.suggest(
                         Suggestion::new(Text::new().plain("Install the fake packages."))
                             .with_command("fake deps", &[]),
+                    );
+                }
+                if *symptom == Symptom::TestFailed {
+                    found = found.rerun_with(
+                        Text::new().plain("See the rows that fail: test it again, keeping them:"),
+                        "--keep-failing-rows",
                     );
                 }
                 Classification::Recognised(found)

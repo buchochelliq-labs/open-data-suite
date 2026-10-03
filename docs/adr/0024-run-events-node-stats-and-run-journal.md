@@ -221,6 +221,30 @@ snapshot the run commits.
   someone needs another (`state.runs.keep`), and `ods state history` says when a run's
   journal is gone.
 
+### A check's failing rows and message (amended 2026-10-02, #323)
+`check_finished` gains two optional fields, so `RunEvent`'s `schema_version` is **1.1**
+and the executor contract **0.6** (SDK 0.4):
+- `failures`: how many rows the check found that don't pass, when the engine said (dbt's
+  `failures` in `run_results.json`, `num_failures` in a `NodeFinished` log event). It is
+  a count, not data, so it may be shown; `None` when not reported, and readers treat a
+  `0` on a failed check as "not said", never as zero rows.
+- `error`: the engine's message for a check that failed, warned or errored, as an
+  `ErrorSummary` made by `ErrorSummary::from_message` (values, numbers and SQL
+  removed), like a node's error; `RunEvent::sanitized` redacts it again.
+
+Both are set only for a check that didn't pass (failed or warned): a check that
+passed, was skipped or whose outcome is unknown carries no `error` and no `failures`,
+whatever the engine said. The conformance suite checks that a passed check carries
+neither and that a check's message quotes nothing. Both are `#[serde(default)]` and
+left out when `None`: a 1.0 journal reads as before, with neither, and a 1.0 reader of a
+1.1 line (same major) ignores them. `RunSummary` keeps each check's latest outcome
+(`checks`), so hosts can explain failed tests (ADR-0025), but never serializes it.
+A check is still identified by the engine's id in the journal: dbt builds a generic
+test's id from its arguments (an `accepted_values` test's id names the values it
+accepts), so the id can hold a value. Explanations, `ods state history --run` and the
+dashboard's run views show a check's handle instead (`check-<12 hex digits>`, ADR-0025);
+the journal itself (and the live stream of it) is unchanged, a follow-up.
+
 ### The live stream (`ods serve`, amended 2026-09-30)
 `ods serve` shows a run while it goes by tailing its journal; the executor, the CLI and
 the journal format are unchanged. ods-web reads the journal through the shared reader

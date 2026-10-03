@@ -72,6 +72,10 @@ pub struct ResultDetails {
     pub adapter_response: Option<serde_json::Value>,
     /// dbt's message: a status (`INSERT 6`) or, for an error, its text.
     pub message: Option<String>,
+    /// For a test, how many rows its query returned (`failures` in
+    /// `run_results.json`, `num_failures` in a log event's `run_result`), when dbt
+    /// said; `None` for a node that isn't a test, or a test that errored (#323).
+    pub failures: Option<u64>,
 }
 
 /// Seconds as dbt writes them (`0.108`) in whole milliseconds; `None` unless finite and
@@ -154,6 +158,9 @@ struct RawNodeResult {
     adapter_response: Option<serde_json::Value>,
     #[serde(default)]
     message: Option<String>,
+    /// Run results v4 and later (dbt 1.0+): rows a test returned; `null` otherwise.
+    #[serde(default)]
+    failures: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -212,6 +219,7 @@ impl RunResults {
                     thread: r.thread_id,
                     adapter_response: r.adapter_response,
                     message: r.message,
+                    failures: r.failures.and_then(|f| u64::try_from(f).ok()),
                 };
                 NodeResult {
                     status: RunStatus::parse(&r.status),

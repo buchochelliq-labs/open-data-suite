@@ -8,7 +8,8 @@
 //!   calling a macro that does not exist`, `depends on a node named … which was not
 //!   found`, `dbt found N package(s) specified in packages.yml, but only M …`;
 //! - `DuckDB`'s error kinds and messages (MIT), as dbt-duckdb 1.10 reports them: every one
-//!   is recorded from a real run in `fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-errors`;
+//!   is recorded from real runs of dbt 1.10, 1.11 and 1.12 in
+//!   `fixtures/dbt/jaffle-ods/artifacts/dbt-<version>-errors`;
 //! - PostgreSQL's documented messages (`column … does not exist`, `relation … does not
 //!   exist`, `permission denied for …`);
 //! - Apache Spark's public error conditions (`[UNRESOLVED_COLUMN…]`,
@@ -18,13 +19,16 @@
 //! Anything else is not recognised: the catalogue gives only the category dbt's (or the
 //! adapter's) kind implies, and ODS doesn't guess a cause.
 //!
-//! [`project_index`] describes a project for explanations: each node's files and the
-//! macros its code calls that the manifest doesn't define.
+//! [`project_index`] describes a project for explanations: each node's files, the
+//! macros its code calls that the manifest doesn't define, and what each data test
+//! tests (its `test_metadata` name, `column_name` and `attached_node`; never its
+//! `kwargs`, which hold values such as the ones `accepted_values` accepts).
 
 use ods_core::failure::{ErrorCategory, Suggestion, Symptom, Text, is_code};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::error_catalogue::{
-    CatalogueInfo, Classification, ErrorCatalogue, IndexedNode, NameAt, PatternMatch, ProjectIndex,
+    CatalogueInfo, CheckTarget, Classification, ErrorCatalogue, IndexedNode, NameAt, PatternMatch,
+    ProjectIndex,
 };
 use ods_sdk::contracts::run_events::ErrorSummary;
 use ods_sdk::{Provider, ProviderInfo};
@@ -32,7 +36,7 @@ use ods_sdk::{Provider, ProviderInfo};
 use crate::{Manifest, ResourceType};
 
 /// The catalogue's version: bumped whenever a pattern is added, changed or removed.
-pub const CATALOGUE_VERSION: &str = "1";
+pub const CATALOGUE_VERSION: &str = "2";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly), and phrases its
 /// lowercased message must hold, all of them.
@@ -80,6 +84,16 @@ const PATTERNS: &[Pattern] = &[
         Symptom::PackagesMissing,
         None,
         &["specified in packages.yml, but only", "installed in"],
+    ),
+    // dbt 1.12's wording of the same failure (recorded in `dbt-1.12-errors`).
+    p(
+        "dbt-packages-expected",
+        Symptom::PackagesMissing,
+        None,
+        &[
+            "based on packages specified in packages.yml, but found only",
+            "installed in",
+        ],
     ),
     p(
         "dbt-profile-not-found",
@@ -348,6 +362,13 @@ fn steps(found: PatternMatch) -> PatternMatch {
         Symptom::ProfileNotFound | Symptom::CredentialsMissing => found.suggest(
             Suggestion::new(Text::new().plain("Check that dbt can connect with this profile:"))
                 .with_command("dbt debug", &[]),
+        ),
+        // dbt keeps a test's failing rows in a table when asked (`--store-failures`).
+        Symptom::TestFailed => found.rerun_with(
+            Text::new().plain(
+                "See the rows that fail: run the test again, keeping them in a table in the warehouse:",
+            ),
+            "--store-failures",
         ),
         _ => found,
     }
@@ -668,12 +689,14 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
             continue;
         };
         let file = node.original_file_path.as_deref();
+        // A generic test compiles to a file named after the test (and so, maybe, its
+        // arguments) under its YAML file: no compiled file is named for it.
         let compiled = match (target, node.fqn.first(), file) {
             (Some(target), Some(package), Some(file))
                 if matches!(
                     node.resource_type,
-                    ResourceType::Model | ResourceType::Snapshot | ResourceType::Test
-                ) =>
+                    ResourceType::Model | ResourceType::Snapshot
+                ) || (node.resource_type == ResourceType::Test && node.test.is_none()) =>
             {
                 Some(format!("{target}/compiled/{package}/{file}"))
             }
@@ -687,15 +710,41 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
             .into_iter()
             .filter(|c| is_code(&c.name) && !defined(&c.name, &index, &packaged, &namespaces))
             .collect();
-        index = index.with_node(
-            node.unique_id.clone(),
-            IndexedNode::new(name)
-                .in_file(file, compiled.as_deref())
-                .in_language(node.language.as_deref())
-                .calling_undefined(undefined),
-        );
+        let mut indexed = IndexedNode::new(name)
+            .in_file(file, compiled.as_deref())
+            .in_language(node.language.as_deref())
+            .calling_undefined(undefined);
+        if node.resource_type == ResourceType::Test {
+            indexed = indexed.checking(check_target(node));
+        }
+        index = index.with_node(node.unique_id.clone(), indexed);
     }
     index
+}
+
+/// What a data test tests: a generic test's name (with its package, e.g.
+/// `dbt_utils.expression_is_true`), column and the node it is attached to; a singular
+/// test's node when it reads exactly one. Its arguments are never read.
+fn check_target(node: &crate::ManifestNode) -> CheckTarget {
+    match &node.test {
+        Some(test) => {
+            let name = match &test.namespace {
+                Some(namespace) => format!("{namespace}.{}", test.name),
+                None => test.name.clone(),
+            };
+            CheckTarget::new(
+                Some(&name),
+                test.column_name.as_deref(),
+                test.attached_node.as_deref(),
+            )
+        }
+        // No `test_metadata`: a singular test, named by its file.
+        None => match node.depends_on.as_slice() {
+            [one] => CheckTarget::new(None, None, Some(one)),
+            _ => CheckTarget::default(),
+        }
+        .singular(),
+    }
 }
 
 #[cfg(test)]
@@ -705,11 +754,15 @@ mod tests {
     use super::*;
     use crate::events::{error_summary, project_failure};
 
-    /// The messages real dbt 1.10 + `DuckDB` runs gave (`capture-errors.sh`).
-    fn recorded() -> Vec<(String, Option<String>, String)> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/dbt/jaffle-ods/artifacts/dbt-1.10-errors/errors.json"
+    /// The dbt minors whose messages are recorded (`capture-errors.sh`): 1.10, and the
+    /// two the real-dbt CI job runs.
+    const VERSIONS: [&str; 3] = ["1.10", "1.11", "1.12"];
+
+    /// The messages real dbt `version` + `DuckDB` runs gave (`capture-errors.sh`).
+    fn recorded(version: &str) -> Vec<(String, Option<String>, String)> {
+        let path = format!(
+            "{}/../../fixtures/dbt/jaffle-ods/artifacts/dbt-{version}-errors/errors.json",
+            env!("CARGO_MANIFEST_DIR")
         );
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -750,78 +803,103 @@ mod tests {
             ("python-exception", Some(Symptom::PythonException)),
             ("dependent-objects", Some(Symptom::DependentObjects)),
             ("test-failure", Some(Symptom::TestFailed)),
+            ("accepted-values", Some(Symptom::TestFailed)),
         ];
-        let recorded = recorded();
-        assert_eq!(recorded.len(), expected.len(), "every scenario is checked");
-        for (name, node, message) in &recorded {
-            let (_, want) = expected
-                .iter()
-                .find(|(n, _)| n == name)
-                .unwrap_or_else(|| panic!("{name} isn't expected"));
-            let summary = summary_of(node.as_ref(), message);
-            let got = DbtErrorCatalogue.classify(&summary);
-            match (&got, want) {
-                (Classification::Recognised(m), Some(want)) => {
-                    assert_eq!(m.symptom, *want, "{name}: {summary:?}");
+        for version in VERSIONS {
+            let recorded = recorded(version);
+            assert_eq!(
+                recorded.len(),
+                expected.len(),
+                "{version}: every scenario is checked"
+            );
+            for (name, node, message) in &recorded {
+                let (_, want) = expected
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .unwrap_or_else(|| panic!("{version} {name} isn't expected"));
+                let summary = summary_of(node.as_ref(), message);
+                let got = DbtErrorCatalogue.classify(&summary);
+                match (&got, want) {
+                    (Classification::Recognised(m), Some(want)) => {
+                        assert_eq!(m.symptom, *want, "{version} {name}: {summary:?}");
+                        // A failed test can be run again keeping its rows (#323).
+                        assert_eq!(
+                            m.rerun.as_ref().map(|r| r.passthrough.as_str()),
+                            (*want == Symptom::TestFailed).then_some("--store-failures"),
+                            "{version} {name}"
+                        );
+                    }
+                    (Classification::NotRecognised { category }, None) => {
+                        assert_eq!(*category, ErrorCategory::Database, "{version} {name}");
+                    }
+                    _ => panic!("{version} {name}: {summary:?} gave {got:?}"),
                 }
-                (Classification::NotRecognised { category }, None) => {
-                    assert_eq!(*category, ErrorCategory::Database, "{name}");
-                }
-                _ => panic!("{name}: {summary:?} gave {got:?}"),
+                let json = serde_json::to_string(&(&summary, &got)).unwrap();
+                assert!(!json.contains(SENTINEL), "{version} {name}: {json}");
+                // What dbt 1.12 colours in its log never reaches a summary.
+                assert!(
+                    !json.contains('\u{1b}') && !json.contains("\\u001b"),
+                    "{version} {name}: {json}"
+                );
             }
-            let json = serde_json::to_string(&(&summary, &got)).unwrap();
-            assert!(!json.contains(SENTINEL), "{name}: {json}");
         }
+    }
+
+    /// dbt 1.11 and 1.12 put the failing line one earlier than 1.10 in these models.
+    fn column_line(version: &str) -> u32 {
+        if version == "1.10" { 25 } else { 24 }
     }
 
     #[test]
     fn summaries_keep_the_line_and_a_python_exception() {
-        let recorded = recorded();
-        let get = |name: &str| {
-            let (_, node, message) = recorded.iter().find(|(n, _, _)| n == name).unwrap();
-            summary_of(node.as_ref(), message)
-        };
-        let column = get("missing-column");
-        assert_eq!(column.kind(), Some("Binder Error"));
-        assert_eq!(column.line(), Some(25));
-        assert_eq!(
-            column.message(),
-            "Binder Error: Values list [value removed] does not have a column named [value removed]"
-        );
-        let python = get("python-exception");
-        assert_eq!(
-            python.message(),
-            "Python model failed: KeyError: [value removed]"
-        );
-        assert_eq!(python.line(), Some(6));
-        let Classification::Recognised(m) = DbtErrorCatalogue.classify(&python) else {
-            panic!()
-        };
-        assert_eq!(m.subject.as_deref(), Some("KeyError"));
-        let macro_failure = project_failure(
-            &recorded
-                .iter()
-                .find(|(n, _, _)| n == "unknown-macro")
-                .unwrap()
-                .2,
-        )
-        .unwrap();
-        assert_eq!(macro_failure.node_name.as_deref(), Some("stg_payments"));
-        assert_eq!(
-            macro_failure.file.as_deref(),
-            Some("models/staging/stg_payments.sql")
-        );
-        assert_eq!(macro_failure.summary.kind(), Some("Compilation Error"));
-        let missing_ref = project_failure(
-            &recorded
-                .iter()
-                .find(|(n, _, _)| n == "missing-ref")
-                .unwrap()
-                .2,
-        )
-        .unwrap();
-        assert_eq!(missing_ref.node_name, None);
-        assert_eq!(missing_ref.summary.kind(), Some("Compilation Error"));
+        for version in VERSIONS {
+            let recorded = recorded(version);
+            let get = |name: &str| {
+                let (_, node, message) = recorded.iter().find(|(n, _, _)| n == name).unwrap();
+                summary_of(node.as_ref(), message)
+            };
+            let column = get("missing-column");
+            assert_eq!(column.kind(), Some("Binder Error"));
+            assert_eq!(column.line(), Some(column_line(version)), "{version}");
+            assert_eq!(
+                column.message(),
+                "Binder Error: Values list [value removed] does not have a column named [value removed]"
+            );
+            let python = get("python-exception");
+            assert_eq!(
+                python.message(),
+                "Python model failed: KeyError: [value removed]"
+            );
+            assert_eq!(python.line(), Some(6));
+            let Classification::Recognised(m) = DbtErrorCatalogue.classify(&python) else {
+                panic!()
+            };
+            assert_eq!(m.subject.as_deref(), Some("KeyError"));
+            let macro_failure = project_failure(
+                &recorded
+                    .iter()
+                    .find(|(n, _, _)| n == "unknown-macro")
+                    .unwrap()
+                    .2,
+            )
+            .unwrap();
+            assert_eq!(macro_failure.node_name.as_deref(), Some("stg_payments"));
+            assert_eq!(
+                macro_failure.file.as_deref(),
+                Some("models/staging/stg_payments.sql")
+            );
+            assert_eq!(macro_failure.summary.kind(), Some("Compilation Error"));
+            let missing_ref = project_failure(
+                &recorded
+                    .iter()
+                    .find(|(n, _, _)| n == "missing-ref")
+                    .unwrap()
+                    .2,
+            )
+            .unwrap();
+            assert_eq!(missing_ref.node_name, None);
+            assert_eq!(missing_ref.summary.kind(), Some("Compilation Error"));
+        }
     }
 
     #[test]
@@ -917,6 +995,79 @@ mod tests {
         assert!(orders.undefined_calls.is_empty(), "{orders:?}");
     }
 
+    /// #323: a data test's kind, column and node come from the manifest; its
+    /// arguments (here the values `accepted_values` accepts, one a secret) never do,
+    /// and a generic test gets no compiled file (dbt names it after its arguments).
+    /// The test as each recorded dbt version declared it; a test without
+    /// `test_metadata` is singular.
+    #[test]
+    fn the_index_says_what_a_test_tests_without_its_arguments() {
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/dbt/jaffle-ods/artifacts"
+        );
+        for version in VERSIONS {
+            let mut manifest: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(format!("{dir}/dbt-1.10/manifest.json")).unwrap(),
+            )
+            .unwrap();
+            // The test as dbt declared it (`capture-errors.sh`, accepted-values), over
+            // another test's node for the fields the scenario didn't keep.
+            let recorded: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(format!(
+                    "{dir}/dbt-{version}-errors/accepted-values-node.json"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            let nodes = manifest["nodes"].as_object_mut().unwrap();
+            let mut node = nodes["test.jaffle_ods.not_null_orders_order_id.cf6c17daed"].clone();
+            for (key, value) in recorded.as_object().unwrap() {
+                node[key] = value.clone();
+            }
+            let id = recorded["unique_id"].as_str().unwrap().to_owned();
+            assert!(id.contains(SENTINEL), "{version}: {id}");
+            nodes.insert(id.clone(), node);
+            // A singular test: its own SQL file, no `test_metadata`.
+            let mut singular = nodes["test.jaffle_ods.unique_orders_order_id.fed79b3a6e"].clone();
+            singular.as_object_mut().unwrap().remove("test_metadata");
+            singular["name"] = "only_placed_orders".into();
+            singular["unique_id"] = "test.jaffle_ods.only_placed_orders".into();
+            singular["original_file_path"] = "tests/only_placed_orders.sql".into();
+            nodes.insert("test.jaffle_ods.only_placed_orders".to_owned(), singular);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), manifest.to_string()).unwrap();
+            let index = project_index(&crate::Manifest::read(file.path()).unwrap(), Some("target"));
+
+            let test = &index.nodes[&id];
+            assert_eq!(
+                test.check,
+                Some(CheckTarget::new(
+                    Some("accepted_values"),
+                    Some("status"),
+                    Some("model.jaffle_ods.orders")
+                )),
+                "{version}"
+            );
+            assert_eq!(test.compiled_file, None, "{version}");
+            let check = serde_json::to_string(&test.check).unwrap();
+            assert!(!check.contains(SENTINEL), "{version}: {check}");
+            // A model isn't a check; a test from dbt's own fixture is, and a generic one.
+            assert_eq!(index.nodes["model.jaffle_ods.orders"].check, None);
+            let not_null = index.nodes["test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d"]
+                .check
+                .as_ref()
+                .unwrap();
+            assert_eq!(not_null.column.as_deref(), Some("customer_id"));
+            assert!(!not_null.singular && !test.check.as_ref().unwrap().singular);
+            assert_eq!(
+                index.nodes["test.jaffle_ods.only_placed_orders"].check,
+                Some(CheckTarget::new(None, None, Some("model.jaffle_ods.orders")).singular()),
+                "{version}"
+            );
+        }
+    }
+
     #[test]
     fn a_python_exception_as_the_kind_is_a_python_model_failure() {
         let summary = error_summary(
@@ -993,18 +1144,22 @@ mod tests {
                 ("python-exception", Some(Symptom::PythonException)),
                 ("missing-function", None),
             ];
-            let recorded = recorded();
-            names
+            VERSIONS
                 .iter()
-                .map(|(name, expected)| {
-                    let (n, node, message) = recorded.iter().find(|(n, _, _)| n == name).unwrap();
-                    let name: &'static str = Box::leak(n.clone().into_boxed_str());
-                    Sample {
-                        name,
-                        summary: summary_of(node.as_ref(), message),
-                        expected: *expected,
-                        sentinel: Some(SENTINEL),
-                    }
+                .flat_map(|version| {
+                    let recorded = recorded(version);
+                    names.iter().map(move |(name, expected)| {
+                        let (n, node, message) =
+                            recorded.iter().find(|(n, _, _)| n == name).unwrap();
+                        let name: &'static str =
+                            Box::leak(format!("{version} {n}").into_boxed_str());
+                        Sample {
+                            name,
+                            summary: summary_of(node.as_ref(), message),
+                            expected: *expected,
+                            sentinel: Some(SENTINEL),
+                        }
+                    })
                 })
                 .collect()
         }

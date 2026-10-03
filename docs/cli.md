@@ -1338,6 +1338,7 @@ stats (#322, [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md)):
 | other values | the rest of `adapter_response` (e.g. `code`, a query id), never its `_message` | not shown |
 | error | the error's kind and first line, with quoted values, numbers and SQL removed; the full text stays in `logs/dbt.log` | — |
 | tests | how many of its tests passed, failed, warned or didn't run | not run |
+| a failed test's rows | `failures` (`num_failures` in dbt's log): how many rows the test returned, a count, never the rows | — (never `0`) |
 
 The report's totals give the run's time, how many nodes built, failed or were skipped,
 and the rows written: `at least 17 (6 nodes didn't report rows)` when some didn't
@@ -1353,7 +1354,9 @@ The run's events are also appended, as they happen, to a **journal** beside the 
 database, `<state-db>.runs/<run_id>.jsonl` (`journal` in the report), under the same
 run id as `.last-run.json` and the snapshot the run records. It is one JSON event per
 line (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`,
-`run_finished`), each with its `schema_version`, and is flushed line by line, so it can
+`run_finished`), each with its `schema_version` (1.1 since a `check_finished` that
+didn't pass may carry `failures`, the rows dbt counted, and `error`, its redacted
+message; a 1.0 journal reads as before), and is flushed line by line, so it can
 be followed while the run goes. It is evidence, not state: a failed run keeps its
 journal, and nothing ODS decides reads it. It holds no SQL, no `--vars` values and no
 secrets: no options at all, and errors only as the redacted summary above. The 50 most
@@ -1421,6 +1424,50 @@ full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
   Nothing else in an explanation comes from dbt's text: the names in it come from
   ODS's own evidence.
 
+A failed **test** is explained too, under **Why it failed** (or **Why 1 node and 2
+tests failed**): which test, on which column of which model, and how many rows don't
+pass, named by what the test tests (its kind, column and model, from the manifest),
+never by the name dbt gives a generic test, which can hold its arguments:
+
+```text
+failed test: not_null on customers.customer_id
+what: The not_null test on customer_id of customers failed: 5 rows don't pass
+kind: test failure · test failed
+confidence: known pattern + evidence
+
+why ODS thinks so
+  dbt reported 5 rows that fail the test.  [run stats]
+  The project declares it as a not_null test of column customer_id on customers.  [project]
+  customers changed in this run (sql), so the test checked its new build.  [fingerprints]
+  This test failed in 2 of its last 3 runs too.  [run history]
+
+where: models/schema.yml
+
+what to try
+  1. See the rows that fail: run the test again, keeping them in a table in the warehouse:
+    $ ods state test --select customers -- --store-failures
+  2. Fix the data, the model or the test, then test customers again:
+    $ ods state test --select customers
+
+dbt said: Got [value removed] results, configured to fail if != [value removed]  Literal values and SQL removed.
+```
+
+- It is `known pattern + evidence` when dbt reported how many rows failed, `known
+  pattern` when it didn't (the headline then says dbt didn't say how many, never `0`).
+  A test's arguments (e.g. the values `accepted_values` accepts) are never shown.
+- A test that **errored** (it couldn't run, e.g. its query reads a column that doesn't
+  exist) is explained like a failed node's error, from dbt's message, never as rows
+  that failed: "The `not_null` test on `customer_id` of `customers` couldn't run".
+- A test that only **warned** (`severity: warn`) isn't explained: it failed nothing.
+- In `ods state test`, where nothing is built, a model that is untested because its
+  test failed is explained by the test, not as a failed model.
+- `--store-failures` is one of the dbt options ODS passes through after `--`; the dbt
+  provider offers it for a failed test (other engines may offer their own, or none).
+- When the run didn't build the tested model (e.g. in `ods state test`), the evidence
+  says which build of it ODS last recorded ("The last build ODS recorded for `customers`
+  is from run `…`"), not which one the test read.
+- With no message from dbt and no count, the headline is just "A test failed".
+
 When dbt fails before any node runs (e.g. `dbt compile` can't compile a model that
 calls an undefined macro), the report says `failed before any node ran: nothing was
 built or recorded` (`outcome: failed_before_running` in JSON) and explains dbt's error
@@ -1429,18 +1476,27 @@ names the run's journal, which `ods state history --run` explains.
 
 `ods serve` shows the same explanations on the Run page's Nodes tab and in the Runs side
 panel (`explanation` on each failed node in `/api/state/runs/<run_id>` and
-`/api/state/runs`), with Copy buttons for the commands; on the Nodes tab the side panel
-gives each failed node's headline with a link to its row. `ods state retry --failed` is
+`/api/state/runs`, and `failed_tests` on each node a failed test checks), with Copy
+buttons for the commands; on the Nodes tab the side panel gives each failed node's (and
+failed test's) headline with a link to its row. A failed test is shown under each node
+it checks; one that checks no node the run shows (dbt didn't say which, or it checks a
+node the run didn't run) is listed in the Run page's **Failed tests** section
+(`failed_tests` in `/api/state/runs/<run_id>`). `ods state retry --failed` is
 offered only for the last run, which is what it retries. Beyond loopback, explanations
 leave out file paths and where dbt's full message is, as the Catalog does.
 
 `--output json` includes the explanations as `failures` (in `ods state history --run`, too):
-each has `schema_version`, `node`, `category`, `symptom` (when recognised),
+each has `schema_version` (1.1), `node` (for a failed test, its handle,
+`check-<12 hex digits>`, the same for the same test in every run: never dbt's id for
+it, which holds a generic test's arguments), `check`
+(for a failed test: `covers`, the nodes it checks, and its `test` kind and `column`
+when the manifest says), `category`, `symptom` (when recognised),
 `confidence` (`known_pattern_with_evidence`, `known_pattern`, `not_recognised`),
 `pattern` (`catalogue`, `version` and `id` of the pattern that matched), `headline`,
 `detail`, `evidence` (each with `source`: `plan`, `fingerprint`, `column_lineage`,
 `project`, `source_versions`, `run_history` or `run_stats`; its `text`; whether it
-`confirms` the pattern; and, for missing columns or undefined macros, its `data`),
+`confirms` the pattern; and, for missing columns, undefined macros, a test's failing
+rows (`failing_rows`) or what it tests (`test_target`), its `data`),
 `location` (`file`, `line`, `compiled_file`,
 `reported_line`), `suggestions` (`text`, `commands`), `impact` (`blocked`, `kept`) and
 `engine_message` (`engine`, `kind`, `message`, `details_at`). Text marks names as code

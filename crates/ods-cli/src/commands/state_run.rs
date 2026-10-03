@@ -1910,6 +1910,7 @@ impl RunReport {
             retry: Some(ods_state::Retry::new(super::failures::retry_state_db(
                 settings,
             ))),
+            state_db_flag: super::failures::retry_state_db(settings),
             project_is_run: true,
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);
@@ -2438,6 +2439,7 @@ pub(super) fn failed_before_running<const TEST: bool>(
         before: None,
         state_db: Path::new(""),
         retry: None,
+        state_db_flag: None,
         project_is_run: true,
     };
     match super::failures::explain_prepare(&error.message, &evidence) {

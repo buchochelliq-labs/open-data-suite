@@ -21,13 +21,15 @@
 //!   removed, so an explanation says which catalogue made it.
 //!
 //! A provider may also describe the project for explanations, as a [`ProjectIndex`]:
-//! each node's file and the macros its code calls that aren't defined. That is the
-//! provider's reading of its own project format.
+//! each node's file, the macros its code calls that aren't defined, and, for a check
+//! (e.g. a data test), what it tests ([`CheckTarget`]: the kind of test, the column and
+//! the node, never its arguments). That is the provider's reading of its own project
+//! format.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ods_core::SchemaVersion;
-use ods_core::failure::{ErrorCategory, Suggestion, Symptom, is_code};
+use ods_core::failure::{ErrorCategory, Suggestion, Symptom, Text, is_code};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::run_events::ErrorSummary;
@@ -36,7 +38,9 @@ use crate::provider::{Contract, Provider};
 /// The `error_catalogue` contract.
 pub const ERROR_CATALOGUE: Contract = Contract {
     name: "error_catalogue",
-    version: SchemaVersion::new(0, 1),
+    // 0.2: an indexed node may say what it checks (`IndexedNode::check`), and a pattern
+    // may offer a step for running it again (`PatternMatch::rerun`) (#323).
+    version: SchemaVersion::new(0, 2),
 };
 
 /// A catalogue's name and version.
@@ -84,6 +88,24 @@ pub struct PatternMatch {
     /// identifier-shaped names are kept ([`is_code`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// A step for when what failed runs again, with an argument for the engine (#323).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun: Option<Rerun>,
+}
+
+/// A step that runs what failed again with one more argument for the engine, passed
+/// through after `--` (#323): e.g. dbt's `--store-failures`, which keeps a failed test's
+/// rows in a table to look at. The catalogue knows the engine's argument, not ODS's
+/// command or the node: the host builds the command for the node it would run again
+/// (e.g. `ods state test --select orders -- --store-failures`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct Rerun {
+    /// What it does, for people; the host's command follows it.
+    pub text: Text,
+    /// The engine's argument; always [code](is_code).
+    pub passthrough: String,
 }
 
 impl PatternMatch {
@@ -95,6 +117,7 @@ impl PatternMatch {
             category: symptom.category(),
             suggestions: Vec::new(),
             subject: None,
+            rerun: None,
         }
     }
 
@@ -116,6 +139,17 @@ impl PatternMatch {
     #[must_use]
     pub fn suggest(mut self, suggestion: Suggestion) -> Self {
         self.suggestions.push(suggestion);
+        self
+    }
+
+    /// Offers running it again with the engine's argument `passthrough`, which does
+    /// what `text` says. An argument that isn't [code](is_code) is dropped.
+    #[must_use]
+    pub fn rerun_with(mut self, text: Text, passthrough: &str) -> Self {
+        self.rerun = is_code(passthrough).then(|| Rerun {
+            text,
+            passthrough: passthrough.to_owned(),
+        });
         self
     }
 }
@@ -165,6 +199,51 @@ impl NameAt {
     }
 }
 
+/// What a check (e.g. a data test) tests, as the project declares it (#323). Names
+/// only: a test's arguments (e.g. the values `accepted_values` accepts) are values, so
+/// they are never kept. Each name is kept only when it is [code](is_code).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CheckTarget {
+    /// The kind of test, for a generic one (e.g. `not_null`, `unique`,
+    /// `accepted_values`, `relationships`, or a package's `dbt_utils.expression_is_true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<String>,
+    /// The column it tests, when it tests one column by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    /// The node it is declared on, by id, when the project says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// Whether the project declares it as a test of its own (a singular test, named by
+    /// its file), rather than an instance of a generic test. Only a singular test's
+    /// name may be shown: a generic test's may be made of its arguments.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub singular: bool,
+}
+
+impl CheckTarget {
+    /// A check of `test` kind on `column` of `node`; a name that isn't [code](is_code)
+    /// (e.g. a column given as an expression) is left out.
+    pub fn new(test: Option<&str>, column: Option<&str>, node: Option<&str>) -> Self {
+        let keep = |name: Option<&str>| name.filter(|n| is_code(n)).map(str::to_owned);
+        Self {
+            test: keep(test),
+            column: keep(column),
+            node: keep(node),
+            singular: false,
+        }
+    }
+
+    /// Says it is a singular test: one of its own, not a generic test's instance.
+    #[must_use]
+    pub fn singular(mut self) -> Self {
+        self.singular = true;
+        self
+    }
+}
+
 /// What explanations need to know about one node.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -182,6 +261,9 @@ pub struct IndexedNode {
     /// The language its code is in (e.g. `sql`, `python`), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// What it checks, when it is a check (e.g. a data test).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<CheckTarget>,
 }
 
 impl IndexedNode {
@@ -205,6 +287,13 @@ impl IndexedNode {
     #[must_use]
     pub fn in_language(mut self, language: Option<&str>) -> Self {
         self.language = language.map(str::to_ascii_lowercase);
+        self
+    }
+
+    /// Says it is a check, of `target`.
+    #[must_use]
+    pub fn checking(mut self, target: CheckTarget) -> Self {
+        self.check = Some(target);
         self
     }
 

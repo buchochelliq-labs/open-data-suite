@@ -1,0 +1,81 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "redact(&serde_json::to_string_pretty(failure).unwrap())"
+---
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 1
+  },
+  "node": "check-62fd3f12487f",
+  "check": {
+    "covers": [
+      "model.jaffle_ods.customers"
+    ],
+    "test": "not_null",
+    "column": "customer_id"
+  },
+  "category": "test_failure",
+  "symptom": "test_failed",
+  "confidence": "known_pattern_with_evidence",
+  "pattern": {
+    "catalogue": "dbt",
+    "version": "2",
+    "id": "dbt-test-failed"
+  },
+  "headline": "The `not_null` test on `customer_id` of `customers` failed: 5 rows don't pass",
+  "evidence": [
+    {
+      "source": "run_stats",
+      "text": "dbt reported 5 rows that fail the test.",
+      "confirms": true,
+      "data": {
+        "kind": "failing_rows",
+        "rows": 5
+      }
+    },
+    {
+      "source": "project",
+      "text": "The project declares it as a `not_null` test of column `customer_id` on `customers`.",
+      "confirms": false,
+      "data": {
+        "kind": "test_target",
+        "test": "not_null",
+        "column": "customer_id",
+        "node": "model.jaffle_ods.customers"
+      }
+    },
+    {
+      "source": "fingerprint",
+      "text": "`customers` changed in this run (sql), so the test checked its new build.",
+      "confirms": false
+    },
+    {
+      "source": "run_history",
+      "text": "This test passed in its last run.",
+      "confirms": false
+    }
+  ],
+  "location": {
+    "file": "models/schema.yml"
+  },
+  "suggestions": [
+    {
+      "text": "See the rows that fail: run the test again, keeping them in a table in the warehouse:",
+      "commands": [
+        "ods state test --select customers --state-db <state-db> -- --store-failures"
+      ]
+    },
+    {
+      "text": "Fix the data, the model or the test, then test `customers` again:",
+      "commands": [
+        "ods state test --select customers --state-db <state-db>"
+      ]
+    }
+  ],
+  "engine_message": {
+    "engine": "dbt",
+    "message": "Got [value removed] results, configured to fail if != [value removed] (first: [value removed])",
+    "details_at": "dbt's log file (logs/dbt.log in the project, unless --log-path)"
+  }
+}

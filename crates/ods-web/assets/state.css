@@ -297,6 +297,8 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-explain-head { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.35; }
 .st-side .st-explain { padding: 14px; }
 .st-side .st-explain-head { font-size: 15px; }
+/* Several explanations in one place (a node and its failed tests, #323). */
+.st-explain + .st-explain { margin-top: 12px; }
 .st-explain-detail { margin: 0; }
 .st-explain code, .st-explain-cmd code { font-family: var(--mono); font-size: 12px; }
 .st-explain-sec { display: flex; flex-direction: column; gap: 6px; }
