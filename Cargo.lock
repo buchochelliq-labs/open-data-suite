@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "ods-cli"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "clap",
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "ods-config"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "ods-core",
  "serde",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "ods-core"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "hex",
  "jiff",
@@ -1310,7 +1310,7 @@ dependencies = [
 
 [[package]]
 name = "ods-erd"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "ods-lineage"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "hex",
  "ods-core",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "ods-mcp"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "ods-provider-databricks"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "csv",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "ods-provider-dbt"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "csv",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "ods-provider-fake"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "ods-config",
@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "ods-provider-sqlparser"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "hex",
  "ods-core",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "ods-sdk"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "ods-config",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "ods-state"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "ods-core",
  "ods-provider-fake",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "ods-store-sqlite"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "ods-core",
@@ -1444,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "ods-web"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "axum",
  "form_urlencoded",

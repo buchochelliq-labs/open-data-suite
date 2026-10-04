@@ -490,7 +490,13 @@ mod tests {
             "JSON mode reports failures in the envelope: {}",
             o.err
         );
-        insta::assert_snapshot!(o.out.replace(env!("CARGO_PKG_VERSION"), "[ods-version]"));
+        // Only the envelope's own version is masked: a milestone in a hint may name the
+        // same version.
+        let version = format!("\"ods_version\": \"{}\"", env!("CARGO_PKG_VERSION"));
+        insta::assert_snapshot!(
+            o.out
+                .replace(&version, "\"ods_version\": \"[ods-version]\"")
+        );
     }
 
     #[test]
