@@ -101,6 +101,7 @@ KEPT
 Run finished in <took>
 5 built · 1 failed · 1 skipped · 6 kept
 Jump to failure
+Replay
 orders
 ×
 BUILT

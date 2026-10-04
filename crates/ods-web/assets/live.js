@@ -442,12 +442,11 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   liveOption.value = "live";
   liveOption.textContent = "Live run";
   select.insertBefore(liveOption, select.firstChild);
-  // Shown only while a run is replayed (ADR-0026).
+  // In the picker only while a run is replayed (ADR-0026).
   const replayOption = document.createElement("option");
   replayOption.value = "replay";
   replayOption.textContent = "Replay";
-  replayOption.hidden = true;
-  liveOption.insertAdjacentElement("afterend", replayOption);
+  const showReplay = on => { if (on) liveOption.insertAdjacentElement("afterend", replayOption); else replayOption.remove(); };
   const offer = h("button", "Watch the run live", "lv-offer lin-ui", null);
   offer.type = "button";
   offer.hidden = true;
@@ -533,7 +532,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     S.card = { node: null, status: null, html: null };
     S.replay = opts.replay ? { tl: null, p: 0, applied: 0, playing: false, speed: opts.speed || 1, at: opts.at || 0, autoplay: !!opts.autoplay, raf: 0 } : null;
     document.body.classList.toggle("lv-replay", !!S.replay);
-    replayOption.hidden = !S.replay;
+    showReplay(!!S.replay);
     select.value = S.replay ? "replay" : "live";
     x.state.overlay = "live";
     x.state.columns = false;
@@ -551,7 +550,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     if (S.source) { S.source.close(); S.source = null; }
     clearTimeout(S.pollTimer);
     if (S.replay) { cancelAnimationFrame(S.replay.raf); S.replay = null; }
-    replayOption.hidden = true;
+    showReplay(false);
     if (!S.on) return;
     S.on = false;
     document.body.classList.remove("lv-on", "lv-done", "lv-replay", "lv-playing");
@@ -1795,7 +1794,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       S.replay = { tl: null, p: 0, applied: 0, playing: false, raf: 0, autoplay: false,
         at: isFinite(at) && at > 0 ? at * 1000 : 0, speed: L.SPEEDS.includes(speed) ? speed : 1 };
       document.body.classList.add("lv-replay");
-      replayOption.hidden = false;
+      showReplay(true);
     }
     liveOption.disabled = false;
     liveOption.textContent = "Live run";
