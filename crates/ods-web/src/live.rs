@@ -13,8 +13,9 @@
 //! The journal is tailed by polling its size, on a blocking thread, at most a bounded
 //! chunk at a time, so no stream holds more than one chunk and one line. Every line is
 //! read through ods-sdk's journal reader, which redacts each event again whatever wrote
-//! the file (AGENTS rule 9); beyond loopback, where an error's full text is (a local
-//! path) is left out too, as the Run page does. The dashboard stays read-only: nothing
+//! the file (AGENTS rule 9); a check is sent by its handle, never its id (#323); and
+//! beyond loopback, where an error's full text is (a local path) is left out too, as
+//! the Run page does. The dashboard stays read-only: nothing
 //! here starts, stops or writes anything.
 
 use std::collections::VecDeque;
@@ -38,8 +39,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::server::Shared;
 
 /// Version of the stream's messages and of [`LiveRuns`]. Additive fields don't change
-/// it; a removed or retyped one does.
-pub const LIVE_SCHEMA_VERSION: u32 = 1;
+/// it; a removed or retyped one does. Every message's data carries it as
+/// `live_schema_version`, beside a run event's own `schema_version`, which is the
+/// journal's. 2 since a `check_finished` names its check by handle (#323).
+pub const LIVE_SCHEMA_VERSION: u32 = 2;
 
 /// The most a stream reads from a journal at once, in bytes; also the longest line it
 /// reads (a longer one is counted as unreadable, never held whole).
@@ -514,10 +517,17 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// An event as the stream sends it: the sanitized event, and beyond loopback without
-/// where an error's full text is.
+/// An event as the stream sends it: the sanitized event, a check by its
+/// [handle](ods_core::failure::check_handle) rather than its id (#323: an engine may
+/// build a check's id from the test's arguments; the journal on disk keeps the id),
+/// and beyond loopback without where an error's full text is.
 fn event_json(event: &RunEvent, details: bool) -> serde_json::Value {
     let mut value = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
+    if let RunEventKind::CheckFinished { check, .. } = &event.kind
+        && let Some(shown) = value.get_mut("check")
+    {
+        *shown = ods_core::failure::check_handle(check).into();
+    }
     if !details
         && let Some(error) = value
             .get_mut("stats")
@@ -546,11 +556,17 @@ impl Message {
     }
 
     fn data(&self, details: bool) -> serde_json::Value {
-        match self {
+        let mut data = match self {
             Message::Event { event, .. } => event_json(event, details),
             Message::Unreadable { line } => serde_json::json!({ "line": line }),
             Message::End(end) => serde_json::to_value(end).unwrap_or(serde_json::Value::Null),
+        };
+        // A client tells the stream's meaning by this, not by the event's version,
+        // which is the journal's and didn't change when the stream did.
+        if let Some(object) = data.as_object_mut() {
+            object.insert("live_schema_version".into(), LIVE_SCHEMA_VERSION.into());
         }
+        data
     }
 
     fn sse(&self, details: bool) -> Event {

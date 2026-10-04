@@ -33,7 +33,7 @@ fn version_json_envelope() {
     assert!(out.status.success());
     let value: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("valid JSON");
     assert_eq!(value["command"], "version");
-    assert_eq!(value["schema_version"]["major"], 0);
+    assert_eq!(value["schema_version"]["major"], 1);
     assert_eq!(value["result"]["ods_version"], env!("CARGO_PKG_VERSION"));
     assert!(value["diagnostics"].as_array().is_some_and(Vec::is_empty));
 }

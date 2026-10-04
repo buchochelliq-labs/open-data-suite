@@ -13,7 +13,7 @@ use ods_lineage::{GraphFilter, LineageNode, LineageProject, MemoryCache, NodeKin
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::executor::ExecutionMode;
 use ods_sdk::contracts::run_events::{
-    ErrorSummary, NodeRunStats, NodeRunStatus, RunEvent, RunEventKind, RunOutcome,
+    CheckStatus, ErrorSummary, NodeRunStats, NodeRunStatus, RunEvent, RunEventKind, RunOutcome,
 };
 use ods_sdk::run_journal::Journals;
 use ods_web::{Dashboard, ServeOptions, Snapshot, StreamLimits, router};
@@ -398,6 +398,58 @@ fn nothing_the_journal_holds_beyond_the_redacted_fields_is_streamed() {
     assert!(!polled.contains("SENTINEL"), "{polled}");
 }
 
+/// #323: dbt names a generic test after its arguments, so a `check_finished` event's
+/// id may hold a value (the recorded `accepted_values` test accepts a secret). The
+/// journal keeps it; the stream and its polling fallback send the check's handle.
+#[test]
+fn a_check_is_streamed_by_its_handle_never_its_id() {
+    const SENTINEL: &str = "sk_live_SENTINEL_42";
+    let id =
+        format!("test.jaffle_ods.accepted_values_orders_status__completed__{SENTINEL}.efdbb4986a");
+    let handle = ods_core::failure::check_handle(&id);
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal = Journal::create(dir.path(), RUN);
+    journal.write(&started(&["model.orders"]));
+    journal.write(&line(&event(
+        500,
+        RunEventKind::CheckFinished {
+            check: id.clone(),
+            covers: vec!["model.orders".into()],
+            status: CheckStatus::Failed,
+            failures: Some(3),
+            // dbt's message for it, as recorded (dbt 1.10, `capture-errors.sh`).
+            error: ErrorSummary::from_message("Got 3 results, configured to fail if != 0"),
+        },
+    )));
+    journal.write(&run_finished(1_000, RunOutcome::Failed));
+    let on_disk = std::fs::read_to_string(dir.path().join(format!("{RUN}.jsonl"))).unwrap();
+    let addr = start(snapshot(dir.path()), limits(4));
+
+    let (status, body) = get(addr, &format!("/api/runs/{RUN}/events"));
+    assert_eq!(status, 200);
+    assert!(body.contains("check_finished"), "{body}");
+    assert!(body.contains(&handle), "{body}");
+    assert!(!body.contains(SENTINEL), "{body}");
+
+    let (status, polled) = get(addr, &format!("/api/runs/{RUN}/events?since=0"));
+    assert_eq!(status, 200);
+    assert!(!polled.contains(SENTINEL), "{polled}");
+    let check = polled
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|m| m["data"]["kind"] == "check_finished")
+        .unwrap();
+    assert_eq!(check["data"]["check"], handle.as_str(), "{check:#}");
+    assert_eq!(check["data"]["live_schema_version"], 2, "{check:#}");
+    assert_eq!(check["data"]["covers"][0], "model.orders");
+    assert_eq!(check["data"]["failures"], 3);
+
+    let (_, live) = get(addr, "/api/runs/live");
+    assert!(!live.contains(SENTINEL), "{live}");
+    // Only what is sent changes: the journal on disk keeps the id (ADR-0024).
+    assert!(on_disk.contains(&id), "{on_disk}");
+}
+
 #[test]
 fn the_polling_fallback_answers_json_lines_after_a_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -523,7 +575,7 @@ fn runs_going_on_now_are_listed_as_probably_running() {
     let (status, body) = get(addr, "/api/runs/live");
     assert_eq!(status, 200);
     let live: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(live["schema_version"], 1);
+    assert_eq!(live["schema_version"], 2);
     let runs = live["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 1, "{body}");
     let run = &runs[0];

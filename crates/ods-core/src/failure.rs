@@ -24,7 +24,9 @@ use crate::SchemaVersion;
 /// The version of [`ErrorExplanation`] as serialized (e.g. in `--output json`).
 /// 1.1 added [`ErrorExplanation::check`] and the [`EvidenceData::FailingRows`] and
 /// [`EvidenceData::TestTarget`] evidence (#323): optional, so 1.0 readers ignore them.
-pub const EXPLANATION_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
+/// 1.2 added the [`EvidenceSource::Doctor`] source and its [`EvidenceData::DoctorCheck`]
+/// data (#323, #181).
+pub const EXPLANATION_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 2);
 
 /// What kind of failure it was, for people: the chip on a failed node. Coarse on
 /// purpose, so an engine's error kinds map onto it without guessing.
@@ -277,6 +279,9 @@ pub enum EvidenceSource {
     RunHistory,
     /// This run's stats for the node.
     RunStats,
+    /// A health check of the environment (`ods doctor`'s), run locally when the failure
+    /// was explained: what it found about the configuration now.
+    Doctor,
 }
 
 impl EvidenceSource {
@@ -290,6 +295,7 @@ impl EvidenceSource {
             Self::SourceVersions => "source versions",
             Self::RunHistory => "run history",
             Self::RunStats => "run stats",
+            Self::Doctor => "ods doctor",
         }
     }
 }
@@ -339,6 +345,14 @@ impl Text {
         } else {
             self.0.push_str("[name hidden]");
         }
+        self
+    }
+
+    /// Adds another text after this one, with its code spans: both were built through
+    /// [`plain`](Self::plain) and [`code`](Self::code), so the result is too.
+    #[must_use]
+    pub fn append(mut self, other: &Text) -> Self {
+        self.0.push_str(&other.0);
         self
     }
 
@@ -429,6 +443,14 @@ pub enum EvidenceData {
         /// The node it tests, by id, when one is known.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         node: Option<String>,
+    },
+    /// A health check's outcome (`ods doctor`'s, #181): its stable id (e.g.
+    /// `config.resolution`) and status. Neither is ever a value.
+    DoctorCheck {
+        /// The check's id.
+        check: String,
+        /// What it concluded.
+        status: crate::diagnostic::CheckStatus,
     },
 }
 
@@ -1261,7 +1283,7 @@ mod tests {
             )
             .build();
         let json = serde_json::to_value(&e).unwrap();
-        assert_eq!(json["schema_version"]["minor"], 1);
+        assert_eq!(json["schema_version"]["minor"], 2);
         assert_eq!(json["check"]["covers"][0], "model.a");
         assert_eq!(json["evidence"][0]["data"]["kind"], "failing_rows");
         assert_eq!(json["evidence"][0]["data"]["rows"], 5);
@@ -1303,5 +1325,41 @@ mod tests {
             .check(FailedCheck::default())
             .build();
         assert_eq!(e.headline().as_str(), "The warehouse rejected the query");
+    }
+
+    /// #323, #181: a health check's finding is evidence from `ods doctor`, with the
+    /// check's id and status as data; a 1.1 explanation (none) still reads.
+    #[test]
+    fn a_doctor_finding_is_evidence_with_its_check() {
+        let e = ExplanationBuilder::new("project", ErrorCategory::Configuration)
+            .recognised(pattern(), Symptom::ProfileNotFound)
+            .evidence(
+                EvidenceItem::confirming(
+                    EvidenceSource::Doctor,
+                    Text::new().code("config.resolution").plain(" warns."),
+                )
+                .with_data(EvidenceData::DoctorCheck {
+                    check: "config.resolution".into(),
+                    status: crate::diagnostic::CheckStatus::Warning,
+                }),
+            )
+            .build();
+        assert_eq!(e.confidence(), Confidence::KnownPatternWithEvidence);
+        assert_eq!(EvidenceSource::Doctor.label(), "ods doctor");
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json["schema_version"]["minor"], 2);
+        assert_eq!(json["evidence"][0]["source"], "doctor");
+        assert_eq!(json["evidence"][0]["data"]["kind"], "doctor_check");
+        assert_eq!(json["evidence"][0]["data"]["check"], "config.resolution");
+        assert_eq!(json["evidence"][0]["data"]["status"], "warning");
+        assert_eq!(serde_json::from_value::<ErrorExplanation>(json).unwrap(), e);
+
+        let mut old = serde_json::to_value(
+            ExplanationBuilder::new("model.a", ErrorCategory::Configuration).build(),
+        )
+        .unwrap();
+        old["schema_version"]["minor"] = 1.into();
+        let read: ErrorExplanation = serde_json::from_value(old).unwrap();
+        assert_eq!(read.evidence().len(), 0);
     }
 }

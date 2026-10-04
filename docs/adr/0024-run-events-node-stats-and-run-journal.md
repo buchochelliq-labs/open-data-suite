@@ -241,9 +241,19 @@ left out when `None`: a 1.0 journal reads as before, with neither, and a 1.0 rea
 (`checks`), so hosts can explain failed tests (ADR-0025), but never serializes it.
 A check is still identified by the engine's id in the journal: dbt builds a generic
 test's id from its arguments (an `accepted_values` test's id names the values it
-accepts), so the id can hold a value. Explanations, `ods state history --run` and the
-dashboard's run views show a check's handle instead (`check-<12 hex digits>`, ADR-0025);
-the journal itself (and the live stream of it) is unchanged, a follow-up.
+accepts), so the id can hold a value. Every surface that shows or serves a check uses
+its handle instead (`check-<12 hex digits>`, ADR-0025): explanations, `ods state
+history --run`, the dashboard's run views, the terminal's and `--output json`'s
+execution report, and the live stream (amended 2026-10-04, #323).
+
+The journal on disk keeps the id, deliberately (amended 2026-10-04): `check` is the
+key that ties a `check_finished` to the engine's own records of the test, and
+changing what a persisted field means is a format break (a new major `schema_version`,
+with readers of every journal already written to handle both), for no gain in what is
+kept: the journal is local evidence beside the project, whose `manifest.json`,
+`run_results.json` and compiled files already hold the same id and the same
+arguments, and it is read only by ODS, which shows the handle. A host that serves a
+journal's events (the live stream below) sends the handle.
 
 ### The live stream (`ods serve`, amended 2026-09-30)
 `ods serve` shows a run while it goes by tailing its journal; the executor, the CLI and
@@ -257,11 +267,14 @@ than the Run pages show.
   `EventSource`, at most 2,000 per answer; `GET /api/runs/live` lists the runs that are
   probably running. All are `GET` and read-only: no route starts, stops or changes a
   run.
-- **Messages:** `run_event` (data: the sanitized `RunEvent`), `unreadable` (data:
+- **Messages:** `run_event` (data: the sanitized `RunEvent`, with a `check_finished`'s
+  `check` as the check's handle, #323), `unreadable` (data:
   `{"line"}`, for any line that doesn't parse as an event of this run: a newer version,
   a line cut short, one longer than 256 KiB, or another run's event) and `end` (data:
   `reason` `finished` | `stopped` | `replaced`, the `outcome` when known, `inferred`,
-  `note`). The **id** of a line's message is its line number in the journal, from 1
+  `note`). Every message's data carries `live_schema_version`, the stream's version
+  (2 since a check is sent by its handle; the event's own `schema_version` is the
+  journal's). The **id** of a line's message is its line number in the journal, from 1
   (blank lines count and send nothing); `end` has none. A stream replays the journal
   from the start, then follows it; with `Last-Event-ID: n` (or `?since=n`) it sends only
   lines after `n`. Lines up to `n` aren't parsed: only one that may hold

@@ -285,6 +285,7 @@ fn explainer(
         project_dir: &project_dir,
         target_dir: &ws.target_dir,
         manifest: Some(&ws.manifest),
+        last_manifest: None,
     };
     let missing = graph
         .nodes()

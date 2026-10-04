@@ -17,7 +17,9 @@ use crate::exit::CliError;
 use crate::output::{Mode, OutputSettings};
 
 /// Version of the JSON envelope and every command's `result` shape (ADR-0003 §3).
-pub const OUTPUT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(0, 1);
+/// 1.0 since checks are named by their handle rather than their id (#323): the same
+/// fields with another meaning, a major change by ADR-0019 §2.
+pub const OUTPUT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
 
 /// A command result that can be shown to people and machines.
 pub trait Present: Serialize {

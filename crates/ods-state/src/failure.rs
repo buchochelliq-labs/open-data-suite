@@ -30,8 +30,20 @@
 //! is the check's [handle](ods_core::failure::check_handle). The steps it offers are
 //! neutral (test the node again), plus what the provider's pattern offers for running
 //! it again (e.g. dbt's `--store-failures`, [`Rerun`]).
+//!
+//! A reference to a missing node gets **did-you-mean** (#323): the project's nodes that
+//! others refer to by name ([`IndexedNode::referable`]) within two edits of the name
+//! the reference used (the pattern's subject), at most three, closest first. It is a
+//! suggestion from the names alone, never evidence that the name is a typo, and the
+//! name the reference used is never shown: only the project's own names are.
+//!
+//! The host may also run health checks (`ods doctor`'s local ones, #181) and pass what
+//! they found as neutral [`DoctorFinding`]s: each becomes evidence from
+//! [`EvidenceSource::Doctor`], which confirms only when the host says the finding shows
+//! the very symptom the pattern recognised.
 
 use ods_core::FreshnessPolicy;
+use ods_core::diagnostic::CheckStatus as HealthStatus;
 use ods_core::failure::{
     EngineMessage, ErrorCategory, ErrorExplanation, EvidenceData, EvidenceItem, EvidenceSource,
     ExplanationBuilder, FailedCheck, Location, MissingColumn, PatternRef, Suggestion, Symptom,
@@ -46,6 +58,7 @@ use ods_sdk::contracts::error_catalogue::{
 use ods_sdk::contracts::run_events::{
     CheckStatus, CheckSummary, ErrorSummary, NodeRunStats, NodeRunStatus, RunSummary,
 };
+use serde::{Deserialize, Serialize};
 
 /// How many earlier runs of a node its history looks at.
 pub const HISTORY_RUNS: usize = 5;
@@ -102,6 +115,45 @@ pub enum FailureStage {
     Run,
 }
 
+/// What one health check (e.g. `ods doctor`'s `config.resolution`) found, as neutral
+/// data for an explanation (#323, #181). The host runs only local checks with no side
+/// effects and no connection, right after the failure, and words what they found
+/// itself; a check's output never holds a secret (ADR-0023), and the text keeps only
+/// identifier-shaped names in code spans ([`Text`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DoctorFinding {
+    /// The check's stable id, e.g. `config.resolution`.
+    pub check: String,
+    /// What it concluded.
+    pub status: HealthStatus,
+    /// What it found, for people.
+    pub text: Text,
+    /// The symptom this finding shows on its own, when the host knows it does (e.g. a
+    /// profiles directory with no profiles file shows that no profile can be found).
+    /// It confirms an explanation only when the catalogue recognised that symptom.
+    pub shows: Option<Symptom>,
+}
+
+impl DoctorFinding {
+    /// Check `check` concluded `status`, and found what `text` says.
+    pub fn new(check: impl Into<String>, status: HealthStatus, text: Text) -> Self {
+        Self {
+            check: check.into(),
+            status,
+            text,
+            shows: None,
+        }
+    }
+
+    /// Says the finding shows `symptom` on its own.
+    #[must_use]
+    pub fn showing(mut self, symptom: Symptom) -> Self {
+        self.shows = Some(symptom);
+        self
+    }
+}
+
 /// Everything ODS knows about a failed node. Only [`FailureFacts::new`]'s arguments
 /// are needed; each other fact adds evidence when present.
 #[derive(Debug, Clone)]
@@ -142,6 +194,9 @@ pub struct FailureFacts<'a> {
     pub check: Option<&'a CheckSummary>,
     /// The state database a suggested command names, when it isn't the default.
     pub state_db: Option<&'a str>,
+    /// What health checks found about the environment, run for this failure right
+    /// after it (#181): evidence from [`EvidenceSource::Doctor`].
+    pub doctor: &'a [DoctorFinding],
 }
 
 impl<'a> FailureFacts<'a> {
@@ -169,6 +224,7 @@ impl<'a> FailureFacts<'a> {
             project_is_run: true,
             check: None,
             state_db: None,
+            doctor: &[],
         }
     }
 
@@ -259,38 +315,39 @@ pub fn explain_failure(facts: &FailureFacts<'_>) -> ErrorExplanation {
             ),
             found.symptom,
         );
-        builder = match found.symptom {
-            Symptom::MissingColumn => missing_column(facts, builder),
-            Symptom::UnknownMacro => unknown_macro(facts, builder),
-            Symptom::MissingRelation => missing_relation(facts, builder),
-            Symptom::PythonException => {
-                let python = facts
-                    .indexed(facts.node)
-                    .and_then(|n| n.language.as_deref())
-                    == Some("python");
-                match (&found.subject, python) {
-                    (Some(exception), true) => builder.headline(
-                        Text::new()
-                            .plain("The Python model raised ")
-                            .code(exception),
-                    ),
-                    (Some(exception), false) => builder.headline(
-                        Text::new()
-                            .plain("It raised the Python exception ")
-                            .code(exception),
-                    ),
-                    (None, true) => builder,
-                    (None, false) => {
-                        builder.headline(Text::new().plain("It raised a Python exception"))
+        builder =
+            match found.symptom {
+                Symptom::MissingColumn => missing_column(facts, builder),
+                Symptom::UnknownMacro => unknown_macro(facts, builder),
+                Symptom::MissingRelation => missing_relation(facts, builder),
+                Symptom::PythonException => {
+                    let python = facts
+                        .indexed(facts.node)
+                        .and_then(|n| n.language.as_deref())
+                        == Some("python");
+                    match (&found.subject, python) {
+                        (Some(exception), true) => builder.headline(
+                            Text::new()
+                                .plain("The Python model raised ")
+                                .code(exception),
+                        ),
+                        (Some(exception), false) => builder.headline(
+                            Text::new()
+                                .plain("It raised the Python exception ")
+                                .code(exception),
+                        ),
+                        (None, true) => builder,
+                        (None, false) => {
+                            builder.headline(Text::new().plain("It raised a Python exception"))
+                        }
                     }
                 }
-            }
-            Symptom::MissingRef => builder
-                .suggest(Suggestion::new(Text::new().plain(
-                    "Check the names the model refers to against the project's nodes.",
-                ))),
-            _ => builder,
-        };
+                Symptom::MissingRef => similar_ref(facts, found.subject.as_deref(), builder)
+                    .suggest(Suggestion::new(Text::new().plain(
+                        "Check the names the model refers to against the project's nodes.",
+                    ))),
+                _ => builder,
+            };
         // A macro with a close name comes first: without evidence that packages are
         // missing, a typo is the likelier cause.
         if found.symptom == Symptom::UnknownMacro {
@@ -300,10 +357,12 @@ pub fn explain_failure(facts: &FailureFacts<'_>) -> ErrorExplanation {
             builder = builder.suggest(suggestion.clone());
         }
         builder = symptom_steps(found.symptom, builder);
+        builder = doctor_evidence(facts, Some(found.symptom), builder);
     } else {
         builder = builder.detail(Text::new().plain(
             "ODS doesn't recognise this error, so it won't guess the cause. Here is what it does know.",
         ));
+        builder = doctor_evidence(facts, None, builder);
     }
     builder = match facts.check {
         Some(check) => check_context(facts, check, builder),
@@ -353,13 +412,98 @@ fn found_failing_rows(facts: &FailureFacts<'_>, check: &CheckSummary) -> bool {
     }
 }
 
+/// What ODS shows of a check instead of its id (#323), wherever it names one: its
+/// [handle](check_handle), and what the project says it tests. An engine may build a
+/// check's id from the test's arguments (dbt names an `accepted_values` test after the
+/// values it accepts), so neither the id nor a generic test's name is kept here; a
+/// test's own name only for a test the provider marks
+/// [singular](CheckTarget::singular).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CheckDescription {
+    /// The check's [handle](check_handle).
+    pub handle: String,
+    /// The kind of test (e.g. `not_null`), when the project says.
+    pub test: Option<String>,
+    /// The column it tests, when the project says.
+    pub column: Option<String>,
+    /// The one node it is about, by id: the one the project declares it on, or the
+    /// only one it covers.
+    pub node: Option<String>,
+    /// A singular test's own name, when the project has one.
+    pub name: Option<String>,
+}
+
+impl CheckDescription {
+    /// The check, for machines: what it covers, tests and on which column.
+    pub fn failed_check(&self, covers: &[String]) -> FailedCheck {
+        FailedCheck::new(covers.to_vec()).testing(self.test.as_deref(), self.column.as_deref())
+    }
+
+    /// The check, for people: "the `not_null` test on `customer_id` of `orders`", "the
+    /// test `only_placed_orders` on `orders`", or "a test on `orders`" (capitalised
+    /// when it `start`s a sentence). `node_name` names a node for people.
+    pub fn phrase(&self, start: bool, node_name: impl Fn(&str) -> String) -> Text {
+        let the = if start { "The " } else { "the " };
+        let a_test = if start { "A test" } else { "a test" };
+        let mut text = match (&self.test, &self.name) {
+            (Some(kind), _) => Text::new().plain(the).code(kind).plain(" test"),
+            (None, Some(name)) => Text::new().plain(the).plain("test ").code(name),
+            (None, None) => Text::new().plain(a_test),
+        };
+        let node = self.node.as_deref().map(node_name);
+        text = match (self.column.as_deref(), node) {
+            (Some(column), Some(node)) => text.plain(" on ").code(column).plain(" of ").code(&node),
+            (None, Some(node)) => text.plain(" on ").code(&node),
+            (Some(column), None) => text.plain(" on ").code(column),
+            (None, None) => text,
+        };
+        text
+    }
+}
+
+/// Describes the check `id`, which `covers` the given nodes, from what the project
+/// `index` says about it (#323). Without an index (or with one that doesn't know the
+/// check) it is named by its handle and, when it covers one node, that node.
+pub fn describe_check(
+    id: &str,
+    covers: &[String],
+    index: Option<&ProjectIndex>,
+) -> CheckDescription {
+    let indexed = index.and_then(|i| i.nodes.get(id));
+    let target = indexed.and_then(|n| n.check.as_ref());
+    let node = target.and_then(|t| t.node.clone()).or(match covers {
+        [one] => Some(one.clone()),
+        _ => None,
+    });
+    let name = match target {
+        Some(CheckTarget { singular: true, .. }) => {
+            indexed.map(|n| n.name.clone()).filter(|n| !n.is_empty())
+        }
+        _ => None,
+    };
+    CheckDescription {
+        handle: check_handle(id),
+        test: target.and_then(|t| t.test.clone()),
+        column: target.and_then(|t| t.column.clone()),
+        node,
+        name,
+    }
+}
+
+/// The failed check of `facts`, described.
+fn described(facts: &FailureFacts<'_>, check: &CheckSummary) -> CheckDescription {
+    describe_check(facts.node, &check.covers, facts.index)
+}
+
 /// What the project says the check tests, when it knows.
 fn check_target<'a>(facts: &FailureFacts<'a>) -> Option<&'a CheckTarget> {
     facts.indexed(facts.node)?.check.as_ref()
 }
 
 /// The one node the check is about: the one the project attaches it to, or the only
-/// one it covers.
+/// one it covers (as [`describe_check`] says).
 fn tested_node<'a>(facts: &FailureFacts<'a>, check: &'a CheckSummary) -> Option<&'a str> {
     check_target(facts)
         .and_then(|t| t.node.as_deref())
@@ -371,45 +515,12 @@ fn tested_node<'a>(facts: &FailureFacts<'a>, check: &'a CheckSummary) -> Option<
 
 /// The check, for machines: what it covers, tests and on which column.
 fn failed_check(facts: &FailureFacts<'_>, check: &CheckSummary) -> FailedCheck {
-    let target = check_target(facts);
-    FailedCheck::new(check.covers.clone()).testing(
-        target.and_then(|t| t.test.as_deref()),
-        target.and_then(|t| t.column.as_deref()),
-    )
+    described(facts, check).failed_check(&check.covers)
 }
 
-/// The check, for people: "the `not_null` test on `customer_id` of `orders`", "the
-/// test `only_placed_orders` on `orders`", or "a test on `orders`". A test's own name
-/// is used only for one the provider says is [singular](CheckTarget::singular) (named
-/// by its file): a generic test's name may hold its arguments.
+/// The check, for people (see [`CheckDescription::phrase`]).
 fn test_phrase(facts: &FailureFacts<'_>, check: &CheckSummary, start: bool) -> Text {
-    let the = if start { "The " } else { "the " };
-    let target = check_target(facts);
-    let node = tested_node(facts, check).map(|n| facts.name(n));
-    let a_test = if start { "A test" } else { "a test" };
-    let mut text = Text::new();
-    match target {
-        Some(CheckTarget {
-            test: Some(kind), ..
-        }) => {
-            text = text.plain(the).code(kind).plain(" test");
-        }
-        Some(CheckTarget { singular: true, .. }) => {
-            let name = facts.indexed(facts.node).map(|n| n.name.as_str());
-            text = match name.filter(|n| !n.is_empty()) {
-                Some(name) => text.plain(the).plain("test ").code(name),
-                None => text.plain(a_test),
-            };
-        }
-        _ => text = text.plain(a_test),
-    }
-    let column = target.and_then(|t| t.column.as_deref());
-    match (column, node) {
-        (Some(column), Some(node)) => text.plain(" on ").code(column).plain(" of ").code(&node),
-        (None, Some(node)) => text.plain(" on ").code(&node),
-        (Some(column), None) => text.plain(" on ").code(column),
-        (None, None) => text,
-    }
+    described(facts, check).phrase(start, |n| facts.name(n))
 }
 
 /// A check that ran and found rows that don't pass (see the module docs).
@@ -924,6 +1035,73 @@ fn similar_macro(facts: &FailureFacts<'_>, mut builder: ExplanationBuilder) -> E
     builder
 }
 
+/// Did-you-mean for a reference to a missing node: the project's referable nodes with
+/// a name close to the one the reference used (`missing`, the pattern's subject). The
+/// missing name itself is never shown, only the project's names.
+fn similar_ref(
+    facts: &FailureFacts<'_>,
+    missing: Option<&str>,
+    builder: ExplanationBuilder,
+) -> ExplanationBuilder {
+    let (Some(missing), Some(index)) = (missing, facts.index) else {
+        return builder;
+    };
+    // Names repeat across packages: each once.
+    let names: std::collections::BTreeSet<&String> = index
+        .nodes
+        .values()
+        .filter(|n| n.referable && is_code(&n.name))
+        .map(|n| &n.name)
+        .collect();
+    let close = similar(missing, names);
+    let Some((first, rest)) = close.split_first() else {
+        return builder;
+    };
+    let mut text = Text::new().plain("Did you mean ").code(first);
+    for (i, other) in rest.iter().enumerate() {
+        text = text
+            .plain(if i + 1 == rest.len() { " or " } else { ", " })
+            .code(other);
+    }
+    text = text.plain(if rest.is_empty() {
+        "? The project has a node with a name close to the missing one; that is a guess from the names, not evidence of a typo."
+    } else {
+        "? The project has nodes with names close to the missing one; that is a guess from the names, not evidence of a typo."
+    });
+    builder.suggest(Suggestion::new(text))
+}
+
+/// What health checks found, as evidence: a finding confirms only when it shows the
+/// symptom the pattern recognised.
+fn doctor_evidence(
+    facts: &FailureFacts<'_>,
+    recognised: Option<Symptom>,
+    mut builder: ExplanationBuilder,
+) -> ExplanationBuilder {
+    for finding in facts.doctor {
+        let text = Text::new()
+            .plain("Check ")
+            .code(&finding.check)
+            .plain(&format!(" ({}): ", finding.status.name()))
+            .append(&finding.text);
+        let confirms = recognised.is_some() && finding.shows == recognised;
+        let item = if confirms {
+            EvidenceItem::confirming(EvidenceSource::Doctor, text)
+        } else {
+            EvidenceItem::context(EvidenceSource::Doctor, text)
+        };
+        builder = builder.evidence(item.with_data(EvidenceData::DoctorCheck {
+            check: if is_code(&finding.check) {
+                finding.check.clone()
+            } else {
+                "[name hidden]".to_owned()
+            },
+            status: finding.status,
+        }));
+    }
+    builder
+}
+
 fn missing_relation(facts: &FailureFacts<'_>, builder: ExplanationBuilder) -> ExplanationBuilder {
     let Some(entry) = facts.entry(facts.node) else {
         return builder;
@@ -1299,7 +1477,7 @@ mod tests {
     use ods_sdk::contracts::run_events::{RunEvent, RunEventKind, RunOutcome};
 
     use super::*;
-    use ods_sdk::contracts::error_catalogue::CheckTarget;
+    use ods_sdk::contracts::error_catalogue::{CheckTarget, PatternMatch};
 
     const CUSTOMERS: &str = "model.shop.customers";
     const STG: &str = "model.shop.stg_customers";
@@ -1909,6 +2087,209 @@ mod tests {
         );
     }
 
+    /// #323: a reference to a missing node suggests the project's referable nodes with a
+    /// close name, closest first and at most three, as a guess, never as evidence; the
+    /// name the reference used is never shown.
+    #[test]
+    fn a_missing_ref_suggests_close_names_from_the_project() {
+        let index = ProjectIndex::new(Vec::<String>::new())
+            .with_node("model.shop.orders", IndexedNode::new("orders").referable())
+            .with_node("model.shop.order", IndexedNode::new("order").referable())
+            .with_node("seed.shop.border", IndexedNode::new("border").referable())
+            .with_node(
+                "snapshot.shop.ordered",
+                IndexedNode::new("ordered").referable(),
+            )
+            .with_node(
+                "model.shop.orders_",
+                IndexedNode::new("orders_").referable(),
+            )
+            // The same name in a package counts once; what can't be referred to never.
+            .with_node("model.pkg.orders", IndexedNode::new("orders").referable())
+            .with_node("source.shop.raw.orderx", IndexedNode::new("orderx"))
+            .with_node(
+                "test.shop.orderz_test",
+                IndexedNode::new("orderx").checking(CheckTarget::default()),
+            )
+            .with_node(
+                "model.shop.customers",
+                IndexedNode::new("customers").referable(),
+            );
+        let info = CatalogueInfo::new("fake", "1", "the fake engine");
+        let error = summary("Compilation Error: depends on a node named [value removed]");
+        let explain = |missing: Option<&str>, index: Option<&ProjectIndex>| {
+            let classification = Classification::Recognised(
+                PatternMatch::new("fake-missing-ref", Symptom::MissingRef)
+                    .about(missing.map(str::to_owned)),
+            );
+            let mut facts =
+                FailureFacts::new("project", &classification, &info, FailureStage::Prepare);
+            facts.error = Some(&error);
+            facts.index = index;
+            explain_failure(&facts)
+        };
+        let texts = |e: &ErrorExplanation| -> Vec<String> {
+            e.suggestions()
+                .iter()
+                .map(|s| s.text.as_str().to_owned())
+                .collect()
+        };
+        let generic = "Check the names the model refers to against the project's nodes.";
+
+        // One close name.
+        let e = explain(Some("custmers"), Some(&index));
+        assert_eq!(
+            texts(&e)[..2],
+            [
+                "Did you mean `customers`? The project has a node with a name close to the missing one; that is a guess from the names, not evidence of a typo.",
+                generic
+            ]
+        );
+        assert_eq!(
+            e.confidence(),
+            Confidence::KnownPattern,
+            "a guess confirms nothing"
+        );
+        assert!(e.evidence().iter().all(|i| !i.confirms));
+        assert!(!json(&e).contains("custmers"), "{}", json(&e));
+
+        // Several: closest first, then by name; at most three; deterministic.
+        let several = explain(Some("orderz"), Some(&index));
+        assert_eq!(
+            texts(&several)[0],
+            "Did you mean `order`, `orders` or `border`? The project has nodes with names close to the missing one; that is a guess from the names, not evidence of a typo."
+        );
+        assert_eq!(json(&several), json(&explain(Some("orderz"), Some(&index))));
+        let two = explain(Some("ordrs"), Some(&index));
+        assert!(
+            texts(&two)[0].starts_with("Did you mean `orders`, `order` or `orders_`? "),
+            "{:?}",
+            texts(&two)
+        );
+
+        // None close, no name, or no project: only the generic step.
+        for e in [
+            explain(Some("zzzzzzzz"), Some(&index)),
+            explain(None, Some(&index)),
+            explain(Some("custmers"), None),
+        ] {
+            assert_eq!(texts(&e)[0], generic);
+            assert!(texts(&e).iter().all(|t| !t.contains("Did you mean")));
+            assert_eq!(e.confidence(), Confidence::KnownPattern);
+        }
+    }
+
+    /// #323, #181: health checks are evidence from `ods doctor`; one confirms only when
+    /// it shows the symptom the pattern recognised, and nothing secret gets through.
+    #[test]
+    fn doctor_findings_are_evidence_and_confirm_only_the_symptom_they_show() {
+        let info = CatalogueInfo::new("fake", "1", "the fake engine");
+        let error = summary(&format!(
+            "Runtime Error: Could not find profile named '{SENTINEL}'"
+        ));
+        let profile = Classification::Recognised(PatternMatch::new(
+            "fake-profile-not-found",
+            Symptom::ProfileNotFound,
+        ));
+        let unknown = Classification::NotRecognised {
+            category: ErrorCategory::Configuration,
+        };
+        let resolution = DoctorFinding::new(
+            "config.resolution",
+            HealthStatus::Ok,
+            Text::new()
+                .plain("dbt's profile is ")
+                .code("analytics")
+                // A value that could carry a secret never reads as a name.
+                .plain(", password ")
+                .code(&format!("password={SENTINEL}"))
+                .plain("."),
+        );
+        let missing = DoctorFinding::new(
+            "config.resolution",
+            HealthStatus::Warning,
+            Text::new()
+                .plain("no profiles file in ")
+                .code("profiles")
+                .plain("."),
+        )
+        .showing(Symptom::ProfileNotFound);
+        let elsewhere = DoctorFinding::new(
+            "config.values",
+            HealthStatus::Warning,
+            Text::new().plain("something else."),
+        )
+        .showing(Symptom::CredentialsMissing);
+        let explain = |classification: &Classification, doctor: &[DoctorFinding]| {
+            let mut facts =
+                FailureFacts::new("project", classification, &info, FailureStage::Prepare);
+            facts.error = Some(&error);
+            facts.doctor = doctor;
+            explain_failure(&facts)
+        };
+
+        // Without doctor findings, nothing changes.
+        let plain = explain(&profile, &[]);
+        assert_eq!(plain.confidence(), Confidence::KnownPattern);
+        assert!(
+            plain
+                .evidence()
+                .iter()
+                .all(|i| i.source != EvidenceSource::Doctor)
+        );
+
+        // Findings that don't show the symptom are context.
+        let context = explain(&profile, &[resolution.clone(), elsewhere.clone()]);
+        assert_eq!(context.confidence(), Confidence::KnownPattern);
+        let doctor: Vec<&EvidenceItem> = context
+            .evidence()
+            .iter()
+            .filter(|i| i.source == EvidenceSource::Doctor)
+            .collect();
+        assert_eq!(doctor.len(), 2);
+        assert_eq!(
+            doctor[0].text.as_str(),
+            "Check `config.resolution` (ok): dbt's profile is `analytics`, password [name hidden]."
+        );
+        assert_eq!(
+            doctor[0].data,
+            Some(EvidenceData::DoctorCheck {
+                check: "config.resolution".into(),
+                status: HealthStatus::Ok,
+            })
+        );
+        assert!(doctor.iter().all(|i| !i.confirms));
+
+        // One that shows it confirms.
+        let confirmed = explain(&profile, &[resolution.clone(), missing.clone()]);
+        assert_eq!(confirmed.confidence(), Confidence::KnownPatternWithEvidence);
+        let confirming: Vec<&str> = confirmed
+            .evidence()
+            .iter()
+            .filter(|i| i.confirms)
+            .map(|i| i.text.as_str())
+            .collect();
+        assert_eq!(
+            confirming,
+            ["Check `config.resolution` (warning): no profiles file in `profiles`."]
+        );
+
+        // An error nothing recognised gets it as context only.
+        let unrecognised = explain(&unknown, &[missing]);
+        assert_eq!(unrecognised.confidence(), Confidence::NotRecognised);
+        assert!(
+            unrecognised
+                .evidence()
+                .iter()
+                .any(|i| i.source == EvidenceSource::Doctor)
+        );
+        assert!(unrecognised.evidence().iter().all(|i| !i.confirms));
+
+        for e in [plain, context, confirmed, unrecognised] {
+            assert!(!json(&e).contains("SENTINEL"), "{}", json(&e));
+        }
+    }
+
     const TEST: &str = "test.shop.not_null_orders_customer_id.ab12";
     const ORDERS: &str = "model.shop.orders";
 
@@ -2207,6 +2588,35 @@ mod tests {
     /// #323: a test's own name is used only for a test the provider says is singular
     /// (named by its file), never for a generic one, whose name may hold its arguments;
     /// nor is the check's id, which may too: the explanation carries its handle.
+    #[test]
+    fn a_check_is_described_by_what_it_tests_or_its_handle_never_its_id() {
+        let covers = vec![ORDERS.to_owned()];
+        let index = test_index();
+        let known = describe_check(TEST, &covers, Some(&index));
+        assert_eq!(known.handle, check_handle(TEST));
+        assert_eq!(
+            (known.test.as_deref(), known.column.as_deref()),
+            (Some("not_null"), Some("customer_id"))
+        );
+        assert_eq!(known.node.as_deref(), Some(ORDERS));
+        assert_eq!(known.name, None, "a generic test's name is never kept");
+        assert_eq!(
+            known.phrase(true, |_| "orders".to_owned()).as_str(),
+            "The `not_null` test on `customer_id` of `orders`"
+        );
+
+        // Without the project: its handle and the node it covers, nothing else.
+        let id = format!("test.shop.accepted_values_orders_status__completed__{SENTINEL}.1");
+        let unknown = describe_check(&id, &covers, None);
+        assert_eq!(unknown.handle, check_handle(&id));
+        assert!(!format!("{unknown:?}").contains(SENTINEL), "{unknown:?}");
+        assert_eq!(
+            unknown.phrase(false, |_| "orders".to_owned()).as_str(),
+            "a test on `orders`"
+        );
+        assert_eq!(describe_check(&id, &[], None).node, None);
+    }
+
     #[test]
     fn only_a_singular_tests_name_is_shown() {
         let run = tested(CheckStatus::Failed, Some(3), None);

@@ -711,6 +711,25 @@ pub struct ProjectFailure {
     pub file: Option<String>,
     /// The error, summarised as [`error_summary`] does.
     pub summary: ErrorSummary,
+    /// The name a reference to a missing node used (`depends on a node named
+    /// 'no_such_model' which was not found`), when it is identifier-shaped
+    /// ([`is_code`](ods_core::failure::is_code)). The summary removes it, as every
+    /// quoted name; it is kept here only so explanations can compare it with the
+    /// project's own names (did-you-mean), and is never shown (#323).
+    pub missing_node: Option<String>,
+}
+
+/// The node name a missing reference used, from dbt-core's message `… depends on a node
+/// named '<name>' … which was not found`. Only the `node` form is read: it is the one
+/// recorded from real dbt runs (`dbt-<version>-errors`, scenario `missing-ref`).
+fn missing_node(lines: &[&str]) -> Option<String> {
+    const OPENING: &str = "depends on a node named '";
+    lines.iter().find_map(|line| {
+        let (_, rest) = line.split_once(OPENING)?;
+        let (name, tail) = rest.split_once('\'')?;
+        (tail.contains("which was not found") && ods_core::failure::is_code(name))
+            .then(|| name.to_owned())
+    })
 }
 
 /// Reads the error dbt printed when a whole command failed (`Encountered an error:`
@@ -736,6 +755,7 @@ pub fn project_failure(output: &str) -> Option<ProjectFailure> {
             resource_type: Some(resource.to_owned()),
             file: Some(file.to_owned()),
             summary: error_summary(&lines[at..].join("\n"))?,
+            missing_node: missing_node(&lines[at..]),
         });
     }
     let at = lines.iter().position(|l| HEADER_KINDS.contains(l))?;
@@ -748,6 +768,7 @@ pub fn project_failure(output: &str) -> Option<ProjectFailure> {
         summary: ErrorSummary::from_message(detail)?
             .with_kind(kind)
             .with_details_at(DETAILS_AT),
+        missing_node: missing_node(&[detail]),
     })
 }
 

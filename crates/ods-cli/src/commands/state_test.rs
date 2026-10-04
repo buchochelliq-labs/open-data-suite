@@ -78,7 +78,11 @@ pub(super) struct TestReport {
     /// Every selected source with tests, and whether they run and why (#232).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     source_tests: Vec<SourceCheck>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Checks by their handles, never their ids (#323).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "super::failures::serialize_execution"
+    )]
     execution: Option<ExecutionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<TestRecordReport>,
@@ -289,7 +293,7 @@ impl TestReport {
             .with_engine_args(dbt_args(args))
             .with_scope(report.scope.clone());
         let execution = report.execute(&executor, &request, &steps)?;
-        report.explain_failures(&ws, settings, latest.as_ref());
+        report.explain_failures(&ws, settings, latest.as_ref(), &execution);
         let store = match store {
             Some(store) => store,
             None => ws.open_store()?,
@@ -304,29 +308,37 @@ impl TestReport {
 }
 
 impl TestReport {
-    /// Explains each node that failed (#323).
+    /// Names the checks `execution` lists, and explains each node that failed (#323).
     fn explain_failures(
         &mut self,
         ws: &Workspace,
         settings: &StateSettings,
         latest: Option<&ods_sdk::contracts::state_store::StoredSnapshot>,
+        execution: &ExecutionReport,
     ) {
+        let project_dir = super::failures::project_dir(settings);
+        let files = super::failures::ProjectFiles {
+            project_dir: &project_dir,
+            target_dir: &ws.target_dir,
+            manifest: Some(&ws.manifest),
+            last_manifest: None,
+        };
+        self.observed.check_names = super::failures::describe_checks(execution, &files);
         let Some(run) = &self.observed.run_stats else {
             return;
         };
-        let project_dir = super::failures::project_dir(settings);
         let evidence = super::failures::Evidence {
-            files: super::failures::ProjectFiles {
-                project_dir: &project_dir,
-                target_dir: &ws.target_dir,
-                manifest: Some(&ws.manifest),
-            },
+            files,
             plan: None,
             before: latest.map(|l| &l.snapshot),
             state_db: &self.state_db,
             retry: None,
             state_db_flag: super::failures::retry_state_db(settings),
             project_is_run: true,
+            doctor: Some(super::failures::Doctor {
+                config: None,
+                settings,
+            }),
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);
     }
@@ -494,7 +506,7 @@ impl Present for TestReport {
                     .map(|n| {
                         vec![
                             vec![Span::toned(display_name(&n.node), Tone::Code)],
-                            vec![test_cell(n)],
+                            test_cell(n, &self.observed.check_names),
                         ]
                     })
                     .collect(),
@@ -504,7 +516,11 @@ impl Present for TestReport {
             blocks.push(ViewNode::Table {
                 title: Some("source tests".into()),
                 columns: vec!["source".into(), "tests".into(), "why".into()],
-                rows: source_rows(&self.source_tests, self.execution.as_ref()),
+                rows: source_rows(
+                    &self.source_tests,
+                    self.execution.as_ref(),
+                    &self.observed.check_names,
+                ),
             });
         }
         blocks.extend(super::failures::section(&self.observed.failures));
@@ -563,27 +579,23 @@ fn results_to_record(execution: &ExecutionReport) -> Vec<TestResult> {
         .collect()
 }
 
-/// One node's test outcome, for people.
-fn test_cell(n: &NodeExecution) -> Span {
-    let names = |checks: &[String]| {
-        checks
-            .iter()
-            .map(|c| display_name(c))
-            .collect::<Vec<_>>()
-            .join(", ")
+/// One node's test outcome, for people, each check named as `names` describes it,
+/// never by its id (#323).
+fn test_cell(n: &NodeExecution, names: &super::failures::CheckNames) -> Vec<Span> {
+    let listed = |label: &str, tone: Tone, checks: &[String]| {
+        let mut line = vec![Span::toned(label, tone)];
+        line.extend(super::failures::checks_line(checks, names));
+        line
     };
     if n.fully_checked() {
-        Span::toned("passed", Tone::Success)
+        vec![Span::toned("passed", Tone::Success)]
     } else if !n.checks_failed.is_empty() {
-        Span::toned(format!("failed: {}", names(&n.checks_failed)), Tone::Error)
+        listed("failed: ", Tone::Error, &n.checks_failed)
     } else if !n.checks_skipped.is_empty() {
-        Span::toned(
-            format!("didn't run: {}", names(&n.checks_skipped)),
-            Tone::Warning,
-        )
+        listed("didn't run: ", Tone::Warning, &n.checks_skipped)
     } else if n.checks_passed.is_empty() {
-        Span::toned("no tests ran on it", Tone::Warning)
+        vec![Span::toned("no tests ran on it", Tone::Warning)]
     } else {
-        Span::toned("not tested", Tone::Warning)
+        vec![Span::toned("not tested", Tone::Warning)]
     }
 }

@@ -18,6 +18,27 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- `SDK_VERSION` is now 0.5 (#323): the `error_catalogue` contract is 0.3 (a
+  `ProjectIndex` node may say other nodes refer to it by name,
+  `IndexedNode::referable`). **What to do:** rebuild out-of-process plugins against it;
+  a catalogue that indexes a project marks the nodes a reference can name (for dbt:
+  models, seeds and snapshots) with `IndexedNode::referable()`, or leaves them unmarked
+  and gets no did-you-mean for missing references.
+- `--output json` of `ods state run`, `seed`, `snapshot`, `build`, `test` and `retry`
+  lists tests by their handle, `check-<12 hex digits>`, instead of dbt's id for them,
+  which holds a generic test's arguments (an `accepted_values` test's id names the
+  values it accepts) (#323): `execution.checks_failed`, and each node's and source's
+  `checks_failed`, `checks_skipped` and `checks_passed`, are still arrays of strings.
+  `ods serve`'s live stream (`/api/runs/<run_id>/events`, and with `?since=`) sends a
+  `check_finished` event's `check` as the handle too. So the `--output json` envelope
+  is now `schema_version` 1.0 (was 0.1; `ods version` reports it), and the stream's
+  messages, and `/api/runs/live`, are `live_schema_version` / `schema_version` 2 (was 1):
+  every stream message's data now carries `live_schema_version`. The journal on disk
+  (`<state-db>.runs/<run_id>.jsonl`) keeps dbt's id. **What to do:** accept output
+  schema 1.x and live schema 2; match a failed
+  test to its explanation by the handle (`failures[].node`), whose `check` says what it
+  tests (`test`, `column`, `covers`); to find a test from its handle, compute it from
+  the manifest's ids: `check-` and the first 12 hex digits of the SHA-256 of the id.
 - `ods state retry` needs `--vars` and the arguments after `--` given again when the
   last run had them (#321). **What to do:** pass the same `--vars` and `-- …` that the
   run had, e.g. `ods state retry --vars '{…}' -- --threads 8`; without them, or with
@@ -68,6 +89,19 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- A failure from a `ref()` to a model that doesn't exist suggests the project's models,
+  seeds and snapshots with a close name, at most three, closest first ("Did you mean
+  `customers`?"), as a guess that doesn't raise the confidence; the name the `ref()`
+  used is never shown (#323). The dbt error catalogue is version 3.
+- A failure of dbt's profile, target or credentials is explained with `ods doctor`'s
+  local configuration checks (`config.load`, `config.values` for credentials,
+  `config.resolution`), as evidence marked `[ods doctor]` (`source: doctor`, with
+  `data.kind: doctor_check`, `check` and `status`, in `--output json`). Explanations are
+  `schema_version` 1.2 (#323, #181).
+- `ods doctor`'s `config.resolution` warns (`ODS-W0510`) when the profiles directory
+  given to dbt (`--profiles-dir`, `DBT_PROFILES_DIR` or `profiles_dir`) has no
+  `profiles.yml`; an explanation of a missing profile counts that as confirming it
+  (`known pattern + evidence`). Only the file's presence is checked (#181).
 - A failed test is explained (#323, ADR-0025): `ods state build`, `ods state test`
   and `ods state history --run` say which test failed, on which column of which model,
   and how many rows don't pass ("The `not_null` test on `customer_id` of `customers`
@@ -352,6 +386,12 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- The terminal names a failed or skipped test by what it tests, never by dbt's id or a
+  generic test's name (#323): `failed: accepted_values on orders.status` on the node's
+  line of `ods state test` and on a source's line, `warning: failed checks: …` after
+  `ods state build`, a singular test by its own name, and any other test as `a test on
+  orders (check-…)`. The live view announces a failed test as `A test on orders failed
+  (check-…)`.
 - `ods serve`'s Run pages say *the node didn't build* for a failed or skipped node's
   rows (`rows_missing` in `/api/state/runs/<run_id>`), instead of *not reported by the
   adapter* or *didn't run* (#322).

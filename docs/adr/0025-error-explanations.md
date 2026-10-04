@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-30
-- **Issues:** #323 (explain dbt errors), #322 (run events and journal), #320 (values removed from messages)
+- **Issues:** #323 (explain dbt errors), #322 (run events and journal), #320 (values removed from messages), #181 (`ods doctor`)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -254,6 +254,19 @@ rows and redacted message, ADR-0024 1.1) and the project:
   and de-duplicates failed tests there; it says nothing about the test. `RunSummary`
   keeps each check's id for explaining (`checks`), but never serializes it, so
   `ods state history --run` doesn't show it.
+- **Every surface uses the handle** (amended 2026-10-04, #323): besides explanations,
+  `--output json`'s `execution` lists checks by their handles (`checks_failed`, and each
+  node's and source's `checks_failed`, `checks_skipped` and `checks_passed`: the same
+  arrays of strings, a handle where the id was, so a failed test's entry matches its
+  explanation's `node`, whose `check` says what it tests); the terminal names each
+  failed or skipped check by what it tests (`ods_state::describe_check`, the same
+  description explanations phrase: "`not_null` on `orders.customer_id`", a singular
+  test by its own name, otherwise "a test on `orders`" and its handle); and the live
+  stream sends a `check_finished`'s `check` as its handle. Without the project index a
+  check is named by its handle, never its id. The journal on disk keeps the id
+  (ADR-0024): it is the key to the engine's own records of the test, which sit beside
+  it and hold the same arguments, and changing what a persisted field means would be a
+  format break for no gain in what is kept.
 - **Failing rows:** the check found rows when the catalogue recognises its message as a
   failed test (`dbt-test-failed`), or, with no message ODS recognises, when the engine
   counted failing rows (ODS's own pattern `ods`/`check-failing-rows`, from the event's
@@ -288,6 +301,39 @@ rows and redacted message, ADR-0024 1.1) and the project:
   (or of nodes the run didn't run), in the Run page's "Failed tests" section
   (`failed_tests` on the run).
 
+### Did-you-mean for refs and `ods doctor` as evidence (amended 2026-10-04, #323, #181)
+- **A ref to a missing node** gets did-you-mean, as an undefined macro does: the
+  project's nodes that others refer to by name (`IndexedNode::referable`, error-catalogue
+  contract **0.3**; the dbt provider marks models, seeds and snapshots) within two edits
+  of the name the ref used, at most three, closest first, then by name, each name once.
+  The redacted summary removes that name, so the dbt provider reads it from dbt's whole
+  message when a command failed before running (`ProjectFailure::missing_node`, from
+  `depends on a node named '<name>' … which was not found`, identifier-shaped only) and
+  `DbtErrorCatalogue::classify_project` sets it as the pattern's subject (catalogue
+  version **3**). It is only compared, never shown: an explanation still names only
+  the project's own nodes. The suggestion ("Did you mean `customers`? … a guess from the
+  names, not evidence of a typo") confirms nothing. dbt writes no manifest when a ref
+  can't be resolved, so the names come from the manifest it wrote last. Only the `node`
+  form of the message is read: a missing `source()` (`depends on a source named …`) is
+  not in the recorded messages, so it isn't matched.
+- **`ods doctor`'s local checks are evidence** for a missing profile or target
+  (`profile_not_found`) and missing credentials (`credentials_missing`), from a new
+  source, `EvidenceSource::Doctor` (`doctor`, shown `[ods doctor]`), with the check's id
+  and status as data (`EvidenceData::DoctorCheck`); `ErrorExplanation` **1.2**. The CLI
+  runs only checks that don't run dbt, connect or write: `config.load` and, for
+  credentials, `config.values` (when the command has the configuration at hand: after a
+  failure before running), and `config.resolution`, with the `profiles_dir`, `profile`
+  and `target` ODS gives dbt and where each came from. Their wording is ODS's, with names
+  in code spans, and doctor output holds no secret (ADR-0023). ods-state receives them as
+  neutral `DoctorFinding`s (`FailureFacts::doctor`: id, status, text, and the symptom the
+  host says a finding shows on its own); a finding **confirms** only when it shows the
+  symptom the catalogue recognised. `config.resolution` now warns (`ODS-W0510`) when the
+  profiles directory ODS gives dbt has no `profiles.yml`, which shows that no profile can
+  be found and so confirms `profile_not_found`; ODS checks the file's presence only and
+  still never reads it (rule 9), so a profile missing *from* the file stays
+  `known_pattern`. `ods state history --run` runs no checks (the configuration may have
+  changed since), and nor does the dashboard's explainer.
+
 ## Consequences
 - Positive:
   - A failed node says what went wrong, why ODS thinks so and what to try, in the same
@@ -311,13 +357,15 @@ rows and redacted message, ADR-0024 1.1) and the project:
     recorded fixtures. (dbt 1.11 and 1.12 are now recorded as well as 1.10, and every
     recorded message is checked on each: 1.12 rewords the missing-packages error, which
     the catalogue's version 2 recognises.)
-  - Hiding check ids that hold a generic test's arguments where ODS still shows or
-    keeps them: explanations, `ods state history --run`, the Run page and its API use
-    the check's handle, but the executor's `checks_failed` (in `--output json`'s
-    `execution`, and the terminal's per-node `failed: …` line and `failed checks: …`
-    warning) and the journal's `check_finished` events (also streamed by the live view)
-    still carry the id, as they did before #323.
-  - `ods doctor` checks as evidence for configuration errors.
+  - ~~Hiding check ids that hold a generic test's arguments where ODS still shows
+    them~~ (closed 2026-10-04): see "Every surface uses the handle" above. The journal
+    on disk keeps the id, deliberately (ADR-0024).
+  - ~~`ods doctor` checks as evidence for configuration errors~~ (done, amended
+    2026-10-04). Still open: telling a profile or target missing from `profiles.yml`
+    without reading it (e.g. from `dbt debug`'s structured output), dbt's default
+    profiles locations (the working directory, then `~/.dbt`) when no directory is
+    named, and doctor evidence on the dashboard and for `ods state history --run`.
+  - Did-you-mean for a missing `source()`, once its message is recorded from real dbt.
   - "Ask the ODS agent to investigate" (M6) and an MCP tool `explain_failure`.
 
 ## References

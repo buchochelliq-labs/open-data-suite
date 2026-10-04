@@ -409,9 +409,10 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
     let (code, json) = project.run(&["--test"]);
     assert_eq!(code, 1, "{json:#}");
     let result = &json["result"];
+    // By its handle, never its id (#323).
     assert_eq!(
         result["execution"]["checks_failed"][0],
-        "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
+        ods_core::failure::check_handle("test.jaffle_ods.unique_orders_order_id.fed79b3a6e")
     );
     // `orders` was built, but not validated: it doesn't advance, so it (and its test)
     // runs again next time.
@@ -566,7 +567,7 @@ fn a_skipped_test_leaves_its_node_untested() {
         .unwrap();
     assert_eq!(
         orders["checks_skipped"][0],
-        "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
+        ods_core::failure::check_handle("test.jaffle_ods.unique_orders_order_id.fed79b3a6e")
     );
 
     // Not a failure, but not a pass either: orders stays untested.
@@ -1385,12 +1386,16 @@ fn real_dbt_a_failing_source_test_skips_downstream_models() {
         source_tests(result)["raw.raw_orders"],
         decided("test", "not_tested")
     );
+    // Listed by its handle (#323), which its explanation's `node` holds too.
     let failed = result["execution"]["checks_failed"].as_array().unwrap();
     assert!(
-        failed.iter().any(|c| c
-            .as_str()
-            .unwrap()
-            .contains("source_accepted_values_raw_raw_orders_status")),
+        result["failures"].as_array().unwrap().iter().any(|f| {
+            f["check"]["test"] == "accepted_values"
+                && f["check"]["covers"][0]
+                    .as_str()
+                    .is_some_and(|c| c.ends_with(".raw.raw_orders"))
+                && failed.contains(&f["node"])
+        }),
         "{result:#}"
     );
     let mut ods_skipped: Vec<String> = result["execution"]["nodes"]
@@ -3064,7 +3069,9 @@ fn a_failing_source_test_fails_the_build_and_skips_its_readers() {
     assert_eq!(result["outcome"], "failed");
     assert_eq!(
         result["execution"]["checks_failed"],
-        serde_json::json!(["test.jaffle_ods.source_not_null_raw_orders_id.0000000000"])
+        serde_json::json!([ods_core::failure::check_handle(
+            "test.jaffle_ods.source_not_null_raw_orders_id.0000000000"
+        )])
     );
     let status = |name: &str| {
         result["execution"]["nodes"]
@@ -3779,7 +3786,7 @@ fn a_failed_node_is_explained_without_values() {
         .with("FAKE_DBT_FAIL_MESSAGE", MISSING_COLUMN);
     let (code, json) = project.run(&[]);
     assert_eq!(code, 1, "{json:#}");
-    assert!(!json.to_string().contains("SENTINEL"), "{json:#}");
+    assert!(!json["result"].to_string().contains("SENTINEL"), "{json:#}");
     let result = &json["result"];
     let (path, _) = journal_of(&project, result);
     assert!(!std::fs::read_to_string(path).unwrap().contains("SENTINEL"));
@@ -3950,11 +3957,11 @@ fn a_failed_test_is_explained_without_values() {
 
 /// #323: dbt names a generic test after its arguments: the recorded `accepted_values`
 /// test (dbt 1.10, `capture-errors.sh`) accepts a secret, so its name and id hold it.
-/// When it fails, its explanation names it by what it tests and its handle, in
-/// `ods state build` (with tests), `ods state test` and `ods state history --run`, JSON
-/// and plain. The id stays only where ODS kept it before #323: the journal's
-/// `check_finished` events and the executor's `checks_failed` (the report's
-/// `execution`, and the per-node line and the warning the terminal prints from it).
+/// When it fails, no output of `ods state build` (with tests), `ods state test` or
+/// `ods state history --run`, JSON or plain, holds it, whole: its explanation names it
+/// by what it tests and its handle, the execution's `checks_failed` lists its handle,
+/// and the terminal's per-node line and warning name it by what it tests. Only the
+/// journal on disk keeps the id (ADR-0024), beside the manifest that holds it too.
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -3991,28 +3998,31 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         );
         failure.clone()
     };
-    // What ODS kept before #323 (the executor's `checks_failed`), and nothing else.
-    let without_checks_failed = |result: &Value| {
-        let mut result = result.clone();
-        let execution = &mut result["execution"];
+    // The execution lists the check by its handle, on the run and on the node.
+    let listed = |execution: &Value| {
+        assert_eq!(execution["checks_failed"], serde_json::json!([handle]));
+        let orders = execution["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node"] == "model.jaffle_ods.orders")
+            .unwrap();
         assert!(
-            leaks(&execution["checks_failed"].to_string()),
-            "{execution:#}"
+            orders["checks_failed"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from(handle.as_str())),
+            "{orders:#}"
         );
-        execution["checks_failed"] = Value::Null;
-        for n in execution["nodes"].as_array_mut().unwrap() {
-            n["checks_failed"] = Value::Null;
-        }
-        result
     };
 
-    // `ods state build --test`.
+    // `ods state build --test`: the whole output.
     let (code, json) = project.run(&["--test"]);
     assert_eq!(code, 1, "{json:#}");
+    assert!(!leaks(&json.to_string()), "{json:#}");
     let result = &json["result"];
     explained(&result["failures"]);
-    let rest = without_checks_failed(result);
-    assert!(!leaks(&rest.to_string()), "{rest:#}");
+    listed(&result["execution"]);
     let (_, events) = journal_of(&project, result);
     let check = events
         .iter()
@@ -4040,12 +4050,14 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         "{history}"
     );
 
-    // `ods state test`.
+    // `ods state test`: the whole output.
     let (code, tested) = project.test(&[]);
     assert_eq!(code, 1, "{tested:#}");
+    assert!(!leaks(&tested.to_string()), "{tested:#}");
     explained(&tested["result"]["failures"]);
+    listed(&tested["result"]["execution"]);
 
-    // Plain: the explanation, whole; the rest only as before #323.
+    // Plain: the whole output; the test named by what it tests everywhere.
     let dbt = fixture("fake-dbt/dbt");
     let dbt = dbt.to_str().unwrap();
     for command in ["build", "test"] {
@@ -4058,14 +4070,14 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
             "{why}"
         );
         assert!(!leaks(&why), "{command}: {why}");
-        let elsewhere: Vec<&str> = plain.lines().filter(|l| leaks(l)).collect();
-        // Before #323: the per-node line (`failed: <check>`) and the run's warning
-        // (`failed checks: <check>`), from `checks_failed`.
-        assert!(
-            elsewhere.iter().all(|l| !why.contains(*l)
-                && (l.contains("failed: ") || l.starts_with("warning: failed checks: "))),
-            "{command}: {elsewhere:?}"
-        );
+        assert!(!leaks(&plain), "{command}: {plain}");
+        // The run's warning (`build`) and the per-node line (`test`) name it by what it
+        // tests.
+        let named = match command {
+            "build" => "warning: failed checks: accepted_values on orders.status",
+            _ => "orders\tfailed: accepted_values on orders.status",
+        };
+        assert!(plain.lines().any(|l| l == named), "{command}: {plain}");
     }
 }
 
@@ -4123,6 +4135,135 @@ fn a_compile_failure_is_explained_before_anything_runs() {
     ]);
     assert_eq!(code, 1, "{plain}");
     insta::assert_snapshot!("compile_failure_plain", plain.trim_end());
+}
+
+/// #323: a ref to a node that doesn't exist suggests the project's nodes with a close
+/// name, as a guess; the name the ref used, which only dbt's message holds, is never
+/// shown.
+#[test]
+fn a_missing_ref_suggests_a_close_name() {
+    let project = Project::new("missing-ref").with(
+        "FAKE_DBT_COMPILE_ERROR",
+        "Compilation Error\n  Model 'model.jaffle_ods.broken' (models/marts/broken.sql) depends on a node named 'custmers' which was not found",
+    );
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["symptom"], "missing_ref", "{json:#}");
+    assert_eq!(
+        failure["confidence"], "known_pattern",
+        "a guess confirms nothing"
+    );
+    assert_eq!(
+        failure["suggestions"][0]["text"],
+        "Did you mean `customers`? The project has a node with a name close to the missing one; that is a guess from the names, not evidence of a typo.",
+        "{json:#}"
+    );
+    // The command's own diagnostic relays dbt's error as dbt printed it (as before
+    // #323); the explanation never holds the name.
+    assert!(!json["result"].to_string().contains("custmers"), "{json:#}");
+    insta::assert_snapshot!(
+        "missing_ref_json",
+        serde_json::to_string_pretty(failure).unwrap()
+    );
+
+    let (code, plain) = project.ods_plain_status(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ]);
+    assert_eq!(code, 1, "{plain}");
+    assert!(plain.contains("Did you mean customers?"), "{plain}");
+    assert!(!plain.contains("custmers"), "{plain}");
+    insta::assert_snapshot!("missing_ref_plain", plain.trim_end());
+}
+
+/// #323, #181: a profile dbt can't find is explained with what `ods doctor`'s local
+/// configuration checks find; a profiles directory with no `profiles.yml` confirms it.
+/// Nothing from dbt's message gets through.
+#[test]
+fn a_missing_profile_is_explained_with_doctor_checks() {
+    const SENTINEL: &str = "sk_live_PROFILE_SENTINEL";
+    let project = Project::new("missing-profile").with(
+        "FAKE_DBT_COMPILE_ERROR",
+        &format!("Runtime Error\n  Could not find profile named '{SENTINEL}'"),
+    );
+    let flags = ["--profiles-dir", "profiles", "--dbt-profile", "analytics"];
+    let (code, json) = project.run(&flags);
+    assert_eq!(code, 1, "{json:#}");
+    assert!(!json["result"].to_string().contains("SENTINEL"), "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["symptom"], "profile_not_found", "{json:#}");
+    assert_eq!(failure["confidence"], "known_pattern_with_evidence");
+    let doctor: Vec<&Value> = failure["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["source"] == "doctor")
+        .collect();
+    let checks: Vec<(&str, &str, bool)> = doctor
+        .iter()
+        .map(|e| {
+            (
+                e["data"]["check"].as_str().unwrap(),
+                e["data"]["status"].as_str().unwrap(),
+                e["confirms"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        checks,
+        [
+            ("config.resolution", "warning", true),
+            ("config.load", "ok", false)
+        ],
+        "{json:#}"
+    );
+    insta::assert_snapshot!(
+        "missing_profile_json",
+        serde_json::to_string_pretty(failure).unwrap()
+    );
+
+    let dbt = fixture("fake-dbt/dbt");
+    let mut args = vec![
+        "state",
+        "build",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ];
+    args.extend(flags);
+    let (code, plain) = project.ods_plain_status(&args);
+    assert_eq!(code, 1, "{plain}");
+    assert!(!plain.contains("SENTINEL"), "{plain}");
+    assert!(plain.contains("[ods doctor]"), "{plain}");
+    insta::assert_snapshot!("missing_profile_plain", plain.trim_end());
+
+    // With a profiles file there, the checks are context: ODS never reads it, so it
+    // can't tell whether the profile is in it.
+    std::fs::create_dir_all(project.dir.join("profiles")).unwrap();
+    std::fs::write(project.dir.join("profiles/profiles.yml"), "").unwrap();
+    let (code, json) = project.run(&flags);
+    assert_eq!(code, 1, "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["confidence"], "known_pattern", "{json:#}");
+    let resolution = failure["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["data"]["check"] == "config.resolution")
+        .unwrap();
+    assert_eq!(resolution["confirms"], false);
+    assert_eq!(
+        resolution["text"],
+        "Check `config.resolution` (ok): where ODS finds the project, dbt and the state. dbt's `profiles_dir` `profiles` (`flag`), `profile` `analytics` (`flag`), `target` unset (dbt's default).",
+        "{json:#}"
+    );
+    assert!(!json["result"].to_string().contains("SENTINEL"), "{json:#}");
 }
 
 /// #323 review: an error once dbt started building is never "failed before any node

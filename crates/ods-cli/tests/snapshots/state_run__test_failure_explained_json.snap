@@ -5,7 +5,7 @@ expression: "redact(&serde_json::to_string_pretty(failure).unwrap())"
 {
   "schema_version": {
     "major": 1,
-    "minor": 1
+    "minor": 2
   },
   "node": "check-62fd3f12487f",
   "check": {
@@ -20,7 +20,7 @@ expression: "redact(&serde_json::to_string_pretty(failure).unwrap())"
   "confidence": "known_pattern_with_evidence",
   "pattern": {
     "catalogue": "dbt",
-    "version": "2",
+    "version": "3",
     "id": "dbt-test-failed"
   },
   "headline": "The `not_null` test on `customer_id` of `customers` failed: 5 rows don't pass",

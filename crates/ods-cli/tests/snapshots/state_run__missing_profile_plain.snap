@@ -1,0 +1,29 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: plain.trim_end()
+---
+State run
+
+outcome: failed before any node ran: nothing was built or recorded
+
+Why it failed
+
+failed: project
+what: The profile or target isn't defined
+kind: configuration or profile · profile or target not found
+confidence: known pattern + evidence
+
+why ODS thinks so
+  Check config.resolution (warning): no profiles.yml in the profiles directory profiles (flag): dbt finds no profile there. dbt's profiles_dir profiles (flag), profile analytics (flag), target unset (dbt's default).  [ods doctor]
+  Check config.load (ok): no configuration file: built-in defaults apply.  [ods doctor]
+  It failed while the project was compiled, before anything ran.  [run stats]
+
+what to try
+  1. Check that dbt can connect with this profile:
+    $ dbt debug
+  2. Check the profile, target and credentials ODS and the engine use:
+    $ ods doctor
+  3. Then run the same command again: nothing was built or recorded.
+
+dbt said: Could not find profile named [value removed]  Literal values and SQL removed.
+full text: dbt's log file (logs/dbt.log in the project, unless --log-path)

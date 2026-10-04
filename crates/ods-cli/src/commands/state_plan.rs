@@ -1132,6 +1132,7 @@ fn explain_history(
             project_dir: &project_dir,
             target_dir: &target_dir,
             manifest: ws.as_ref().map(|w| &w.manifest),
+            last_manifest: None,
         },
         plan: Some(&plan),
         before: before.as_ref(),
@@ -1144,6 +1145,8 @@ fn explain_history(
             .as_ref()
             .and_then(|w| w.manifest.invocation_id.as_deref())
             .is_some_and(|id| run.run_id.as_deref() == Some(id)),
+        // The configuration now may not be the run's: no health checks.
+        doctor: None,
     };
     super::failures::explain_run(run, &evidence)
 }

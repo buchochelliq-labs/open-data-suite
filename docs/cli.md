@@ -65,7 +65,7 @@ literally.
 
 ```json
 {
-  "schema_version": {"major": 0, "minor": 1},
+  "schema_version": {"major": 1, "minor": 0},
   "command": "usage",
   "ods_version": "0.0.1",
   "result": null,
@@ -274,7 +274,7 @@ It takes the options `ods state` commands take to find things (`--project-dir`,
 |---|---|---|
 | `config.load` | Do the configuration files load? Which were found, and which profile is active? | yes |
 | `config.values` | What is every effective value, and where did it come from? Credentials appear only as references, e.g. `secret(env:WH_TOKEN)` | |
-| `config.resolution` | Where do dbt, the project, the target directory, the state database and the environment come from: a flag, a `DBT_*` variable, a configuration file or profile, or a default? | yes |
+| `config.resolution` | Where do dbt, the project, the target directory, the state database and the environment come from: a flag, a `DBT_*` variable, a configuration file or profile, or a default? A profiles directory named for dbt must hold a `profiles.yml` (`ODS-W0510`). | yes |
 | `project.dbt_project` | Is there a `dbt_project.yml` in the project directory? | yes |
 | `project.manifest` | Can `manifest.json` (or dbt's Information Schema) be read, at a supported schema version (v11, v12)? | yes |
 | `project.name` | Does the manifest name its project? | |
@@ -336,6 +336,7 @@ report in `result`, and `ODS-E0501` in `diagnostics`.
 | `ODS-U0507` | The manifest names no adapter. | `dbt parse` with dbt 1.7 or later. |
 | `ODS-U0508` | dbt lists no adapters, so whether the manifest's is installed can't be told. | |
 | `ODS-E0509` | dbt can't render the profile, so it can't say which target it builds in. | Check `profiles.yml`, `--profiles-dir`, `--target` and the variables it reads; `dbt debug` says more. |
+| `ODS-W0510` | The profiles directory ODS gives dbt (`--profiles-dir`, `DBT_PROFILES_DIR` or `profiles_dir`) has no `profiles.yml`: dbt finds no profile there. Only the file's presence is checked; ODS never reads it. | Name the directory that holds `profiles.yml`, or leave it unset for dbt's default. |
 | `ODS-W0601` | No data versions for some sources: the adapter has no table versions, and they have no `loaded_at_field`, so the models reading them build on every run. | Give them a `loaded_at_field` (or `loaded_at_query`); see [where source versions come from](#where-source-versions-come-from). |
 | `ODS-W0602` | Relations can't be checked before reuse: a dropped table is rebuilt only when something else changes. | |
 | `ODS-E0603` | The live relation check failed. | Check that the warehouse is reachable with the profile's credentials: `dbt debug`. |
@@ -756,7 +757,7 @@ an event at a time; nothing else is needed, and the dashboard still only reads.
 
 | Route | Returns |
 |---|---|
-| `/api/runs/live` | the runs that are *probably* running: their journal doesn't say they finished and changed in the last 10 minutes (`status: probably_running`, `inferred: true`, since a journal changing is the only sign), with the command, when each started, how many nodes finished, run or failed so far, and links to the live view and the Run page. Only runs of the dashboard's scope, at `schema_version` 1 |
+| `/api/runs/live` | the runs that are *probably* running: their journal doesn't say they finished and changed in the last 10 minutes (`status: probably_running`, `inferred: true`, since a journal changing is the only sign), with the command, when each started, how many nodes finished, run or failed so far, and links to the live view and the Run page. Only runs of the dashboard's scope, at `schema_version` 2 |
 | `/api/runs/<run_id>/events` | the run's journal as [Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html): every line from the start, then each new line as it is written, then `end` |
 | `/api/runs/<run_id>/events?since=<n>` | the same messages after line `n`, once, as JSON lines (`application/x-ndjson`), for clients without `EventSource`; at most 2,000 per answer, then ask again from the last `id` |
 
@@ -764,9 +765,13 @@ The stream's messages:
 
 | `event` | `id` | `data` |
 |---|---|---|
-| `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it |
+| `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it, except that a `check_finished`'s `check` is the test's handle (`check-<12 hex digits>`), never dbt's id for it, which holds a generic test's arguments |
 | `unreadable` | the line's number | `{"line": n}`: a line that isn't an event of this run: a newer version, a line cut short (sent before `end` when the run stopped mid-write), one longer than 256 KiB, or another run's event |
 | `end` | none | `{"reason", "outcome", "inferred", "note"}`: `finished` after `run_finished`; `stopped` (inferred) when the journal doesn't say it finished and hasn't grown for 10 minutes; `replaced` when the journal was replaced or got shorter |
+
+Every message's `data` also carries `live_schema_version` (2), the stream's own version:
+a run event's `schema_version` is the journal's, which didn't change when the stream
+started sending a check's handle.
 
 A client that reconnects with `Last-Event-ID` (browsers do it on their own) gets only
 the lines after it; without one, the stream replays from the start, so a page opened
@@ -1059,6 +1064,17 @@ new data"), and how they ended; in JSON, `source_tests` holds the decisions (`so
 `checks_changed`, `missing_data_evidence`, `new_upstream_data` or `unchanged`, and
 `evidence`), `execution.sources` each source's outcome, and `record.source_tests` the
 sources whose tests `passed` or `failed`.
+
+A test is never shown by dbt's id for it, which holds a generic test's arguments (an
+`accepted_values` test's id names the values it accepts) (#323). The terminal names it
+by what the manifest says it tests: `failed: not_null on orders.customer_id` on the
+node's line, `warning: failed checks: …` under the table, a singular test by its own
+name, and any other test as `a test on orders (check-1f0c2a9e3b7d)`. In `--output
+json`, `execution.checks_failed` and each node's and source's `checks_failed`,
+`checks_skipped` and `checks_passed` list tests by their **handle**,
+`check-<12 hex digits>` (the first 12 hex digits of the SHA-256 of dbt's id): the same
+for the same test in every run and command, and the `node` of a failed test's
+explanation in `failures`, whose `check` says what it tests.
 
 It exits 0 when everything built and every test passed, or when there was nothing to
 build. It exits 1 with `ODS-E0404` when dbt couldn't run or when nodes or tests
@@ -1357,7 +1373,9 @@ line (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_fini
 `run_finished`), each with its `schema_version` (1.1 since a `check_finished` that
 didn't pass may carry `failures`, the rows dbt counted, and `error`, its redacted
 message; a 1.0 journal reads as before), and is flushed line by line, so it can
-be followed while the run goes. It is evidence, not state: a failed run keeps its
+be followed while the run goes. A `check_finished` names the test by dbt's id, as
+dbt's own `run_results.json` and `manifest.json` beside it do; ODS shows that id
+nowhere else (it may hold a generic test's arguments), only the test's handle. It is evidence, not state: a failed run keeps its
 journal, and nothing ODS decides reads it. It holds no SQL, no `--vars` values and no
 secrets: no options at all, and errors only as the redacted summary above. The 50 most
 recent journals are kept; older ones are deleted when a run starts. `ods state history
@@ -1418,7 +1436,23 @@ full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 - **What to try:** steps and commands to copy, only real ones: `ods lineage impact
   --column <unique id>.COLUMN=removed`, `ods state retry --failed` (with `--state-db`
   when you passed one, and only for the last run), `ods doctor`, and dbt's own (`dbt
-  deps`, `dbt debug`); "did you mean" for a macro with a close name.
+  deps`, `dbt debug`); "did you mean" for a macro with a close name, and for a `ref()`
+  to a model that doesn't exist: up to three models, seeds or snapshots of the project
+  within two edits of the name, closest first ("Did you mean `customers`?"). That is a
+  guess from the names, never evidence of a typo, so it doesn't raise the confidence;
+  the name the `ref()` used is never shown (only dbt's message holds it), only the
+  project's own names. When dbt wrote no manifest (it doesn't when a `ref()` can't be
+  resolved), the names come from the one it wrote last.
+- **ods doctor:** for a profile or target dbt can't find, or missing credentials, ODS
+  runs `ods doctor`'s local configuration checks right after the failure (none runs
+  dbt, connects or writes anything): `config.load` and, for credentials,
+  `config.values` (after a failure before any node ran), and `config.resolution`,
+  which shows the `profiles_dir`, `profile` and `target` ODS gives dbt and where each
+  came from. Each is evidence marked `[ods doctor]` (`source: doctor` in JSON, with
+  `data.check` and `data.status`). A profiles directory with no `profiles.yml`
+  (`ODS-W0510`) confirms a missing profile (`known pattern + evidence`); otherwise the
+  checks are context, since ODS never reads `profiles.yml`. `ods state history --run`
+  doesn't run them: the configuration may have changed since the run.
 - **Impact:** the nodes it blocked, and whether their last good builds are kept.
 - **dbt said:** dbt's message, only as the redacted summary kept in the journal.
   Nothing else in an explanation comes from dbt's text: the names in it come from
