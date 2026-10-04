@@ -32,32 +32,23 @@
     },
     {
       "title": "M1 State MVP (v0.0.1)",
-      "renamed_from": ["M1 State MVP (v0.1.0)"],
-      "due_on": "2026-12-18T00:00:00Z",
+      "renamed_from": [
+        "M1 State MVP (v0.1.0)"
+      ],
+      "due_on": "2026-10-30T00:00:00Z",
       "description": "First public release (v0.0.1): local ods state plan/run/explain on dbt with SQLite state and exact-selection dbt executor; code- and data-aware (dbt source freshness, Delta table versions, staleness policies); first dashboard screens (#310-#313).",
       "issues": [
         11,
-        12,
-        13,
-        14,
         18,
         20,
         22,
         21,
         23,
-        25,
         24,
-        26,
-        16,
-        19,
-        17,
-        99,
         168,
-        73,
         74,
         181,
         188,
-        192,
         209,
         211,
         212,
@@ -71,7 +62,25 @@
         310,
         311,
         312,
-        313
+        313,
+        356,
+        357,
+        322,
+        323
+      ]
+    },
+    {
+      "title": "R2 ERD, Impact & hardening (v0.0.2)",
+      "due_on": "2026-11-27T00:00:00Z",
+      "description": "Second public release: the ERD page and the Impact simulator on the dashboard (engines already built), failure explanations for agents and the CLI, `ods state savings`, Databricks error messages recorded from a real run, and test hardening (conformance suite, property tests).",
+      "issues": [
+        99,
+        192,
+        64,
+        210,
+        347,
+        348,
+        349
       ]
     },
     {
@@ -79,7 +88,13 @@
       "due_on": "2027-01-29T00:00:00Z",
       "description": "Every screen in the dashboard design (docs/design/dashboard/). v0.1.0 ships only when the whole design is built; until then releases are v0.0.x. #310-#313 ship in v0.0.1 (M1).",
       "issues": [
-        309
+        309,
+        350,
+        351,
+        352,
+        353,
+        354,
+        355
       ]
     },
     {
@@ -97,12 +112,19 @@
         169,
         173,
         170,
-        210,
         215,
         221,
         224,
         225,
-        231
+        231,
+        12,
+        13,
+        14,
+        16,
+        17,
+        19,
+        25,
+        26
       ]
     },
     {
@@ -120,7 +142,6 @@
         56,
         59,
         66,
-        64,
         182
       ]
     },
@@ -152,7 +173,8 @@
         71,
         72,
         107,
-        116
+        116,
+        73
       ]
     },
     {
