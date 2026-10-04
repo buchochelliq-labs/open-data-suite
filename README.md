@@ -12,9 +12,9 @@ and Databricks, and every decision it makes can be explained.
 > **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
 > `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
 >
-> **Install:** `pip install opendatasuite` puts `ods` on your PATH next to dbt.
-> `cargo binstall`, direct downloads, building from source and Homebrew (coming soon):
-> [`docs/install.md`](docs/install.md).
+> **Install:** `pip install opendatasuite` puts `ods` on your PATH next to dbt, or
+> `brew install buchochelliq-labs/tap/ods`. `cargo binstall`, direct downloads and
+> building from source: [`docs/install.md`](docs/install.md).
 
 `ods state build` runs `dbt build` on only what changed (code, or upstream data), shows
 each node's result as it finishes, and explains why each one ran:

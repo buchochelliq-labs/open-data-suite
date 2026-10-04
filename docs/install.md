@@ -36,10 +36,17 @@ pipx install opendatasuite       # or: uv tool install opendatasuite
 Wheels exist for the platforms above, and for Linux with glibc 2.17 or newer on x86_64
 and arm64.
 
-## Homebrew (macOS and Linux): coming soon
+## Homebrew (macOS and Linux)
 
-A Homebrew tap isn't available yet. Until it is, use `pip`, `cargo binstall` or a
-direct download.
+```sh
+brew install buchochelliq-labs/tap/ods
+ods version
+```
+
+The formula, in the [buchochelliq-labs/homebrew-tap](https://github.com/buchochelliq-labs/homebrew-tap)
+tap, installs the prebuilt binary from the GitHub release for macOS and Linux, arm64
+and x86_64, and checks it against the release's checksums. `brew upgrade ods` moves to
+a new release once its formula is in the tap.
 
 ## cargo-binstall
 
@@ -152,8 +159,9 @@ One-time setup, by a repository and PyPI admin:
 - **The `pypi` environment.** Create it under **Settings → Environments**, restrict it
   to `v*` tags, and add required reviewers so each upload waits for approval.
 - **Tag protection.** Add a ruleset for `v*` tags so only maintainers can create them.
-- **Homebrew tap.** Create the repository `buchochelliq-labs/homebrew-tap`. After each
-  release, copy the release's `ods.rb` asset to `Formula/ods.rb` there and commit it.
+- **Homebrew tap.** The public repository `buchochelliq-labs/homebrew-tap` holds the
+  formula. After each release, copy the release's `ods.rb` asset to `Formula/ods.rb`
+  there and commit it.
   Automating this needs a token with write access to the tap, stored as a secret; it
   isn't set up yet.
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging

@@ -12,6 +12,10 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Added
+- Homebrew: `brew install buchochelliq-labs/tap/ods` installs the release binary on
+  macOS and Linux ([Install](docs/install.md)).
+
 ## [0.0.1] - 2026-10-04
 
 The first public release: the State MVP and the first dashboard screens.
