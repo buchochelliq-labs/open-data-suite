@@ -1,6 +1,6 @@
 # ADR-0022: Delta table versions as source change evidence, read through dbt
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-29
 - **Issues:** #17 (M1 slice), #16 (the `ChangeProvider` contract); related #15, #126, #230
 - **Deciders:** @n1ckyb

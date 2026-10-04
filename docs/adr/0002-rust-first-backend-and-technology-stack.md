@@ -1,6 +1,6 @@
 # ADR-0002: Rust-first backend and technology stack
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Not built yet: the OpenTelemetry exporter (#8); `tracing` is in. The SQL parser was decided in ADR-0008 (`sqlparser`); the LSP library is still open (M5).
 - **Date:** 2026-09-24
 - **Issues:** #105 (also #6, #8, #25, #27, #67, #95, #106)
 - **Deciders:** @n1ckyb

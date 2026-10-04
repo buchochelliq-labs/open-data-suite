@@ -1,6 +1,6 @@
 # ADR-0018: State store migrations, integrity and recovery
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-27
 - **Issues:** #188
 - **Deciders:** @n1ckyb

@@ -54,7 +54,7 @@ with a non-permissive licence) require an ADR in `docs/adr/` — use the `adr` s
 Rust (stable, edition 2024) · Tokio · Clap · Serde · SQLx (SQLite/PostgreSQL) · Axum ·
 tracing/OpenTelemetry · thiserror (libraries) / anyhow (binaries only) ·
 rs-rich for terminal rendering, confined to `ods-cli`
-([ADR-0003](docs/adr/0003-cli-presentation-boundary.md), proposed). LSP library and SQL parser are
+([ADR-0003](docs/adr/0003-cli-presentation-boundary.md)). LSP library and SQL parser are
 decided in their own ADRs (#67, #73). Python/TypeScript/Go are thin consumers only.
 
 ## Repository layout (target — see ROADMAP §7)

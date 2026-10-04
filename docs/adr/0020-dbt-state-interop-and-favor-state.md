@@ -1,6 +1,6 @@
 # ADR-0020: dbt state interop: export a state that `--favor-state` can trust, and import dbt runs
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Accepted for the export (`ods state export --dbt-state`). Not built yet, now a follow-up: `ods state import --from <target dir>` (§6; `ods state record` is the nearest today), and the Databricks run of the scenario (§7.4).
 - **Date:** 2026-09-28 (amended 2026-09-29 with the reproduction results, #296)
 - **Issues:** #296 (related: #292, #293, #294, #227, #230)
 - **Deciders:** @n1ckyb

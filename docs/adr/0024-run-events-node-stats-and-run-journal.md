@@ -1,6 +1,6 @@
 # ADR-0024: Run events, per-node run stats and the run journal
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). The SDK has moved on since (0.6); the version this text names is the one each change shipped with.
 - **Date:** 2026-09-29 (amended 2026-09-30: the live stream)
 - **Issues:** #322 (live run view), #318 (Run pages), #320 (values removed from diagnostics), #321 (`.last-run.json`)
 - **Deciders:** @n1ckyb

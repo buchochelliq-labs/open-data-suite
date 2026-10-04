@@ -1,6 +1,6 @@
 # ADR-0012: An ERD from tests and constraints, with evidence
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-25
 - **Issues:** #60 (ERD domain), #61 (dbt ERD provider), #62 (relationship inference), #63 (render/export), #65 (`ods erd`); #169 (the MCP tool)
 - **Deciders:** @n1ckyb

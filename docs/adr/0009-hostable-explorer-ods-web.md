@@ -1,6 +1,6 @@
 # ADR-0009: A hostable explorer (`ods-web`) and an EDGE layer
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Since written: the dashboard's view models are at `schema_version` 2, not 1; `router` takes `&ServeOptions`; and the routes include `/api/catalog…` and the run stream (`/api/runs/live`, `/api/runs/<id>/events`, ADR-0024).
 - **Date:** 2026-09-25
 - **Issues:** #74 (column lineage), #95 (server mode), #96 (REST API), #102 (docs site), #107 (VS Code view); related #97 (RBAC/OIDC)
 - **Deciders:** @n1ckyb

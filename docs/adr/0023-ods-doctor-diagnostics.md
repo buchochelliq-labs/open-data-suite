@@ -1,6 +1,6 @@
 # ADR-0023: `ods doctor`: typed health checks, stable codes and exit semantics
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-29
 - **Issues:** #181 (builds on #6, #7, #188, #227, #230, #17)
 - **Deciders:** @n1ckyb

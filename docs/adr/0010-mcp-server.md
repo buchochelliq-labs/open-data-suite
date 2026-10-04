@@ -1,6 +1,6 @@
 # ADR-0010: `ods mcp`, a read-only, local MCP server
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-25
 - **Issues:** #169; related #173 (skills pack), #32 (agent)
 - **Deciders:** @n1ckyb
