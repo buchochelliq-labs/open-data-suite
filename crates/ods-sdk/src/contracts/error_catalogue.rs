@@ -23,7 +23,8 @@
 //! A provider may also describe the project for explanations, as a [`ProjectIndex`]:
 //! each node's file, the macros its code calls that aren't defined, and, for a check
 //! (e.g. a data test), what it tests ([`CheckTarget`]: the kind of test, the column and
-//! the node, never its arguments). That is the provider's reading of its own project
+//! the node, never its arguments), and which nodes others refer to by name
+//! ([`IndexedNode::referable`]). That is the provider's reading of its own project
 //! format.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,7 +41,9 @@ pub const ERROR_CATALOGUE: Contract = Contract {
     name: "error_catalogue",
     // 0.2: an indexed node may say what it checks (`IndexedNode::check`), and a pattern
     // may offer a step for running it again (`PatternMatch::rerun`) (#323).
-    version: SchemaVersion::new(0, 2),
+    // 0.3: an indexed node may say other nodes refer to it by name
+    // (`IndexedNode::referable`), for did-you-mean on a reference to a missing node.
+    version: SchemaVersion::new(0, 3),
 };
 
 /// A catalogue's name and version.
@@ -84,8 +87,9 @@ pub struct PatternMatch {
     pub category: ErrorCategory,
     /// The engine's own steps to try, most useful first.
     pub suggestions: Vec<Suggestion>,
-    /// A name the pattern read from the summary, e.g. a Python exception's type. Only
-    /// identifier-shaped names are kept ([`is_code`]).
+    /// A name the pattern read, e.g. a Python exception's type, or the name a reference
+    /// to a missing node used (to compare with the project's own names, never shown).
+    /// Only identifier-shaped names are kept ([`is_code`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
     /// A step for when what failed runs again, with an argument for the engine (#323).
@@ -264,6 +268,11 @@ pub struct IndexedNode {
     /// What it checks, when it is a check (e.g. a data test).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckTarget>,
+    /// Whether other nodes refer to it by its name (e.g. dbt's models, seeds and
+    /// snapshots, which `ref()` names), so a reference to a missing node may have meant
+    /// it (0.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub referable: bool,
 }
 
 impl IndexedNode {
@@ -294,6 +303,13 @@ impl IndexedNode {
     #[must_use]
     pub fn checking(mut self, target: CheckTarget) -> Self {
         self.check = Some(target);
+        self
+    }
+
+    /// Says other nodes refer to it by its name.
+    #[must_use]
+    pub fn referable(mut self) -> Self {
+        self.referable = true;
         self
     }
 

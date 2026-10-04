@@ -33,10 +33,13 @@ use ods_sdk::contracts::error_catalogue::{
 use ods_sdk::contracts::run_events::ErrorSummary;
 use ods_sdk::{Provider, ProviderInfo};
 
+use crate::events::ProjectFailure;
 use crate::{Manifest, ResourceType};
 
 /// The catalogue's version: bumped whenever a pattern is added, changed or removed.
-pub const CATALOGUE_VERSION: &str = "2";
+/// 3: `dbt-missing-ref` names the missing node when the whole message is at hand
+/// ([`DbtErrorCatalogue::classify_project`]).
+pub const CATALOGUE_VERSION: &str = "3";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly), and phrases its
 /// lowercased message must hold, all of them.
@@ -436,6 +439,24 @@ fn python_exception(message: &str) -> Option<String> {
     is_python_exception(name).then(|| name.to_owned())
 }
 
+impl DbtErrorCatalogue {
+    /// Classifies a failure that stopped the whole project ([`project_failure`]) as
+    /// [`classify`](ErrorCatalogue::classify) does its summary; a reference to a
+    /// missing node also gets the name it used as its
+    /// [subject](PatternMatch::subject), for did-you-mean against the project's own
+    /// names. The name is compared, never shown (#323).
+    ///
+    /// [`project_failure`]: crate::events::project_failure
+    pub fn classify_project(&self, failure: &ProjectFailure) -> Classification {
+        match self.classify(&failure.summary) {
+            Classification::Recognised(found) if found.symptom == Symptom::MissingRef => {
+                Classification::Recognised(found.about(failure.missing_node.clone()))
+            }
+            other => other,
+        }
+    }
+}
+
 impl ErrorCatalogue for DbtErrorCatalogue {
     fn catalogue(&self) -> CatalogueInfo {
         CatalogueInfo::new("dbt", CATALOGUE_VERSION, "dbt")
@@ -717,6 +738,13 @@ pub fn project_index(manifest: &Manifest, target: Option<&str>) -> ProjectIndex 
         if node.resource_type == ResourceType::Test {
             indexed = indexed.checking(check_target(node));
         }
+        // What `ref()` can name.
+        if matches!(
+            node.resource_type,
+            ResourceType::Model | ResourceType::Seed | ResourceType::Snapshot
+        ) {
+            indexed = indexed.referable();
+        }
         index = index.with_node(node.unique_id.clone(), indexed);
     }
     index
@@ -899,6 +927,22 @@ mod tests {
             .unwrap();
             assert_eq!(missing_ref.node_name, None);
             assert_eq!(missing_ref.summary.kind(), Some("Compilation Error"));
+            // The name the reference used is the subject, for did-you-mean; the summary
+            // still doesn't hold it.
+            assert_eq!(missing_ref.missing_node.as_deref(), Some("no_such_model"));
+            assert!(!missing_ref.summary.message().contains("no_such_model"));
+            let Classification::Recognised(m) = DbtErrorCatalogue.classify_project(&missing_ref)
+            else {
+                panic!("{version}: {missing_ref:?}")
+            };
+            assert_eq!(m.id, "dbt-missing-ref", "{version}");
+            assert_eq!(m.subject.as_deref(), Some("no_such_model"), "{version}");
+            // Only a missing ref gets one: another project failure keeps none.
+            let Classification::Recognised(m) = DbtErrorCatalogue.classify_project(&macro_failure)
+            else {
+                panic!("{version}")
+            };
+            assert_eq!(m.subject, None, "{version}");
         }
     }
 
@@ -993,6 +1037,25 @@ mod tests {
         // `ref`, `config`, loops and filters are not macros; nothing else is undefined.
         let orders = &index.nodes["model.jaffle_ods.orders"];
         assert!(orders.undefined_calls.is_empty(), "{orders:?}");
+        // What `ref()` can name (models, seeds, snapshots) is referable; tests and
+        // sources aren't (#323: did-you-mean for a missing ref).
+        assert!(orders.referable);
+        let kind = |id: &str| {
+            manifest
+                .nodes
+                .iter()
+                .find(|n| n.unique_id == id)
+                .map(|n| n.resource_type)
+        };
+        for (id, node) in &index.nodes {
+            let expected = matches!(
+                kind(id),
+                Some(ResourceType::Model | ResourceType::Seed | ResourceType::Snapshot)
+            );
+            assert_eq!(node.referable, expected, "{id}");
+        }
+        assert!(index.nodes.values().any(|n| n.referable));
+        assert!(index.nodes.values().any(|n| !n.referable));
     }
 
     /// #323: a data test's kind, column and node come from the manifest; its
