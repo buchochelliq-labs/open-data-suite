@@ -90,7 +90,11 @@ const OdsLive = (function () {
           n.tests[k] += 1;
           changed.push(id);
         }
-        if (ev.status === "failed") said = { at, kind: "check", text: `Test ${ev.check.split(".").slice(-2, -1)[0] || ev.check} failed` };
+        // `check` is the check's handle (#323), never its id: name it by what it covers.
+        if (ev.status === "failed") {
+          const on = (ev.covers || []).map(c => c.split(".").pop()).join(", ");
+          said = { at, kind: "check", text: `A test${on ? ` on ${on}` : ""} failed (${ev.check})` };
+        }
         break;
       case "run_finished":
         run.outcome = ev.outcome; run.finishedAt = at;

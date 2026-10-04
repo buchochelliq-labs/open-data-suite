@@ -13,8 +13,9 @@
 //! The journal is tailed by polling its size, on a blocking thread, at most a bounded
 //! chunk at a time, so no stream holds more than one chunk and one line. Every line is
 //! read through ods-sdk's journal reader, which redacts each event again whatever wrote
-//! the file (AGENTS rule 9); beyond loopback, where an error's full text is (a local
-//! path) is left out too, as the Run page does. The dashboard stays read-only: nothing
+//! the file (AGENTS rule 9); a check is sent by its handle, never its id (#323); and
+//! beyond loopback, where an error's full text is (a local path) is left out too, as
+//! the Run page does. The dashboard stays read-only: nothing
 //! here starts, stops or writes anything.
 
 use std::collections::VecDeque;
@@ -514,10 +515,17 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// An event as the stream sends it: the sanitized event, and beyond loopback without
-/// where an error's full text is.
+/// An event as the stream sends it: the sanitized event, a check by its
+/// [handle](ods_core::failure::check_handle) rather than its id (#323: an engine may
+/// build a check's id from the test's arguments; the journal on disk keeps the id),
+/// and beyond loopback without where an error's full text is.
 fn event_json(event: &RunEvent, details: bool) -> serde_json::Value {
     let mut value = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
+    if let RunEventKind::CheckFinished { check, .. } = &event.kind
+        && let Some(shown) = value.get_mut("check")
+    {
+        *shown = ods_core::failure::check_handle(check).into();
+    }
     if !details
         && let Some(error) = value
             .get_mut("stats")
