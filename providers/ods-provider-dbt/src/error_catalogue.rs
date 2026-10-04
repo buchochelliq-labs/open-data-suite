@@ -13,8 +13,8 @@
 //! - PostgreSQL's documented messages (`column … does not exist`, `relation … does not
 //!   exist`, `permission denied for …`);
 //! - Apache Spark's public error conditions (Apache-2.0, `error-conditions.json`:
-//!   `[UNRESOLVED_COLUMN…]`, `[TABLE_OR_VIEW_NOT_FOUND]`, `[CAST_INVALID_INPUT]`,
-//!   `[DATATYPE_MISMATCH…]`,
+//!   `[UNRESOLVED_COLUMN…]`, `[TABLE_OR_VIEW_NOT_FOUND]`, `[SCHEMA_NOT_FOUND]`,
+//!   `[UNRESOLVED_ROUTINE]`, `[CAST_INVALID_INPUT]`, `[DATATYPE_MISMATCH…]`,
 //!   `[CHECK_CONSTRAINT_VIOLATION]`, `[NOT_NULL_CONSTRAINT_VIOLATION]`) and Delta Lake's
 //!   (Apache-2.0, `delta-error-classes.json`: `[DELTA_CONCURRENT_…]`,
 //!   `[DELTA_NOT_NULL_CONSTRAINT_VIOLATED]`, `[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES]`),
@@ -24,10 +24,10 @@
 //!   run that timed out, and credentials its profile is missing.
 //!
 //! Anything else is not recognised: the catalogue gives only the category dbt's (or the
-//! adapter's) kind implies, and ODS doesn't guess a cause. That includes errors close to
-//! a symptom but not it: Spark's `[SCHEMA_NOT_FOUND]` isn't a missing table or view, and
-//! `[UNRESOLVED_ROUTINE]` (a SQL function, after dbt compiled the query) isn't an
-//! undefined macro; either would let unrelated evidence confirm the wrong cause.
+//! adapter's) kind implies, and ODS doesn't guess a cause. Errors close to a symptom
+//! get their own: a missing schema (Spark's `[SCHEMA_NOT_FOUND]`) isn't a missing table
+//! or view, and a missing SQL function (`[UNRESOLVED_ROUTINE]`, after dbt compiled the
+//! query) isn't an undefined macro, so neither's evidence can confirm the other.
 //!
 //! [`project_index`] describes a project for explanations: each node's files, the
 //! macros its code calls that the manifest doesn't define, and what each data test
@@ -49,11 +49,15 @@ use crate::{Manifest, ResourceType};
 /// The catalogue's version: bumped whenever a pattern is added, changed or removed.
 /// 3: `dbt-missing-ref` names the missing node when the whole message is at hand
 /// ([`DbtErrorCatalogue::classify_project`]). 4: Databricks's unavailable compute,
-/// timeouts and missing credentials, Spark's and Delta's constraint violations; `postgres-invalid-input` and `postgres-connect` no longer need dbt's kind.
-pub const CATALOGUE_VERSION: &str = "4";
+/// timeouts and missing credentials, Spark's and Delta's constraint violations. 5:
+/// missing schemas and SQL functions (`DuckDB`, PostgreSQL, Spark) as their own symptoms;
+/// a pattern's kind may be dbt's header kind ([`ErrorSummary::outer_kind`]), which
+/// `postgres-invalid-input` and `postgres-connect` need.
+pub const CATALOGUE_VERSION: &str = "5";
 
-/// How a pattern recognises a summary: its kind (lowercased, exactly), and phrases its
-/// lowercased message must hold, all of them.
+/// How a pattern recognises a summary: its kind (lowercased, exactly: the message's own,
+/// or the one dbt's header gave around it), and phrases its lowercased message must
+/// hold, all of them.
 struct Pattern {
     id: &'static str,
     symptom: Symptom,
@@ -177,6 +181,19 @@ const PATTERNS: &[Pattern] = &[
         &["view with name", "does not exist"],
     ),
     p(
+        "duckdb-schema-missing",
+        Symptom::MissingSchema,
+        Some("catalog error"),
+        &["schema with name", "does not exist"],
+    ),
+    // Recorded in every `dbt-<version>-errors` (`missing-function`).
+    p(
+        "duckdb-function-missing",
+        Symptom::MissingFunction,
+        Some("catalog error"),
+        &["function with name", "does not exist"],
+    ),
+    p(
         "duckdb-conversion",
         Symptom::TypeMismatch,
         Some("conversion error"),
@@ -226,6 +243,18 @@ const PATTERNS: &[Pattern] = &[
         &["column ", "does not exist"],
     ),
     p(
+        "postgres-schema-missing",
+        Symptom::MissingSchema,
+        Some("database error"),
+        &["schema ", "does not exist"],
+    ),
+    p(
+        "postgres-function-missing",
+        Symptom::MissingFunction,
+        Some("database error"),
+        &["function ", "does not exist"],
+    ),
+    p(
         "postgres-relation-missing",
         Symptom::MissingRelation,
         Some("database error"),
@@ -243,12 +272,12 @@ const PATTERNS: &[Pattern] = &[
         Some("database error"),
         &["canceling statement due to statement timeout"],
     ),
-    // PostgreSQL ends these phrases with a colon, so the summary takes them for the
-    // error's kind rather than dbt's `Database Error`: matched on the message alone.
+    // PostgreSQL ends this phrase with a colon, so the summary takes it for the
+    // message's kind; dbt's `Database Error` is its outer kind.
     p(
         "postgres-invalid-input",
         Symptom::TypeMismatch,
-        None,
+        Some("database error"),
         &["invalid input syntax for type"],
     ),
     p(
@@ -272,7 +301,7 @@ const PATTERNS: &[Pattern] = &[
     p(
         "postgres-connect",
         Symptom::WarehouseUnavailable,
-        None,
+        Some("database error"),
         &["could not connect to server"],
     ),
     // Apache Spark's error conditions and Delta Lake's error classes (Databricks).
@@ -323,6 +352,18 @@ const PATTERNS: &[Pattern] = &[
         Symptom::ConstraintViolation,
         None,
         &["[delta_violate_constraint_with_values]"],
+    ),
+    p(
+        "spark-schema-not-found",
+        Symptom::MissingSchema,
+        None,
+        &["[schema_not_found]"],
+    ),
+    p(
+        "spark-unresolved-routine",
+        Symptom::MissingFunction,
+        None,
+        &["[unresolved_routine]"],
     ),
     p(
         "delta-concurrent-write",
@@ -540,9 +581,12 @@ impl ErrorCatalogue for DbtErrorCatalogue {
 
     fn classify(&self, error: &ErrorSummary) -> Classification {
         let kind = error.kind().map(str::to_ascii_lowercase);
+        let outer = error.outer_kind().map(str::to_ascii_lowercase);
         let message = error.message().to_ascii_lowercase();
         let found = PATTERNS.iter().find(|pattern| {
-            pattern.kind.is_none_or(|k| kind.as_deref() == Some(k))
+            pattern
+                .kind
+                .is_none_or(|k| kind.as_deref() == Some(k) || outer.as_deref() == Some(k))
                 && pattern.all.iter().all(|phrase| message.contains(phrase))
         });
         // A Python exception's name as the error's kind (`KeyError: …`): only a Python
@@ -562,8 +606,12 @@ impl ErrorCatalogue for DbtErrorCatalogue {
                 }
                 Classification::Recognised(steps(found))
             }
+            // The message's kind may be a phrase, not a kind: then dbt's says more.
             None => Classification::NotRecognised {
-                category: category_of(error.kind(), &message),
+                category: match category_of(error.kind(), &message) {
+                    ErrorCategory::Unknown => category_of(error.outer_kind(), &message),
+                    known => known,
+                },
             },
         }
     }
@@ -901,7 +949,7 @@ mod tests {
             ("missing-ref", Some(Symptom::MissingRef)),
             ("template-syntax", Some(Symptom::TemplateSyntax)),
             ("type-mismatch", Some(Symptom::TypeMismatch)),
-            ("missing-function", None),
+            ("missing-function", Some(Symptom::MissingFunction)),
             ("packages-missing", Some(Symptom::PackagesMissing)),
             ("profile-missing", Some(Symptom::ProfileNotFound)),
             ("python-exception", Some(Symptom::PythonException)),
@@ -1229,6 +1277,31 @@ mod tests {
             "[DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES] Cannot resolve \"(a + b)\" due to data type mismatch.",
         ),
         (
+            "spark-schema-not-found",
+            "Database Error",
+            "[SCHEMA_NOT_FOUND] The schema `main`.`staging` cannot be found. Verify the spelling and correctness of the schema and catalog.",
+        ),
+        (
+            "spark-unresolved-routine",
+            "Database Error",
+            "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`, `system`.`session`].",
+        ),
+        (
+            "duckdb-schema-missing",
+            "Runtime Error",
+            "Catalog Error: Schema with name staging does not exist!",
+        ),
+        (
+            "postgres-schema-missing",
+            "Database Error",
+            "schema \"staging\" does not exist",
+        ),
+        (
+            "postgres-function-missing",
+            "Database Error",
+            "function cents_to_dollars(integer) does not exist",
+        ),
+        (
             "spark-check-constraint",
             "Database Error",
             "[CHECK_CONSTRAINT_VIOLATION] CHECK constraint positive (amount > 0) violated by row with values: - amount : -1",
@@ -1319,35 +1392,56 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_schema_or_sql_function_is_not_recognised() {
-        // Neither is the symptom it resembles (a missing relation, an undefined macro),
-        // whose evidence could otherwise confirm the wrong cause.
-        for message in [
-            "[SCHEMA_NOT_FOUND] The schema `main`.`staging` cannot be found.",
-            "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`].",
+    fn a_missing_schema_or_sql_function_is_its_own_symptom() {
+        // Not the symptom it resembles (a missing relation, an undefined macro), whose
+        // evidence could otherwise confirm the wrong cause.
+        for (message, symptom) in [
+            (
+                "[SCHEMA_NOT_FOUND] The schema `main`.`staging` cannot be found.",
+                Symptom::MissingSchema,
+            ),
+            (
+                "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`].",
+                Symptom::MissingFunction,
+            ),
         ] {
-            assert_eq!(
-                DbtErrorCatalogue.classify(&node_failure("Database Error", message)),
-                Classification::NotRecognised {
-                    category: ErrorCategory::Database
-                },
-                "{message}"
+            let got = DbtErrorCatalogue.classify(&node_failure("Database Error", message));
+            assert!(
+                matches!(&got, Classification::Recognised(m) if m.symptom == symptom),
+                "{message}: {got:?}"
             );
         }
     }
 
     #[test]
-    fn a_postgres_phrase_ending_in_a_colon_is_still_recognised() {
-        // The summary takes the phrase for the error's kind, not dbt's header.
+    fn dbts_header_kind_is_kept_beside_a_phrase_read_as_the_kind() {
+        // The summary takes the phrase before the colon for the message's kind; dbt's
+        // header is kept as its outer kind, which patterns can require.
         let summary = node_failure(
             "Database Error",
             "could not connect to server: Connection refused",
         );
         assert_eq!(summary.kind(), Some("could not connect to server"));
+        assert_eq!(summary.outer_kind(), Some("Database Error"));
         assert!(matches!(
             DbtErrorCatalogue.classify(&summary),
-            Classification::Recognised(m) if m.symptom == Symptom::WarehouseUnavailable
+            Classification::Recognised(m) if m.id == "postgres-connect"
+                && m.category == ErrorCategory::Connection
         ));
+        // An error no pattern knows still gets dbt's category, not `unknown`.
+        let unknown = node_failure("Database Error", "something new happened: details");
+        assert_eq!(
+            DbtErrorCatalogue.classify(&unknown),
+            Classification::NotRecognised {
+                category: ErrorCategory::Database
+            }
+        );
+        let binder = node_failure(
+            "Runtime Error",
+            "Binder Error: Referenced column x not found",
+        );
+        assert_eq!(binder.kind(), Some("Binder Error"));
+        assert_eq!(binder.outer_kind(), Some("Runtime Error"));
     }
 
     #[test]
@@ -1563,7 +1657,7 @@ mod tests {
                 ("unknown-macro", Some(Symptom::UnknownMacro)),
                 ("type-mismatch", Some(Symptom::TypeMismatch)),
                 ("python-exception", Some(Symptom::PythonException)),
-                ("missing-function", None),
+                ("missing-function", Some(Symptom::MissingFunction)),
             ];
             VERSIONS
                 .iter()
@@ -1582,6 +1676,17 @@ mod tests {
                         }
                     })
                 })
+                // Every recorded failure is recognised now; one no pattern knows, as
+                // dbt-duckdb reports a `DuckDB` error kind no pattern names.
+                .chain(std::iter::once(Sample {
+                    name: "an error no pattern knows",
+                    summary: node_failure(
+                        "Runtime Error",
+                        "Out of Range Error: Overflow in multiplication of INT32 ('sk_live_SENTINEL_42')",
+                    ),
+                    expected: None,
+                    sentinel: Some(SENTINEL),
+                }))
                 .collect()
         }
     }

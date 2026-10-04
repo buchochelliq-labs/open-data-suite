@@ -58,11 +58,12 @@ nodes, and which keep an earlier build); and the engine's own (redacted) message
 
 **Categories** (the chip on a failed node): `compilation`, `dependency` (dependency or
 ref), `database` (database or SQL), `permission`, `timeout` (timeout or lock),
-`python_model`, `test_failure`, `configuration` (configuration or profile),
-`internal`, `unknown`.
+`connection` (since 1.3), `python_model`, `test_failure`, `configuration`
+(configuration or profile), `internal`, `unknown`.
 
 **Symptoms** (what a recognised error means, whatever engine said it):
-`missing_column`, `missing_relation`, `unknown_macro`, `missing_ref`,
+`missing_column`, `missing_relation`, `missing_schema` and `missing_function` (since
+1.3), `unknown_macro`, `missing_ref`,
 `template_syntax`, `packages_missing`, `permission_denied`, `type_mismatch`,
 `constraint_violation`, `dependent_objects`, `query_timeout`, `lock_conflict`,
 `warehouse_unavailable`, `profile_not_found`, `credentials_missing`,
@@ -349,6 +350,30 @@ rows and redacted message, ADR-0024 1.1) and the project:
   still never reads it (rule 9), so a profile missing *from* the file stays
   `known_pattern`. `ods state history --run` runs no checks (the configuration may have
   changed since), and nor does the dashboard's explainer.
+
+### Connection, missing schemas and functions, and dbt's kind (amended 2026-10-04, #323)
+- **`connection`** is a category of its own: the warehouse, cluster or server couldn't
+  be reached or wasn't running. `warehouse_unavailable` belongs to it, no longer to
+  `timeout` ("timeout or lock"), which said something that wasn't so. It is still
+  offered a retry, as a timeout or a lock is, since it may be transient.
+- **`missing_schema` and `missing_function`** are symptoms of their own, in the
+  `database` category, because they resemble others whose evidence would wrongly
+  confirm them: a missing schema isn't a missing table or view (an upstream never built
+  says nothing about it), and a missing SQL function isn't an undefined macro (macros
+  are expanded before the query runs, so a call in the code says nothing about it).
+  Nothing of ODS's confirms either yet (`known_pattern`); each has its own step. The
+  dbt catalogue (version 5) recognises them from DuckDB (`Catalog Error: Schema …` and
+  `… Function with name … does not exist`, the latter recorded in every
+  `dbt-<version>-errors`), PostgreSQL (`schema … does not exist`, `function … does not
+  exist`) and Spark (`SCHEMA_NOT_FOUND`, `UNRESOLVED_ROUTINE`).
+- **dbt's kind is kept** (ADR-0024, run events 1.2): the summary reads a message's kind
+  from the text before its first `: `, which can be a phrase (`could not connect to
+  server: …`); dbt's header kind is now kept beside it as `outer_kind`. A pattern's kind
+  matches either, so `postgres-invalid-input` and `postgres-connect` require dbt's
+  `Database Error` again, and an error no pattern knows takes its category from dbt's
+  kind when the message's says nothing (`database`, not `unknown`). Journals written
+  before 1.2 have no outer kind, so those two patterns don't match in their errors.
+- Contracts: `ErrorExplanation` **1.3**, error-catalogue contract **0.4**, SDK **0.6**.
 
 ## Consequences
 - Positive:

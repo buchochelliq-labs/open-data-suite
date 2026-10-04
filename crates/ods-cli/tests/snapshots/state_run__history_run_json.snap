@@ -107,6 +107,7 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
       "adapter": null,
       "error": {
         "kind": "Conversion Error",
+        "outer_kind": "Runtime Error",
         "message": "Conversion Error: Could not convert string [value removed] to INT32",
         "details_at": "dbt's log file (logs/dbt.log in the project, unless --log-path)",
         "line": 3

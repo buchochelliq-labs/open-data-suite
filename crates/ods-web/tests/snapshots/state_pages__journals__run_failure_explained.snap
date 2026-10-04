@@ -5,7 +5,7 @@ expression: "serde_json::to_string_pretty(&customers).unwrap()"
 {
   "schema_version": {
     "major": 1,
-    "minor": 2
+    "minor": 3
   },
   "node": "model.customers",
   "category": "database",

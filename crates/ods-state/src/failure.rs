@@ -1153,6 +1153,12 @@ fn symptom_steps(symptom: Symptom, builder: ExplanationBuilder) -> ExplanationBu
         Symptom::MissingRelation => builder.suggest(Suggestion::new(Text::new().plain(
             "Check the relation's name, and that it was built in this target.",
         ))),
+        Symptom::MissingSchema => builder.suggest(Suggestion::new(Text::new().plain(
+            "Check the schema's name and the target's database or catalog, and that the role can see it.",
+        ))),
+        Symptom::MissingFunction => builder.suggest(Suggestion::new(Text::new().plain(
+            "Check the function's name and arguments against the warehouse's SQL functions: the query was already compiled, so it isn't a missing macro.",
+        ))),
         Symptom::PythonException => builder.suggest(Suggestion::new(Text::new().plain(
             "Read the traceback in the full log: it shows where in the model's code the exception was raised.",
         ))),
@@ -1895,6 +1901,51 @@ mod tests {
             e.evidence()[0].text.as_str(),
             "Upstream `stg_customers` has never been built, and didn't build in this run."
         );
+    }
+
+    /// A missing schema or SQL function is never confirmed by what confirms a missing
+    /// relation (an upstream never built) or an undefined macro (a call in the code).
+    #[test]
+    fn a_missing_schema_or_function_is_not_confirmed_by_a_relations_evidence() {
+        use ods_sdk::contracts::error_catalogue::PatternMatch;
+        let info = catalogue().catalogue();
+        let run = run(&[
+            (STG, NodeRunStats::new(NodeRunStatus::Error)),
+            (CUSTOMERS, NodeRunStats::new(NodeRunStatus::Error)),
+        ]);
+        let plan = plan();
+        for (symptom, step) in [
+            (Symptom::MissingSchema, "Check the schema's name"),
+            (Symptom::MissingFunction, "Check the function's name"),
+        ] {
+            let classification = Classification::Recognised(PatternMatch::new("p", symptom));
+            let mut facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+            facts.run = Some(&run);
+            facts.plan = Some(&plan);
+            let e = explain_failure(&facts);
+            assert_eq!(e.confidence(), Confidence::KnownPattern, "{symptom:?}");
+            assert_eq!(e.category(), ErrorCategory::Database, "{symptom:?}");
+            assert_eq!(e.headline().as_str(), symptom.headline(), "{symptom:?}");
+            assert!(
+                e.suggestions()
+                    .iter()
+                    .any(|s| s.text.as_str().starts_with(step)),
+                "{symptom:?}: {:?}",
+                e.suggestions()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreachable_warehouse_is_a_connection_error_to_retry() {
+        use ods_sdk::contracts::error_catalogue::PatternMatch;
+        let info = catalogue().catalogue();
+        let classification =
+            Classification::Recognised(PatternMatch::new("p", Symptom::WarehouseUnavailable));
+        let facts = FailureFacts::new(CUSTOMERS, &classification, &info, FailureStage::Run);
+        let e = explain_failure(&facts);
+        assert_eq!(e.category(), ErrorCategory::Connection);
+        assert_eq!(e.headline().as_str(), "The warehouse couldn't be reached");
     }
 
     /// #323 review (H1): several missing columns, or one whose upstream wasn't built

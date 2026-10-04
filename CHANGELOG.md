@@ -18,6 +18,18 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- An unreachable warehouse, cluster or server is explained in a new category,
+  `connection`, no longer `timeout` ("timeout or lock") (#323). Explanations are
+  `schema_version` 1.3, which also adds the symptoms `missing_schema` and
+  `missing_function`. **What to do:** where you match an explanation's `category` (in
+  `--output json`'s `failures` or the dashboard's API), expect `connection` for
+  `symptom: warehouse_unavailable`, and accept the new symptoms.
+- `SDK_VERSION` is now 0.6 (#323): the `error_catalogue` contract is 0.4 (an
+  `ErrorSummary` may carry `outer_kind`, the kind the tool around the engine gave, which
+  patterns may match on; the symptoms `missing_schema` and `missing_function`).
+  **What to do:** rebuild out-of-process plugins against it; an executor that wraps the
+  engine's message in its own header can keep that header's kind with
+  `ErrorSummary::with_outer_kind`.
 - `SDK_VERSION` is now 0.5 (#323): the `error_catalogue` contract is 0.3 (a
   `ProjectIndex` node may say other nodes refer to it by name,
   `IndexedNode::referable`). **What to do:** rebuild out-of-process plugins against it;
@@ -93,6 +105,12 @@ the changelog was introduced.
   seeds and snapshots with a close name, at most three, closest first ("Did you mean
   `customers`?"), as a guess that doesn't raise the confidence; the name the `ref()`
   used is never shown (#323). The dbt error catalogue is version 3.
+- A missing schema and a missing SQL function are recognised as such (#323), from
+  DuckDB, PostgreSQL and Spark (`SCHEMA_NOT_FOUND`, `UNRESOLVED_ROUTINE`), with their own
+  steps, and never confirmed by what confirms a missing table or an undefined macro.
+  dbt's own error kind (`Database Error`) is kept in the run journal beside the
+  message's (`outer_kind`, journal format 1.2), so an error no pattern knows is
+  categorised by it rather than as `unknown`. The dbt error catalogue is version 5.
 - More dbt failures on Databricks are explained (#323): a cluster that can't be
   started, or a connection that can't be made, reads as *warehouse unavailable* with
   `dbt debug` to try; a command or Python model run that timed out as a *query

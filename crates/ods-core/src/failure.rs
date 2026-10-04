@@ -25,8 +25,11 @@ use crate::SchemaVersion;
 /// 1.1 added [`ErrorExplanation::check`] and the [`EvidenceData::FailingRows`] and
 /// [`EvidenceData::TestTarget`] evidence (#323): optional, so 1.0 readers ignore them.
 /// 1.2 added the [`EvidenceSource::Doctor`] source and its [`EvidenceData::DoctorCheck`]
-/// data (#323, #181).
-pub const EXPLANATION_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 2);
+/// data (#323, #181). 1.3 added the [`ErrorCategory::Connection`] category and the
+/// [`Symptom::MissingSchema`] and [`Symptom::MissingFunction`] symptoms, and moved
+/// [`Symptom::WarehouseUnavailable`] from [`ErrorCategory::Timeout`] to
+/// [`ErrorCategory::Connection`] (#323).
+pub const EXPLANATION_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 3);
 
 /// What kind of failure it was, for people: the chip on a failed node. Coarse on
 /// purpose, so an engine's error kinds map onto it without guessing.
@@ -44,6 +47,8 @@ pub enum ErrorCategory {
     Permission,
     /// It ran out of time or waited on a lock or a conflicting write.
     Timeout,
+    /// The warehouse, cluster or server couldn't be reached, or wasn't running.
+    Connection,
     /// A Python model raised an exception.
     PythonModel,
     /// A check (data test) on it failed.
@@ -58,12 +63,13 @@ pub enum ErrorCategory {
 
 impl ErrorCategory {
     /// Every category, for documentation and tests.
-    pub const ALL: [ErrorCategory; 10] = [
+    pub const ALL: [ErrorCategory; 11] = [
         Self::Compilation,
         Self::Dependency,
         Self::Database,
         Self::Permission,
         Self::Timeout,
+        Self::Connection,
         Self::PythonModel,
         Self::TestFailure,
         Self::Configuration,
@@ -79,6 +85,7 @@ impl ErrorCategory {
             Self::Database => "database error",
             Self::Permission => "permission",
             Self::Timeout => "timeout or lock",
+            Self::Connection => "connection",
             Self::PythonModel => "python model",
             Self::TestFailure => "test failure",
             Self::Configuration => "configuration or profile",
@@ -96,6 +103,7 @@ impl ErrorCategory {
             Self::Database => "The warehouse rejected the query",
             Self::Permission => "The warehouse refused access",
             Self::Timeout => "The query timed out or waited too long",
+            Self::Connection => "The warehouse couldn't be reached",
             Self::PythonModel => "The Python model raised an error",
             Self::TestFailure => "A test on this node failed",
             Self::Configuration => "The project's configuration couldn't be used",
@@ -115,6 +123,12 @@ pub enum Symptom {
     MissingColumn,
     /// A table or view the query reads doesn't exist.
     MissingRelation,
+    /// A schema (or database) the query reads or writes doesn't exist. Not a missing
+    /// relation: what holds it is missing, so a relation's evidence says nothing.
+    MissingSchema,
+    /// A SQL function the query calls doesn't exist in the warehouse. Not an unknown
+    /// macro: macros are expanded before the query runs.
+    MissingFunction,
     /// A macro or function the code calls isn't defined.
     UnknownMacro,
     /// The code refers to a node the project doesn't have.
@@ -149,9 +163,11 @@ pub enum Symptom {
 
 impl Symptom {
     /// Every symptom, for documentation and tests.
-    pub const ALL: [Symptom; 17] = [
+    pub const ALL: [Symptom; 19] = [
         Self::MissingColumn,
         Self::MissingRelation,
+        Self::MissingSchema,
+        Self::MissingFunction,
         Self::UnknownMacro,
         Self::MissingRef,
         Self::TemplateSyntax,
@@ -174,6 +190,8 @@ impl Symptom {
         match self {
             Self::MissingColumn => "missing column",
             Self::MissingRelation => "missing table or view",
+            Self::MissingSchema => "missing schema",
+            Self::MissingFunction => "missing SQL function",
             Self::UnknownMacro => "unknown macro",
             Self::MissingRef => "missing ref",
             Self::TemplateSyntax => "template syntax",
@@ -197,15 +215,16 @@ impl Symptom {
         match self {
             Self::MissingColumn
             | Self::MissingRelation
+            | Self::MissingSchema
+            | Self::MissingFunction
             | Self::TypeMismatch
             | Self::ConstraintViolation
             | Self::DependentObjects => ErrorCategory::Database,
             Self::UnknownMacro | Self::TemplateSyntax => ErrorCategory::Compilation,
             Self::MissingRef | Self::PackagesMissing => ErrorCategory::Dependency,
             Self::PermissionDenied => ErrorCategory::Permission,
-            Self::QueryTimeout | Self::LockConflict | Self::WarehouseUnavailable => {
-                ErrorCategory::Timeout
-            }
+            Self::QueryTimeout | Self::LockConflict => ErrorCategory::Timeout,
+            Self::WarehouseUnavailable => ErrorCategory::Connection,
             Self::ProfileNotFound | Self::CredentialsMissing => ErrorCategory::Configuration,
             Self::PythonException => ErrorCategory::PythonModel,
             Self::TestFailed => ErrorCategory::TestFailure,
@@ -217,6 +236,8 @@ impl Symptom {
         match self {
             Self::MissingColumn => "A column this model reads doesn't exist",
             Self::MissingRelation => "A table or view this model reads doesn't exist",
+            Self::MissingSchema => "A schema this model reads or writes doesn't exist",
+            Self::MissingFunction => "The query calls a SQL function the warehouse doesn't have",
             Self::UnknownMacro => "The model calls a macro that isn't defined",
             Self::MissingRef => "The model refers to a node the project doesn't have",
             Self::TemplateSyntax => "The model's template has a syntax error",
@@ -1283,7 +1304,8 @@ mod tests {
             )
             .build();
         let json = serde_json::to_value(&e).unwrap();
-        assert_eq!(json["schema_version"]["minor"], 2);
+        // At least the minor that added it.
+        assert!(json["schema_version"]["minor"].as_u64() >= Some(2));
         assert_eq!(json["check"]["covers"][0], "model.a");
         assert_eq!(json["evidence"][0]["data"]["kind"], "failing_rows");
         assert_eq!(json["evidence"][0]["data"]["rows"], 5);
@@ -1347,7 +1369,8 @@ mod tests {
         assert_eq!(e.confidence(), Confidence::KnownPatternWithEvidence);
         assert_eq!(EvidenceSource::Doctor.label(), "ods doctor");
         let json = serde_json::to_value(&e).unwrap();
-        assert_eq!(json["schema_version"]["minor"], 2);
+        // At least the minor that added it.
+        assert!(json["schema_version"]["minor"].as_u64() >= Some(2));
         assert_eq!(json["evidence"][0]["source"], "doctor");
         assert_eq!(json["evidence"][0]["data"]["kind"], "doctor_check");
         assert_eq!(json["evidence"][0]["data"]["check"], "config.resolution");
@@ -1361,5 +1384,35 @@ mod tests {
         old["schema_version"]["minor"] = 1.into();
         let read: ErrorExplanation = serde_json::from_value(old).unwrap();
         assert_eq!(read.evidence().len(), 0);
+    }
+
+    #[test]
+    fn an_unreachable_warehouse_is_a_connection_error_not_a_timeout() {
+        assert_eq!(
+            Symptom::WarehouseUnavailable.category(),
+            ErrorCategory::Connection
+        );
+        assert_eq!(Symptom::QueryTimeout.category(), ErrorCategory::Timeout);
+        assert_eq!(Symptom::MissingSchema.category(), ErrorCategory::Database);
+        assert_eq!(Symptom::MissingFunction.category(), ErrorCategory::Database);
+        assert_eq!(
+            serde_json::to_value(ErrorCategory::Connection).unwrap(),
+            "connection"
+        );
+        assert_eq!(
+            serde_json::to_value(Symptom::MissingSchema).unwrap(),
+            "missing_schema"
+        );
+        assert_eq!(
+            serde_json::to_value(Symptom::MissingFunction).unwrap(),
+            "missing_function"
+        );
+        // Every one has its own words.
+        let labels: std::collections::BTreeSet<_> =
+            Symptom::ALL.iter().map(|s| s.label()).collect();
+        assert_eq!(labels.len(), Symptom::ALL.len());
+        let labels: std::collections::BTreeSet<_> =
+            ErrorCategory::ALL.iter().map(|c| c.label()).collect();
+        assert_eq!(labels.len(), ErrorCategory::ALL.len());
     }
 }
