@@ -320,6 +320,7 @@ impl TestReport {
                 project_dir: &project_dir,
                 target_dir: &ws.target_dir,
                 manifest: Some(&ws.manifest),
+                last_manifest: None,
             },
             plan: None,
             before: latest.map(|l| &l.snapshot),
@@ -327,6 +328,10 @@ impl TestReport {
             retry: None,
             state_db_flag: super::failures::retry_state_db(settings),
             project_is_run: true,
+            doctor: Some(super::failures::Doctor {
+                config: None,
+                settings,
+            }),
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);
     }

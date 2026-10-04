@@ -3779,7 +3779,7 @@ fn a_failed_node_is_explained_without_values() {
         .with("FAKE_DBT_FAIL_MESSAGE", MISSING_COLUMN);
     let (code, json) = project.run(&[]);
     assert_eq!(code, 1, "{json:#}");
-    assert!(!json.to_string().contains("SENTINEL"), "{json:#}");
+    assert!(!json["result"].to_string().contains("SENTINEL"), "{json:#}");
     let result = &json["result"];
     let (path, _) = journal_of(&project, result);
     assert!(!std::fs::read_to_string(path).unwrap().contains("SENTINEL"));
@@ -4123,6 +4123,135 @@ fn a_compile_failure_is_explained_before_anything_runs() {
     ]);
     assert_eq!(code, 1, "{plain}");
     insta::assert_snapshot!("compile_failure_plain", plain.trim_end());
+}
+
+/// #323: a ref to a node that doesn't exist suggests the project's nodes with a close
+/// name, as a guess; the name the ref used, which only dbt's message holds, is never
+/// shown.
+#[test]
+fn a_missing_ref_suggests_a_close_name() {
+    let project = Project::new("missing-ref").with(
+        "FAKE_DBT_COMPILE_ERROR",
+        "Compilation Error\n  Model 'model.jaffle_ods.broken' (models/marts/broken.sql) depends on a node named 'custmers' which was not found",
+    );
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["symptom"], "missing_ref", "{json:#}");
+    assert_eq!(
+        failure["confidence"], "known_pattern",
+        "a guess confirms nothing"
+    );
+    assert_eq!(
+        failure["suggestions"][0]["text"],
+        "Did you mean `customers`? The project has a node with a name close to the missing one; that is a guess from the names, not evidence of a typo.",
+        "{json:#}"
+    );
+    // The command's own diagnostic relays dbt's error as dbt printed it (as before
+    // #323); the explanation never holds the name.
+    assert!(!json["result"].to_string().contains("custmers"), "{json:#}");
+    insta::assert_snapshot!(
+        "missing_ref_json",
+        serde_json::to_string_pretty(failure).unwrap()
+    );
+
+    let (code, plain) = project.ods_plain_status(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ]);
+    assert_eq!(code, 1, "{plain}");
+    assert!(plain.contains("Did you mean customers?"), "{plain}");
+    assert!(!plain.contains("custmers"), "{plain}");
+    insta::assert_snapshot!("missing_ref_plain", plain.trim_end());
+}
+
+/// #323, #181: a profile dbt can't find is explained with what `ods doctor`'s local
+/// configuration checks find; a profiles directory with no `profiles.yml` confirms it.
+/// Nothing from dbt's message gets through.
+#[test]
+fn a_missing_profile_is_explained_with_doctor_checks() {
+    const SENTINEL: &str = "sk_live_PROFILE_SENTINEL";
+    let project = Project::new("missing-profile").with(
+        "FAKE_DBT_COMPILE_ERROR",
+        &format!("Runtime Error\n  Could not find profile named '{SENTINEL}'"),
+    );
+    let flags = ["--profiles-dir", "profiles", "--dbt-profile", "analytics"];
+    let (code, json) = project.run(&flags);
+    assert_eq!(code, 1, "{json:#}");
+    assert!(!json["result"].to_string().contains("SENTINEL"), "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["symptom"], "profile_not_found", "{json:#}");
+    assert_eq!(failure["confidence"], "known_pattern_with_evidence");
+    let doctor: Vec<&Value> = failure["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["source"] == "doctor")
+        .collect();
+    let checks: Vec<(&str, &str, bool)> = doctor
+        .iter()
+        .map(|e| {
+            (
+                e["data"]["check"].as_str().unwrap(),
+                e["data"]["status"].as_str().unwrap(),
+                e["confirms"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        checks,
+        [
+            ("config.resolution", "warning", true),
+            ("config.load", "ok", false)
+        ],
+        "{json:#}"
+    );
+    insta::assert_snapshot!(
+        "missing_profile_json",
+        serde_json::to_string_pretty(failure).unwrap()
+    );
+
+    let dbt = fixture("fake-dbt/dbt");
+    let mut args = vec![
+        "state",
+        "build",
+        "--dbt",
+        dbt.to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+    ];
+    args.extend(flags);
+    let (code, plain) = project.ods_plain_status(&args);
+    assert_eq!(code, 1, "{plain}");
+    assert!(!plain.contains("SENTINEL"), "{plain}");
+    assert!(plain.contains("[ods doctor]"), "{plain}");
+    insta::assert_snapshot!("missing_profile_plain", plain.trim_end());
+
+    // With a profiles file there, the checks are context: ODS never reads it, so it
+    // can't tell whether the profile is in it.
+    std::fs::create_dir_all(project.dir.join("profiles")).unwrap();
+    std::fs::write(project.dir.join("profiles/profiles.yml"), "").unwrap();
+    let (code, json) = project.run(&flags);
+    assert_eq!(code, 1, "{json:#}");
+    let failure = &json["result"]["failures"][0];
+    assert_eq!(failure["confidence"], "known_pattern", "{json:#}");
+    let resolution = failure["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["data"]["check"] == "config.resolution")
+        .unwrap();
+    assert_eq!(resolution["confirms"], false);
+    assert_eq!(
+        resolution["text"],
+        "Check `config.resolution` (ok): where ODS finds the project, dbt and the state. dbt's `profiles_dir` `profiles` (`flag`), `profile` `analytics` (`flag`), `target` unset (dbt's default).",
+        "{json:#}"
+    );
+    assert!(!json["result"].to_string().contains("SENTINEL"), "{json:#}");
 }
 
 /// #323 review: an error once dbt started building is never "failed before any node

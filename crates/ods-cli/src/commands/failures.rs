@@ -17,7 +17,9 @@ use ods_provider_dbt::events::project_failure;
 use ods_sdk::contracts::error_catalogue::{ErrorCatalogue, ProjectIndex};
 use ods_sdk::contracts::run_events::RunSummary;
 use ods_sdk::run_journal::Journals;
-use ods_state::{FailureFacts, FailureStage, explain_failure, failed_checks, failed_nodes};
+use ods_state::{
+    DoctorFinding, FailureFacts, FailureStage, explain_failure, failed_checks, failed_nodes,
+};
 
 use super::lineage::{LoadOptions, Loaded, shared_cache};
 use super::state_plan::display_name;
@@ -34,6 +36,9 @@ pub(super) struct ProjectFiles<'a> {
     pub(super) target_dir: &'a Path,
     /// The manifest, if one was read.
     pub(super) manifest: Option<&'a ods_provider_dbt::Manifest>,
+    /// The manifest dbt wrote last, when `manifest` is `None` because it may not
+    /// describe the code that failed: only its names are used, for did-you-mean.
+    pub(super) last_manifest: Option<&'a ods_provider_dbt::Manifest>,
 }
 
 impl ProjectFiles<'_> {
@@ -61,6 +66,11 @@ impl ProjectFiles<'_> {
         let name = self.target_name();
         self.manifest.map(|m| project_index(m, Some(&name)))
     }
+
+    fn last_index(&self) -> Option<ProjectIndex> {
+        let name = self.target_name();
+        self.last_manifest.map(|m| project_index(m, Some(&name)))
+    }
 }
 
 /// What explains a run's failures, besides the run itself.
@@ -80,6 +90,89 @@ pub(super) struct Evidence<'a> {
     /// Whether the manifest and lineage describe the code the run ran: right after it,
     /// or when the manifest was written by that run (its invocation is the run id).
     pub(super) project_is_run: bool,
+    /// What `ods doctor`'s local configuration checks need, to explain a failure of
+    /// dbt's profile or credentials right after it (#181); `None` for an older run,
+    /// whose configuration may have changed since.
+    pub(super) doctor: Option<Doctor<'a>>,
+}
+
+/// What `ods doctor`'s configuration checks read (#323, #181).
+#[derive(Clone, Copy)]
+pub(super) struct Doctor<'a> {
+    /// ODS's configuration, when the command has it at hand: then `config.load` (and
+    /// `config.values`, for credentials) run too.
+    pub(super) config: Option<&'a ods_config::Loaded>,
+    /// The command's resolved settings, for `config.resolution`.
+    pub(super) settings: &'a super::state_settings::StateSettings,
+}
+
+/// What `ods doctor`'s local, side-effect-free checks find that bears on a failure
+/// recognised as `classification`: only for a missing profile or target, or missing
+/// credentials; nothing for anything else. No check runs dbt or connects to anything.
+fn doctor_findings(
+    doctor: Option<Doctor<'_>>,
+    classification: &ods_sdk::contracts::error_catalogue::Classification,
+) -> Vec<DoctorFinding> {
+    use ods_core::failure::Symptom;
+    use ods_sdk::contracts::error_catalogue::Classification;
+    let (Some(doctor), Classification::Recognised(found)) = (doctor, classification) else {
+        return Vec::new();
+    };
+    let credentials = match found.symptom {
+        Symptom::ProfileNotFound => false,
+        Symptom::CredentialsMissing => true,
+        _ => return Vec::new(),
+    };
+    super::doctor_checks::configuration_checks(doctor.config, doctor.settings, credentials)
+        .iter()
+        .map(doctor_finding)
+        .collect()
+}
+
+/// One doctor check as a neutral finding: its message's backticked names as code spans
+/// (only identifier-shaped ones show), and, for `config.resolution`, the profile
+/// settings ODS gives dbt and where each came from. A profiles directory without
+/// `profiles.yml` shows that dbt can't find a profile.
+fn doctor_finding(check: &ods_core::CheckResult) -> DoctorFinding {
+    let mut text = Text::new();
+    for (i, part) in check.message.split('`').enumerate() {
+        text = if i % 2 == 1 {
+            text.code(part)
+        } else {
+            text.plain(part)
+        };
+    }
+    if check.id == super::doctor_checks::RESOLUTION {
+        let mut first = true;
+        for key in ["profiles_dir", "profile", "target"] {
+            let Some(e) = check.evidence.iter().find(|e| e.key == key) else {
+                continue;
+            };
+            text = text.plain(if first { ". dbt's " } else { ", " });
+            first = false;
+            text = text.code(key).plain(" ");
+            text = if e.value == "unset" {
+                text.plain("unset")
+            } else {
+                text.code(&e.value)
+            };
+            if let Some(source) = &e.source {
+                text = text.plain(" (");
+                text = if ods_core::failure::is_code(source) {
+                    text.code(source)
+                } else {
+                    text.plain(source)
+                };
+                text = text.plain(")");
+            }
+        }
+    }
+    let finding = DoctorFinding::new(&check.id, check.status, text.plain("."));
+    if check.code.as_deref() == Some(super::doctor_checks::codes::PROFILES_MISSING) {
+        finding.showing(ods_core::failure::Symptom::ProfileNotFound)
+    } else {
+        finding
+    }
 }
 
 /// Earlier runs than `run`, from their journals, newest first.
@@ -149,7 +242,9 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
         } else {
             Vec::new()
         };
+        let doctor = doctor_findings(evidence.doctor, &classification);
         let mut facts = FailureFacts::new(node, &classification, &info, FailureStage::Run);
+        facts.doctor = &doctor;
         facts.error = stats.error.as_ref();
         facts.stats = Some(stats);
         facts.run = Some(run);
@@ -192,8 +287,18 @@ pub(super) fn explain_prepare(output: &str, evidence: &Evidence<'_>) -> Option<E
     let failure = project_failure(output)?;
     let catalogue = DbtErrorCatalogue::new();
     let info = catalogue.catalogue();
-    let classification = catalogue.classify(&failure.summary);
-    let index = evidence.files.index();
+    let classification = catalogue.classify_project(&failure);
+    // dbt writes no manifest when it can't resolve a reference; for did-you-mean, the
+    // one it wrote last still names the project's nodes (a guess either way).
+    let index = evidence.files.index().or_else(|| {
+        matches!(
+            &classification,
+            ods_sdk::contracts::error_catalogue::Classification::Recognised(m)
+                if m.symptom == ods_core::failure::Symptom::MissingRef
+        )
+        .then(|| evidence.files.last_index())
+        .flatten()
+    });
     // The node dbt named, by the file it named: names alone can repeat across packages.
     let node = index
         .as_ref()
@@ -209,7 +314,9 @@ pub(super) fn explain_prepare(output: &str, evidence: &Evidence<'_>) -> Option<E
         })
         .or_else(|| failure.file.clone())
         .unwrap_or_else(|| "project".to_owned());
+    let doctor = doctor_findings(evidence.doctor, &classification);
     let mut facts = FailureFacts::new(&node, &classification, &info, FailureStage::Prepare);
+    facts.doctor = &doctor;
     facts.error = Some(&failure.summary);
     facts.index = index.as_ref();
     facts.plan = evidence.plan;
@@ -503,12 +610,14 @@ mod tests {
             project_dir: &link,
             target_dir: &real.join("target"),
             manifest: None,
+            last_manifest: None,
         };
         assert_eq!(files.target_name(), "target");
         let files = ProjectFiles {
             project_dir: &link,
             target_dir: &link.join("target"),
             manifest: None,
+            last_manifest: None,
         };
         assert_eq!(files.target_name(), "target");
     }

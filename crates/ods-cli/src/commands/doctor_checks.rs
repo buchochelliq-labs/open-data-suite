@@ -73,6 +73,8 @@ pub(super) mod codes {
     pub const RELATION_CHECK_FAILED: &str = "ODS-E0603";
     /// The live table-version probe failed.
     pub const VERSION_PROBE_FAILED: &str = "ODS-E0604";
+    /// The profiles directory ODS gives dbt has no `profiles.yml`.
+    pub const PROFILES_MISSING: &str = "ODS-W0510";
     /// The live relation check couldn't tell whether some relations exist.
     pub const RELATIONS_UNKNOWN: &str = "ODS-U0605";
     /// The live table-version probe ran, but some sources have no table version.
@@ -82,7 +84,7 @@ pub(super) mod codes {
 
     /// Every code `ods doctor` reports, reused ones included, for the docs test.
     #[cfg(test)]
-    pub const ALL: [&str; 28] = [
+    pub const ALL: [&str; 29] = [
         BLOCKED,
         "ODS-E0101",
         "ODS-E0102",
@@ -104,6 +106,7 @@ pub(super) mod codes {
         ADAPTER_UNKNOWN,
         ADAPTER_UNLISTED,
         TARGET_UNRENDERED,
+        PROFILES_MISSING,
         NO_SOURCE_VERSIONS,
         NO_RELATION_CHECK,
         RELATION_CHECK_FAILED,
@@ -474,26 +477,7 @@ impl<'a> Checks<'a> {
                 });
             }
         };
-        let optional = |key: &str, setting: &Option<Setting>| match setting {
-            Some(setting) => setting_evidence(key, setting),
-            None => Evidence::new(key, "unset").from_source("dbt's default"),
-        };
-        let mut result = CheckResult::ok(
-            s.id,
-            s.category,
-            "where ODS finds the project, dbt and the state",
-        );
-        result.evidence = vec![
-            setting_evidence("program", &settings.program),
-            optional("project_dir", &settings.project_dir),
-            optional("profiles_dir", &settings.profiles_dir),
-            optional("profile", &settings.profile),
-            optional("target", &settings.target),
-            setting_evidence("target_dir", &settings.target_dir),
-            setting_evidence("state_db", &settings.state_db),
-            setting_evidence("environment", &settings.environment),
-        ];
-        Ok(result)
+        Ok(resolution(s, settings))
     }
 
     // ------------------------------------------------------------------------ project
@@ -1170,6 +1154,89 @@ fn without_credentials(value: &toml::Value) -> (toml::Value, bool) {
         }
         other => (other.clone(), false),
     }
+}
+
+/// `config.resolution` for resolved settings: where ODS finds the project, dbt and
+/// the state. A profiles directory named for dbt with no `profiles.yml` in it is a
+/// warning: dbt finds no profile there (only the file's presence is checked; ODS never
+/// reads it, AGENTS.md rule 9).
+fn resolution(s: Spec, settings: &StateSettings) -> CheckResult {
+    let optional = |key: &str, setting: &Option<Setting>| match setting {
+        Some(setting) => setting_evidence(key, setting),
+        None => Evidence::new(key, "unset").from_source("dbt's default"),
+    };
+    let missing_profiles = settings
+        .profiles_dir
+        .as_ref()
+        .filter(|dir| !Path::new(&dir.value).join("profiles.yml").is_file());
+    let mut result = match missing_profiles {
+        Some(dir) => CheckResult::warning(
+            s.id,
+            s.category,
+            codes::PROFILES_MISSING,
+            format!(
+                "no `profiles.yml` in the profiles directory `{}` ({}): dbt finds no profile there",
+                dir.value,
+                dir.origin.label()
+            ),
+        )
+        .hint("name the directory that holds profiles.yml with --profiles-dir, DBT_PROFILES_DIR or the dbt provider's `profiles_dir` setting, or leave it unset for dbt's default"),
+        None => CheckResult::ok(
+            s.id,
+            s.category,
+            "where ODS finds the project, dbt and the state",
+        ),
+    };
+    result.evidence = vec![
+        setting_evidence("program", &settings.program),
+        optional("project_dir", &settings.project_dir),
+        optional("profiles_dir", &settings.profiles_dir),
+        optional("profile", &settings.profile),
+        optional("target", &settings.target),
+        setting_evidence("target_dir", &settings.target_dir),
+        setting_evidence("state_db", &settings.state_db),
+        setting_evidence("environment", &settings.environment),
+    ];
+    result
+}
+
+/// The id of the check whose findings explain a configuration failure best:
+/// `config.resolution` (#323, #181).
+pub(super) const RESOLUTION: &str = "config.resolution";
+
+/// The local, side-effect-free checks that bear on a failure of dbt's profile or
+/// credentials, for explanations (#323, #181): `config.load` and, for credentials,
+/// `config.values` when the configuration is at hand, and `config.resolution`. None
+/// runs dbt, opens a connection or writes anything.
+pub(super) fn configuration_checks(
+    config: Option<&Loaded>,
+    settings: &StateSettings,
+    credentials: bool,
+) -> Vec<CheckResult> {
+    let spec = |id: &str| {
+        *SPECS
+            .iter()
+            .find(|s| s.id == id)
+            .expect("every configuration check is in SPECS")
+    };
+    let mut results = Vec::new();
+    if let Some(config) = config {
+        let checks = Checks {
+            config,
+            config_failure: None,
+            settings: Ok(settings.clone()),
+            connect: false,
+            manifest: OnceCell::new(),
+            dbt: OnceCell::new(),
+            target: OnceCell::new(),
+        };
+        results.push(checks.check(spec("config.load")));
+        if credentials {
+            results.push(checks.check(spec("config.values")));
+        }
+    }
+    results.push(resolution(spec(RESOLUTION), settings));
+    results
 }
 
 fn setting_evidence(key: &str, setting: &Setting) -> Evidence {

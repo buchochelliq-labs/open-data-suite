@@ -1903,6 +1903,7 @@ impl RunReport {
                 project_dir: &project_dir,
                 target_dir: &ws.target_dir,
                 manifest: Some(&ws.manifest),
+                last_manifest: None,
             },
             plan: Some(&self.plan),
             before: before.map(|s| &s.snapshot),
@@ -1912,6 +1913,10 @@ impl RunReport {
             ))),
             state_db_flag: super::failures::retry_state_db(settings),
             project_is_run: true,
+            doctor: Some(super::failures::Doctor {
+                config: None,
+                settings,
+            }),
         };
         self.observed.failures = super::failures::explain_run(run, &evidence);
     }
@@ -2426,14 +2431,16 @@ pub(super) fn failed_before_running<const TEST: bool>(
     let fresh = std::fs::metadata(&manifest_path)
         .and_then(|m| m.modified())
         .is_ok_and(|at| at >= started);
-    let manifest = fresh
-        .then(|| ods_provider_dbt::Manifest::read(&manifest_path).ok())
-        .flatten();
+    let read = || ods_provider_dbt::Manifest::read(&manifest_path).ok();
+    let manifest = fresh.then(read).flatten();
+    // An older one names the project's nodes, for did-you-mean only.
+    let last_manifest = if fresh { None } else { read() };
     let evidence = super::failures::Evidence {
         files: super::failures::ProjectFiles {
             project_dir: &project_dir,
             target_dir: &target_dir,
             manifest: manifest.as_ref(),
+            last_manifest: last_manifest.as_ref(),
         },
         plan: None,
         before: None,
@@ -2441,6 +2448,10 @@ pub(super) fn failed_before_running<const TEST: bool>(
         retry: None,
         state_db_flag: None,
         project_is_run: true,
+        doctor: Some(super::failures::Doctor {
+            config: Some(ctx.config),
+            settings,
+        }),
     };
     match super::failures::explain_prepare(&error.message, &evidence) {
         Some(explanation) => ctx.emit_failed(

@@ -274,7 +274,7 @@ It takes the options `ods state` commands take to find things (`--project-dir`,
 |---|---|---|
 | `config.load` | Do the configuration files load? Which were found, and which profile is active? | yes |
 | `config.values` | What is every effective value, and where did it come from? Credentials appear only as references, e.g. `secret(env:WH_TOKEN)` | |
-| `config.resolution` | Where do dbt, the project, the target directory, the state database and the environment come from: a flag, a `DBT_*` variable, a configuration file or profile, or a default? | yes |
+| `config.resolution` | Where do dbt, the project, the target directory, the state database and the environment come from: a flag, a `DBT_*` variable, a configuration file or profile, or a default? A profiles directory named for dbt must hold a `profiles.yml` (`ODS-W0510`). | yes |
 | `project.dbt_project` | Is there a `dbt_project.yml` in the project directory? | yes |
 | `project.manifest` | Can `manifest.json` (or dbt's Information Schema) be read, at a supported schema version (v11, v12)? | yes |
 | `project.name` | Does the manifest name its project? | |
@@ -336,6 +336,7 @@ report in `result`, and `ODS-E0501` in `diagnostics`.
 | `ODS-U0507` | The manifest names no adapter. | `dbt parse` with dbt 1.7 or later. |
 | `ODS-U0508` | dbt lists no adapters, so whether the manifest's is installed can't be told. | |
 | `ODS-E0509` | dbt can't render the profile, so it can't say which target it builds in. | Check `profiles.yml`, `--profiles-dir`, `--target` and the variables it reads; `dbt debug` says more. |
+| `ODS-W0510` | The profiles directory ODS gives dbt (`--profiles-dir`, `DBT_PROFILES_DIR` or `profiles_dir`) has no `profiles.yml`: dbt finds no profile there. Only the file's presence is checked; ODS never reads it. | Name the directory that holds `profiles.yml`, or leave it unset for dbt's default. |
 | `ODS-W0601` | No data versions for some sources: the adapter has no table versions, and they have no `loaded_at_field`, so the models reading them build on every run. | Give them a `loaded_at_field` (or `loaded_at_query`); see [where source versions come from](#where-source-versions-come-from). |
 | `ODS-W0602` | Relations can't be checked before reuse: a dropped table is rebuilt only when something else changes. | |
 | `ODS-E0603` | The live relation check failed. | Check that the warehouse is reachable with the profile's credentials: `dbt debug`. |
@@ -1418,7 +1419,23 @@ full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 - **What to try:** steps and commands to copy, only real ones: `ods lineage impact
   --column <unique id>.COLUMN=removed`, `ods state retry --failed` (with `--state-db`
   when you passed one, and only for the last run), `ods doctor`, and dbt's own (`dbt
-  deps`, `dbt debug`); "did you mean" for a macro with a close name.
+  deps`, `dbt debug`); "did you mean" for a macro with a close name, and for a `ref()`
+  to a model that doesn't exist: up to three models, seeds or snapshots of the project
+  within two edits of the name, closest first ("Did you mean `customers`?"). That is a
+  guess from the names, never evidence of a typo, so it doesn't raise the confidence;
+  the name the `ref()` used is never shown (only dbt's message holds it), only the
+  project's own names. When dbt wrote no manifest (it doesn't when a `ref()` can't be
+  resolved), the names come from the one it wrote last.
+- **ods doctor:** for a profile or target dbt can't find, or missing credentials, ODS
+  runs `ods doctor`'s local configuration checks right after the failure (none runs
+  dbt, connects or writes anything): `config.load` and, for credentials,
+  `config.values` (after a failure before any node ran), and `config.resolution`,
+  which shows the `profiles_dir`, `profile` and `target` ODS gives dbt and where each
+  came from. Each is evidence marked `[ods doctor]` (`source: doctor` in JSON, with
+  `data.check` and `data.status`). A profiles directory with no `profiles.yml`
+  (`ODS-W0510`) confirms a missing profile (`known pattern + evidence`); otherwise the
+  checks are context, since ODS never reads `profiles.yml`. `ods state history --run`
+  doesn't run them: the configuration may have changed since the run.
 - **Impact:** the nodes it blocked, and whether their last good builds are kept.
 - **dbt said:** dbt's message, only as the redacted summary kept in the journal.
   Nothing else in an explanation comes from dbt's text: the names in it come from
