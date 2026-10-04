@@ -1658,6 +1658,34 @@ mod tests {
         assert_eq!(find("profile").value, "unset");
     }
 
+    /// #323, #181: a profiles directory without `profiles.yml` is a warning (dbt finds
+    /// no profile there); with one, or unset, resolution is fine. The file isn't read.
+    #[test]
+    fn a_profiles_directory_without_profiles_yml_is_a_warning() {
+        let project = Project::new();
+        let profiles = project.path().join("profiles");
+        let dir = profiles.to_str().unwrap();
+        let run = || {
+            only(
+                "config.resolution",
+                &project.run(&["--profiles-dir", dir], &Options::default()),
+            )
+            .clone()
+        };
+        let resolution = run();
+        assert_eq!(resolution.status, CheckStatus::Warning);
+        assert_eq!(resolution.code.as_deref(), Some(codes::PROFILES_MISSING));
+        assert!(resolution.message.contains("(flag)"), "{resolution:?}");
+        std::fs::create_dir_all(&profiles).unwrap();
+        // Not YAML at all: only its presence counts.
+        std::fs::write(profiles.join("profiles.yml"), "password: SENTINEL\n").unwrap();
+        let resolution = run();
+        assert_eq!(resolution.status, CheckStatus::Ok);
+        assert!(!format!("{resolution:?}").contains("SENTINEL"));
+        let unset = only("config.resolution", &project.run(&[], &Options::default())).clone();
+        assert_eq!(unset.status, CheckStatus::Ok);
+    }
+
     #[test]
     fn a_missing_dbt_is_an_error_and_the_target_unknown() {
         let project = Project::new();
