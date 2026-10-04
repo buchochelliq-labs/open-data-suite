@@ -1,6 +1,6 @@
 # ADR-0019: Release and versioning strategy
 
-- **Status:** Accepted (2026-10-04). The policy is in force; the first release (v0.0.1, #356) hasn't been cut yet, so the release flow hasn't been exercised by a real tag. Reporting the store schema in `ods version` is a follow-up.
+- **Status:** Accepted (2026-10-04). The policy is in force, and the release flow has been exercised by a real tag: v0.0.1 (#356) was published to GitHub Releases and PyPI on 2026-10-04. Homebrew waits on the tap being published. Reporting the store schema in `ods version` is a follow-up.
 - **Date:** 2026-09-27 (amended 2026-09-29: first release is 0.0.1; 0.1.0 means the
   dashboard design is complete)
 - **Issues:** #101, #212, #309
