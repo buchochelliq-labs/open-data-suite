@@ -3,17 +3,18 @@
 A Rust-first, provider-neutral control plane for analytics engineering. It starts with dbt
 and Databricks, and every decision it makes can be explained.
 
-> **Status:** very experimental, pre-alpha. There is no release yet: the first, v0.0.1,
-> is the State MVP with the first dashboard screens. `ods state`, the `ods serve`
+> **Status:** very experimental, pre-alpha. The first release,
+> [v0.0.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.1), is
+> the State MVP with the first dashboard screens. `ods state`, the `ods serve`
 > dashboard, column-level lineage, ERDs and an MCP server work as previews; everything
 > may change.
 >
 > **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
 > `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
 >
-> **Install:** from v0.0.1, `pip install opendatasuite` puts `ods` on your PATH next to
-> dbt. `cargo binstall`, direct downloads and Homebrew (coming soon): [`docs/install.md`](docs/install.md).
-> Until then, build from source: `cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suite ods-cli`.
+> **Install:** `pip install opendatasuite` puts `ods` on your PATH next to dbt.
+> `cargo binstall`, direct downloads, building from source and Homebrew (coming soon):
+> [`docs/install.md`](docs/install.md).
 
 `ods state build` runs `dbt build` on only what changed (code, or upstream data), shows
 each node's result as it finishes, and explains why each one ran:

@@ -130,7 +130,7 @@ v0.0.1 also carries the first dashboard screens (#310–#313, listed below and u
 | **#313** | Dashboard: Catalog (models) and Model page |
 | #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
 
-**Status (2026-10-04): the M1 scope is merged; what is left is the release itself.**
+**Status (2026-10-04): released as [v0.0.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.1).**
 - Closed on GitHub: #11, #18, #20, #21, #22, #23, #24, #74, #168, #181, #188, #209, #211,
   #212, #214, #220, #227, #229, #230, #232, #233 and the four dashboard screens
   #310–#313 (merged in #316, #318, #319, #320).
@@ -147,7 +147,8 @@ v0.0.1 also carries the first dashboard screens (#310–#313, listed below and u
 - Moved out of M1 with no work merged, since v0.0.1 doesn't need them: #26 (a JSON
   store for debugging) goes to M2, and #99 and #192 (the conformance suite and property
   tests) go to R2.
-- Left in M1: cutting the release (#356) and accepting the ADRs that shipped (#357).
+- The release itself (#356): v0.0.1 is on GitHub Releases and PyPI (#360), and the
+  ADRs that shipped are accepted (#357, merged in #359).
 
 **Why data awareness moved into M1:** skipping only on code changes still rebuilds
 models whose upstream data hasn't changed. Skipping on unchanged code *and* data is the
