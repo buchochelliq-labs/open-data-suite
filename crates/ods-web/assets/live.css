@@ -270,3 +270,6 @@
 @media (prefers-reduced-motion: reduce) {
   .lv-playing .lv-node.lv-running .lv-halo { animation: none; }
 }
+/* A marker whose time was inferred (the journal's wasn't usable): dashed. */
+.lv-mark.inferred::after { background: repeating-linear-gradient(to bottom, var(--lv-error-line) 0 4px, transparent 4px 7px); }
+.lv-mark.finished.inferred::after { background: repeating-linear-gradient(to bottom, var(--muted) 0 4px, transparent 4px 7px); }

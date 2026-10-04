@@ -157,6 +157,13 @@ function ctx(status, extra) {
   assert.strictEqual(tl.t1 - tl.t0, 5000);
   assert.ok(tl.finished);
   assert.strictEqual(tl.items[7].at - t0, 3000, "never earlier than the event before it");
+  // ...and said to be inferred, not recorded.
+  assert.ok(tl.items[7].adjusted && !tl.items[6].adjusted);
+  assert.strictEqual(tl.adjusted, 1);
+  assert.ok(tl.markers[0].inferred, "the failure's time is the adjusted one");
+  // Each node's story ends with its last event: c's at the 9th.
+  assert.strictEqual(tl.lastIndex.get("c"), 9);
+  assert.strictEqual(tl.lastIndex.get("a"), 7);
   // The state at a moment is the fold of what happened by then.
   const mid = L.stateAt(tl, t0 + 1500).run;
   assert.strictEqual(mid.nodes.get("a").status, "running");
@@ -217,7 +224,18 @@ function ctx(status, extra) {
   assert.strictEqual(tl.live, false);
   assert.strictEqual(tl.peak, 0);
   assert.ok(!tl.finished);
+  assert.strictEqual(tl.adjusted, 0);
   assert.strictEqual(tl.t1 - tl.t0, 9000);
+}
+{
+  // An event without a time is played at the start, and said to be inferred.
+  const tl = L.timeline("r", [
+    { id: 1, ev: Object.assign(ev(0, "run_started", { nodes: ["a"], mode: "build", live: true })) },
+    { id: 2, ev: Object.assign(ev(1, "node_started", { node: "a" }), { at: "not a time" }) },
+    { id: 3, ev: ev(2, "node_finished", { node: "a", stats: { status: "success" } }) },
+  ]);
+  assert.strictEqual(tl.adjusted, 1);
+  assert.strictEqual(tl.items[1].at, tl.t0);
 }
 process.stdout.write("ok");
 "#;

@@ -161,38 +161,49 @@ const OdsLive = (function () {
   // The timeline of a run's events (`[{ id, ev }]`, in journal order, this run's only):
   // when it starts and ends, each event's time, keyframes, failures, and how many nodes
   // were running at each moment. Times never go backwards: an event dated before the
-  // one before it is played at that one's time; one without a time, too.
+  // one before it is played at that one's time; one without a time, too. Such an event
+  // is marked `adjusted` and counted, so the page can say its time is inferred.
   function timeline(runId, events) {
     const items = [];
     let last = null;
     for (const e of events) {
-      let at = ms(e.ev.at);
-      if (at == null || (last != null && at < last)) at = last;
-      items.push({ id: e.id, ev: e.ev, at });
+      const recorded = ms(e.ev.at);
+      const adjusted = recorded == null || (last != null && recorded < last);
+      const at = adjusted ? last : recorded;
+      items.push({ id: e.id, ev: e.ev, at, adjusted });
       if (at != null) last = at;
     }
     const firstAt = items.find(i => i.at != null);
     const started = items.find(i => i.ev.kind === "run_started" && i.at != null);
     const t0 = started ? started.at : firstAt ? firstAt.at : 0;
-    for (const i of items) if (i.at == null || i.at < t0) i.at = t0;
+    for (const i of items) if (i.at == null || i.at < t0) { i.at = t0; i.adjusted = true; }
     const finishedItem = items.find(i => i.ev.kind === "run_finished");
     const t1 = items.length ? Math.max(t0, items[items.length - 1].at) : t0;
     const run = newRun(runId);
     const keyframes = [{ index: 0, run: cloneRun(run) }];
     const markers = [];
+    // The last event that says something about each node: until the playhead passes
+    // it, the node's story isn't over.
+    const lastIndex = new Map();
+    const touch = (id, i) => { if (id) lastIndex.set(id, i + 1); };
     items.forEach((item, i) => {
       apply(run, item.ev);
+      touch(item.ev.node, i);
+      for (const id of item.ev.kind === "check_finished" ? item.ev.covers || [] : []) touch(id, i);
       if (item.ev.kind === "node_finished" && item.ev.stats && item.ev.stats.status === "error") {
-        markers.push({ at: item.at, kind: "error", node: item.ev.node, index: i + 1 });
+        markers.push({ at: item.at, kind: "error", node: item.ev.node, index: i + 1, inferred: item.adjusted });
       }
       if ((i + 1) % KEYFRAME_EVERY === 0) keyframes.push({ index: i + 1, run: cloneRun(run) });
     });
-    if (finishedItem) markers.push({ at: finishedItem.at, kind: "finished", outcome: finishedItem.ev.outcome, index: items.indexOf(finishedItem) + 1 });
+    if (finishedItem) markers.push({ at: finishedItem.at, kind: "finished", outcome: finishedItem.ev.outcome, index: items.indexOf(finishedItem) + 1, inferred: finishedItem.adjusted });
+    const adjusted = items.filter(i => i.adjusted).length;
     // Running at each moment: from each node's start to its finish (or the end).
     const edges = [];
     for (const n of run.nodes.values()) {
       if (n.startedAt == null) continue;
-      edges.push([Math.max(t0, n.startedAt), 1], [Math.max(t0, n.finishedAt != null ? n.finishedAt : t1), -1]);
+      // A finish dated before its start (a clock that went back) ends where it began.
+      const from = Math.max(t0, n.startedAt);
+      edges.push([from, 1], [Math.max(from, n.finishedAt != null ? n.finishedAt : t1), -1]);
     }
     edges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     const steps = [[t0, 0]];
@@ -202,7 +213,7 @@ const OdsLive = (function () {
       peak = Math.max(peak, now);
       if (steps[steps.length - 1][0] === t) steps[steps.length - 1][1] = now; else steps.push([t, now]);
     }
-    return { runId, items, t0, t1, keyframes, markers, steps, peak, finished: !!finishedItem, live: run.live, final: run };
+    return { runId, items, t0, t1, keyframes, markers, steps, peak, finished: !!finishedItem, live: run.live, final: run, lastIndex, adjusted };
   }
   // How many events happened at or before `t`.
   function indexAt(tl, t) {
@@ -646,13 +657,16 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const R = S.replay;
     const url = x.baseUrl + "api/runs/" + encodeURIComponent(S.runId) + "/events";
     const events = [];
-    let since = 0, unreadable = 0, missing = false, failed = false;
+    let since = 0, unreadable = 0, missing = false, failed = null;
+    R.error = null; R.retry = false; R.offerLive = false;
+    schedule();
     try {
       for (;;) {
         const r = await fetch(url + "?since=" + since);
         if (S.replay !== R) return;
         if (r.status === 400 || r.status === 404) { missing = true; break; }
-        if (!r.ok) { failed = true; break; }
+        // E.g. 503 when too many streams are open: worth trying again.
+        if (!r.ok) { failed = `the server answered ${r.status}`; break; }
         let got = 0, end = false;
         for (const line of (await r.text()).split("\n")) {
           if (!line.trim()) continue;
@@ -668,11 +682,27 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
         // A finished journal ends; one still being written has nothing more for now.
         if (end || !got) break;
       }
-    } catch (_) { failed = true; }
+    } catch (_) { failed = failed || "the connection failed or an answer couldn't be read"; }
     if (S.replay !== R) return;
-    if (missing || failed || !events.length) {
-      R.error = missing || !events.length ? `No journal for run ${S.runId}: it may have been pruned (the newest 50 are kept), or the id is wrong.` : "The run's journal couldn't be loaded.";
+    // Only a journal that isn't there is said to be missing; one that couldn't be
+    // loaded, or read, says so, and what to do.
+    if (missing) {
+      R.error = `No journal for run ${S.runId}: it may have been pruned (the newest 50 are kept), or the id is wrong.`;
       ended({ reason: "missing", outcome: null, inferred: false, note: R.error });
+      return;
+    }
+    if (failed) {
+      R.error = `The run's journal couldn't be loaded: ${failed}.`;
+      R.retry = true;
+      schedule();
+      return;
+    }
+    if (!events.length) {
+      R.error = unreadable
+        ? `The run's journal is there, but none of its ${unreadable} line${unreadable === 1 ? "" : "s"} could be read (a newer version, or cut short).`
+        : "The run's journal has no events yet: the run may be starting.";
+      R.offerLive = !unreadable;
+      schedule();
       return;
     }
     R.tl = L.timeline(S.runId, events);
@@ -832,6 +862,10 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   pnote.id = "lv-pnote";
   const liveBtn = btn("lv-golive", "Go live", "Watch the run live instead");
   liveBtn.textContent = "Go live";
+  const retryBtn = btn("lv-golive lv-retry", "Try again", "Load the run's journal again");
+  retryBtn.textContent = "Try again";
+  retryBtn.hidden = true;
+  retryBtn.addEventListener("click", () => { if (S.replay && !S.replay.tl) load(); });
   playBtn.addEventListener("click", toggle);
   prevBtn.addEventListener("click", () => step(-1));
   nextBtn.addEventListener("click", () => step(1));
@@ -854,7 +888,13 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
     }
     if (speedSel.value !== String(R.speed)) speedSel.value = String(R.speed);
-    if (!tl) { timeEl.textContent = "loading…"; pnote.textContent = R.error || ""; liveBtn.hidden = true; return; }
+    retryBtn.hidden = !R.retry;
+    if (!tl) {
+      timeEl.textContent = R.error ? "—" : "loading…";
+      pnote.textContent = R.error || "";
+      liveBtn.hidden = !R.offerLive;
+      return;
+    }
     const len = tl.t1 - tl.t0, at = R.p - tl.t0;
     const text = `${L.playTime(at)} / ${L.playTime(len)}`;
     if (timeEl.textContent !== text) timeEl.textContent = text;
@@ -865,6 +905,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const notes = [];
     if (tl.live === false) notes.push("Times from the run's final report: when each node finished, not when it started.");
     if (!tl.finished) notes.push("The journal ends here: the run hadn't finished when it was loaded, or it stopped.");
+    if (tl.adjusted) notes.push(`${tl.adjusted} event${tl.adjusted === 1 ? " has" : "s have"} no usable time (missing, or earlier than the event before): played at the time of the event before, so ${tl.adjusted === 1 ? "its" : "their"} time is inferred.`);
     const note = notes.join(" ");
     if (pnote.textContent !== note) pnote.textContent = note;
     liveBtn.hidden = tl.finished;
@@ -890,10 +931,11 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     band.title = `Nodes running over the run: at most ${tl.peak} at once`;
     marks.replaceChildren();
     for (const m of tl.markers) {
-      const b = h("button", null, "lv-mark " + m.kind, marks);
+      const b = h("button", null, "lv-mark " + m.kind + (m.inferred ? " inferred" : ""), marks);
       b.type = "button";
       b.style.left = `${(m.at - tl.t0) / len * 100}%`;
-      const label = m.kind === "error" ? `${x.nameOf(m.node)} failed at ${L.playTime(m.at - tl.t0)}` : `The run finished (${m.outcome || "outcome not said"}) at ${L.playTime(m.at - tl.t0)}`;
+      const when = `${m.inferred ? "at about" : "at"} ${L.playTime(m.at - tl.t0)}${m.inferred ? " (inferred: its time wasn't recorded usably)" : ""}`;
+      const label = m.kind === "error" ? `${x.nameOf(m.node)} failed ${when}` : `The run finished (${m.outcome || "outcome not said"}) ${when}`;
       b.setAttribute("aria-label", label + ": go there");
       b.title = label;
       b.addEventListener("click", () => {
@@ -1271,7 +1313,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const requested = S.run.requested.length || S.run.nodes.size;
     const finished = c.success + c.error + c.skipped + c.unknown;
     const R = S.replay;
-    const word = R ? (R.tl ? `Replay · run ${shortRun(S.runId)} · ${R.playing ? "playing" : "paused"} · ${finished} of ${requested} finished · ${c.running} running` : `Loading run ${shortRun(S.runId)}'s journal`)
+    const word = R ? (R.tl ? `Replay · run ${shortRun(S.runId)} · ${R.playing ? "playing" : "paused"} · ${finished} of ${requested} finished · ${c.running} running`
+      : R.error ? `Replay · run ${shortRun(S.runId)} · couldn't load` : `Loading run ${shortRun(S.runId)}'s journal`)
       : S.waiting ? `Waiting for run ${shortRun(S.runId)}'s journal`
       : running ? `Live · run ${shortRun(S.runId)} · ${finished} of ${requested} finished · ${c.running} running` : `Finished · run ${shortRun(S.runId)}`;
     const ending = S.run.ended && S.run.ended.reason;
@@ -1586,10 +1629,15 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const id = x.state.sel && x.state.sel.node;
     if (!id || !S.card.slot) return;
     const s = shownStatus(id);
-    if (!force && S.card.node === id && S.card.status === s) return;
-    S.card.node = id; S.card.status = s;
+    // In a replay the server's card is the run's final word on the node: shown only
+    // once the playhead has passed the node's last event, never before (no future).
+    const R = S.replay;
+    const settled = !R || (!!R.tl && (R.tl.lastIndex.get(id) || 0) <= R.applied);
+    const key = s + (settled ? "" : ":at-playhead");
+    if (!force && S.card.node === id && S.card.status === key) return;
+    S.card.node = id; S.card.status = key;
     const slot = S.card.slot;
-    if (!inRun(id)) { slot.replaceChildren(localCard(id)); return; }
+    if (!inRun(id) || !settled) { slot.replaceChildren(localCard(id)); return; }
     try {
       const r = await fetch(x.baseUrl + "state/runs/" + encodeURIComponent(S.runId) + "/card?node=" + encodeURIComponent(id));
       if (!r.ok) throw new Error(String(r.status));
@@ -1639,7 +1687,10 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     } else {
       row("Started", n.startedAt ? clock(n.startedAt) : "—", n.startedAt ? "" : "not recorded yet");
       row("Time taken", L.duration(L.took(n)) || "—", L.took(n) == null ? "not timed yet" : "");
+      const r = n.stats && n.stats.rows_affected;
+      if (n.stats) row("Rows affected", r == null ? "—" : String(r), r == null ? "not reported" : "");
     }
+    if (S.replay && n) h("p", "As at the playhead: the run's full card for this node shows once the replay passes its last event.", "lv-note", wrap);
     return wrap;
   }
   // Times that count up while the run goes, updated in place (focus stays put).

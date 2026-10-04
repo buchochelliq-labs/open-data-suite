@@ -63,7 +63,10 @@ incrementally.
 
 A **running** node's elapsed time is measured from the playhead, not the wall clock:
 the view's clock is the playhead in playback and `Date.now()` live, one function both
-use.
+use. A node's **stats card** never shows its future: until the playhead passes the
+node's last event, the card is built from the state at the playhead (status, start,
+time, rows so far, and a note saying so); the Run page's card (the run's final word on
+the node, its explanation included) shows only once the playhead is past it.
 
 ### Controls
 A play bar along the bottom of the Lineage canvas, as a video player has:
@@ -98,6 +101,14 @@ changes, never a flood of events.
   page (`/state/runs/<run_id>`) for a run whose journal ODS still keeps.
 
 ### Conservative where the journal is thin (rule 3)
+An event whose time is missing, unreadable or earlier than the event before it (a
+clock that went back) is played at the time of the event before it, and counted: the
+play bar says how many times are inferred, and a marker at such a time reads "at
+about" and is drawn dashed. A journal that isn't there (`404`) is said to be missing;
+one that couldn't be loaded (e.g. `503`, a dropped connection) says so and offers
+*Try again*; one whose lines can't be read says how many; one with no events yet says
+the run may be starting and offers *Go live*.
+
 A journal rebuilt after the run from its final report (`live: false`, ADR-0024) has no
 start events and only the times the engine reported: nodes are shown going from queued
 straight to their outcome, at the time each finished, and the play bar says "Times from

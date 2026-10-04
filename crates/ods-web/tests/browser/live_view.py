@@ -614,6 +614,46 @@ class Replay(LiveCase):
         self.page.wait_for_selector("#lv-ptime")
         self.assertIn(f"replay={self.run_id}", unquote(self.page.url))
 
+    def test_a_card_shows_the_node_as_at_the_playhead_never_its_future(self) -> None:
+        self.replay("&t=10")
+        self.choose("customer_segments")
+        self.wait("() => document.querySelector('#lv-card .lv-card')")
+        card = self.text("#lv-card")
+        self.assertIn("running", card)
+        self.assertNotIn("failed", card.lower())
+        self.assertIn("As at the playhead", card)
+        # Past its last event, the run's own card: it failed, explained.
+        self.keys("End")
+        self.wait("() => !/As at the playhead/.test(document.getElementById('lv-card').textContent) && /fail/i.test(document.getElementById('lv-card').textContent)")
+        # And back before it: the future is hidden again.
+        self.keys("Home")
+        self.wait("() => /As at the playhead/.test(document.getElementById('lv-card').textContent)")
+        self.assertNotIn("fail", self.text("#lv-card").lower())
+
+    def test_a_journal_that_cant_be_loaded_is_not_said_to_be_missing(self) -> None:
+        self.page.route("**/api/runs/*/events*", lambda r: r.fulfill(status=503, body="busy"))
+        self.page.goto(f"{self.url}/lineage?replay={self.run_id}")
+        self.page.wait_for_selector("#lin-nodes g[data-node]")
+        self.wait("() => /couldn't be loaded: the server answered 503/.test(document.getElementById('lv-pnote').textContent)")
+        self.assertNotIn("No journal", self.text("#lv-pnote"))
+        self.assertTrue(self.page.locator("#lv-toast").is_hidden())
+        # Trying again, once the server answers, replays it.
+        self.page.unroute("**/api/runs/*/events*")
+        self.page.click(".lv-retry")
+        self.wait("() => /\\/ 0:13$/.test(document.getElementById('lv-ptime').textContent)")
+        self.assertTrue(self.page.locator(".lv-retry").is_hidden())
+
+    def test_a_journal_of_unreadable_lines_says_so(self) -> None:
+        unreadable = sim.Journal(self.db, f"7f2f6c69-0000-4000-8000-{uuid.uuid4().hex[:12]}", self.scope)
+        try:
+            unreadable.raw('{"schema_version":"9.0","kind":"node_queued"}\n')
+            self.page.goto(f"{self.url}/lineage?replay={unreadable.run_id}")
+            self.page.wait_for_selector("#lin-nodes g[data-node]")
+            self.wait("() => /none of its 1 line could be read/.test(document.getElementById('lv-pnote').textContent)")
+            self.assertNotIn("No journal", self.text("#lv-pnote"))
+        finally:
+            unreadable.remove()
+
     def test_a_missing_journal_is_said(self) -> None:
         self.page.goto(f"{self.url}/lineage?replay=7f2f6c69-0000-4000-8000-{uuid.uuid4().hex[:12]}")
         self.page.wait_for_selector("#lin-nodes g[data-node]")
