@@ -13,7 +13,10 @@ use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
 use ods_web::catalog::{
     CatalogColumn, CatalogInput, CatalogNode, CatalogTest, TestKind, TypeSource,
 };
-use ods_web::impact::{ImpactQuery, ImpactView, LineageStatus, MAX_CHANGES, Verdict, impact_view};
+use ods_web::impact::{
+    ChangeKind, ImpactQuery, ImpactView, LineageStatus, MAX_CHANGES, MAX_TRAIL, Verdict,
+    impact_view,
+};
 use ods_web::{Dashboard, ServeOptions, Snapshot, router};
 
 /// A model name that must never reach the page raw.
@@ -616,4 +619,106 @@ fn hostile_names_are_escaped() {
         "/lineage/impact?column=%3C%2Fscript%3E.x&change-0=drop",
     );
     assert!(!page.contains("</script>.x"), "the input is escaped too");
+}
+
+#[test]
+fn indexed_changes_bind_to_their_row_whatever_the_order() {
+    let view = view(&[
+        ("column", "orders.amount"),
+        ("column", "orders.status"),
+        ("change-1", "retype"),
+        ("change-0", "drop"),
+    ]);
+    assert_eq!(view.changes[0].change, Some(ChangeKind::Drop));
+    assert_eq!(view.changes[1].change, Some(ChangeKind::Retype));
+    assert!(view.result.is_some());
+}
+
+#[test]
+fn shared_names_are_listed_and_linked_by_id() {
+    let graph = graph();
+    let mut names = names(&graph);
+    // `rank` is also called `customers`, as a model of another package could be.
+    names.insert("model.shop.rank".into(), "customers".into());
+    let query = ImpactQuery::from_pairs(&pairs(&[("column", "customers.lifetime_value")]));
+    let shared = impact_view(&graph, &names, &catalog(), &query);
+    assert!(
+        shared.changes[0]
+            .problem
+            .as_deref()
+            .unwrap_or_default()
+            .contains("names 2 nodes")
+    );
+    assert!(
+        shared
+            .column_options
+            .contains(&"model.shop.customers.lifetime_value".to_owned())
+    );
+    assert!(
+        shared
+            .column_options
+            .contains(&"model.shop.rank.amount".to_owned())
+    );
+    assert!(
+        !shared
+            .column_options
+            .iter()
+            .any(|o| o.starts_with("customers."))
+    );
+    // An id always works; with a unique name, the form shows the name instead.
+    let by_id = impact_view(
+        &graph,
+        &names,
+        &catalog(),
+        &ImpactQuery::from_pairs(&pairs(&[("column", "model.shop.customers.lifetime_value")])),
+    );
+    assert_eq!(by_id.changes[0].problem, None);
+    assert_eq!(
+        by_id.changes[0].input,
+        "model.shop.customers.lifetime_value"
+    );
+    let unique = view(&[("column", "model.shop.orders.amount")]);
+    assert_eq!(unique.changes[0].input, "orders.amount");
+}
+
+#[test]
+fn the_trail_is_capped_even_within_one_columns_uses() {
+    // One column read by more readers than the trail shows.
+    let readers = MAX_TRAIL + 5;
+    let mut analyzer = FakeSqlLineageAnalyzer::new();
+    let mut nodes =
+        vec![LineageNode::new("seed.shop.wide", rel("wide"), NodeKind::Seed).with_columns(["x"])];
+    for i in 0..readers {
+        let name = format!("r{i:03}");
+        analyzer = analyzer.with(
+            format!("{name}.sql"),
+            query(vec![out("x", &[(col("wide", "x"), ID)])], &[], &["wide"]),
+        );
+        nodes.push(
+            LineageNode::new(format!("model.shop.{name}"), rel(&name), NodeKind::Model)
+                .with_sql(format!("{name}.sql"))
+                .with_depends_on(["seed.shop.wide"]),
+        );
+    }
+    let graph = build(
+        &LineageProject::new(nodes),
+        &analyzer,
+        &MemoryCache::default(),
+    )
+    .unwrap()
+    .0;
+    let view = impact_view(
+        &graph,
+        &names(&graph),
+        &CatalogInput::default(),
+        &ImpactQuery::from_pairs(&pairs(&[("column", "wide.x"), ("change", "retype")])),
+    );
+    let result = view.result.unwrap();
+    assert_eq!(result.trail.len(), MAX_TRAIL);
+    assert!(result.trail_cut);
+    assert_eq!(
+        result.reached.len(),
+        readers,
+        "the cap is on the trail only"
+    );
 }

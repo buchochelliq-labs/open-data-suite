@@ -142,8 +142,15 @@ impl ImpactQuery {
                 }
                 "add" => query.add = true,
                 "remove" => remove = value.parse().ok(),
+                // The form's radios say which row they belong to (`change-<row>`), so
+                // a reordered URL still binds each change to its column; a plain
+                // `change` belongs to the column before it.
                 key if key == "change" || key.starts_with("change-") => {
-                    if let Some(row) = rows.last_mut() {
+                    let row = match key.strip_prefix("change-") {
+                        Some(index) => index.parse().ok().and_then(|i: usize| rows.get_mut(i)),
+                        None => rows.last_mut(),
+                    };
+                    if let Some(row) = row {
                         row.1 = Some(value.to_owned());
                     }
                 }
@@ -359,12 +366,23 @@ pub fn impact_view(
     }
 }
 
+/// `model.column` for each column; a model whose name another node shares is named by
+/// its id, so every option picks the node it was listed for.
 fn column_options(graph: &ColumnGraph, name_of: &dyn Fn(&str) -> String) -> Vec<String> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for node in graph.nodes() {
+        *counts.entry(name_of(&node.id)).or_default() += 1;
+    }
     let mut options: BTreeSet<String> = BTreeSet::new();
     for node in graph.nodes() {
         let name = name_of(&node.id);
+        let model = if counts.get(&name).copied().unwrap_or(0) > 1 {
+            node.id.clone()
+        } else {
+            name
+        };
         for column in &node.columns {
-            options.insert(format!("{name}.{column}"));
+            options.insert(format!("{model}.{column}"));
         }
     }
     options.into_iter().collect()
@@ -409,6 +427,14 @@ fn propose(
         }
     };
     proposed.node = Some(node.id.clone());
+    // Links name the node by id, which is never ambiguous; the form shows the name
+    // when only this node has it.
+    if model == node.id
+        && let Some(name) = names.get(&node.id)
+        && names.values().filter(|n| *n == name).count() == 1
+    {
+        proposed.input = format!("{name}.{column}");
+    }
     proposed.model = Some(
         names
             .get(&node.id)
@@ -973,6 +999,11 @@ fn trail(
         for used in graph.uses_of(&column) {
             if !impact.nodes.contains_key(&used.node) {
                 continue;
+            }
+            // One column can feed many readers: the cap holds within its uses too.
+            if steps.len() >= MAX_TRAIL {
+                cut = true;
+                break;
             }
             let Some(node) = graph.node(&used.node) else {
                 continue;

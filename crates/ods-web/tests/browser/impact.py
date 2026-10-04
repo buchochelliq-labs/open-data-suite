@@ -84,7 +84,7 @@ class Simulator(unittest.TestCase):
         page = self.page
         page.goto(f"{URL}/catalog/model.jaffle_ods.orders?tab=columns")
         page.locator('tr[data-column="amount"] a.simulate').click()
-        page.wait_for_url(re.compile(r"/lineage/impact\?column=orders\.amount$"))
+        page.wait_for_url(re.compile(r"/lineage/impact\?column=model\.jaffle_ods\.orders\.amount$"))
         self.assertEqual(page.locator('input[name="column"]').input_value(), "orders.amount")
         self.assertEqual(page.locator("tr[data-verdict]").count(), 0, "nothing until a change is chosen")
         page.get_by_role("radio", name="drop").check()

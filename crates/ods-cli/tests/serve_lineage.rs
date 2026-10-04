@@ -471,7 +471,7 @@ fn the_impact_simulator_reaches_what_ods_lineage_impact_says() {
     // The page, opened from a column's link on the Model page.
     let (_, model) = get(&server, "catalog/model.jaffle_ods.orders?tab=columns");
     assert!(
-        model.contains(r#"href="../lineage/impact?column=orders.amount""#),
+        model.contains(r#"href="../lineage/impact?column=model.jaffle_ods.orders.amount""#),
         "the Columns tab links each column to the simulator"
     );
     let (status, page) = get(&server, "lineage/impact?column=orders.amount&change-0=drop");

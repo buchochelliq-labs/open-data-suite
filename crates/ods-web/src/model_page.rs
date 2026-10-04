@@ -481,7 +481,7 @@ fn columns(b: &mut String, view: &ModelView, full: bool) {
                 name_attr = attr(&column.name),
                 simulate = attr(
                     &form_urlencoded::Serializer::new(String::new())
-                        .append_pair("column", &format!("{}.{}", view.name, column.name))
+                        .append_pair("column", &format!("{}.{}", view.id, column.name))
                         .finish()
                 ),
                 ty = type_cell(column),
