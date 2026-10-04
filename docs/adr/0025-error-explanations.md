@@ -144,11 +144,26 @@ and, for dbt and DuckDB, recorded from a real dbt 1.10 + DuckDB run
   conversion, constraint, dependent entries, write-write conflicts, file locks,
   permission and interrupt errors;
 - PostgreSQL's documented messages (missing column or relation, permission denied,
-  statement timeout, invalid input, unique and not-null violations, dependent objects,
-  password authentication, connection);
+  statement timeout, invalid input, unique and not-null violations, password
+  authentication, connection);
 - Apache Spark's public error conditions (`UNRESOLVED_COLUMN`,
   `TABLE_OR_VIEW_NOT_FOUND`, `CAST_INVALID_INPUT`, `DATATYPE_MISMATCH`) and Delta Lake's
   `DELTA_CONCURRENT_*` classes, which Databricks reports.
+
+*Amended 2026-10-04 (version 4).* Added, from public Apache-2.0 sources: Spark's
+`SCHEMA_NOT_FOUND`, `UNRESOLVED_ROUTINE`, `CHECK_CONSTRAINT_VIOLATION` and
+`NOT_NULL_CONSTRAINT_VIOLATION`, and Delta's `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` and
+`DELTA_VIOLATE_CONSTRAINT_WITH_VALUES`; and dbt-databricks's (1.12) own messages: a
+cluster that can't be started or asked for its state and a connection that can't be
+made (warehouse unavailable, with `dbt debug` to try), a command or Python model run
+that timed out, and OAuth or client credentials its profile is missing. Each pattern
+is now reached by a message in a test (`every_pattern_is_reached_by_a_message`), which
+found two faults: PostgreSQL's `cannot drop … because other objects depend on it` never
+reached the catalogue (the summary removes `drop …` as SQL), so that pattern is gone;
+and PostgreSQL phrases that end in a colon (`invalid input syntax for type integer:`,
+`could not connect to server:`) are read as the error's kind, so those two patterns no
+longer require dbt's `Database Error`. Not yet recorded from a real Databricks run: the
+messages are dbt-databricks's own text, as its source raises them.
 
 Anything else is not recognised. A missing scalar function (DuckDB's `Scalar Function
 with name … does not exist`) is deliberately left unrecognised: it isn't a macro, and
@@ -353,8 +368,8 @@ rows and redacted message, ADR-0024 1.1) and the project:
     of the source file; ODS shows it as such and maps back to the source only where it
     knows the line itself (an undefined macro's call).
 - Follow-up issues:
-  - Patterns for more adapters (Snowflake, BigQuery, Databricks SQL warehouses) with
-    recorded fixtures. (dbt 1.11 and 1.12 are now recorded as well as 1.10, and every
+  - Patterns for more adapters (Snowflake, BigQuery) with recorded fixtures, and
+    Databricks's patterns (version 4) recorded from a real run. (dbt 1.11 and 1.12 are now recorded as well as 1.10, and every
     recorded message is checked on each: 1.12 rewords the missing-packages error, which
     the catalogue's version 2 recognises.)
   - ~~Hiding check ids that hold a generic test's arguments where ODS still shows

@@ -12,9 +12,16 @@
 //!   `fixtures/dbt/jaffle-ods/artifacts/dbt-<version>-errors`;
 //! - PostgreSQL's documented messages (`column … does not exist`, `relation … does not
 //!   exist`, `permission denied for …`);
-//! - Apache Spark's public error conditions (`[UNRESOLVED_COLUMN…]`,
-//!   `[TABLE_OR_VIEW_NOT_FOUND]`, `[CAST_INVALID_INPUT]`, `[DATATYPE_MISMATCH…]`) and
-//!   Delta Lake's (`[DELTA_CONCURRENT_…]`), which Databricks reports.
+//! - Apache Spark's public error conditions (Apache-2.0, `error-conditions.json`:
+//!   `[UNRESOLVED_COLUMN…]`, `[TABLE_OR_VIEW_NOT_FOUND]`, `[SCHEMA_NOT_FOUND]`,
+//!   `[UNRESOLVED_ROUTINE]`, `[CAST_INVALID_INPUT]`, `[DATATYPE_MISMATCH…]`,
+//!   `[CHECK_CONSTRAINT_VIOLATION]`, `[NOT_NULL_CONSTRAINT_VIOLATION]`) and Delta Lake's
+//!   (Apache-2.0, `delta-error-classes.json`: `[DELTA_CONCURRENT_…]`,
+//!   `[DELTA_NOT_NULL_CONSTRAINT_VIOLATED]`, `[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES]`),
+//!   which Databricks reports;
+//! - dbt-databricks's own messages (Apache-2.0, 1.12): a cluster that can't be started
+//!   or asked for its state, a connection that can't be made, a command or Python model
+//!   run that timed out, and credentials its profile is missing.
 //!
 //! Anything else is not recognised: the catalogue gives only the category dbt's (or the
 //! adapter's) kind implies, and ODS doesn't guess a cause.
@@ -38,8 +45,10 @@ use crate::{Manifest, ResourceType};
 
 /// The catalogue's version: bumped whenever a pattern is added, changed or removed.
 /// 3: `dbt-missing-ref` names the missing node when the whole message is at hand
-/// ([`DbtErrorCatalogue::classify_project`]).
-pub const CATALOGUE_VERSION: &str = "3";
+/// ([`DbtErrorCatalogue::classify_project`]). 4: Databricks's unavailable compute,
+/// timeouts and missing credentials, Spark's and Delta's constraint, schema and routine
+/// errors; `postgres-invalid-input` and `postgres-connect` no longer need dbt's kind.
+pub const CATALOGUE_VERSION: &str = "4";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly), and phrases its
 /// lowercased message must hold, all of them.
@@ -232,17 +241,13 @@ const PATTERNS: &[Pattern] = &[
         Some("database error"),
         &["canceling statement due to statement timeout"],
     ),
+    // PostgreSQL ends these phrases with a colon, so the summary takes them for the
+    // error's kind rather than dbt's `Database Error`: matched on the message alone.
     p(
         "postgres-invalid-input",
         Symptom::TypeMismatch,
-        Some("database error"),
+        None,
         &["invalid input syntax for type"],
-    ),
-    p(
-        "postgres-dependent-objects",
-        Symptom::DependentObjects,
-        Some("database error"),
-        &["because other objects depend on it"],
     ),
     p(
         "postgres-password",
@@ -265,7 +270,7 @@ const PATTERNS: &[Pattern] = &[
     p(
         "postgres-connect",
         Symptom::WarehouseUnavailable,
-        Some("database error"),
+        None,
         &["could not connect to server"],
     ),
     // Apache Spark's error conditions and Delta Lake's error classes (Databricks).
@@ -294,10 +299,91 @@ const PATTERNS: &[Pattern] = &[
         &["[datatype_mismatch"],
     ),
     p(
+        "spark-schema-not-found",
+        Symptom::MissingRelation,
+        None,
+        &["[schema_not_found]"],
+    ),
+    p(
+        "spark-unresolved-routine",
+        Symptom::UnknownMacro,
+        None,
+        &["[unresolved_routine]"],
+    ),
+    p(
+        "spark-check-constraint",
+        Symptom::ConstraintViolation,
+        None,
+        &["[check_constraint_violation]"],
+    ),
+    p(
+        "spark-not-null-constraint",
+        Symptom::ConstraintViolation,
+        None,
+        &["[not_null_constraint_violation]"],
+    ),
+    p(
+        "delta-not-null-constraint",
+        Symptom::ConstraintViolation,
+        None,
+        &["[delta_not_null_constraint_violated]"],
+    ),
+    p(
+        "delta-check-constraint",
+        Symptom::ConstraintViolation,
+        None,
+        &["[delta_violate_constraint_with_values]"],
+    ),
+    p(
         "delta-concurrent-write",
         Symptom::LockConflict,
         None,
         &["[delta_concurrent_"],
+    ),
+    // dbt-databricks's own messages. Its compute: a cluster or SQL warehouse.
+    p(
+        "databricks-cluster-start",
+        Symptom::WarehouseUnavailable,
+        None,
+        &["error starting cluster"],
+    ),
+    p(
+        "databricks-cluster-status",
+        Symptom::WarehouseUnavailable,
+        None,
+        &["error getting status of cluster"],
+    ),
+    p(
+        "databricks-connection",
+        Symptom::WarehouseUnavailable,
+        None,
+        &["failed to create connection"],
+    ),
+    p(
+        "databricks-command-timeout",
+        Symptom::QueryTimeout,
+        None,
+        &["command execution timed out"],
+    ),
+    p(
+        "databricks-python-timeout",
+        Symptom::QueryTimeout,
+        None,
+        &["python model run timed out"],
+    ),
+    p(
+        "databricks-oauth-required",
+        Symptom::CredentialsMissing,
+        None,
+        &["is required when not using access token"],
+    ),
+    // `The config 'client_id' is required to connect to Databricks when
+    // 'client_secret' is present`, its names removed.
+    p(
+        "databricks-client-id-required",
+        Symptom::CredentialsMissing,
+        None,
+        &["is required to connect to databricks when", "is present"],
     ),
 ];
 
@@ -362,7 +448,7 @@ fn steps(found: PatternMatch) -> PatternMatch {
         Symptom::TemplateSyntax => found.suggest(Suggestion::new(Text::new().plain(
             "Check the Jinja around the reported line: an unclosed bracket, quote or tag.",
         ))),
-        Symptom::ProfileNotFound | Symptom::CredentialsMissing => found.suggest(
+        Symptom::ProfileNotFound | Symptom::CredentialsMissing | Symptom::WarehouseUnavailable => found.suggest(
             Suggestion::new(Text::new().plain("Check that dbt can connect with this profile:"))
                 .with_command("dbt debug", &[]),
         ),
@@ -999,6 +1085,280 @@ mod tests {
                 category: ErrorCategory::Database
             }
         );
+    }
+
+    /// A failure as dbt reports a node's: its header, then the engine's message.
+    fn node_failure(kind: &str, message: &str) -> ErrorSummary {
+        error_summary(&format!(
+            "{kind} in model customers (models/customers.sql)\n  {message}"
+        ))
+        .unwrap()
+    }
+
+    /// Messages for the patterns the recorded runs don't reach, each from the public
+    /// source the module docs name, with the pattern each must match.
+    const WRITTEN: &[(&str, &str, &str)] = &[
+        (
+            "dbt-target-not-found",
+            "Runtime Error",
+            "The profile 'jaffle' does not have a target named 'prod'. The valid target names for this profile are: - dev",
+        ),
+        (
+            "dbt-template-unexpected",
+            "Compilation Error",
+            "unexpected '}'",
+        ),
+        (
+            "dbt-template-expected-token",
+            "Compilation Error",
+            "expected token 'end of statement block', got 'x'",
+        ),
+        (
+            "dbt-template-unknown-tag",
+            "Compilation Error",
+            "Encountered unknown tag 'endfor'.",
+        ),
+        (
+            "duckdb-values-list-column",
+            "Runtime Error",
+            "Binder Error: Values list \"o\" does not have a column named \"x\"",
+        ),
+        (
+            "duckdb-referenced-column",
+            "Runtime Error",
+            "Binder Error: Referenced column \"x\" not found in FROM clause!",
+        ),
+        (
+            "duckdb-table-missing",
+            "Runtime Error",
+            "Catalog Error: Table with name orders does not exist!",
+        ),
+        (
+            "duckdb-view-missing",
+            "Runtime Error",
+            "Catalog Error: View with name orders does not exist!",
+        ),
+        (
+            "duckdb-conversion",
+            "Runtime Error",
+            "Conversion Error: Could not convert string 'sk_live_SENTINEL_42' to INT32",
+        ),
+        (
+            "duckdb-constraint",
+            "Runtime Error",
+            "Constraint Error: Duplicate key \"id: 1\" violates primary key constraint.",
+        ),
+        (
+            "duckdb-write-conflict",
+            "Runtime Error",
+            "TransactionContext Error: Catalog write-write conflict on create with \"orders\"",
+        ),
+        (
+            "duckdb-file-lock",
+            "Runtime Error",
+            "IO Error: Could not set lock on file \"jaffle.duckdb\": Conflicting lock is held",
+        ),
+        (
+            "duckdb-permission",
+            "Runtime Error",
+            "Permission Error: File system LocalFileSystem has been disabled by configuration",
+        ),
+        (
+            "duckdb-interrupted",
+            "Runtime Error",
+            "INTERRUPT Error: Interrupted!",
+        ),
+        (
+            "postgres-statement-timeout",
+            "Database Error",
+            "canceling statement due to statement timeout",
+        ),
+        (
+            "postgres-invalid-input",
+            "Database Error",
+            "invalid input syntax for type integer: \"sk_live_SENTINEL_42\"",
+        ),
+        (
+            "postgres-password",
+            "Database Error",
+            "password authentication failed for user \"sk_live_SENTINEL_42\"",
+        ),
+        (
+            "postgres-unique",
+            "Database Error",
+            "duplicate key value violates unique constraint \"orders_pkey\"",
+        ),
+        (
+            "postgres-not-null",
+            "Database Error",
+            "null value in column \"id\" of relation \"orders\" violates not-null constraint",
+        ),
+        (
+            "postgres-connect",
+            "Database Error",
+            "could not connect to server: Connection refused",
+        ),
+        (
+            "postgres-column-missing",
+            "Database Error",
+            "column \"first_name\" does not exist",
+        ),
+        (
+            "postgres-relation-missing",
+            "Database Error",
+            "relation \"main.orders\" does not exist",
+        ),
+        (
+            "postgres-permission-denied",
+            "Database Error",
+            "permission denied for table orders",
+        ),
+        (
+            "spark-unresolved-column",
+            "Database Error",
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `first_name` cannot be resolved.",
+        ),
+        (
+            "spark-table-or-view-not-found",
+            "Database Error",
+            "[TABLE_OR_VIEW_NOT_FOUND] The table or view `main`.`orders` cannot be found.",
+        ),
+        (
+            "spark-cast-invalid-input",
+            "Database Error",
+            "[CAST_INVALID_INPUT] The value 'sk_live_SENTINEL_42' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed.",
+        ),
+        (
+            "delta-concurrent-write",
+            "Database Error",
+            "[DELTA_CONCURRENT_APPEND] Transaction conflict detected. a concurrent WRITE added data to table x committed at version 830.",
+        ),
+        (
+            "spark-datatype-mismatch",
+            "Database Error",
+            "[DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES] Cannot resolve \"(a + b)\" due to data type mismatch.",
+        ),
+        (
+            "spark-schema-not-found",
+            "Database Error",
+            "[SCHEMA_NOT_FOUND] The schema `main`.`staging` cannot be found. Verify the spelling and correctness of the schema and catalog.",
+        ),
+        (
+            "spark-unresolved-routine",
+            "Database Error",
+            "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`, `system`.`session`].",
+        ),
+        (
+            "spark-check-constraint",
+            "Database Error",
+            "[CHECK_CONSTRAINT_VIOLATION] CHECK constraint positive (amount > 0) violated by row with values: - amount : -1",
+        ),
+        (
+            "spark-not-null-constraint",
+            "Database Error",
+            "[NOT_NULL_CONSTRAINT_VIOLATION] Assigning a NULL is not allowed here.",
+        ),
+        (
+            "delta-not-null-constraint",
+            "Database Error",
+            "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: order_id.",
+        ),
+        (
+            "delta-check-constraint",
+            "Database Error",
+            "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint positive (amount > 0) violated by row with values: - amount : -1",
+        ),
+        (
+            "databricks-cluster-start",
+            "Runtime Error",
+            "Error starting cluster: Cluster 0123-456789-abcdefgh is terminated",
+        ),
+        (
+            "databricks-cluster-status",
+            "Runtime Error",
+            "Error getting status of cluster: Cluster 0123-456789-abcdefgh does not exist",
+        ),
+        (
+            "databricks-connection",
+            "Database Error",
+            "Failed to create connection",
+        ),
+        (
+            "databricks-command-timeout",
+            "Runtime Error",
+            "Command execution timed out",
+        ),
+        (
+            "databricks-python-timeout",
+            "Runtime Error",
+            "Python model run timed out",
+        ),
+        (
+            "databricks-oauth-required",
+            "Runtime Error",
+            "The config `auth_type: oauth` is required when not using access token",
+        ),
+        (
+            "databricks-client-id-required",
+            "Runtime Error",
+            "The config 'client_id' is required to connect to Databricks when 'client_secret' is present",
+        ),
+    ];
+
+    #[test]
+    fn every_pattern_is_reached_by_a_message() {
+        let mut reached = std::collections::BTreeSet::new();
+        for (id, kind, message) in WRITTEN {
+            let summary = node_failure(kind, message);
+            let got = DbtErrorCatalogue.classify(&summary);
+            let Classification::Recognised(m) = &got else {
+                panic!("{id}: {summary:?} gave {got:?}")
+            };
+            assert_eq!(m.id, *id, "{summary:?}");
+            let pattern = PATTERNS.iter().find(|p| p.id == *id).unwrap();
+            assert_eq!(m.symptom, pattern.symptom, "{id}");
+            let json = serde_json::to_string(&(&summary, &got)).unwrap();
+            assert!(!json.contains(SENTINEL), "{id}: {json}");
+            reached.insert(m.id.clone());
+        }
+        for version in VERSIONS {
+            for (_, node, message) in recorded(version) {
+                if let Classification::Recognised(m) =
+                    DbtErrorCatalogue.classify(&summary_of(node.as_ref(), &message))
+                {
+                    reached.insert(m.id);
+                }
+            }
+        }
+        let missing: Vec<_> = PATTERNS
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| !reached.contains(*id))
+            .collect();
+        assert!(missing.is_empty(), "no message reaches {missing:?}");
+    }
+
+    #[test]
+    fn a_postgres_phrase_ending_in_a_colon_is_still_recognised() {
+        // The summary takes the phrase for the error's kind, not dbt's header.
+        let summary = node_failure(
+            "Database Error",
+            "could not connect to server: Connection refused",
+        );
+        assert_eq!(summary.kind(), Some("could not connect to server"));
+        assert!(matches!(
+            DbtErrorCatalogue.classify(&summary),
+            Classification::Recognised(m) if m.symptom == Symptom::WarehouseUnavailable
+        ));
+    }
+
+    #[test]
+    fn unavailable_compute_suggests_checking_the_connection() {
+        let summary = node_failure("Runtime Error", "Error starting cluster: terminated");
+        let Classification::Recognised(m) = DbtErrorCatalogue.classify(&summary) else {
+            panic!()
+        };
+        assert_eq!(m.suggestions[0].commands, ["dbt debug"]);
     }
 
     #[test]

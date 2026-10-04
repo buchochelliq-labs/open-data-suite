@@ -93,6 +93,13 @@ the changelog was introduced.
   seeds and snapshots with a close name, at most three, closest first ("Did you mean
   `customers`?"), as a guess that doesn't raise the confidence; the name the `ref()`
   used is never shown (#323). The dbt error catalogue is version 3.
+- More dbt failures on Databricks are explained (#323): a cluster that can't be
+  started, or a connection that can't be made, reads as *warehouse unavailable* with
+  `dbt debug` to try; a command or Python model run that timed out as a *query
+  timeout*; OAuth or client credentials missing from the profile as *credentials
+  missing*; Spark's and Delta's `CHECK` and `NOT NULL` constraint violations, a schema
+  that can't be found and an unknown function too. The dbt error catalogue is
+  version 4.
 - A failure of dbt's profile, target or credentials is explained with `ods doctor`'s
   local configuration checks (`config.load`, `config.values` for credentials,
   `config.resolution`), as evidence marked `[ods doctor]` (`source: doctor`, with
@@ -438,6 +445,11 @@ the changelog was introduced.
   unchanged (ADR-0003).
 
 ### Fixed
+- Two of the dbt error catalogue's PostgreSQL patterns never matched (#323): an invalid
+  input (`invalid input syntax for type …:`) and a failed connection (`could not
+  connect to server:`) are now recognised. The pattern for `cannot drop … because other
+  objects depend on it` is removed: that message never reached the catalogue, since
+  the summary removes its `drop …` as SQL.
 - dbt 1.12's missing-packages error ("dbt expects 1 package(s) based on packages
   specified in packages.yml, but found only 0…") is recognised again as packages not
   installed, with `dbt deps` to try (#323). The error catalogue is now version 2, and
