@@ -454,7 +454,7 @@ fn columns(b: &mut String, view: &ModelView, full: bool) {
         return;
     }
     if full {
-        b.push_str(r#"<table class="cols full"><thead><tr><th>Column</th><th>Type</th><th>Description</th><th>Tests</th><th>Constraints</th><th>Computed from</th></tr></thead><tbody>"#);
+        b.push_str(r#"<table class="cols full"><thead><tr><th>Column</th><th>Type</th><th>Description</th><th>Tests</th><th>Constraints</th><th>Computed from</th><th><span class="sr-only">Impact</span></th></tr></thead><tbody>"#);
     } else {
         b.push_str(r#"<table class="cols"><thead><tr><th>Column</th><th>Description</th><th>Tests · lineage</th></tr></thead><tbody>"#);
     }
@@ -477,8 +477,13 @@ fn columns(b: &mut String, view: &ModelView, full: bool) {
         if full {
             let _ = write!(
                 b,
-                r#"<tr data-column="{name_attr}"><td class="mono">{name}</td><td>{ty}</td><td class="muted">{description}</td><td>{tests}</td><td>{constraints}</td><td class="muted">{from}</td></tr>"#,
+                r#"<tr data-column="{name_attr}"><td class="mono">{name}</td><td>{ty}</td><td class="muted">{description}</td><td>{tests}</td><td>{constraints}</td><td class="muted">{from}</td><td><a class="simulate" href="../lineage/impact?{simulate}" title="What must run, and what breaks, if this column changes (Impact simulator)">Simulate</a></td></tr>"#,
                 name_attr = attr(&column.name),
+                simulate = attr(
+                    &form_urlencoded::Serializer::new(String::new())
+                        .append_pair("column", &format!("{}.{}", view.name, column.name))
+                        .finish()
+                ),
                 ty = type_cell(column),
                 constraints = text(&column.constraints.join(" · ")),
             );

@@ -156,6 +156,9 @@ jobs:
       # scopes, the node menu from the keyboard, reduced motion.
       - name: Live run view in a browser
         run: python crates/ods-web/tests/browser/live_view.py -v
+      # The Impact simulator (#347) in Chromium: from a column, a change, the verdicts.
+      - name: Impact simulator in a browser
+        run: python crates/ods-web/tests/browser/impact.py -v
 
   msrv:
     runs-on: ubuntu-latest

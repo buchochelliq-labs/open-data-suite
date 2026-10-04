@@ -13,6 +13,14 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Added
+- The Impact simulator on the dashboard (`/lineage/impact`): propose a rename, type
+  change or drop of one or more columns and see which models must run (the same set as
+  `ods lineage impact`), which would break because their SQL names a column that goes
+  away, which only lose it through `select *`, and which can't be told because their
+  lineage is unknown; plus what can be skipped, the column trail, the `ods state build -s …`
+  command for exactly what must run, and the tests that run. Opened from a column's *Simulate* link on its Model page or the
+  explorer's *Impact* tab; `/api/lineage/impact` returns the same as JSON
+  ([dashboard](docs/cli.md#the-impact-simulator)) (#347).
 - Homebrew: `brew install buchochelliq-labs/tap/ods` installs the release binary on
   macOS and Linux ([Install](docs/install.md)) (#362, #212).
 - Chocolatey: each release is packaged as `opendatasuite` and pushed to the Chocolatey

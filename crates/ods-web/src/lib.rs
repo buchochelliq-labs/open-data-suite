@@ -11,8 +11,8 @@
 //! Served, it sits inside the ODS Dashboard: Home at the root (the project's runs,
 //! reuse and what needs attention, see [`dashboard`]), the explorer at `lineage`,
 //! the State pages under `state/` (the plan and why, the runs, see
-//! [`dashboard::state`]), and the Catalog at `catalog`, with a page per node (see
-//! [`catalog`]).
+//! [`dashboard::state`]), the Catalog at `catalog`, with a page per node (see
+//! [`catalog`]), and the Impact simulator at `lineage/impact` (see [`impact`]).
 //!
 //! This crate only presents. It never reads dbt artifacts or the state store, or wires
 //! providers: the caller (a binary) supplies a [`Loader`] that produces a fresh
@@ -25,6 +25,8 @@ mod catalog_page;
 pub mod dashboard;
 mod fonts;
 mod home;
+pub mod impact;
+mod impact_page;
 pub mod live;
 mod model_page;
 mod page;

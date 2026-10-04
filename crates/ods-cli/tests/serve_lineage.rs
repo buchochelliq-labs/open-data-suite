@@ -392,3 +392,89 @@ fn a_secret_in_compiled_sql_never_reaches_the_lineage_outputs() {
         assert!(!String::from_utf8_lossy(&out.stderr).contains(SECRET));
     }
 }
+
+/// `ods lineage impact --output json`'s `run` for these `--column` specs.
+fn cli_impact(target: &Path, specs: &[&str]) -> Vec<String> {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ods"));
+    command
+        .args(["lineage", "impact", "--target-dir"])
+        .arg(target)
+        .args(["--output", "json"])
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)));
+    for spec in specs {
+        command.args(["--column", spec]);
+    }
+    let output = command.output().unwrap();
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    envelope["result"]["run"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{envelope}"))
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The Impact simulator (#347) reaches exactly what `ods lineage impact` does, for
+/// each kind of change, on the demo project.
+#[test]
+fn the_impact_simulator_reaches_what_ods_lineage_impact_says() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let server = serve(&target, None, &[]);
+    for (query, specs) in [
+        (
+            "column=orders.amount&change=drop",
+            vec!["orders.amount=removed"],
+        ),
+        (
+            "column=orders.amount&change=retype&to=decimal",
+            vec!["orders.amount=modified"],
+        ),
+        (
+            "column=orders.amount&change=rename&to=total_amount",
+            vec!["orders.amount=removed", "orders.total_amount=added"],
+        ),
+        (
+            "column=orders.status&change=drop",
+            vec!["orders.status=removed"],
+        ),
+        (
+            "column=customers.lifetime_value&change=drop",
+            vec!["customers.lifetime_value=removed"],
+        ),
+    ] {
+        let (status, body) = get(&server, &format!("api/lineage/impact?{query}"));
+        assert_eq!(status, 200, "{body}");
+        let view: Value = serde_json::from_str(&body).unwrap();
+        let reached: Vec<String> = view["result"]["reached"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{query}: {view}"))
+            .iter()
+            .map(|id| id.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(reached, cli_impact(&target, &specs), "{query}");
+        assert!(!reached.is_empty(), "{query}: the demo has readers");
+        // The Python model's lineage is unknown: it is never "not affected".
+        let python = view["result"]["must_run"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "customer_segments");
+        if let Some(python) = python {
+            assert_eq!(python["lineage"], "opaque", "{query}");
+            assert!(python["columns"].is_null(), "{query}");
+        }
+    }
+    // The page, opened from a column's link on the Model page.
+    let (_, model) = get(&server, "catalog/model.jaffle_ods.orders?tab=columns");
+    assert!(
+        model.contains(r#"href="../lineage/impact?column=orders.amount""#),
+        "the Columns tab links each column to the simulator"
+    );
+    let (status, page) = get(&server, "lineage/impact?column=orders.amount&change-0=drop");
+    assert_eq!(status, 200);
+    assert!(page.contains(r#"<tr data-node="model.jaffle_ods.customers" data-verdict="breaks">"#));
+}

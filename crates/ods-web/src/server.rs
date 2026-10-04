@@ -259,6 +259,9 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         .route(&at("/index.html"), get(home))
         // Relative to `lineage`, the explorer's `api/...` resolves to `<base>/api/...`.
         .route(&at("/lineage"), get(explorer))
+        // The Impact simulator (#347).
+        .route(&at("/lineage/impact"), get(catalog_routes::impact_page))
+        .route(&at("/api/lineage/impact"), get(catalog_routes::impact_api))
         // The Lineage page's State overlay (#312).
         .route(&at("/api/lineage/overlay"), get(lineage_overlay))
         .route(&at("/healthz"), get(|| async { "ok" }))
