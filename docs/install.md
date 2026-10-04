@@ -1,9 +1,8 @@
 # Install
 
-!!! note "Versions"
-    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.0.1` as the
-    example version; the [releases](https://github.com/buchochelliq-labs/open-data-suite/releases)
-    list the latest.
+!!! warning "From the first release"
+    Prebuilt binaries start with **v0.0.1**, which isn't released yet. Until then, build
+    from source (below). The commands on this page use `0.0.1` as the example version.
 
 `ods` is a single binary with no runtime dependencies. Every channel below installs the
 same build, for:
