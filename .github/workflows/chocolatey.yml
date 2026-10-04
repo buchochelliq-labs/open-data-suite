@@ -1,0 +1,113 @@
+name: Chocolatey
+
+# Packs, tests and optionally pushes the `opendatasuite` Chocolatey package for a published
+# release (#212). The package downloads the release's Windows archive and checks its
+# sha256, so the GitHub release must exist first.
+#
+# - release.yml calls it with publish: true once the GitHub release is created.
+# - Packaging (packaging.yml) calls it with publish: false and version `latest`, to pack
+#   and install the current templates against the latest release.
+# - Run it by hand to publish an existing release, e.g. one released before this workflow
+#   existed, or to retry a failed push. The `chocolatey` environment must allow the ref
+#   it runs from (docs/install.md, "For maintainers").
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Released version (X.Y.Z or vX.Y.Z), or `latest`"
+        required: true
+        type: string
+      publish:
+        description: "Push the package to the Chocolatey community repository"
+        required: true
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version (X.Y.Z or vX.Y.Z), or `latest`"
+        required: true
+        type: string
+      publish:
+        description: "Push the package to the Chocolatey community repository"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.render.outputs.version }}
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: render
+        name: Render the package from the release's checksums
+        shell: bash
+        run: |
+          if [ "$VERSION" = latest ]; then
+            VERSION=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          fi
+          VERSION="${VERSION#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
+          python scripts/render-chocolatey-package.py --self-test
+          python scripts/render-chocolatey-package.py --version "$VERSION" --sums SHA256SUMS --out choco
+      - name: Pack
+        shell: pwsh
+        run: |
+          choco pack choco/opendatasuite.nuspec --outputdirectory dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+      # The install downloads the release archive and checks it against the package's
+      # sha256, as a user's install would.
+      - name: Install the package, run ods, uninstall
+        shell: pwsh
+        run: |
+          choco install opendatasuite --source "$PWD\dist" --version $env:VERSION --prerelease --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ods = (Get-Command ods -ErrorAction Stop).Source
+          Write-Output "ods is $ods"
+          ods version
+          $got = (ods version --output json | ConvertFrom-Json).ods_version
+          if ($got -ne $env:VERSION) { throw "ods_version $got, expected $env:VERSION" }
+          choco uninstall opendatasuite --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Get-Command ods -ErrorAction SilentlyContinue) { throw "ods is still on PATH after uninstalling" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-package
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  push:
+    if: inputs.publish
+    needs: pack
+    runs-on: windows-latest
+    environment:
+      name: chocolatey
+      url: https://community.chocolatey.org/packages/opendatasuite/${{ needs.pack.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chocolatey-package
+          path: dist
+      # Each version goes through Chocolatey's automated checks and, for a new package,
+      # human moderation before it is listed; the push only submits it.
+      - name: Push to the Chocolatey community repository
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          if (-not $env:CHOCOLATEY_API_KEY) { throw "The chocolatey environment has no CHOCOLATEY_API_KEY secret." }
+          $package = (Get-ChildItem dist\*.nupkg).FullName
+          choco push $package --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

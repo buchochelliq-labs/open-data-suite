@@ -15,6 +15,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ### Added
 - Homebrew: `brew install buchochelliq-labs/tap/ods` installs the release binary on
   macOS and Linux ([Install](docs/install.md)) (#362, #212).
+- Chocolatey: each release is packaged as `opendatasuite` and pushed to the Chocolatey
+  community repository, where it is listed once Chocolatey approves it
+  ([Install](docs/install.md)) (#363, #212).
 
 ## [0.0.1] - 2026-10-04
 

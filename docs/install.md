@@ -48,6 +48,21 @@ tap, installs the prebuilt binary from the GitHub release for macOS and Linux, a
 and x86_64, and checks it against the release's checksums. `brew upgrade ods` moves to
 a new release once its formula is in the tap.
 
+## Chocolatey (Windows): coming soon
+
+Releases are packaged for [Chocolatey](https://chocolatey.org) as `opendatasuite`. The
+package is listed once Chocolatey's moderators approve it; until then, use `pip`,
+`cargo binstall` or a direct download. Once it is listed:
+
+```powershell
+choco install opendatasuite
+ods version
+```
+
+The package downloads the release's Windows archive, checks its sha256 and puts `ods`
+on your `PATH`. `choco upgrade opendatasuite` moves to a new release once Chocolatey has
+approved it, usually within a day of the release.
+
 ## cargo-binstall
 
 With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), Rust users get the
@@ -145,7 +160,9 @@ version (ADR-0019). The tag starts `.github/workflows/release.yml`, which:
 3. installs the wheels with pip and runs `ods version` on Linux, macOS and Windows;
 4. writes `SHA256SUMS`, renders the Homebrew formula `ods.rb`, attests provenance, and
    creates the GitHub release;
-5. publishes the wheels to PyPI.
+5. publishes the wheels to PyPI;
+6. packs the Chocolatey package for the release, installs it on Windows, and pushes it
+   to the Chocolatey community repository (`.github/workflows/chocolatey.yml`).
 
 Run the workflow by hand (**Actions → Release → Run workflow**) for a dry run: it builds
 and tests everything, uploads the result as workflow artifacts, and publishes nothing.
@@ -164,6 +181,13 @@ One-time setup, by a repository and PyPI admin:
   there and commit it.
   Automating this needs a token with write access to the tap, stored as a secret; it
   isn't set up yet.
+- **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
+  secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
+  required reviewers, like `pypi`. The release pushes from its `v*` tag. To push an
+  existing release by hand (**Actions → Chocolatey → Run workflow**, `publish` on), the
+  environment must also allow the branch the workflow runs from. Each push goes through
+  Chocolatey's automated checks, and the package's first version through human
+  moderation, before it is listed.
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,
