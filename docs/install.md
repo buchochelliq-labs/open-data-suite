@@ -48,10 +48,11 @@ tap, installs the prebuilt binary from the GitHub release for macOS and Linux, a
 and x86_64, and checks it against the release's checksums. `brew upgrade ods` moves to
 a new release once its formula is in the tap.
 
-## Chocolatey (Windows): coming soon
+## Chocolatey (Windows): under review
 
-Releases are packaged for [Chocolatey](https://chocolatey.org) as `opendatasuite`. The
-package is listed once Chocolatey's moderators approve it; until then, use `pip`,
+The [`opendatasuite`](https://community.chocolatey.org/packages/opendatasuite) package
+has been submitted to Chocolatey and is waiting for its moderators to approve the first
+version, which can take a couple of weeks. Until it is approved, use `pip`,
 `cargo binstall` or a direct download. Once it is listed:
 
 ```powershell
