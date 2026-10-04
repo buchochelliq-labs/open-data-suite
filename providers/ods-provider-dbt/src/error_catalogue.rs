@@ -1458,7 +1458,10 @@ mod tests {
     fn the_error_pattern_reference_matches_the_catalogue() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/reference/error-patterns.md");
-        let page = std::fs::read_to_string(&path).unwrap();
+        // A Windows checkout may give the page CRLF line endings.
+        let page = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\r\n", "\n");
         let (begin, end) = ("<!-- patterns:begin -->\n", "<!-- patterns:end -->");
         let start = page.find(begin).expect("the begin marker") + begin.len();
         let stop = page.find(end).expect("the end marker");
