@@ -2216,13 +2216,25 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
         r#"<div class="st-run-title"><h1 class="mono">run {short}</h1>{command}{target}<span class="st-right st-actions">{live}{copy}{why}</span></div>"#,
         short = text(&run.short_run_id),
         // A run whose journal doesn't say it ended may still be going: watch it (#322).
-        live = if run.outcome == RunOutcome::Unfinished {
-            format!(
-                r#"<a class="st-btn st-live" href="../../lineage?live={}" title="Its journal doesn't say it finished, and changed recently: probably still running">Watch live on the DAG →</a>"#,
-                attr(&enc(&run.run_id))
-            )
-        } else {
-            String::new()
+        live = {
+            let live = if run.outcome == RunOutcome::Unfinished {
+                format!(
+                    r#"<a class="st-btn st-live" href="../../lineage?live={}" title="Its journal doesn't say it finished, and changed recently: probably still running">Watch live on the DAG →</a>"#,
+                    attr(&enc(&run.run_id))
+                )
+            } else {
+                String::new()
+            };
+            // Any run with a journal can be played again, at any speed (ADR-0026).
+            let replay = if run.no_journal.is_none() {
+                format!(
+                    r#"<a class="st-btn st-replay" href="../../lineage?replay={}" title="Play the run again on the DAG from its journal: pause, speed up, slow down or drag to any moment">Replay on the DAG</a>"#,
+                    attr(&enc(&run.run_id))
+                )
+            } else {
+                String::new()
+            };
+            live + &replay
         },
         // Long commands are cut to one line; the whole command is in the title.
         command = run.command.as_deref().map_or_else(String::new, |c| format!(

@@ -29,5 +29,6 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0023](0023-ods-doctor-diagnostics.md) | `ods doctor`: typed health checks, stable codes and exit semantics | Proposed | #181 |
 | [0024](0024-run-events-node-stats-and-run-journal.md) | Run events, per-node run stats and the run journal | Proposed | #322 |
 | [0025](0025-error-explanations.md) | Explaining failed nodes: a neutral taxonomy, provider pattern catalogues and evidence joins | Proposed | #323 |
+| [0026](0026-run-playback.md) | Run playback: replaying a run's journal on the Lineage page | Proposed | #322 (follow-up) |
 
 Planned for M0: ADR-0007 clean-room & licensing policy (#10).

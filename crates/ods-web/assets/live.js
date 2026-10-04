@@ -8,6 +8,9 @@
 //   `api/runs/<id>/events` (Server-Sent Events, or polling `?since=` without them), and
 //   draws each node's state, the run's side panel, follow mode, the node menu, edge
 //   chips and the minimap.
+// - playback (ADR-0026): the same view for a run's whole journal, replayed in the page
+//   at any speed, paused, stepped event by event or scrubbed to any moment
+//   (`?replay=<run_id>&t=<seconds>`).
 // It only reads: nothing here starts, stops or changes a run.
 
 const OdsLive = (function () {
@@ -141,6 +144,99 @@ const OdsLive = (function () {
     if (msv < 60000) return `${(Math.round(msv / 100) / 10).toFixed(1)}s`;
     const s = Math.round(msv / 1000);
     return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  }
+
+  // ---------- playback (ADR-0026): a run's journal, replayed from any moment
+  const SPEEDS = [0.25, 0.5, 1, 2, 4, 8, 16, 64];
+  // A copy of the folded state every this many events, so seeking folds at most this
+  // many from the nearest one.
+  const KEYFRAME_EVERY = 256;
+  function cloneRun(run) {
+    const c = Object.assign({}, run, { requested: run.requested.slice(), log: run.log.slice(), nodes: new Map() });
+    for (const [id, n] of run.nodes) {
+      c.nodes.set(id, Object.assign({}, n, { stats: n.stats && Object.assign({}, n.stats), tests: n.tests && Object.assign({}, n.tests) }));
+    }
+    return c;
+  }
+  // The timeline of a run's events (`[{ id, ev }]`, in journal order, this run's only):
+  // when it starts and ends, each event's time, keyframes, failures, and how many nodes
+  // were running at each moment. Times never go backwards: an event dated before the
+  // one before it is played at that one's time; one without a time, too.
+  function timeline(runId, events) {
+    const items = [];
+    let last = null;
+    for (const e of events) {
+      let at = ms(e.ev.at);
+      if (at == null || (last != null && at < last)) at = last;
+      items.push({ id: e.id, ev: e.ev, at });
+      if (at != null) last = at;
+    }
+    const firstAt = items.find(i => i.at != null);
+    const started = items.find(i => i.ev.kind === "run_started" && i.at != null);
+    const t0 = started ? started.at : firstAt ? firstAt.at : 0;
+    for (const i of items) if (i.at == null || i.at < t0) i.at = t0;
+    const finishedItem = items.find(i => i.ev.kind === "run_finished");
+    const t1 = items.length ? Math.max(t0, items[items.length - 1].at) : t0;
+    const run = newRun(runId);
+    const keyframes = [{ index: 0, run: cloneRun(run) }];
+    const markers = [];
+    items.forEach((item, i) => {
+      apply(run, item.ev);
+      if (item.ev.kind === "node_finished" && item.ev.stats && item.ev.stats.status === "error") {
+        markers.push({ at: item.at, kind: "error", node: item.ev.node, index: i + 1 });
+      }
+      if ((i + 1) % KEYFRAME_EVERY === 0) keyframes.push({ index: i + 1, run: cloneRun(run) });
+    });
+    if (finishedItem) markers.push({ at: finishedItem.at, kind: "finished", outcome: finishedItem.ev.outcome, index: items.indexOf(finishedItem) + 1 });
+    // Running at each moment: from each node's start to its finish (or the end).
+    const edges = [];
+    for (const n of run.nodes.values()) {
+      if (n.startedAt == null) continue;
+      edges.push([Math.max(t0, n.startedAt), 1], [Math.max(t0, n.finishedAt != null ? n.finishedAt : t1), -1]);
+    }
+    edges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const steps = [[t0, 0]];
+    let now = 0, peak = 0;
+    for (const [t, d] of edges) {
+      now += d;
+      peak = Math.max(peak, now);
+      if (steps[steps.length - 1][0] === t) steps[steps.length - 1][1] = now; else steps.push([t, now]);
+    }
+    return { runId, items, t0, t1, keyframes, markers, steps, peak, finished: !!finishedItem, live: run.live, final: run };
+  }
+  // How many events happened at or before `t`.
+  function indexAt(tl, t) {
+    let lo = 0, hi = tl.items.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tl.items[mid].at <= t) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  // The run as it was after its first `n` events: from the nearest keyframe, folded on.
+  function stateAfter(tl, n) {
+    let kf = tl.keyframes[0];
+    for (const k of tl.keyframes) { if (k.index <= n) kf = k; else break; }
+    const run = cloneRun(kf.run);
+    for (let i = kf.index; i < n; i++) apply(run, tl.items[i].ev);
+    return run;
+  }
+  // The run as it was at `t`: the same picture for the same `t`, always.
+  function stateAt(tl, t) { const n = indexAt(tl, t); return { run: stateAfter(tl, n), applied: n }; }
+  // How many nodes were running at `t`.
+  function runningAt(tl, t) {
+    let v = 0;
+    for (const [at, n] of tl.steps) { if (at <= t) v = n; else break; }
+    return v;
+  }
+  // The next speed up (`dir` 1) or down (-1), staying within the list.
+  function nextSpeed(speed, dir) {
+    const i = SPEEDS.indexOf(speed);
+    const at = i < 0 ? SPEEDS.indexOf(1) : i;
+    return SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, at + dir))];
+  }
+  // `1:05`, or `1:02:05` past an hour: a player's time.
+  function playTime(msv) {
+    const s = Math.max(0, Math.floor(msv / 1000));
+    const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, "0");
+    return hh ? `${hh}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
   }
 
   // ---------- the graph: who is downstream or upstream of whom
@@ -284,6 +380,7 @@ const OdsLive = (function () {
   return {
     MIN_READABLE, MAX_FOLLOW, MOVE_EVERY, FINISHED,
     newRun, apply, counts, took, rows, duration, adjacency, reach, scopeSet, blocking,
+    SPEEDS, KEYFRAME_EVERY, cloneRun, timeline, indexAt, stateAfter, stateAt, runningAt, nextSpeed, playTime,
     box, fit, fitReadable, chooseFocus, follow, finalView, moved, offscreen,
   };
 })();
@@ -308,7 +405,11 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     follow: true, hint: false, focus: null, scope: null, lastCam: null, lastMove: 0, tween: null,
     dirty: new Set(), frame: 0, liveIds: [], menu: null, card: { node: null, status: null, html: null },
     toast: null, scopeDoneShown: false, say: [], saidAt: 0, pollTimer: 0,
+    // Playback (ADR-0026): null live; else the timeline, the playhead and the transport.
+    replay: null,
   };
+  // The view's clock: the playhead in playback, the wall clock live.
+  const now = () => (S.replay && S.replay.tl ? S.replay.p : Date.now());
   const statusOf = id => {
     const n = S.run && S.run.nodes.get(id);
     if (n) return n.status;
@@ -330,6 +431,12 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   liveOption.value = "live";
   liveOption.textContent = "Live run";
   select.insertBefore(liveOption, select.firstChild);
+  // Shown only while a run is replayed (ADR-0026).
+  const replayOption = document.createElement("option");
+  replayOption.value = "replay";
+  replayOption.textContent = "Replay";
+  replayOption.hidden = true;
+  liveOption.insertAdjacentElement("afterend", replayOption);
   const offer = h("button", "Watch the run live", "lv-offer lin-ui", null);
   offer.type = "button";
   offer.hidden = true;
@@ -392,7 +499,12 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   // ---------- turning the view on and off
   function params_(q) {
     if (!S.on) return;
-    q.set("live", S.runId);
+    const R = S.replay;
+    if (R) {
+      q.set("replay", S.runId);
+      if (R.tl && R.p > R.tl.t0) q.set("t", ((R.p - R.tl.t0) / 1000).toFixed(1));
+      if (R.speed !== 1) q.set("speed", String(R.speed));
+    } else q.set("live", S.runId);
     if (S.scope) {
       const n = x.byId.get(S.scope.id);
       const named = n && x.doc.nodes.filter(m => m.name === n.name).length === 1 ? n.name : S.scope.id;
@@ -408,7 +520,10 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     S.follow = true; S.hint = false; S.focus = null; S.lastCam = null; S.lastMove = 0; S.scopeDoneShown = false;
     S.scope = opts.scope || null;
     S.card = { node: null, status: null, html: null };
-    select.value = "live";
+    S.replay = opts.replay ? { tl: null, p: 0, applied: 0, playing: false, speed: opts.speed || 1, at: opts.at || 0, autoplay: !!opts.autoplay, raf: 0 } : null;
+    document.body.classList.toggle("lv-replay", !!S.replay);
+    replayOption.hidden = !S.replay;
+    select.value = S.replay ? "replay" : "live";
     x.state.overlay = "live";
     x.state.columns = false;
     const cols = $("lin-columns"); if (cols) cols.checked = false;
@@ -418,15 +533,17 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     x.fitAll();
     x.panel();
     x.remember();
-    connect();
+    if (S.replay) load(); else connect();
     draw();
   }
   function stop(quiet) {
     if (S.source) { S.source.close(); S.source = null; }
     clearTimeout(S.pollTimer);
+    if (S.replay) { cancelAnimationFrame(S.replay.raf); S.replay = null; }
+    replayOption.hidden = true;
     if (!S.on) return;
     S.on = false;
-    document.body.classList.remove("lv-on", "lv-done");
+    document.body.classList.remove("lv-on", "lv-done", "lv-replay", "lv-playing");
     closeMenu();
     if (status) status.innerHTML = statusBefore;
     x.setBox(140, 52, 28, 34);
@@ -524,6 +641,293 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     S.frame = requestAnimationFrame(() => { S.frame = 0; draw(); });
   }
 
+  // ---------- playback (ADR-0026): the journal, loaded once and replayed in the page
+  async function load() {
+    const R = S.replay;
+    const url = x.baseUrl + "api/runs/" + encodeURIComponent(S.runId) + "/events";
+    const events = [];
+    let since = 0, unreadable = 0, missing = false, failed = false;
+    try {
+      for (;;) {
+        const r = await fetch(url + "?since=" + since);
+        if (S.replay !== R) return;
+        if (r.status === 400 || r.status === 404) { missing = true; break; }
+        if (!r.ok) { failed = true; break; }
+        let got = 0, end = false;
+        for (const line of (await r.text()).split("\n")) {
+          if (!line.trim()) continue;
+          const m = JSON.parse(line);
+          if (m.id) since = Math.max(since, m.id);
+          if (m.event === "run_event") {
+            got += 1;
+            // Another run's event in this journal: counted, never drawn.
+            if (m.data.run_id && m.data.run_id !== S.runId) unreadable += 1; else events.push({ id: m.id, ev: m.data });
+          } else if (m.event === "unreadable") { got += 1; unreadable += 1; }
+          else if (m.event === "end") end = true;
+        }
+        // A finished journal ends; one still being written has nothing more for now.
+        if (end || !got) break;
+      }
+    } catch (_) { failed = true; }
+    if (S.replay !== R) return;
+    if (missing || failed || !events.length) {
+      R.error = missing || !events.length ? `No journal for run ${S.runId}: it may have been pruned (the newest 50 are kept), or the id is wrong.` : "The run's journal couldn't be loaded.";
+      ended({ reason: "missing", outcome: null, inferred: false, note: R.error });
+      return;
+    }
+    R.tl = L.timeline(S.runId, events);
+    R.unreadable = unreadable;
+    S.run = L.stateAfter(R.tl, 0);
+    R.applied = 0;
+    R.p = R.tl.t0;
+    seek(R.tl.t0 + R.at, { quiet: true });
+    for (const id of buildable) S.dirty.add(id);
+    if (R.autoplay) play(); else announce({ kind: "run", text: `Replay of run ${shortRun(S.runId)} ready, paused at ${L.playTime(R.p - R.tl.t0)}. Space plays.` });
+    schedule();
+  }
+  // Moves the playhead to `t`: forward by applying what happened since, backward by
+  // folding again from the nearest keyframe. Every node redraws; nothing is announced.
+  function seek(t, how) {
+    const R = S.replay;
+    if (!R || !R.tl) return;
+    const tl = R.tl;
+    const p = Math.max(tl.t0, Math.min(tl.t1, t));
+    const n = L.indexAt(tl, p);
+    if (n >= R.applied) {
+      for (let i = R.applied; i < n; i++) for (const id of L.apply(S.run, tl.items[i].ev)) S.dirty.add(id);
+    } else {
+      S.run = L.stateAfter(tl, n);
+      for (const id of buildable) S.dirty.add(id);
+    }
+    R.applied = n; R.p = p;
+    S.run.unreadable = R.unreadable;
+    for (const id of buildable) if (statusOf(id) === "running") S.dirty.add(id);
+    const atEnd = tl.finished && n === tl.items.length && p >= tl.t1;
+    if (atEnd && !S.done) {
+      S.done = true;
+      document.body.classList.add("lv-done");
+      S.run.ended = { reason: "finished", outcome: S.run.outcome, inferred: false, note: "" };
+      S.follow = false; S.hint = false; S.focus = null;
+      for (const id of S.run.nodes.keys()) S.dirty.add(id);
+    } else if (!atEnd && S.done) {
+      S.done = false; S.jumped = false;
+      document.body.classList.remove("lv-done");
+      S.run.ended = null;
+    }
+    S.chipsKey = null; S.panelKey = null; S.edgesStale = true;
+    if (how && how.user) { R.userMoved = true; rememberSoon(); }
+    schedule();
+  }
+  let rememberTimer = 0;
+  // The URL follows the playhead when it stops moving, not every frame.
+  function rememberSoon() { clearTimeout(rememberTimer); rememberTimer = setTimeout(() => { if (S.on && S.replay && !S.replay.playing) x.remember(); }, 250); }
+  function play() {
+    const R = S.replay;
+    if (!R || !R.tl || R.playing) return;
+    // At the end, play starts again from the beginning, following the run again.
+    if (R.p >= R.tl.t1) { seek(R.tl.t0); S.follow = true; S.lastCam = null; S.focus = null; }
+    R.playing = true;
+    R.last = performance.now();
+    R.ticked = 0;
+    document.body.classList.add("lv-playing");
+    announce({ kind: "run", text: `Playing at ${R.speed}×` });
+    R.raf = requestAnimationFrame(frame);
+    schedule();
+  }
+  function pause(quiet) {
+    const R = S.replay;
+    if (!R || !R.playing) return;
+    R.playing = false;
+    cancelAnimationFrame(R.raf);
+    document.body.classList.remove("lv-playing");
+    if (!quiet) announce({ kind: "run", text: `Paused at ${L.playTime(R.p - R.tl.t0)}` });
+    rememberSoon();
+    schedule();
+  }
+  function frame(t) {
+    const R = S.replay;
+    if (!R || !R.playing) return;
+    const dt = Math.max(0, Math.min(250, t - R.last));
+    R.last = t;
+    seek(R.p + dt * R.speed);
+    // Running nodes' times, and the chips', move with the playhead.
+    if (t - R.ticked > 100) { R.ticked = t; soFar(); }
+    if (R.p >= R.tl.t1) {
+      pause(true);
+      announce({ kind: "run", text: R.tl.finished ? "The replay reached the end of the run" : "The replay reached the end of the journal" });
+      // As live: the final view shows what ran, the failure included.
+      if (R.tl.finished) requestAnimationFrame(() => {
+        const { vw, vh } = viewport();
+        const cam = L.finalView({ ids: buildable, inRun, statusOf, pos: positions(), vw, vh });
+        if (cam) moveTo(cam);
+      });
+      return;
+    }
+    R.raf = requestAnimationFrame(frame);
+  }
+  const toggle = () => { const R = S.replay; if (R && R.tl) { if (R.playing) pause(); else play(); } };
+  function seekBy(dms) { const R = S.replay; if (R && R.tl) seek(R.p + dms, { user: true }); }
+  // The previous or next moment something happened, whatever the gap.
+  function step(dir) {
+    const R = S.replay;
+    if (!R || !R.tl) return;
+    pause(true);
+    const items = R.tl.items;
+    if (dir > 0) {
+      const n = L.indexAt(R.tl, R.p);
+      if (n < items.length) seek(items[n].at, { user: true });
+    } else {
+      let lo = 0, hi = items.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (items[mid].at < R.p) lo = mid + 1; else hi = mid; }
+      seek(lo > 0 ? items[lo - 1].at : R.tl.t0, { user: true });
+    }
+    const said = S.run.log[S.run.log.length - 1];
+    if (said) announce(said);
+  }
+  function setSpeed(speed) {
+    const R = S.replay;
+    if (!R || !L.SPEEDS.includes(speed)) return;
+    R.speed = speed;
+    announce({ kind: "run", text: `Speed ${speed}×` });
+    rememberSoon();
+    schedule();
+  }
+  function goLive() { const scope = S.scope; start(S.runId, { scope }); }
+
+  // The play bar, made once.
+  const player = h("div", null, "lv-player lin-ui", canvas);
+  player.id = "lv-player";
+  player.setAttribute("role", "group");
+  player.setAttribute("aria-label", "Replay controls");
+  const ICON = {
+    play: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>',
+    pause: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 4h4.5v16H6zM13.5 4H18v16h-4.5z"/></svg>',
+    back: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 4h2.5v16H5zM20 4.5v15L9 12z"/></svg>',
+    next: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.5 4H19v16h-2.5zM4 4.5v15L15 12z"/></svg>',
+  };
+  const btn = (cls, label, title) => { const b = h("button", null, "lv-pbtn " + cls, player); b.type = "button"; b.setAttribute("aria-label", label); b.title = title; return b; };
+  const playBtn = btn("lv-play", "Play", "Play or pause (Space or K)");
+  playBtn.id = "lv-play";
+  const prevBtn = btn("lv-prev", "Previous event", "Previous event (,)");
+  prevBtn.innerHTML = ICON.back;
+  const nextBtn = btn("lv-next", "Next event", "Next event (.)");
+  nextBtn.innerHTML = ICON.next;
+  const timeEl = h("span", "0:00 / 0:00", "mono lv-ptime", player);
+  timeEl.id = "lv-ptime";
+  const track = h("div", null, "lv-track", player);
+  const band = h("canvas", null, "lv-band", track);
+  band.setAttribute("aria-hidden", "true");
+  const marks = h("div", null, "lv-marks", track);
+  const scrub = h("input", null, "lv-scrub", track);
+  scrub.type = "range";
+  scrub.id = "lv-scrub";
+  scrub.min = "0"; scrub.step = "1"; scrub.value = "0";
+  scrub.setAttribute("aria-label", "Playhead: time since the run started");
+  const speedSel = h("select", null, "lv-speed", player);
+  speedSel.id = "lv-speed";
+  speedSel.setAttribute("aria-label", "Playback speed");
+  speedSel.title = "Playback speed (Shift+< slower, Shift+> faster)";
+  for (const v of L.SPEEDS) { const o = h("option", `${v}×`, null, speedSel); o.value = String(v); }
+  const pnote = h("span", null, "lv-pnote", player);
+  pnote.id = "lv-pnote";
+  const liveBtn = btn("lv-golive", "Go live", "Watch the run live instead");
+  liveBtn.textContent = "Go live";
+  playBtn.addEventListener("click", toggle);
+  prevBtn.addEventListener("click", () => step(-1));
+  nextBtn.addEventListener("click", () => step(1));
+  liveBtn.addEventListener("click", goLive);
+  speedSel.addEventListener("change", () => setSpeed(Number(speedSel.value)));
+  // Dragging the playhead pauses; letting go plays again if it was playing.
+  scrub.addEventListener("pointerdown", () => { const R = S.replay; if (R) { R.resume = R.playing; pause(true); } });
+  scrub.addEventListener("input", () => { const R = S.replay; if (R && R.tl) seek(R.tl.t0 + Number(scrub.value), { user: true }); });
+  scrub.addEventListener("change", () => { const R = S.replay; if (R && R.resume) { R.resume = false; play(); } });
+  function playerDraw() {
+    const R = S.replay;
+    player.hidden = !R;
+    if (!R) return;
+    const tl = R.tl;
+    for (const b of [playBtn, prevBtn, nextBtn, scrub, speedSel]) b.disabled = !tl;
+    const playing = !!R.playing;
+    if (playBtn.dataset.state !== String(playing)) {
+      playBtn.dataset.state = String(playing);
+      playBtn.innerHTML = playing ? ICON.pause : ICON.play;
+      playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
+    }
+    if (speedSel.value !== String(R.speed)) speedSel.value = String(R.speed);
+    if (!tl) { timeEl.textContent = "loading…"; pnote.textContent = R.error || ""; liveBtn.hidden = true; return; }
+    const len = tl.t1 - tl.t0, at = R.p - tl.t0;
+    const text = `${L.playTime(at)} / ${L.playTime(len)}`;
+    if (timeEl.textContent !== text) timeEl.textContent = text;
+    timeEl.title = `At ${new Date(R.p).toISOString().replace("T", " ").slice(0, 19)} UTC`;
+    scrub.max = String(len);
+    if (scrub.value !== String(Math.round(at))) scrub.value = String(Math.round(at));
+    scrub.setAttribute("aria-valuetext", `${L.playTime(at)} of ${L.playTime(len)}, ${L.runningAt(tl, R.p)} running`);
+    const notes = [];
+    if (tl.live === false) notes.push("Times from the run's final report: when each node finished, not when it started.");
+    if (!tl.finished) notes.push("The journal ends here: the run hadn't finished when it was loaded, or it stopped.");
+    const note = notes.join(" ");
+    if (pnote.textContent !== note) pnote.textContent = note;
+    liveBtn.hidden = tl.finished;
+    if (R.drawnFor !== tl) { R.drawnFor = tl; bandDraw(); }
+  }
+  // The concurrency band (how many nodes ran at each moment, to the run's peak) and the
+  // failures and the end as markers: where to look, by eye.
+  function bandDraw() {
+    const tl = S.replay && S.replay.tl;
+    if (!tl) return;
+    const W = Math.max(1, track.clientWidth), H = 22, dpr = window.devicePixelRatio || 1;
+    band.width = W * dpr; band.height = H * dpr;
+    const ctx = band.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const len = Math.max(1, tl.t1 - tl.t0), peak = Math.max(1, tl.peak);
+    ctx.fillStyle = getComputedStyle(player).getPropertyValue("--lv-band").trim() || "#9DB8E8";
+    tl.steps.forEach(([t, n], i) => {
+      const next = i + 1 < tl.steps.length ? tl.steps[i + 1][0] : tl.t1;
+      const x0 = (t - tl.t0) / len * W, x1 = (next - tl.t0) / len * W, hh = n / peak * H;
+      if (n) ctx.fillRect(x0, H - hh, Math.max(1, x1 - x0), hh);
+    });
+    band.title = `Nodes running over the run: at most ${tl.peak} at once`;
+    marks.replaceChildren();
+    for (const m of tl.markers) {
+      const b = h("button", null, "lv-mark " + m.kind, marks);
+      b.type = "button";
+      b.style.left = `${(m.at - tl.t0) / len * 100}%`;
+      const label = m.kind === "error" ? `${x.nameOf(m.node)} failed at ${L.playTime(m.at - tl.t0)}` : `The run finished (${m.outcome || "outcome not said"}) at ${L.playTime(m.at - tl.t0)}`;
+      b.setAttribute("aria-label", label + ": go there");
+      b.title = label;
+      b.addEventListener("click", () => {
+        pause(true);
+        seek(m.at, { user: true });
+        if (m.node) { x.user("select"); x.select(m.node, null, { center: true }); }
+      });
+    }
+  }
+  window.addEventListener("resize", () => { if (S.replay && S.replay.tl) bandDraw(); });
+  // A video player's keys, while the page isn't typing or on a control of its own.
+  window.addEventListener("keydown", e => {
+    const R = S.replay;
+    if (!S.on || !R || !R.tl || e.ctrlKey || e.metaKey || e.altKey || S.menu) return;
+    const el = document.activeElement || document.body;
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el !== scrub) return;
+    const onControl = el !== document.body && !!el.closest && !!el.closest("button, a, [role=button], [role=tab], .hit, .lin-panel");
+    const len = R.tl.t1 - R.tl.t0;
+    const k = e.key;
+    let done = true;
+    if ((k === " " && !onControl && el !== scrub) || k === "k" || k === "K") toggle();
+    else if (k === "j" || k === "J") seekBy(-10000);
+    else if (k === "l" || k === "L") seekBy(10000);
+    else if ((k === "ArrowLeft" || k === "ArrowRight") && !onControl && el !== scrub) seekBy(k === "ArrowLeft" ? -5000 : 5000);
+    else if ((k === "Home" || k === "End") && !onControl && el !== scrub) seek(k === "Home" ? R.tl.t0 : R.tl.t1, { user: true });
+    else if (/^[0-9]$/.test(k) && !onControl) seek(R.tl.t0 + len * Number(k) / 10, { user: true });
+    else if (k === ",") step(-1);
+    else if (k === ".") step(1);
+    else if (k === "<") setSpeed(L.nextSpeed(R.speed, -1));
+    else if (k === ">") setSpeed(L.nextSpeed(R.speed, 1));
+    else done = false;
+    if (done) e.preventDefault();
+  });
+
   // ---------- announcements, throttled: at most one every two seconds
   function announce(said) {
     const name = said.node ? x.nameOf(said.node) : "";
@@ -564,7 +968,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       case "notrun": return "not selected";
       case "source": return "read, not built";
       case "queued": return "waiting on upstream";
-      case "running": return `${L.duration(Math.max(0, Date.now() - (n.startedAt || Date.now())))}` + (n.thread ? ` · ${threadName(n.thread)}` : "");
+      case "running": return `${L.duration(Math.max(0, now() - (n.startedAt || now())))}` + (n.thread ? ` · ${threadName(n.thread)}` : "");
       case "success": { const r = n.stats && n.stats.rows_affected; return `${L.duration(L.took(n)) || "time —"} · ${r == null ? "rows —" : `${r} rows`}`; }
       case "error": return L.took(n) != null ? `after ${L.duration(L.took(n))}` : "failed";
       case "skipped": return "upstream failed";
@@ -663,11 +1067,16 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     controls();
     if (!x.state.sel) runPanel(); else refreshCard();
     if (S.legendFor !== S.run.mode) { S.legendFor = S.run.mode; x.legend(); }
+    playerDraw();
   }
 
   // ---------- follow mode
   // The minimap's corner, kept clear while framing.
-  const inset = () => (S.done ? {} : { bottom: 190 });
+  const PLAYER = 96;
+  const inset = () => {
+    const bottom = (S.done ? 0 : 190) + (S.replay ? PLAYER : 0);
+    return bottom ? { bottom } : {};
+  };
   function viewport() { const r = canvas.getBoundingClientRect(); return { vw: r.width, vh: r.height }; }
   function positions() {
     const out = new Map(), { w } = x.size();
@@ -774,8 +1183,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       if (side === "right" || side === "left") h("div", `${list.length} RUNNING OFF SCREEN`, "lv-chips-head", chips[side]);
       for (const o of list) {
         const n = S.run.nodes.get(o.id);
-        const since = n.startedAt || Date.now();
-        const secs = L.duration(Math.max(0, Date.now() - since));
+        const since = n.startedAt || now();
+        const secs = L.duration(Math.max(0, now() - since));
         const b = h("button", null, "lv-chip", chips[side]);
         b.type = "button";
         b.dataset.node = o.id;
@@ -861,17 +1270,20 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const c = L.counts(S.run);
     const requested = S.run.requested.length || S.run.nodes.size;
     const finished = c.success + c.error + c.skipped + c.unknown;
-    const word = S.waiting ? `Waiting for run ${shortRun(S.runId)}'s journal`
+    const R = S.replay;
+    const word = R ? (R.tl ? `Replay · run ${shortRun(S.runId)} · ${R.playing ? "playing" : "paused"} · ${finished} of ${requested} finished · ${c.running} running` : `Loading run ${shortRun(S.runId)}'s journal`)
+      : S.waiting ? `Waiting for run ${shortRun(S.runId)}'s journal`
       : running ? `Live · run ${shortRun(S.runId)} · ${finished} of ${requested} finished · ${c.running} running` : `Finished · run ${shortRun(S.runId)}`;
     const ending = S.run.ended && S.run.ended.reason;
     const text = ending === "missing" ? `No journal · run ${shortRun(S.runId)}` : ending && ending !== "finished" ? `Stopped? · run ${shortRun(S.runId)}` : word;
     if (status.dataset.live !== text) {
       status.dataset.live = text;
       status.innerHTML = "";
-      status.className = "pill-snap lin-status lv-pill-status" + (running ? " running" : "");
-      h("span", null, running ? "dot lv-dot" : "dot lv-dot-done", status);
+      const pulse = running && !R;
+      status.className = "pill-snap lin-status lv-pill-status" + (pulse ? " running" : "");
+      h("span", null, pulse ? "dot lv-dot" : "dot lv-dot-done", status);
       status.append(text);
-      status.title = running ? "Probably running: its journal is still being written" : (S.run.ended ? S.run.ended.note : "");
+      status.title = R ? "A replay of the run's journal: nothing is running" : running ? "Probably running: its journal is still being written" : (S.run.ended ? S.run.ended.note : "");
     }
   }
   const elapsed = msv => { const s = Math.max(0, Math.floor(msv / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
@@ -910,7 +1322,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       const kept = buildable.filter(id => !inRun(id) && shownStatus(id) === "kept").length;
       const took = S.run.finishedAt && S.run.startedAt ? L.duration(S.run.finishedAt - S.run.startedAt) : null;
       const failed = [...S.run.nodes.values()].filter(n => n.status === "error").map(n => n.id);
-      key = `done:${c.success}:${c.error}:${c.skipped}:${kept}:${took}:${S.run.ended && S.run.ended.reason}:${!!S.jumped}`;
+      key = `done:${c.success}:${c.error}:${c.skipped}:${kept}:${took}:${S.run.ended && S.run.ended.reason}:${!!S.jumped}:${!!S.replay}`;
       build = () => {
         toast.className = "lv-toast lin-ui" + (failed.length ? " failed" : "");
         const stopped = S.run.ended && S.run.ended.reason !== "finished";
@@ -926,6 +1338,13 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
           const b = h("button", failed.length === 1 ? "Jump to failure" : `Jump to failures (${failed.length})`, "lv-jump", toast);
           b.type = "button";
           b.addEventListener("click", () => jumpToFailure(failed));
+        }
+        // Watch it again (ADR-0026); in a replay, the play bar does that.
+        if (!S.replay && S.run.ended.reason !== "missing") {
+          const b = h("button", "Replay", "lv-replay-btn", toast);
+          b.type = "button";
+          b.title = "Play the run again from its journal, at any speed";
+          b.addEventListener("click", () => start(S.runId, { replay: true, autoplay: true, scope: S.scope }));
         }
       };
     } else if (S.scope && w && w.mode === "scope-done") {
@@ -1052,7 +1471,8 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const kept = buildable.filter(id => !inRun(id) && shownStatus(id) === "kept").length;
     const running = [...run.nodes.values()].filter(n => n.status === "running").sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
     const r = L.rows(run);
-    const key = JSON.stringify([c, finished, kept, running.map(n => [n.id, n.thread]), r, run.log.length, S.done, run.unreadable, run.outcome, run.startedAt]);
+    const key = JSON.stringify([c, finished, kept, running.map(n => [n.id, n.thread]), r, run.log.length, S.done, run.unreadable, run.outcome, run.startedAt,
+      S.replay && S.replay.tl ? Math.floor(S.replay.p / 1000) : 0]);
     if (key === S.panelKey && P.querySelector(".lv-run")) return;
     S.panelKey = key;
     P.replaceChildren();
@@ -1067,7 +1487,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     const line = h("div", null, "lv-progress-line", prog);
     const verdict = !S.done ? (run.startedAt ? "Running" : "Starting") : run.ended && run.ended.reason !== "finished" ? "Probably stopped" : c.error ? `Finished with ${c.error} failure${c.error === 1 ? "" : "s"}` : run.outcome === "succeeded" ? "Succeeded" : `Finished: ${run.outcome || "outcome not said"}`;
     h("strong", verdict, null, line);
-    const el = h("span", run.startedAt ? elapsed((S.done && run.finishedAt ? run.finishedAt : Date.now()) - run.startedAt) : "—", "mono lv-run-time", line);
+    const el = h("span", run.startedAt ? elapsed((S.done && run.finishedAt ? run.finishedAt : now()) - run.startedAt) : "—", "mono lv-run-time", line);
     if (run.startedAt && !S.done) { el.dataset.since = run.startedAt; el.dataset.fmt = "clock"; }
     const barEl = h("div", null, "lv-bar-track", prog);
     const fill = h("div", null, "lv-bar-fill" + (c.error ? " failed" : ""), barEl);
@@ -1094,7 +1514,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
       b.type = "button";
       h("span", x.nameOf(n.id), "mono", b);
       h("span", n.thread ? threadName(n.thread) : "", "lv-thread", b);
-      const t = h("span", L.duration(Math.max(0, Date.now() - (n.startedAt || Date.now()))), "mono lv-elapsed", b);
+      const t = h("span", L.duration(Math.max(0, now() - (n.startedAt || now()))), "mono lv-elapsed", b);
       if (n.startedAt) t.dataset.since = n.startedAt;
       b.addEventListener("click", () => { x.user("select"); x.select(n.id, null, { center: true }); });
     }
@@ -1224,9 +1644,9 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
   }
   // Times that count up while the run goes, updated in place (focus stays put).
   function soFar() {
-    const now = Date.now();
+    const t = now();
     for (const e of document.querySelectorAll("[data-since]")) {
-      const d = Math.max(0, now - Number(e.dataset.since));
+      const d = Math.max(0, t - Number(e.dataset.since));
       e.textContent = e.classList.contains("lv-so-far") ? `${L.duration(d)} so far` : e.dataset.fmt === "clock" ? elapsed(d) : L.duration(d);
     }
   }
@@ -1269,6 +1689,7 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     return true;
   };
   x.hooks.overlay = value => {
+    if (value === "replay") { if (!S.replay) select.value = x.state.overlay; return true; }
     if (value === "live") {
       const run = S.runId || S.liveIds[0];
       if (run) start(run); else select.value = x.state.overlay;
@@ -1304,8 +1725,10 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     schedule();
   }, 1000);
 
-  // Opened from a live link: `?live=<run_id>`, with `&follow=<node>:down|up|self`.
-  const wantedRun = params.get("live");
+  // Opened from a live link: `?live=<run_id>`, with `&follow=<node>:down|up|self`; or a
+  // replay: `?replay=<run_id>`, with `&t=<seconds>` and `&speed=<n>` (ADR-0026).
+  const replayRun = params.get("replay");
+  const wantedRun = params.get("live") || replayRun;
   if (wantedRun) {
     let scope = null;
     const f = params.get("follow");
@@ -1316,13 +1739,20 @@ if (typeof window !== "undefined") (window.OdsExplorerPlugins = window.OdsExplor
     }
     // Set up before the explorer's first paint, so the graph is laid out once.
     S.on = true; S.runId = wantedRun; S.run = L.newRun(wantedRun); S.scope = scope;
+    if (replayRun) {
+      const at = Number(params.get("t")), speed = Number(params.get("speed"));
+      S.replay = { tl: null, p: 0, applied: 0, playing: false, raf: 0, autoplay: false,
+        at: isFinite(at) && at > 0 ? at * 1000 : 0, speed: L.SPEEDS.includes(speed) ? speed : 1 };
+      document.body.classList.add("lv-replay");
+      replayOption.hidden = false;
+    }
     liveOption.disabled = false;
     liveOption.textContent = "Live run";
-    select.value = "live";
+    select.value = S.replay ? "replay" : "live";
     x.state.overlay = "live";
     x.state.columns = false;
     document.body.classList.add("lv-on");
     x.setBox(196, 72, 54, 48);
-    setTimeout(() => { if (S.on && S.runId === wantedRun && !S.source) { connect(); schedule(); } }, 0);
+    setTimeout(() => { if (S.on && S.runId === wantedRun && !S.source) { if (S.replay) load(); else connect(); schedule(); } }, 0);
   }
 });
