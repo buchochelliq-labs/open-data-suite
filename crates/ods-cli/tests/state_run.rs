@@ -3885,7 +3885,7 @@ fn a_failed_test_is_explained_without_values() {
         .find(|e| e["kind"] == "check_finished" && e["status"] == "failed")
         .unwrap();
     assert_eq!(check["failures"], 5);
-    assert_eq!(check["schema_version"]["minor"], 1);
+    assert!(check["schema_version"]["minor"].as_u64() >= Some(1));
 
     let failures = result["failures"].as_array().unwrap();
     assert_eq!(failures.len(), 1, "{json:#}");

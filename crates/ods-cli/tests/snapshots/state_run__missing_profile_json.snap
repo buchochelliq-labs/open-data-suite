@@ -5,7 +5,7 @@ expression: "serde_json::to_string_pretty(failure).unwrap()"
 {
   "schema_version": {
     "major": 1,
-    "minor": 2
+    "minor": 3
   },
   "node": "project",
   "category": "configuration",
@@ -13,7 +13,7 @@ expression: "serde_json::to_string_pretty(failure).unwrap()"
   "confidence": "known_pattern_with_evidence",
   "pattern": {
     "catalogue": "dbt",
-    "version": "4",
+    "version": "5",
     "id": "dbt-profile-not-found"
   },
   "headline": "The profile or target isn't defined",

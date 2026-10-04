@@ -43,7 +43,11 @@ pub const ERROR_CATALOGUE: Contract = Contract {
     // may offer a step for running it again (`PatternMatch::rerun`) (#323).
     // 0.3: an indexed node may say other nodes refer to it by name
     // (`IndexedNode::referable`), for did-you-mean on a reference to a missing node.
-    version: SchemaVersion::new(0, 3),
+    // 0.4: a summary may carry the kind the tool around the engine gave
+    // (`ErrorSummary::outer_kind`), which a pattern may match on; the symptoms
+    // `missing_schema` and `missing_function`, and `warehouse_unavailable`'s category
+    // `connection` (#323).
+    version: SchemaVersion::new(0, 4),
 };
 
 /// A catalogue's name and version.

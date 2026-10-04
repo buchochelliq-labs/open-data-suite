@@ -1372,7 +1372,8 @@ run id as `.last-run.json` and the snapshot the run records. It is one JSON even
 line (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`,
 `run_finished`), each with its `schema_version` (1.1 since a `check_finished` that
 didn't pass may carry `failures`, the rows dbt counted, and `error`, its redacted
-message; a 1.0 journal reads as before), and is flushed line by line, so it can
+message; 1.2 since an error may carry `outer_kind`, dbt's header kind, when the
+message has a kind of its own; earlier journals read as before), and is flushed line by line, so it can
 be followed while the run goes. A `check_finished` names the test by dbt's id, as
 dbt's own `run_results.json` and `manifest.json` beside it do; ODS shows that id
 nowhere else (it may hold a generic test's arguments), only the test's handle. It is evidence, not state: a failed run keeps its
@@ -1417,9 +1418,10 @@ full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 ```
 
 - **What and kind:** a headline, and the category (`compilation error`, `dependency or
-  ref`, `database error`, `permission`, `timeout or lock`, `python model`, `test
-  failure`, `configuration or profile`, `internal error`), with what ODS recognised
-  (e.g. `missing column`, `unknown macro`, `missing ref`, `type mismatch`).
+  ref`, `database error`, `permission`, `timeout or lock`, `connection`, `python
+  model`, `test failure`, `configuration or profile`, `internal error`), with what ODS
+  recognised (e.g. `missing column`, `missing schema`, `missing SQL function`, `unknown
+  macro`, `missing ref`, `type mismatch`, `warehouse unavailable`).
 - **Confidence:** `known pattern + evidence` when a pattern recognised dbt's error and
   ODS's own evidence confirms it (column lineage for a missing column, the project's
   macros for an undefined macro), about exactly one candidate and from the code the run
@@ -1520,7 +1522,7 @@ offered only for the last run, which is what it retries. Beyond loopback, explan
 leave out file paths and where dbt's full message is, as the Catalog does.
 
 `--output json` includes the explanations as `failures` (in `ods state history --run`, too):
-each has `schema_version` (1.1), `node` (for a failed test, its handle,
+each has `schema_version` (1.3), `node` (for a failed test, its handle,
 `check-<12 hex digits>`, the same for the same test in every run: never dbt's id for
 it, which holds a generic test's arguments), `check`
 (for a failed test: `covers`, the nodes it checks, and its `test` kind and `column`

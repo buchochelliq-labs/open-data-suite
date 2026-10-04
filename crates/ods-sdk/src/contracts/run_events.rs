@@ -47,8 +47,10 @@ use super::executor::{ExecutionMode, ExecutionReport, ExecutionRequest, Executio
 /// The version of [`RunEvent`], carried by every event and every journal line. 1.1
 /// added a check's [`failures`](RunEventKind::CheckFinished::failures) and
 /// [`error`](RunEventKind::CheckFinished::error) (#323): optional, so a 1.0 journal
-/// reads as before, with neither.
-pub const RUN_EVENTS_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
+/// reads as before, with neither. 1.2 added an error's
+/// [`outer_kind`](ErrorSummary::outer_kind) (#323): optional, so earlier journals read
+/// as before, without it.
+pub const RUN_EVENTS_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 2);
 
 /// The longest an [`ErrorSummary`] message is, in characters.
 pub const MAX_SUMMARY_CHARS: usize = 200;
@@ -322,6 +324,12 @@ pub struct ErrorSummary {
     /// The error's kind, when the message starts with one (`KeyError`, `Binder Error`).
     #[serde(default)]
     kind: Option<String>,
+    /// The kind the tool that ran the engine gave the error, around the engine's own
+    /// (dbt's `Database Error` header), when the message has a kind of its own too
+    /// (#323). The message's kind is read from the text before its first `: `, which
+    /// may be a phrase (`could not connect to server: …`); this one isn't a guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outer_kind: Option<String>,
     /// The first line of the message, values and SQL removed.
     message: String,
     /// Where the full message is, for people (e.g. a log file), if the executor knows.
@@ -348,6 +356,7 @@ impl ErrorSummary {
         });
         Some(Self {
             kind,
+            outer_kind: None,
             message,
             details_at: None,
             line: None,
@@ -386,6 +395,22 @@ impl ErrorSummary {
         self.kind.as_deref()
     }
 
+    /// Names the kind the tool that ran the engine gave the error, when the message
+    /// has a kind of its own (see [`outer_kind`](Self::outer_kind)). Values are removed
+    /// from it, and it is cut to 40 characters; one the same as the message's kind isn't
+    /// kept.
+    #[must_use]
+    pub fn with_outer_kind(mut self, kind: &str) -> Self {
+        self.outer_kind = redact::summary_line(kind, 40).filter(|k| Some(k) != self.kind.as_ref());
+        self
+    }
+
+    /// The kind the tool that ran the engine gave the error, around the message's own
+    /// [`kind`](Self::kind), if it gave one and the message has a kind too.
+    pub fn outer_kind(&self) -> Option<&str> {
+        self.outer_kind.as_deref()
+    }
+
     /// The first line of the message, values and SQL removed.
     pub fn message(&self) -> &str {
         &self.message
@@ -403,6 +428,7 @@ impl ErrorSummary {
         let message = redact::summary_line(&self.message, MAX_SUMMARY_CHARS).unwrap_or_default();
         Self {
             kind: self.kind.and_then(|k| redact::summary_line(&k, 40)),
+            outer_kind: self.outer_kind.and_then(|k| redact::summary_line(&k, 40)),
             message,
             details_at: self
                 .details_at
@@ -1520,7 +1546,8 @@ mod tests {
             },
         );
         let json = serde_json::to_value(&new).unwrap();
-        assert_eq!(json["schema_version"]["minor"], 1);
+        // At least the minor that added them.
+        assert!(json["schema_version"]["minor"].as_u64() >= Some(1));
         assert_eq!(json["failures"], 5);
         assert_eq!(
             json["error"]["message"],
@@ -1618,5 +1645,40 @@ mod tests {
         let b = run.get("b").unwrap().stats.tests.unwrap();
         assert_eq!((a.passed, a.failed), (0, 0), "{a:?}");
         assert_eq!((b.passed, b.failed), (0, 1), "{b:?}");
+    }
+
+    #[test]
+    fn an_outer_kind_is_kept_redacted_and_read_from_1_1_as_none() {
+        let summary = ErrorSummary::from_message("could not connect to server: refused")
+            .unwrap()
+            .with_outer_kind("Database Error");
+        assert_eq!(summary.kind(), Some("could not connect to server"));
+        assert_eq!(summary.outer_kind(), Some("Database Error"));
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["outer_kind"], "Database Error");
+        let back: ErrorSummary = serde_json::from_value(json).unwrap();
+        assert_eq!(back, summary);
+        // The message's own kind isn't kept twice.
+        let same = ErrorSummary::from_message("Binder Error: x")
+            .unwrap()
+            .with_outer_kind("Binder Error");
+        assert_eq!(same.outer_kind(), None);
+        // Written before 1.2: none, and the field isn't written when there is none.
+        let old: ErrorSummary =
+            serde_json::from_str(r#"{"kind":"Binder Error","message":"Binder Error: x"}"#).unwrap();
+        assert_eq!(old.outer_kind(), None);
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("outer_kind")
+                .is_none()
+        );
+        // Read back from an edited journal, it is redacted again.
+        let edited: ErrorSummary = serde_json::from_str(
+            r#"{"kind":"x","message":"x: y","outer_kind":"Error 'sk_live_SENTINEL_42'"}"#,
+        )
+        .unwrap();
+        let clean = serde_json::to_string(&edited.sanitized()).unwrap();
+        assert!(!clean.contains("SENTINEL"), "{clean}");
     }
 }

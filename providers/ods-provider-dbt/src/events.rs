@@ -681,10 +681,12 @@ pub fn error_summary(message: &str) -> Option<ErrorSummary> {
         }
         (Some(kind), Some(detail)) => {
             let summary = ErrorSummary::from_message(detail)?;
+            // dbt's header kind is kept beside the message's own, which is only read
+            // from the text before its first `: ` (#323).
             if summary.kind().is_none() {
                 summary.with_kind(kind)
             } else {
-                summary
+                summary.with_outer_kind(kind)
             }
         }
         (Some(kind), None) => ErrorSummary::from_message(kind)?.with_kind(kind),

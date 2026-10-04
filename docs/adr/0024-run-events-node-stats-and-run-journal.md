@@ -186,7 +186,12 @@ events come from `run_results.json` afterwards, with `live: false`. dbt reports 
 never kept. dbt starts an error message with a header, `<Runtime|Database|Compilation|
 Dependency|Parsing|Python> Error in <type> <name> (<path>)`; only a line of exactly that
 form counts as one, the summary takes the kind from it and the message from the next
-line, and SQL echo lines (`LINE 35: …`) are never used. The shapes were checked against
+line, and SQL echo lines (`LINE 35: …`) are never used. *Amended 2026-10-04 (run
+events 1.2, #323):* when that line has a kind of its own (`Binder Error: …`, or a
+phrase before a colon such as `could not connect to server: …`), the header's kind is
+kept beside it as the summary's `outer_kind`, redacted the same way, rather than
+dropped, so a pattern can rely on dbt's kind instead of the guess at the message's.
+It is optional and only written when there is one; earlier journals read without it. The shapes were checked against
 dbt 1.10 with DuckDB, and a captured log is a test fixture.
 
 ### The run journal
