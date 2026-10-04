@@ -765,7 +765,7 @@ The stream's messages:
 
 | `event` | `id` | `data` |
 |---|---|---|
-| `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it |
+| `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it, except that a `check_finished`'s `check` is the test's handle (`check-<12 hex digits>`), never dbt's id for it, which holds a generic test's arguments |
 | `unreadable` | the line's number | `{"line": n}`: a line that isn't an event of this run: a newer version, a line cut short (sent before `end` when the run stopped mid-write), one longer than 256 KiB, or another run's event |
 | `end` | none | `{"reason", "outcome", "inferred", "note"}`: `finished` after `run_finished`; `stopped` (inferred) when the journal doesn't say it finished and hasn't grown for 10 minutes; `replaced` when the journal was replaced or got shorter |
 
@@ -1060,6 +1060,17 @@ new data"), and how they ended; in JSON, `source_tests` holds the decisions (`so
 `checks_changed`, `missing_data_evidence`, `new_upstream_data` or `unchanged`, and
 `evidence`), `execution.sources` each source's outcome, and `record.source_tests` the
 sources whose tests `passed` or `failed`.
+
+A test is never shown by dbt's id for it, which holds a generic test's arguments (an
+`accepted_values` test's id names the values it accepts) (#323). The terminal names it
+by what the manifest says it tests: `failed: not_null on orders.customer_id` on the
+node's line, `warning: failed checks: …` under the table, a singular test by its own
+name, and any other test as `a test on orders (check-1f0c2a9e3b7d)`. In `--output
+json`, `execution.checks_failed` and each node's and source's `checks_failed`,
+`checks_skipped` and `checks_passed` list tests by their **handle**,
+`check-<12 hex digits>` (the first 12 hex digits of the SHA-256 of dbt's id): the same
+for the same test in every run and command, and the `node` of a failed test's
+explanation in `failures`, whose `check` says what it tests.
 
 It exits 0 when everything built and every test passed, or when there was nothing to
 build. It exits 1 with `ODS-E0404` when dbt couldn't run or when nodes or tests
@@ -1358,7 +1369,9 @@ line (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_fini
 `run_finished`), each with its `schema_version` (1.1 since a `check_finished` that
 didn't pass may carry `failures`, the rows dbt counted, and `error`, its redacted
 message; a 1.0 journal reads as before), and is flushed line by line, so it can
-be followed while the run goes. It is evidence, not state: a failed run keeps its
+be followed while the run goes. A `check_finished` names the test by dbt's id, as
+dbt's own `run_results.json` and `manifest.json` beside it do; ODS shows that id
+nowhere else (it may hold a generic test's arguments), only the test's handle. It is evidence, not state: a failed run keeps its
 journal, and nothing ODS decides reads it. It holds no SQL, no `--vars` values and no
 secrets: no options at all, and errors only as the redacted summary above. The 50 most
 recent journals are kept; older ones are deleted when a run starts. `ods state history

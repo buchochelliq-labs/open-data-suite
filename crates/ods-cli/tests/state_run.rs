@@ -409,9 +409,10 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
     let (code, json) = project.run(&["--test"]);
     assert_eq!(code, 1, "{json:#}");
     let result = &json["result"];
+    // By its handle, never its id (#323).
     assert_eq!(
         result["execution"]["checks_failed"][0],
-        "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
+        ods_core::failure::check_handle("test.jaffle_ods.unique_orders_order_id.fed79b3a6e")
     );
     // `orders` was built, but not validated: it doesn't advance, so it (and its test)
     // runs again next time.
@@ -566,7 +567,7 @@ fn a_skipped_test_leaves_its_node_untested() {
         .unwrap();
     assert_eq!(
         orders["checks_skipped"][0],
-        "test.jaffle_ods.unique_orders_order_id.fed79b3a6e"
+        ods_core::failure::check_handle("test.jaffle_ods.unique_orders_order_id.fed79b3a6e")
     );
 
     // Not a failure, but not a pass either: orders stays untested.
@@ -1385,12 +1386,16 @@ fn real_dbt_a_failing_source_test_skips_downstream_models() {
         source_tests(result)["raw.raw_orders"],
         decided("test", "not_tested")
     );
+    // Listed by its handle (#323), which its explanation's `node` holds too.
     let failed = result["execution"]["checks_failed"].as_array().unwrap();
     assert!(
-        failed.iter().any(|c| c
-            .as_str()
-            .unwrap()
-            .contains("source_accepted_values_raw_raw_orders_status")),
+        result["failures"].as_array().unwrap().iter().any(|f| {
+            f["check"]["test"] == "accepted_values"
+                && f["check"]["covers"][0]
+                    .as_str()
+                    .is_some_and(|c| c.ends_with(".raw.raw_orders"))
+                && failed.contains(&f["node"])
+        }),
         "{result:#}"
     );
     let mut ods_skipped: Vec<String> = result["execution"]["nodes"]
@@ -3064,7 +3069,9 @@ fn a_failing_source_test_fails_the_build_and_skips_its_readers() {
     assert_eq!(result["outcome"], "failed");
     assert_eq!(
         result["execution"]["checks_failed"],
-        serde_json::json!(["test.jaffle_ods.source_not_null_raw_orders_id.0000000000"])
+        serde_json::json!([ods_core::failure::check_handle(
+            "test.jaffle_ods.source_not_null_raw_orders_id.0000000000"
+        )])
     );
     let status = |name: &str| {
         result["execution"]["nodes"]
@@ -3950,11 +3957,11 @@ fn a_failed_test_is_explained_without_values() {
 
 /// #323: dbt names a generic test after its arguments: the recorded `accepted_values`
 /// test (dbt 1.10, `capture-errors.sh`) accepts a secret, so its name and id hold it.
-/// When it fails, its explanation names it by what it tests and its handle, in
-/// `ods state build` (with tests), `ods state test` and `ods state history --run`, JSON
-/// and plain. The id stays only where ODS kept it before #323: the journal's
-/// `check_finished` events and the executor's `checks_failed` (the report's
-/// `execution`, and the per-node line and the warning the terminal prints from it).
+/// When it fails, no output of `ods state build` (with tests), `ods state test` or
+/// `ods state history --run`, JSON or plain, holds it, whole: its explanation names it
+/// by what it tests and its handle, the execution's `checks_failed` lists its handle,
+/// and the terminal's per-node line and warning name it by what it tests. Only the
+/// journal on disk keeps the id (ADR-0024), beside the manifest that holds it too.
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -3991,28 +3998,31 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         );
         failure.clone()
     };
-    // What ODS kept before #323 (the executor's `checks_failed`), and nothing else.
-    let without_checks_failed = |result: &Value| {
-        let mut result = result.clone();
-        let execution = &mut result["execution"];
+    // The execution lists the check by its handle, on the run and on the node.
+    let listed = |execution: &Value| {
+        assert_eq!(execution["checks_failed"], serde_json::json!([handle]));
+        let orders = execution["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node"] == "model.jaffle_ods.orders")
+            .unwrap();
         assert!(
-            leaks(&execution["checks_failed"].to_string()),
-            "{execution:#}"
+            orders["checks_failed"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from(handle.as_str())),
+            "{orders:#}"
         );
-        execution["checks_failed"] = Value::Null;
-        for n in execution["nodes"].as_array_mut().unwrap() {
-            n["checks_failed"] = Value::Null;
-        }
-        result
     };
 
-    // `ods state build --test`.
+    // `ods state build --test`: the whole output.
     let (code, json) = project.run(&["--test"]);
     assert_eq!(code, 1, "{json:#}");
+    assert!(!leaks(&json.to_string()), "{json:#}");
     let result = &json["result"];
     explained(&result["failures"]);
-    let rest = without_checks_failed(result);
-    assert!(!leaks(&rest.to_string()), "{rest:#}");
+    listed(&result["execution"]);
     let (_, events) = journal_of(&project, result);
     let check = events
         .iter()
@@ -4040,12 +4050,14 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         "{history}"
     );
 
-    // `ods state test`.
+    // `ods state test`: the whole output.
     let (code, tested) = project.test(&[]);
     assert_eq!(code, 1, "{tested:#}");
+    assert!(!leaks(&tested.to_string()), "{tested:#}");
     explained(&tested["result"]["failures"]);
+    listed(&tested["result"]["execution"]);
 
-    // Plain: the explanation, whole; the rest only as before #323.
+    // Plain: the whole output; the test named by what it tests everywhere.
     let dbt = fixture("fake-dbt/dbt");
     let dbt = dbt.to_str().unwrap();
     for command in ["build", "test"] {
@@ -4058,14 +4070,14 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
             "{why}"
         );
         assert!(!leaks(&why), "{command}: {why}");
-        let elsewhere: Vec<&str> = plain.lines().filter(|l| leaks(l)).collect();
-        // Before #323: the per-node line (`failed: <check>`) and the run's warning
-        // (`failed checks: <check>`), from `checks_failed`.
-        assert!(
-            elsewhere.iter().all(|l| !why.contains(*l)
-                && (l.contains("failed: ") || l.starts_with("warning: failed checks: "))),
-            "{command}: {elsewhere:?}"
-        );
+        assert!(!leaks(&plain), "{command}: {plain}");
+        // The run's warning (`build`) and the per-node line (`test`) name it by what it
+        // tests.
+        let named = match command {
+            "build" => "warning: failed checks: accepted_values on orders.status",
+            _ => "orders\tfailed: accepted_values on orders.status",
+        };
+        assert!(plain.lines().any(|l| l == named), "{command}: {plain}");
     }
 }
 

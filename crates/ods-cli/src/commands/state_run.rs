@@ -1122,38 +1122,33 @@ pub(super) fn source_results(execution: &ExecutionReport) -> Vec<TestResult> {
 }
 
 /// The source checks' rows for people: what ran and how it ended, or, if nothing ran,
-/// what would run.
+/// what would run. A failed check is named as `names` describes it (#323).
 pub(super) fn source_rows(
     checks: &[SourceCheck],
     execution: Option<&ExecutionReport>,
+    names: &super::failures::CheckNames,
 ) -> Vec<Vec<Vec<Span>>> {
     checks
         .iter()
         .map(|c| {
             let ran = execution.and_then(|e| e.sources.iter().find(|s| s.node == c.source));
             let result = match (c.action, ran) {
-                (SourceCheckAction::Skip, _) => Span::toned("skipped", Tone::Success),
-                (_, None) => Span::toned("to test", Tone::Warning),
-                (_, Some(s)) if s.fully_checked() => Span::toned("passed", Tone::Success),
-                (_, Some(s)) if !s.checks_failed.is_empty() => Span::toned(
-                    format!(
-                        "failed: {}",
-                        s.checks_failed
-                            .iter()
-                            .map(|t| display_name(t))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    Tone::Error,
-                ),
-                (_, Some(s)) => Span::toned(
+                (SourceCheckAction::Skip, _) => vec![Span::toned("skipped", Tone::Success)],
+                (_, None) => vec![Span::toned("to test", Tone::Warning)],
+                (_, Some(s)) if s.fully_checked() => vec![Span::toned("passed", Tone::Success)],
+                (_, Some(s)) if !s.checks_failed.is_empty() => {
+                    let mut line = vec![Span::toned("failed: ", Tone::Error)];
+                    line.extend(super::failures::checks_line(&s.checks_failed, names));
+                    line
+                }
+                (_, Some(s)) => vec![Span::toned(
                     s.message.clone().unwrap_or_else(|| "didn't run".to_owned()),
                     Tone::Warning,
-                ),
+                )],
             };
             vec![
                 vec![Span::toned(c.name.as_str(), Tone::Code)],
-                vec![result],
+                result,
                 vec![Span::plain(
                     c.reasons
                         .iter()
@@ -1452,7 +1447,11 @@ pub(super) struct RunReport {
     /// Every selected source with tests, and whether they run and why (#232).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     source_tests: Vec<SourceCheck>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Checks by their handles, never their ids (#323).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "super::failures::serialize_execution"
+    )]
     execution: Option<ExecutionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     record: Option<RunRecord>,
@@ -1495,6 +1494,10 @@ pub(super) struct RunObserved {
     /// Each failed node, explained (#323, ADR-0025).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) failures: Vec<ods_core::failure::ErrorExplanation>,
+    /// The checks the execution lists as failed or skipped, described for the terminal
+    /// (#323); never serialized.
+    #[serde(skip)]
+    pub(super) check_names: super::failures::CheckNames,
 }
 
 /// Runs `request` through `executor`, keeping its events in the journal beside
@@ -1516,6 +1519,7 @@ pub(super) fn execute_observed(
             run_stats,
             journal,
             failures: Vec::new(),
+            check_names: super::failures::CheckNames::new(),
         },
     ))
 }
@@ -1894,17 +1898,21 @@ impl RunReport {
         settings: &StateSettings,
         before: Option<&StoredSnapshot>,
     ) {
+        let project_dir = super::failures::project_dir(settings);
+        let files = super::failures::ProjectFiles {
+            project_dir: &project_dir,
+            target_dir: &ws.target_dir,
+            manifest: Some(&ws.manifest),
+            last_manifest: None,
+        };
+        if let Some(execution) = &self.execution {
+            self.observed.check_names = super::failures::describe_checks(execution, &files);
+        }
         let Some(run) = &self.observed.run_stats else {
             return;
         };
-        let project_dir = super::failures::project_dir(settings);
         let evidence = super::failures::Evidence {
-            files: super::failures::ProjectFiles {
-                project_dir: &project_dir,
-                target_dir: &ws.target_dir,
-                manifest: Some(&ws.manifest),
-                last_manifest: None,
-            },
+            files,
             plan: Some(&self.plan),
             before: before.map(|s| &s.snapshot),
             state_db: &self.state_db,
@@ -2284,17 +2292,14 @@ impl RunReport {
         if let Some(execution) = &self.execution
             && !execution.checks_failed.is_empty()
         {
+            let mut message = vec![Span::plain("failed checks: ")];
+            message.extend(super::failures::checks_line(
+                &execution.checks_failed,
+                &self.observed.check_names,
+            ));
             blocks.push(ViewNode::Notice {
                 level: Level::Warning,
-                message: vec![Span::plain(format!(
-                    "failed checks: {}",
-                    execution
-                        .checks_failed
-                        .iter()
-                        .map(|c| display_name(c))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))],
+                message,
             });
         }
         if let Some(record) = &self.record {
@@ -2372,7 +2377,11 @@ impl Present for RunReport {
             blocks.push(ViewNode::Table {
                 title: Some("source tests".into()),
                 columns: vec!["source".into(), "tests".into(), "why".into()],
-                rows: source_rows(&self.source_tests, self.execution.as_ref()),
+                rows: source_rows(
+                    &self.source_tests,
+                    self.execution.as_ref(),
+                    &self.observed.check_names,
+                ),
             });
         }
         blocks.extend(super::failures::section(&self.observed.failures));

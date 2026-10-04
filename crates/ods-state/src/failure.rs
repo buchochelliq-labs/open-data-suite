@@ -411,13 +411,97 @@ fn found_failing_rows(facts: &FailureFacts<'_>, check: &CheckSummary) -> bool {
     }
 }
 
+/// What ODS shows of a check instead of its id (#323), wherever it names one: its
+/// [handle](check_handle), and what the project says it tests. An engine may build a
+/// check's id from the test's arguments (dbt names an `accepted_values` test after the
+/// values it accepts), so neither the id nor a generic test's name is kept here; a
+/// test's own name only for a test the provider marks
+/// [singular](CheckTarget::singular).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CheckDescription {
+    /// The check's [handle](check_handle).
+    pub handle: String,
+    /// The kind of test (e.g. `not_null`), when the project says.
+    pub test: Option<String>,
+    /// The column it tests, when the project says.
+    pub column: Option<String>,
+    /// The one node it is about, by id: the one the project declares it on, or the
+    /// only one it covers.
+    pub node: Option<String>,
+    /// A singular test's own name, when the project has one.
+    pub name: Option<String>,
+}
+
+impl CheckDescription {
+    /// The check, for machines: what it covers, tests and on which column.
+    pub fn failed_check(&self, covers: &[String]) -> FailedCheck {
+        FailedCheck::new(covers.to_vec()).testing(self.test.as_deref(), self.column.as_deref())
+    }
+
+    /// The check, for people: "the `not_null` test on `customer_id` of `orders`", "the
+    /// test `only_placed_orders` on `orders`", or "a test on `orders`" (capitalised
+    /// when it `start`s a sentence). `node_name` names a node for people.
+    pub fn phrase(&self, start: bool, node_name: impl Fn(&str) -> String) -> Text {
+        let the = if start { "The " } else { "the " };
+        let a_test = if start { "A test" } else { "a test" };
+        let mut text = match (&self.test, &self.name) {
+            (Some(kind), _) => Text::new().plain(the).code(kind).plain(" test"),
+            (None, Some(name)) => Text::new().plain(the).plain("test ").code(name),
+            (None, None) => Text::new().plain(a_test),
+        };
+        let node = self.node.as_deref().map(node_name);
+        text = match (self.column.as_deref(), node) {
+            (Some(column), Some(node)) => text.plain(" on ").code(column).plain(" of ").code(&node),
+            (None, Some(node)) => text.plain(" on ").code(&node),
+            (Some(column), None) => text.plain(" on ").code(column),
+            (None, None) => text,
+        };
+        text
+    }
+}
+
+/// Describes the check `id`, which `covers` the given nodes, from what the project
+/// `index` says about it (#323). Without an index (or with one that doesn't know the
+/// check) it is named by its handle and, when it covers one node, that node.
+pub fn describe_check(
+    id: &str,
+    covers: &[String],
+    index: Option<&ProjectIndex>,
+) -> CheckDescription {
+    let indexed = index.and_then(|i| i.nodes.get(id));
+    let target = indexed.and_then(|n| n.check.as_ref());
+    let node = target.and_then(|t| t.node.clone()).or(match covers {
+        [one] => Some(one.clone()),
+        _ => None,
+    });
+    let name = match target {
+        Some(CheckTarget { singular: true, .. }) => {
+            indexed.map(|n| n.name.clone()).filter(|n| !n.is_empty())
+        }
+        _ => None,
+    };
+    CheckDescription {
+        handle: check_handle(id),
+        test: target.and_then(|t| t.test.clone()),
+        column: target.and_then(|t| t.column.clone()),
+        node,
+        name,
+    }
+}
+
+/// The failed check of `facts`, described.
+fn described(facts: &FailureFacts<'_>, check: &CheckSummary) -> CheckDescription {
+    describe_check(facts.node, &check.covers, facts.index)
+}
+
 /// What the project says the check tests, when it knows.
 fn check_target<'a>(facts: &FailureFacts<'a>) -> Option<&'a CheckTarget> {
     facts.indexed(facts.node)?.check.as_ref()
 }
 
 /// The one node the check is about: the one the project attaches it to, or the only
-/// one it covers.
+/// one it covers (as [`describe_check`] says).
 fn tested_node<'a>(facts: &FailureFacts<'a>, check: &'a CheckSummary) -> Option<&'a str> {
     check_target(facts)
         .and_then(|t| t.node.as_deref())
@@ -429,45 +513,12 @@ fn tested_node<'a>(facts: &FailureFacts<'a>, check: &'a CheckSummary) -> Option<
 
 /// The check, for machines: what it covers, tests and on which column.
 fn failed_check(facts: &FailureFacts<'_>, check: &CheckSummary) -> FailedCheck {
-    let target = check_target(facts);
-    FailedCheck::new(check.covers.clone()).testing(
-        target.and_then(|t| t.test.as_deref()),
-        target.and_then(|t| t.column.as_deref()),
-    )
+    described(facts, check).failed_check(&check.covers)
 }
 
-/// The check, for people: "the `not_null` test on `customer_id` of `orders`", "the
-/// test `only_placed_orders` on `orders`", or "a test on `orders`". A test's own name
-/// is used only for one the provider says is [singular](CheckTarget::singular) (named
-/// by its file): a generic test's name may hold its arguments.
+/// The check, for people (see [`CheckDescription::phrase`]).
 fn test_phrase(facts: &FailureFacts<'_>, check: &CheckSummary, start: bool) -> Text {
-    let the = if start { "The " } else { "the " };
-    let target = check_target(facts);
-    let node = tested_node(facts, check).map(|n| facts.name(n));
-    let a_test = if start { "A test" } else { "a test" };
-    let mut text = Text::new();
-    match target {
-        Some(CheckTarget {
-            test: Some(kind), ..
-        }) => {
-            text = text.plain(the).code(kind).plain(" test");
-        }
-        Some(CheckTarget { singular: true, .. }) => {
-            let name = facts.indexed(facts.node).map(|n| n.name.as_str());
-            text = match name.filter(|n| !n.is_empty()) {
-                Some(name) => text.plain(the).plain("test ").code(name),
-                None => text.plain(a_test),
-            };
-        }
-        _ => text = text.plain(a_test),
-    }
-    let column = target.and_then(|t| t.column.as_deref());
-    match (column, node) {
-        (Some(column), Some(node)) => text.plain(" on ").code(column).plain(" of ").code(&node),
-        (None, Some(node)) => text.plain(" on ").code(&node),
-        (Some(column), None) => text.plain(" on ").code(column),
-        (None, None) => text,
-    }
+    described(facts, check).phrase(start, |n| facts.name(n))
 }
 
 /// A check that ran and found rows that don't pass (see the module docs).
@@ -2535,6 +2586,35 @@ mod tests {
     /// #323: a test's own name is used only for a test the provider says is singular
     /// (named by its file), never for a generic one, whose name may hold its arguments;
     /// nor is the check's id, which may too: the explanation carries its handle.
+    #[test]
+    fn a_check_is_described_by_what_it_tests_or_its_handle_never_its_id() {
+        let covers = vec![ORDERS.to_owned()];
+        let index = test_index();
+        let known = describe_check(TEST, &covers, Some(&index));
+        assert_eq!(known.handle, check_handle(TEST));
+        assert_eq!(
+            (known.test.as_deref(), known.column.as_deref()),
+            (Some("not_null"), Some("customer_id"))
+        );
+        assert_eq!(known.node.as_deref(), Some(ORDERS));
+        assert_eq!(known.name, None, "a generic test's name is never kept");
+        assert_eq!(
+            known.phrase(true, |_| "orders".to_owned()).as_str(),
+            "The `not_null` test on `customer_id` of `orders`"
+        );
+
+        // Without the project: its handle and the node it covers, nothing else.
+        let id = format!("test.shop.accepted_values_orders_status__completed__{SENTINEL}.1");
+        let unknown = describe_check(&id, &covers, None);
+        assert_eq!(unknown.handle, check_handle(&id));
+        assert!(!format!("{unknown:?}").contains(SENTINEL), "{unknown:?}");
+        assert_eq!(
+            unknown.phrase(false, |_| "orders".to_owned()).as_str(),
+            "a test on `orders`"
+        );
+        assert_eq!(describe_check(&id, &[], None).node, None);
+    }
+
     #[test]
     fn only_a_singular_tests_name_is_shown() {
         let run = tested(CheckStatus::Failed, Some(3), None);
