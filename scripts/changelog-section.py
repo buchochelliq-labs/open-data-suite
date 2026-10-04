@@ -123,8 +123,11 @@ def self_test() -> None:
         assert "more than one" in str(e)
     else:
         raise AssertionError("a duplicated section should have failed")
-    # The real changelog always has an Unreleased section to add entries to.
-    section((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), "Unreleased")
+    # The real changelog always has an Unreleased heading to add entries under; right
+    # after a release it may have nothing under it yet.
+    real = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+    unreleased = [line for line in real if (m := HEADING.match(line)) and m["version"] == "Unreleased"]
+    assert len(unreleased) == 1, "CHANGELOG.md needs exactly one `## [Unreleased]` heading"
     # The command line, end to end.
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "CHANGELOG.md"

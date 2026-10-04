@@ -12,10 +12,32 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
-Everything so far is pre-release. The first public release, 0.0.1, will summarise the
-State MVP and the first dashboard screens. Releases stay 0.0.x until the whole dashboard
-design is built; 0.1.0 marks the complete dashboard. Entries below record changes since
-the changelog was introduced.
+## [0.0.1] - 2026-10-04
+
+The first public release: the State MVP and the first dashboard screens.
+
+- **`ods state`** decides what a dbt project needs to build, and why, from its code
+  *and* its data: a model whose code and upstream data haven't changed since its last
+  successful build is reused, with each decision explained (`plan`, `explain`,
+  `why-build`, `why-skip`, `diff`, `history`). It runs dbt on exactly that selection
+  (`run`, `build`, `seed`, `snapshot`, `test`, `retry`), keeps state per target in a
+  local SQLite store, and never lets a failed run replace the last good state. Upstream
+  data is read from dbt's source freshness and, on Databricks, Delta table versions,
+  with per-node staleness tolerance and dbt's own `state:` and `build_after` settings.
+- **Runs are recorded and explained**: each node's time, rows and outcome, a journal of
+  every run, and failed nodes and tests explained in plain language with ODS's own
+  evidence.
+- **`ods serve`**, a read-only dashboard: Home, the Catalog and Model pages, the Plan
+  and Why, Runs and Run pages, and the Lineage page with the State overlay, a live view
+  of a run and run playback.
+- **Column-level lineage** (`ods lineage`), **ERDs** from tests and constraints (`ods
+  erd generate`), **`ods mcp`** for AI agents, and **`ods doctor`**.
+- Binaries for Linux, macOS and Windows: `pip install opendatasuite`, `cargo binstall`,
+  or a download with checksums and provenance ([Install](docs/install.md)).
+
+Everything is a preview: while versions are 0.0.x, any release may break. The entries
+below record the changes since the changelog was introduced, before this first release;
+**Breaking** ones only affect builds from source made before it.
 
 ### Breaking
 - An unreachable warehouse, cluster or server is explained in a new category,

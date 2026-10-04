@@ -7,7 +7,7 @@ name: Release
 #   attestations and a rendered Homebrew formula; then the wheels go to PyPI.
 # - Running it by hand (workflow_dispatch) is a dry run: everything is built, tested and
 #   uploaded as workflow artifacts, and nothing is published. The notes are the
-#   `[Unreleased]` section.
+#   `[Unreleased]` section, or the workspace version's when that is empty.
 #
 # One compile per target produces both the wheel (maturin `bin` bindings) and the
 # archive, so pip, Homebrew, cargo-binstall and direct downloads ship the same binary.
@@ -58,7 +58,10 @@ jobs:
             notes=$version
           else
             publish=false
+            # A dry run shows what's unreleased; right after a release, when that is
+            # empty, the released version's notes.
             notes=Unreleased
+            python3 scripts/changelog-section.py Unreleased > /dev/null 2>&1 || notes=$version
           fi
           python3 scripts/changelog-section.py --self-test
           python3 scripts/changelog-section.py "$notes" > release-notes.md

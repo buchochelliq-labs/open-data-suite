@@ -1,6 +1,6 @@
 ---
 source: crates/ods-cli/src/app.rs
-expression: "o.out.replace(env!(\"CARGO_PKG_VERSION\"), \"[ods-version]\")"
+expression: "o.out.replace(&version, \"\\\"ods_version\\\": \\\"[ods-version]\\\"\")"
 ---
 {
   "schema_version": {

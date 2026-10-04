@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "providers/*"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 # Raised from 1.85 by ADR-0003: rs-rich requires 1.90.
 rust-version = "1.90"

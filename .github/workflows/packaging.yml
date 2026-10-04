@@ -39,7 +39,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/changelog-section.py --self-test
-      - run: python3 scripts/changelog-section.py Unreleased
+      # The notes a release of the workspace version would publish: its own section once
+      # the release PR has cut it, else what's unreleased. Right after a release,
+      # `[Unreleased]` is empty and that's fine.
+      - name: The release notes exist
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          python3 scripts/changelog-section.py "$version" > /dev/null || python3 scripts/changelog-section.py Unreleased > /dev/null
       - run: python3 scripts/render-homebrew-formula.py --self-test
       - name: The rendered formula is valid Ruby
         run: |
