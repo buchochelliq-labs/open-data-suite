@@ -7,17 +7,22 @@
 //! Explanations are computed when shown, from what is kept anyway; nothing new is
 //! stored, so an older run is explained with the current catalogue.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ods_core::failure::{Confidence, ErrorExplanation, FailedCheck, Text};
+use ods_core::failure::{Confidence, ErrorExplanation, FailedCheck, Text, check_handle};
 use ods_core::state::{ExecutionPlan, StateSnapshot};
 use ods_provider_dbt::error_catalogue::{DbtErrorCatalogue, project_index};
 use ods_provider_dbt::events::project_failure;
 use ods_sdk::contracts::error_catalogue::{ErrorCatalogue, ProjectIndex};
+use ods_sdk::contracts::executor::ExecutionReport;
 use ods_sdk::contracts::run_events::RunSummary;
 use ods_sdk::run_journal::Journals;
-use ods_state::{FailureFacts, FailureStage, explain_failure, failed_checks, failed_nodes};
+use ods_state::{
+    CheckDescription, FailureFacts, FailureStage, describe_check, explain_failure, failed_checks,
+    failed_nodes,
+};
 
 use super::lineage::{LoadOptions, Loaded, shared_cache};
 use super::state_plan::display_name;
@@ -377,6 +382,108 @@ pub(super) fn check_label(check: &FailedCheck) -> Line {
         line.push(Span::toned(on, Tone::Code));
     }
     line
+}
+
+/// The checks an execution lists as failed or skipped, by id, described from the
+/// project (#323): the terminal names each by what it tests, never by its id.
+pub(super) type CheckNames = BTreeMap<String, CheckDescription>;
+
+/// Describes each check `execution` lists as failed or skipped, from the project's
+/// index when there is one. The index is read only when there is a check to name.
+pub(super) fn describe_checks(execution: &ExecutionReport, files: &ProjectFiles<'_>) -> CheckNames {
+    // Each listed check, with the nodes (and sources) that list it.
+    let mut covers: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for check in &execution.checks_failed {
+        covers.entry(check).or_default();
+    }
+    for n in execution.nodes.iter().chain(&execution.sources) {
+        for check in n.checks_failed.iter().chain(&n.checks_skipped) {
+            covers.entry(check).or_default().push(n.node.clone());
+        }
+    }
+    if covers.is_empty() {
+        return CheckNames::new();
+    }
+    let index = files.index();
+    covers
+        .into_iter()
+        .map(|(id, covers)| (id.to_owned(), describe_check(id, &covers, index.as_ref())))
+        .collect()
+}
+
+/// A check, for people, by what it tests (#323): `not_null on orders.customer_id`, a
+/// singular test by its own name, or `a test on orders (check-1f0c2a9e3b7d)`. Never by
+/// its id, which may hold the test's arguments; a check `names` doesn't describe is
+/// named by its handle.
+pub(super) fn check_line(id: &str, names: &CheckNames) -> Line {
+    let fallback;
+    let check = if let Some(check) = names.get(id) {
+        check
+    } else {
+        fallback = describe_check(id, &[], None);
+        &fallback
+    };
+    let on: Vec<String> = check.node.iter().cloned().collect();
+    match (&check.test, &check.name) {
+        (None, Some(name)) => {
+            let mut line = vec![Span::toned(name.clone(), Tone::Code)];
+            if let Some(node) = &check.node {
+                line.push(Span::plain(" on "));
+                line.push(Span::toned(display_name(node), Tone::Code));
+            }
+            line
+        }
+        (Some(_), _) => check_label(&check.failed_check(&on)),
+        (None, None) => {
+            let mut line = check_label(&check.failed_check(&on));
+            line.push(Span::toned(format!(" ({})", check.handle), Tone::Muted));
+            line
+        }
+    }
+}
+
+/// Several checks, for people, separated by commas (see [`check_line`]).
+pub(super) fn checks_line(ids: &[String], names: &CheckNames) -> Line {
+    let mut line = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        if i > 0 {
+            line.push(Span::plain(", "));
+        }
+        line.extend(check_line(id, names));
+    }
+    line
+}
+
+/// An execution as `--output json` shows it (#323): each check it lists (failed,
+/// skipped or passed, on the run and on each node and source) by its
+/// [handle](check_handle), the same one an explanation's `node` holds, never by its
+/// id, which may hold the test's arguments.
+pub(super) fn shown_execution(execution: &ExecutionReport) -> ExecutionReport {
+    let mut shown = execution.clone();
+    let handles = |checks: &mut Vec<String>| {
+        for check in checks.iter_mut() {
+            *check = check_handle(check);
+        }
+    };
+    handles(&mut shown.checks_failed);
+    for n in shown.nodes.iter_mut().chain(shown.sources.iter_mut()) {
+        handles(&mut n.checks_failed);
+        handles(&mut n.checks_skipped);
+        handles(&mut n.checks_passed);
+    }
+    shown
+}
+
+/// Serializes an execution as [`shown_execution`] does, for `serialize_with`.
+#[allow(
+    clippy::ref_option,
+    reason = "serde's `serialize_with` passes the field by reference"
+)]
+pub(super) fn serialize_execution<S: serde::Serializer>(
+    execution: &Option<ExecutionReport>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serde::Serialize::serialize(&execution.as_ref().map(shown_execution), serializer)
 }
 
 /// One failed node's (or test's) explanation, as the terminal shows it.
