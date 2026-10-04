@@ -1360,6 +1360,6 @@ mod tests {
         .unwrap();
         old["schema_version"]["minor"] = 1.into();
         let read: ErrorExplanation = serde_json::from_value(old).unwrap();
-        assert!(read.evidence().is_empty());
+        assert_eq!(read.evidence().len(), 0);
     }
 }

@@ -2081,7 +2081,7 @@ mod tests {
                 .map(|s| s.text.as_str().to_owned())
                 .collect()
         };
-        const GENERIC: &str = "Check the names the model refers to against the project's nodes.";
+        let generic = "Check the names the model refers to against the project's nodes.";
 
         // One close name.
         let e = explain(Some("custmers"), Some(&index));
@@ -2089,7 +2089,7 @@ mod tests {
             texts(&e)[..2],
             [
                 "Did you mean `customers`? The project has a node with a name close to the missing one; that is a guess from the names, not evidence of a typo.",
-                GENERIC
+                generic
             ]
         );
         assert_eq!(
@@ -2120,7 +2120,7 @@ mod tests {
             explain(None, Some(&index)),
             explain(Some("custmers"), None),
         ] {
-            assert_eq!(texts(&e)[0], GENERIC);
+            assert_eq!(texts(&e)[0], generic);
             assert!(texts(&e).iter().all(|t| !t.contains("Did you mean")));
             assert_eq!(e.confidence(), Confidence::KnownPattern);
         }
