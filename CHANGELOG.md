@@ -97,8 +97,7 @@ the changelog was introduced.
   started, or a connection that can't be made, reads as *warehouse unavailable* with
   `dbt debug` to try; a command or Python model run that timed out as a *query
   timeout*; OAuth or client credentials missing from the profile as *credentials
-  missing*; Spark's and Delta's `CHECK` and `NOT NULL` constraint violations, a schema
-  that can't be found and an unknown function too. The dbt error catalogue is
+  missing*; Spark's and Delta's `CHECK` and `NOT NULL` constraint violations too. The dbt error catalogue is
   version 4.
 - A failure of dbt's profile, target or credentials is explained with `ods doctor`'s
   local configuration checks (`config.load`, `config.values` for credentials,

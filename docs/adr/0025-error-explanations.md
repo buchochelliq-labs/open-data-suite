@@ -151,8 +151,7 @@ and, for dbt and DuckDB, recorded from a real dbt 1.10 + DuckDB run
   `DELTA_CONCURRENT_*` classes, which Databricks reports.
 
 *Amended 2026-10-04 (version 4).* Added, from public Apache-2.0 sources: Spark's
-`SCHEMA_NOT_FOUND`, `UNRESOLVED_ROUTINE`, `CHECK_CONSTRAINT_VIOLATION` and
-`NOT_NULL_CONSTRAINT_VIOLATION`, and Delta's `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` and
+`CHECK_CONSTRAINT_VIOLATION` and `NOT_NULL_CONSTRAINT_VIOLATION`, and Delta's `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` and
 `DELTA_VIOLATE_CONSTRAINT_WITH_VALUES`; and dbt-databricks's (1.12) own messages: a
 cluster that can't be started or asked for its state and a connection that can't be
 made (warehouse unavailable, with `dbt debug` to try), a command or Python model run
@@ -166,8 +165,10 @@ longer require dbt's `Database Error`. Not yet recorded from a real Databricks r
 messages are dbt-databricks's own text, as its source raises them.
 
 Anything else is not recognised. A missing scalar function (DuckDB's `Scalar Function
-with name … does not exist`) is deliberately left unrecognised: it isn't a macro, and
-ODS has no evidence to say more.
+with name … does not exist`, Spark's `UNRESOLVED_ROUTINE`) is deliberately left
+unrecognised: it isn't a macro, and ODS has no evidence to say more. So is Spark's
+`SCHEMA_NOT_FOUND`: a missing schema isn't a missing table or view, and the evidence
+for one (an upstream never built) would wrongly confirm it.
 
 ### Evidence joins (`ods_state::explain_failure`)
 A pure, synchronous function of `FailureFacts`: the classification, the node's

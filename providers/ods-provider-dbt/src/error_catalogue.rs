@@ -13,8 +13,8 @@
 //! - PostgreSQL's documented messages (`column … does not exist`, `relation … does not
 //!   exist`, `permission denied for …`);
 //! - Apache Spark's public error conditions (Apache-2.0, `error-conditions.json`:
-//!   `[UNRESOLVED_COLUMN…]`, `[TABLE_OR_VIEW_NOT_FOUND]`, `[SCHEMA_NOT_FOUND]`,
-//!   `[UNRESOLVED_ROUTINE]`, `[CAST_INVALID_INPUT]`, `[DATATYPE_MISMATCH…]`,
+//!   `[UNRESOLVED_COLUMN…]`, `[TABLE_OR_VIEW_NOT_FOUND]`, `[CAST_INVALID_INPUT]`,
+//!   `[DATATYPE_MISMATCH…]`,
 //!   `[CHECK_CONSTRAINT_VIOLATION]`, `[NOT_NULL_CONSTRAINT_VIOLATION]`) and Delta Lake's
 //!   (Apache-2.0, `delta-error-classes.json`: `[DELTA_CONCURRENT_…]`,
 //!   `[DELTA_NOT_NULL_CONSTRAINT_VIOLATED]`, `[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES]`),
@@ -24,7 +24,10 @@
 //!   run that timed out, and credentials its profile is missing.
 //!
 //! Anything else is not recognised: the catalogue gives only the category dbt's (or the
-//! adapter's) kind implies, and ODS doesn't guess a cause.
+//! adapter's) kind implies, and ODS doesn't guess a cause. That includes errors close to
+//! a symptom but not it: Spark's `[SCHEMA_NOT_FOUND]` isn't a missing table or view, and
+//! `[UNRESOLVED_ROUTINE]` (a SQL function, after dbt compiled the query) isn't an
+//! undefined macro; either would let unrelated evidence confirm the wrong cause.
 //!
 //! [`project_index`] describes a project for explanations: each node's files, the
 //! macros its code calls that the manifest doesn't define, and what each data test
@@ -46,8 +49,7 @@ use crate::{Manifest, ResourceType};
 /// The catalogue's version: bumped whenever a pattern is added, changed or removed.
 /// 3: `dbt-missing-ref` names the missing node when the whole message is at hand
 /// ([`DbtErrorCatalogue::classify_project`]). 4: Databricks's unavailable compute,
-/// timeouts and missing credentials, Spark's and Delta's constraint, schema and routine
-/// errors; `postgres-invalid-input` and `postgres-connect` no longer need dbt's kind.
+/// timeouts and missing credentials, Spark's and Delta's constraint violations; `postgres-invalid-input` and `postgres-connect` no longer need dbt's kind.
 pub const CATALOGUE_VERSION: &str = "4";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly), and phrases its
@@ -297,18 +299,6 @@ const PATTERNS: &[Pattern] = &[
         Symptom::TypeMismatch,
         None,
         &["[datatype_mismatch"],
-    ),
-    p(
-        "spark-schema-not-found",
-        Symptom::MissingRelation,
-        None,
-        &["[schema_not_found]"],
-    ),
-    p(
-        "spark-unresolved-routine",
-        Symptom::UnknownMacro,
-        None,
-        &["[unresolved_routine]"],
     ),
     p(
         "spark-check-constraint",
@@ -1239,16 +1229,6 @@ mod tests {
             "[DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES] Cannot resolve \"(a + b)\" due to data type mismatch.",
         ),
         (
-            "spark-schema-not-found",
-            "Database Error",
-            "[SCHEMA_NOT_FOUND] The schema `main`.`staging` cannot be found. Verify the spelling and correctness of the schema and catalog.",
-        ),
-        (
-            "spark-unresolved-routine",
-            "Database Error",
-            "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`, `system`.`session`].",
-        ),
-        (
             "spark-check-constraint",
             "Database Error",
             "[CHECK_CONSTRAINT_VIOLATION] CHECK constraint positive (amount > 0) violated by row with values: - amount : -1",
@@ -1336,6 +1316,24 @@ mod tests {
             .filter(|id| !reached.contains(*id))
             .collect();
         assert!(missing.is_empty(), "no message reaches {missing:?}");
+    }
+
+    #[test]
+    fn a_missing_schema_or_sql_function_is_not_recognised() {
+        // Neither is the symptom it resembles (a missing relation, an undefined macro),
+        // whose evidence could otherwise confirm the wrong cause.
+        for message in [
+            "[SCHEMA_NOT_FOUND] The schema `main`.`staging` cannot be found.",
+            "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`].",
+        ] {
+            assert_eq!(
+                DbtErrorCatalogue.classify(&node_failure("Database Error", message)),
+                Classification::NotRecognised {
+                    category: ErrorCategory::Database
+                },
+                "{message}"
+            );
+        }
     }
 
     #[test]
