@@ -30,8 +30,12 @@ the changelog was introduced.
   values it accepts) (#323): `execution.checks_failed`, and each node's and source's
   `checks_failed`, `checks_skipped` and `checks_passed`, are still arrays of strings.
   `ods serve`'s live stream (`/api/runs/<run_id>/events`, and with `?since=`) sends a
-  `check_finished` event's `check` as the handle too. The journal on disk
-  (`<state-db>.runs/<run_id>.jsonl`) keeps dbt's id. **What to do:** match a failed
+  `check_finished` event's `check` as the handle too. So the `--output json` envelope
+  is now `schema_version` 1.0 (was 0.1; `ods version` reports it), and the stream's
+  messages, and `/api/runs/live`, are `live_schema_version` / `schema_version` 2 (was 1):
+  every stream message's data now carries `live_schema_version`. The journal on disk
+  (`<state-db>.runs/<run_id>.jsonl`) keeps dbt's id. **What to do:** accept output
+  schema 1.x and live schema 2; match a failed
   test to its explanation by the handle (`failures[].node`), whose `check` says what it
   tests (`test`, `column`, `covers`); to find a test from its handle, compute it from
   the manifest's ids: `check-` and the first 12 hex digits of the SHA-256 of the id.
