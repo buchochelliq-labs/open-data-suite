@@ -113,4 +113,5 @@ nav:
       - adr/0023-ods-doctor-diagnostics.md
       - adr/0024-run-events-node-stats-and-run-journal.md
       - adr/0025-error-explanations.md
+      - adr/0026-run-playback.md
   - Legal and trademarks: legal.md

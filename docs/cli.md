@@ -815,6 +815,24 @@ of the graph fades, and the toolbar says *Following customers + 3 downstream ×*
 scope is in the address (`&follow=customers:down`, `up` or `self`); when it finishes,
 the page frames it and offers *Follow whole run*.
 
+**Replay** ([ADR-0026](adr/0026-run-playback.md)): any run whose journal ODS still keeps
+can be played again on the DAG, at `/lineage?replay=<run_id>`, from the Run page's
+*Replay on the DAG*, or from *Replay* once a live run has finished. The page loads the
+journal once (through `/api/runs/<run_id>/events?since=`, so it shows nothing the
+stream doesn't) and shows the run as it was at the playhead: the same nodes, panel,
+stats cards and follow mode as live, with running times measured from the playhead. A
+play bar along the bottom has play and pause (Space or `K`), the previous and next
+event (`,` and `.`: what happened next, whatever the gap), the time (`0:10 / 0:13`),
+the speed (0.25× to 64×; Shift+`<` and Shift+`>`) and a slider over the whole run:
+drag it, or use ←/→ (5 s), `J`/`L` (10 s), Home/End and `0`–`9` (0–90 %). Above the
+slider, a band shows how many nodes were running at each moment (to the run's peak:
+where it narrows, the run was waiting on few nodes) with a marker for each failure
+and the run's end; a marker goes there (and selects the failed node). A link opens a
+replay paused at a moment: `&t=<seconds>` (and `&speed=<n>`), which the address keeps
+up to date whenever playback stops. A run rebuilt from its final report says that its
+times are when each node finished, not when it started; a journal still being written
+replays up to when it was loaded and offers *Go live*.
+
 The page holds its automatic reload while it shows a run (a reload would lose the
 camera), and reloads when you leave the Live overlay if the project changed meanwhile.
 `/state/runs/<run_id>/card?node=<id>` serves the stats card as an HTML fragment.

@@ -510,6 +510,157 @@ class SimulatedRun(LiveCase):
         self.assertIn(f"live={self.run_id}", unquote(self.page.url))
 
 
+class Replay(LiveCase):
+    """Playback of a finished run's journal (ADR-0026): the board's run, 13.3 s long."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.play(99)
+
+    def replay(self, query: str = "") -> None:
+        self.page.goto(f"{self.url}/lineage?replay={self.run_id}{query}")
+        self.page.wait_for_selector("#lin-nodes g[data-node]")
+        self.wait("() => /\\/ 0:13$/.test(document.getElementById('lv-ptime').textContent)")
+
+    def keys(self, *keys: str) -> None:
+        self.page.evaluate("() => document.activeElement && document.activeElement.blur()")
+        for key in keys:
+            self.page.keyboard.press(key)
+
+    def test_a_replay_opens_paused_at_the_start_and_plays_to_the_end(self) -> None:
+        self.replay()
+        self.assertEqual(self.text("#lv-ptime"), "0:00 / 0:13")
+        self.assertEqual(self.page.get_attribute("#lv-play", "aria-label"), "Play")
+        self.assertEqual(self.pill("orders"), "QUEUED")
+        self.assertIn("Replay", self.text(".lin-status"))
+        self.assertIn("paused", self.text(".lin-status"))
+        self.page.select_option("#lv-speed", "16")
+        self.page.click("#lv-play")
+        self.wait_pill("customer_segments", "FAILED")
+        self.wait("() => !document.getElementById('lv-toast').hidden")
+        self.assertEqual(self.pill("segment_summary"), "SKIPPED")
+        self.assertEqual(self.text("#lv-ptime"), "0:13 / 0:13")
+        # Paused at the end; Play starts again from the beginning.
+        self.wait("() => document.getElementById('lv-play').getAttribute('aria-label') === 'Play'")
+        # The URL follows once it stops: the moment and the speed.
+        self.wait("() => /speed=16/.test(location.search) && /t=13\\.3/.test(location.search)")
+
+    def test_a_link_to_a_moment_shows_the_run_as_it_was_then(self) -> None:
+        self.replay("&t=7")
+        self.assertEqual(self.text("#lv-ptime"), "0:07 / 0:13")
+        self.assertEqual(self.pill("orders"), "BUILT")
+        self.assertEqual(self.pill("customers"), "RUNNING")
+        self.assertEqual(self.pill("customer_order_rank"), "RUNNING")
+        self.assertEqual(self.pill("customer_segments"), "QUEUED")
+        # Running time is the playhead's, not the wall clock's: 7.0 s - 6.7 s.
+        self.assertTrue(self.node("customers").locator(".lv-meta").text_content().startswith("300ms"))
+        self.assertIn("2 running", self.page.get_attribute("#lv-scrub", "aria-valuetext"))
+        self.assertTrue(self.page.locator("#lv-toast").is_hidden())
+
+    def test_seeking_and_stepping_from_the_keyboard(self) -> None:
+        self.replay("&t=13.2")
+        self.assertEqual(self.pill("customer_segments"), "FAILED")
+        self.keys("Home")
+        self.wait_pill("customer_segments", "QUEUED")
+        self.assertEqual(self.pill("stg_orders"), "QUEUED")
+        # The next event, whatever the gap: stg_orders starts at 0.4 s.
+        self.keys(".")
+        self.wait_pill("stg_orders", "RUNNING")
+        self.keys(".")
+        self.wait_pill("stg_orders", "BUILT")
+        self.keys(",")
+        self.wait_pill("stg_orders", "RUNNING")
+        self.keys("End")
+        self.wait_pill("customer_segments", "FAILED")
+        self.wait("() => !document.getElementById('lv-toast').hidden")
+        # Ten seconds back from the end (13.3 s): 3.3 s, orders running again, the toast gone.
+        self.keys("j")
+        self.wait_pill("orders", "RUNNING")
+        self.assertEqual(self.pill("customers"), "QUEUED")
+        self.assertEqual(self.text("#lv-ptime"), "0:03 / 0:13")
+        self.wait("() => document.getElementById('lv-toast').hidden")
+        self.keys("5")
+        self.wait("() => /t=6\\.\\d/.test(location.search)")
+        self.keys(">")
+        self.wait("() => document.getElementById('lv-speed').value === '2'")
+
+    def test_space_plays_and_pauses(self) -> None:
+        self.replay()
+        self.keys("Space")
+        self.wait("() => document.getElementById('lv-play').getAttribute('aria-label') === 'Pause'")
+        self.wait_pill("stg_orders", "RUNNING")
+        self.keys("k")
+        self.wait("() => document.getElementById('lv-play').getAttribute('aria-label') === 'Play'")
+        self.assertIn("paused", self.text(".lin-status"))
+
+    def test_the_failure_marker_goes_there_and_selects_it(self) -> None:
+        self.replay()
+        marks = self.page.locator(".lv-mark")
+        self.assertEqual(marks.count(), 2)
+        self.assertIn("customer_segments failed at 0:13", self.page.get_attribute(".lv-mark.error", "aria-label"))
+        self.page.click(".lv-mark.error")
+        self.wait_pill("customer_segments", "FAILED")
+        self.wait("() => document.querySelector('.lp-title .nm') && document.querySelector('.lp-title .nm').textContent === 'customer_segments'")
+
+    def test_a_finished_live_run_and_its_run_page_offer_a_replay(self) -> None:
+        self.open()
+        self.wait("() => !document.getElementById('lv-toast').hidden")
+        self.page.click(".lv-replay-btn")
+        self.wait("() => document.getElementById('lv-play').getAttribute('aria-label') === 'Pause'")
+        self.assertIn(f"replay={self.run_id}", unquote(self.page.url))
+        self.assertFalse(self.page.locator("#lv-player").is_hidden())
+        self.page.goto(f"{self.url}/state/runs/{self.run_id}")
+        self.page.click("a.st-replay")
+        self.page.wait_for_selector("#lv-ptime")
+        self.assertIn(f"replay={self.run_id}", unquote(self.page.url))
+
+    def test_a_card_shows_the_node_as_at_the_playhead_never_its_future(self) -> None:
+        self.replay("&t=10")
+        self.choose("customer_segments")
+        self.wait("() => document.querySelector('#lv-card .lv-card')")
+        card = self.text("#lv-card")
+        self.assertIn("running", card)
+        self.assertNotIn("failed", card.lower())
+        self.assertIn("As at the playhead", card)
+        # Past its last event, the run's own card: it failed, explained.
+        self.keys("End")
+        self.wait("() => !/As at the playhead/.test(document.getElementById('lv-card').textContent) && /fail/i.test(document.getElementById('lv-card').textContent)")
+        # And back before it: the future is hidden again.
+        self.keys("Home")
+        self.wait("() => /As at the playhead/.test(document.getElementById('lv-card').textContent)")
+        self.assertNotIn("fail", self.text("#lv-card").lower())
+
+    def test_a_journal_that_cant_be_loaded_is_not_said_to_be_missing(self) -> None:
+        self.page.route("**/api/runs/*/events*", lambda r: r.fulfill(status=503, body="busy"))
+        self.page.goto(f"{self.url}/lineage?replay={self.run_id}")
+        self.page.wait_for_selector("#lin-nodes g[data-node]")
+        self.wait("() => /couldn't be loaded: the server answered 503/.test(document.getElementById('lv-pnote').textContent)")
+        self.assertNotIn("No journal", self.text("#lv-pnote"))
+        self.assertTrue(self.page.locator("#lv-toast").is_hidden())
+        # Trying again, once the server answers, replays it.
+        self.page.unroute("**/api/runs/*/events*")
+        self.page.click(".lv-retry")
+        self.wait("() => /\\/ 0:13$/.test(document.getElementById('lv-ptime').textContent)")
+        self.assertTrue(self.page.locator(".lv-retry").is_hidden())
+
+    def test_a_journal_of_unreadable_lines_says_so(self) -> None:
+        unreadable = sim.Journal(self.db, f"7f2f6c69-0000-4000-8000-{uuid.uuid4().hex[:12]}", self.scope)
+        try:
+            unreadable.raw('{"schema_version":"9.0","kind":"node_queued"}\n')
+            self.page.goto(f"{self.url}/lineage?replay={unreadable.run_id}")
+            self.page.wait_for_selector("#lin-nodes g[data-node]")
+            self.wait("() => /none of its 1 line could be read/.test(document.getElementById('lv-pnote').textContent)")
+            self.assertNotIn("No journal", self.text("#lv-pnote"))
+        finally:
+            unreadable.remove()
+
+    def test_a_missing_journal_is_said(self) -> None:
+        self.page.goto(f"{self.url}/lineage?replay=7f2f6c69-0000-4000-8000-{uuid.uuid4().hex[:12]}")
+        self.page.wait_for_selector("#lin-nodes g[data-node]")
+        self.wait("() => /No journal/.test(document.getElementById('lv-pnote').textContent)")
+        self.assertTrue(self.page.locator("#lv-play").is_disabled())
+
+
 class ReducedMotion(LiveCase):
     reduced = "reduce"
 

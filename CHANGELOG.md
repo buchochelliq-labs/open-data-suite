@@ -101,6 +101,12 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- Run playback ([ADR-0026](docs/adr/0026-run-playback.md)): `ods serve` replays any run
+  whose journal it keeps on the Lineage page (`/lineage?replay=<run_id>`, *Replay on
+  the DAG* on the Run page, or *Replay* when a live run finishes). Play, pause, step
+  event by event, change speed (0.25× to 64×) or drag the play bar to any moment, as on
+  a video, with the keys a video player has; a band over the bar shows how many nodes
+  ran at each moment, with markers for failures. `&t=<seconds>` links to a moment.
 - A failure from a `ref()` to a model that doesn't exist suggests the project's models,
   seeds and snapshots with a close name, at most three, closest first ("Did you mean
   `customers`?"), as a guess that doesn't raise the confidence; the name the `ref()`

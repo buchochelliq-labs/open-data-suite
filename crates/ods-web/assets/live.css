@@ -227,3 +227,49 @@
   .lv-node.lv-running .lv-halo, .lv-dot { animation: none; }
   .lv-bar-fill { transition: none; }
 }
+
+/* ---- playback (ADR-0026): the play bar along the bottom of the canvas */
+.lv-player { display: none; }
+.lv-on.lv-replay .lv-player:not([hidden]) { display: grid; }
+.lv-player { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 4; height: 72px; box-sizing: border-box;
+  grid-template-columns: auto auto auto auto 1fr auto; grid-template-rows: auto auto; align-items: center; gap: 4px 10px;
+  padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 20px var(--lv-shadow);
+  --lv-band: color-mix(in srgb, var(--lv-running-line) 45%, transparent); }
+.lv-pbtn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); color: var(--fg); cursor: pointer; }
+.lv-pbtn:hover:not(:disabled) { background: var(--active-bg); }
+.lv-pbtn:focus-visible, .lv-scrub:focus-visible, .lv-speed:focus-visible, .lv-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lv-pbtn:disabled, .lv-scrub:disabled, .lv-speed:disabled { opacity: .5; cursor: default; }
+.lv-play { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); border-color: var(--accent); color: var(--surface); grid-row: 1 / 3; }
+.lv-play:hover:not(:disabled) { background: var(--accent-strong); }
+.lv-prev, .lv-next { grid-row: 1 / 3; }
+.lv-ptime { grid-row: 1 / 3; font-size: 12.5px; color: var(--heading-muted); min-width: 92px; text-align: center; }
+.lv-track { position: relative; grid-row: 1 / 3; height: 44px; min-width: 120px; }
+.lv-band { position: absolute; left: 0; right: 0; top: 2px; width: 100%; height: 22px; pointer-events: none; }
+.lv-scrub { position: absolute; left: 0; right: 0; bottom: 2px; width: 100%; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.lv-marks { position: absolute; left: 0; right: 0; top: 0; height: 26px; }
+.lv-mark { position: absolute; top: 0; width: 10px; height: 26px; margin-left: -5px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.lv-mark::after { content: ""; position: absolute; left: 4px; top: 0; width: 2px; height: 26px; border-radius: 1px; background: var(--muted); }
+.lv-mark.error::after { background: var(--lv-error-line); width: 3px; left: 3px; }
+.lv-speed { grid-row: 1; height: 30px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--fg); font: inherit; font-size: 12.5px; }
+.lv-golive { grid-row: 2; width: auto; height: 26px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 600; color: var(--accent-strong); border-color: var(--accent); }
+.lv-golive[hidden] { display: none; }
+.lv-pnote { grid-column: 1 / -1; grid-row: 3; font-size: 11.5px; color: var(--heading-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv-pnote:empty { display: none; }
+.lv-player:has(.lv-pnote:not(:empty)) { height: auto; }
+/* The play bar takes the bottom: what sat there moves up. */
+.lv-on.lv-replay .lv-mini, .lv-on.lv-replay .lin-legend { bottom: 100px; }
+.lv-on.lv-replay .lv-chips.bottom { bottom: 280px; }
+.lv-on.lv-replay .lv-toast { bottom: 100px; }
+.lv-on.lv-replay:not(.lv-done) .lv-toast { bottom: 284px; }
+.lv-on.lv-replay .lv-chips.right, .lv-on.lv-replay .lv-chips.left { max-height: calc(100% - 380px); }
+@media (max-width: 720px) {
+  .lv-player { grid-template-columns: auto auto auto 1fr auto; }
+  .lv-ptime { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lv-playing .lv-node.lv-running .lv-halo { animation: none; }
+}
+/* A marker whose time was inferred (the journal's wasn't usable): dashed. */
+.lv-mark.inferred::after { background: repeating-linear-gradient(to bottom, var(--lv-error-line) 0 4px, transparent 4px 7px); }
+.lv-mark.finished.inferred::after { background: repeating-linear-gradient(to bottom, var(--muted) 0 4px, transparent 4px 7px); }

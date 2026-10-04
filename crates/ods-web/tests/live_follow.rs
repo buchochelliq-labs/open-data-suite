@@ -138,6 +138,105 @@ function ctx(status, extra) {
   assert.ok(!L.moved({ x: 0, y: 0, k: 1 }, { x: 2, y: 1, k: 1.001 }), "a pixel isn't a move");
   assert.ok(L.moved({ x: 0, y: 0, k: 1 }, { x: 40, y: 0, k: 1 }));
 }
+
+// ---- playback (ADR-0026): the timeline, seeking, keyframes and concurrency
+{
+  const evs = [
+    ev(0, "run_started", { nodes: ["a", "b", "c"], mode: "build", live: true }),
+    ev(0, "node_queued", { node: "a" }), ev(0, "node_queued", { node: "b" }), ev(0, "node_queued", { node: "c" }),
+    ev(1, "node_started", { node: "a" }), ev(1, "node_started", { node: "b" }),
+    ev(3, "node_finished", { node: "a", stats: { status: "success" } }),
+    // A clock that went back: played at the time before it, never earlier.
+    ev(2, "node_finished", { node: "b", stats: { status: "error" } }),
+    ev(4, "node_finished", { node: "c", stats: { status: "skipped" } }),
+    ev(5, "run_finished", { outcome: "failed" }),
+  ].map((e, i) => ({ id: i + 1, ev: e }));
+  const t0 = Date.parse(at(0));
+  const tl = L.timeline("r", evs);
+  assert.strictEqual(tl.t0, t0);
+  assert.strictEqual(tl.t1 - tl.t0, 5000);
+  assert.ok(tl.finished);
+  assert.strictEqual(tl.items[7].at - t0, 3000, "never earlier than the event before it");
+  // ...and said to be inferred, not recorded.
+  assert.ok(tl.items[7].adjusted && !tl.items[6].adjusted);
+  assert.strictEqual(tl.adjusted, 1);
+  assert.ok(tl.markers[0].inferred, "the failure's time is the adjusted one");
+  // Each node's story ends with its last event: c's at the 9th.
+  assert.strictEqual(tl.lastIndex.get("c"), 9);
+  assert.strictEqual(tl.lastIndex.get("a"), 7);
+  // The state at a moment is the fold of what happened by then.
+  const mid = L.stateAt(tl, t0 + 1500).run;
+  assert.strictEqual(mid.nodes.get("a").status, "running");
+  assert.strictEqual(mid.nodes.get("b").status, "running");
+  assert.strictEqual(mid.nodes.get("c").status, "queued");
+  assert.strictEqual(L.runningAt(tl, t0 + 1500), 2);
+  assert.strictEqual(tl.peak, 2);
+  // The end is the run's final state; before the start, nothing has happened but its
+  // start.
+  const end = L.stateAt(tl, tl.t1);
+  assert.strictEqual(end.applied, evs.length);
+  assert.strictEqual(end.run.outcome, "failed");
+  assert.strictEqual(end.run.nodes.get("b").status, "error");
+  assert.strictEqual(L.stateAt(tl, t0 - 1000).applied, 0);
+  // Deterministic: the same moment gives the same picture, whatever came before.
+  const a1 = JSON.stringify([...L.stateAt(tl, t0 + 3000).run.nodes]);
+  L.stateAt(tl, tl.t1);
+  assert.strictEqual(JSON.stringify([...L.stateAt(tl, t0 + 3000).run.nodes]), a1);
+  // Seeking never changes the timeline's own copies.
+  const again = L.stateAfter(tl, 0);
+  L.apply(again, evs[4].ev);
+  assert.strictEqual(tl.keyframes[0].run.nodes.size, 0);
+  // Failures and the end are markers.
+  assert.deepStrictEqual(tl.markers.map(m => [m.kind, m.node || m.outcome, m.at - t0]), [["error", "b", 3000], ["finished", "failed", 5000]]);
+  // Speeds stay within the list; times read as a player's.
+  assert.strictEqual(L.nextSpeed(1, 1), 2);
+  assert.strictEqual(L.nextSpeed(64, 1), 64);
+  assert.strictEqual(L.nextSpeed(0.25, -1), 0.25);
+  assert.strictEqual(L.playTime(65000), "1:05");
+  assert.strictEqual(L.playTime(3725000), "1:02:05");
+}
+{
+  // A long journal: seeking folds from the nearest keyframe, and gives the same state
+  // as folding everything.
+  const n = 1000, evs = [{ id: 1, ev: ev(0, "run_started", { nodes: [], mode: "build", live: true }) }];
+  for (let i = 0; i < n; i++) {
+    evs.push({ id: evs.length + 1, ev: ev(i, "node_started", { node: "m" + i }) });
+    evs.push({ id: evs.length + 1, ev: ev(i + 0.5, "node_finished", { node: "m" + i, stats: { status: "success", rows_affected: i } }) });
+  }
+  const tl = L.timeline("r", evs);
+  assert.ok(tl.keyframes.length > 1 && tl.keyframes.every((k, i) => k.index === i * L.KEYFRAME_EVERY));
+  const t = Date.parse(at(0)) + 700250;
+  const fast = L.stateAt(tl, t).run;
+  const slow = L.newRun("r");
+  for (const e of evs) if (Date.parse(e.ev.at) <= t) L.apply(slow, e.ev);
+  assert.strictEqual(JSON.stringify([...fast.nodes]), JSON.stringify([...slow.nodes]));
+  assert.strictEqual(L.counts(fast).running, 1);
+  assert.strictEqual(L.runningAt(tl, t), 1);
+}
+{
+  // A journal rebuilt from a final report: no starts, so nothing ran in the band, and
+  // no finish of the run is invented for one that has none.
+  const evs = [
+    ev(0, "run_started", { nodes: ["a"], mode: "build", live: false }),
+    ev(9, "node_finished", { node: "a", stats: { status: "success" } }),
+  ].map((e, i) => ({ id: i + 1, ev: e }));
+  const tl = L.timeline("r", evs);
+  assert.strictEqual(tl.live, false);
+  assert.strictEqual(tl.peak, 0);
+  assert.ok(!tl.finished);
+  assert.strictEqual(tl.adjusted, 0);
+  assert.strictEqual(tl.t1 - tl.t0, 9000);
+}
+{
+  // An event without a time is played at the start, and said to be inferred.
+  const tl = L.timeline("r", [
+    { id: 1, ev: Object.assign(ev(0, "run_started", { nodes: ["a"], mode: "build", live: true })) },
+    { id: 2, ev: Object.assign(ev(1, "node_started", { node: "a" }), { at: "not a time" }) },
+    { id: 3, ev: ev(2, "node_finished", { node: "a", stats: { status: "success" } }) },
+  ]);
+  assert.strictEqual(tl.adjusted, 1);
+  assert.strictEqual(tl.items[1].at, tl.t0);
+}
 process.stdout.write("ok");
 "#;
 
