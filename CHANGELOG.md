@@ -18,6 +18,17 @@ design is built; 0.1.0 marks the complete dashboard. Entries below record change
 the changelog was introduced.
 
 ### Breaking
+- `--output json` of `ods state run`, `seed`, `snapshot`, `build`, `test` and `retry`
+  lists tests by their handle, `check-<12 hex digits>`, instead of dbt's id for them,
+  which holds a generic test's arguments (an `accepted_values` test's id names the
+  values it accepts) (#323): `execution.checks_failed`, and each node's and source's
+  `checks_failed`, `checks_skipped` and `checks_passed`, are still arrays of strings.
+  `ods serve`'s live stream (`/api/runs/<run_id>/events`, and with `?since=`) sends a
+  `check_finished` event's `check` as the handle too. The journal on disk
+  (`<state-db>.runs/<run_id>.jsonl`) keeps dbt's id. **What to do:** match a failed
+  test to its explanation by the handle (`failures[].node`), whose `check` says what it
+  tests (`test`, `column`, `covers`); to find a test from its handle, compute it from
+  the manifest's ids: `check-` and the first 12 hex digits of the SHA-256 of the id.
 - `ods state retry` needs `--vars` and the arguments after `--` given again when the
   last run had them (#321). **What to do:** pass the same `--vars` and `-- …` that the
   run had, e.g. `ods state retry --vars '{…}' -- --threads 8`; without them, or with
@@ -352,6 +363,12 @@ the changelog was introduced.
   notices. See the Install page of the documentation (#212).
 
 ### Changed
+- The terminal names a failed or skipped test by what it tests, never by dbt's id or a
+  generic test's name (#323): `failed: accepted_values on orders.status` on the node's
+  line of `ods state test` and on a source's line, `warning: failed checks: …` after
+  `ods state build`, a singular test by its own name, and any other test as `a test on
+  orders (check-…)`. The live view announces a failed test as `A test on orders failed
+  (check-…)`.
 - `ods serve`'s Run pages say *the node didn't build* for a failed or skipped node's
   rows (`rows_missing` in `/api/state/runs/<run_id>`), instead of *not reported by the
   adapter* or *didn't run* (#322).
