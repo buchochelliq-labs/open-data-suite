@@ -14,12 +14,14 @@ on:
       - "packaging/**"
       - "scripts/changelog-section.py"
       - "scripts/render-homebrew-formula.py"
+      - "scripts/render-chocolatey-package.py"
       - "crates/ods-cli/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/packaging.yml"
       - ".github/workflows/release.yml"
+      - ".github/workflows/chocolatey.yml"
   workflow_dispatch:
 
 permissions:
@@ -47,6 +49,7 @@ jobs:
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
           python3 scripts/changelog-section.py "$version" > /dev/null || python3 scripts/changelog-section.py Unreleased > /dev/null
       - run: python3 scripts/render-homebrew-formula.py --self-test
+      - run: python3 scripts/render-chocolatey-package.py --self-test
       - name: The rendered formula is valid Ruby
         run: |
           for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
@@ -90,3 +93,11 @@ jobs:
           command -v ods
           ods version
           ods version --output json | python -c 'import json, sys; assert json.load(sys.stdin)["command"] == "version"'
+
+  chocolatey:
+    # Packs the current templates for the latest release and installs the package on
+    # Windows; publishes nothing.
+    uses: ./.github/workflows/chocolatey.yml
+    with:
+      version: latest
+      publish: false

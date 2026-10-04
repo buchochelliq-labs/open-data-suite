@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Chocolatey package for `ods`, rendered for each release by
+  scripts/render-chocolatey-package.py and pushed by .github/workflows/chocolatey.yml.
+  Generated file: edit packaging/chocolatey/opendatasuite.nuspec.tmpl in open-data-suite.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>opendatasuite</id>
+    <version>${version}</version>
+    <title>OpenDataSuite (ods)</title>
+    <authors>OpenDataSuite contributors</authors>
+    <owners>buchochelliq-labs</owners>
+    <projectUrl>https://buchochelliq-labs.github.io/open-data-suite/</projectUrl>
+    <projectSourceUrl>https://github.com/buchochelliq-labs/open-data-suite</projectSourceUrl>
+    <packageSourceUrl>https://github.com/buchochelliq-labs/open-data-suite/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://buchochelliq-labs.github.io/open-data-suite/</docsUrl>
+    <bugTrackerUrl>https://github.com/buchochelliq-labs/open-data-suite/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/buchochelliq-labs/open-data-suite/blob/v${version}/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <releaseNotes>https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v${version}</releaseNotes>
+    <tags>dbt analytics-engineering data lineage cli databricks</tags>
+    <summary>Explainable, provider-neutral tooling for dbt projects.</summary>
+    <description><![CDATA[OpenDataSuite (ODS) is an open-source toolkit for analytics engineering, written in Rust. It reads a dbt project's compiled artifacts, answers questions about them, and runs dbt on only what needs to run.
+
+- `ods state` builds only the models whose code or upstream data changed, and explains each decision.
+- `ods serve` is a read-only dashboard of the project, its runs and its lineage.
+- `ods lineage`, `ods erd generate` and `ods mcp` give column-level lineage, ERDs and an MCP server for AI agents.
+
+This package installs the `ods` command. ODS is pre-alpha: while versions are 0.0.x, any release may break. Read the changelog before upgrading.
+]]></description>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

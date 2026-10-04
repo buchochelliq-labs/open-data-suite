@@ -4,15 +4,16 @@ name: Release
 #
 # - A `vX.Y.Z` tag on `main` builds, tests and publishes: a GitHub release whose notes are
 #   the version's CHANGELOG.md section, archives, wheels, SHA256SUMS, build provenance
-#   attestations and a rendered Homebrew formula; then the wheels go to PyPI.
+#   attestations and a rendered Homebrew formula; then the wheels go to PyPI and the
+#   Chocolatey package is pushed (chocolatey.yml).
 # - Running it by hand (workflow_dispatch) is a dry run: everything is built, tested and
 #   uploaded as workflow artifacts, and nothing is published. The notes are the
 #   `[Unreleased]` section, or the workspace version's when that is empty.
 #
 # One compile per target produces both the wheel (maturin `bin` bindings) and the
 # archive, so pip, Homebrew, cargo-binstall and direct downloads ship the same binary.
-# Admin setup (PyPI trusted publisher, the `pypi` environment, the Homebrew tap) is
-# described in docs/install.md, "For maintainers".
+# Admin setup (PyPI trusted publisher, the `pypi` and `chocolatey` environments, the
+# Homebrew tap) is described in docs/install.md, "For maintainers".
 on:
   push:
     tags: ["v*"]
@@ -249,6 +250,13 @@ jobs:
           (cd dist && sha256sum -- * > ../SHA256SUMS)
           mv SHA256SUMS dist/
           (cd dist && sha256sum -c SHA256SUMS)
+      # Packed and pushed on Windows by chocolatey.yml once the release exists; rendered
+      # here so a dry run catches a template the release's checksums can't fill.
+      - name: Render the Chocolatey package
+        run: |
+          python3 scripts/render-chocolatey-package.py --self-test
+          python3 scripts/render-chocolatey-package.py --version "$VERSION" --sums dist/SHA256SUMS --out chocolatey
+          python3 -c 'import sys, xml.etree.ElementTree as ET; ET.parse(sys.argv[1])' chocolatey/opendatasuite.nuspec
       - name: Release notes
         run: |
           {
@@ -261,7 +269,7 @@ jobs:
             echo "cargo binstall --git https://github.com/$GITHUB_REPOSITORY ods-cli"
             echo '```'
             echo
-            echo "Homebrew, direct downloads and verification: https://buchochelliq-labs.github.io/open-data-suite/install/"
+            echo "Homebrew, Chocolatey, direct downloads and verification: https://buchochelliq-labs.github.io/open-data-suite/install/"
             echo
             echo "## Checksums"
             echo
@@ -334,3 +342,14 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  chocolatey:
+    # Pushes with the CHOCOLATEY_API_KEY secret of the `chocolatey` environment
+    # (docs/install.md, "For maintainers").
+    if: needs.plan.outputs.publish == 'true'
+    needs: [plan, publish]
+    uses: ./.github/workflows/chocolatey.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      publish: true
+    secrets: inherit
