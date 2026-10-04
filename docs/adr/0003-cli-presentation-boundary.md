@@ -170,7 +170,7 @@ The view tree stays inside `ods-cli` until a second consumer needs it, such as
 Every `--json` response is a single envelope object:
 ```json
 {
-  "schema_version": {"major": 0, "minor": 1},
+  "schema_version": {"major": 1, "minor": 0},
   "command": "state.plan",
   "ods_version": "0.1.0",
   "result": { "...": "command-specific result model" },

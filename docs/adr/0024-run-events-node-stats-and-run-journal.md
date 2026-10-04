@@ -272,7 +272,9 @@ than the Run pages show.
   `{"line"}`, for any line that doesn't parse as an event of this run: a newer version,
   a line cut short, one longer than 256 KiB, or another run's event) and `end` (data:
   `reason` `finished` | `stopped` | `replaced`, the `outcome` when known, `inferred`,
-  `note`). The **id** of a line's message is its line number in the journal, from 1
+  `note`). Every message's data carries `live_schema_version`, the stream's version
+  (2 since a check is sent by its handle; the event's own `schema_version` is the
+  journal's). The **id** of a line's message is its line number in the journal, from 1
   (blank lines count and send nothing); `end` has none. A stream replays the journal
   from the start, then follows it; with `Last-Event-ID: n` (or `?since=n`) it sends only
   lines after `n`. Lines up to `n` aren't parsed: only one that may hold

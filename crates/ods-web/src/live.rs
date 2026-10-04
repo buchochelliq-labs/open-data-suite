@@ -39,8 +39,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::server::Shared;
 
 /// Version of the stream's messages and of [`LiveRuns`]. Additive fields don't change
-/// it; a removed or retyped one does.
-pub const LIVE_SCHEMA_VERSION: u32 = 1;
+/// it; a removed or retyped one does. Every message's data carries it as
+/// `live_schema_version`, beside a run event's own `schema_version`, which is the
+/// journal's. 2 since a `check_finished` names its check by handle (#323).
+pub const LIVE_SCHEMA_VERSION: u32 = 2;
 
 /// The most a stream reads from a journal at once, in bytes; also the longest line it
 /// reads (a longer one is counted as unreadable, never held whole).
@@ -554,11 +556,17 @@ impl Message {
     }
 
     fn data(&self, details: bool) -> serde_json::Value {
-        match self {
+        let mut data = match self {
             Message::Event { event, .. } => event_json(event, details),
             Message::Unreadable { line } => serde_json::json!({ "line": line }),
             Message::End(end) => serde_json::to_value(end).unwrap_or(serde_json::Value::Null),
+        };
+        // A client tells the stream's meaning by this, not by the event's version,
+        // which is the journal's and didn't change when the stream did.
+        if let Some(object) = data.as_object_mut() {
+            object.insert("live_schema_version".into(), LIVE_SCHEMA_VERSION.into());
         }
+        data
     }
 
     fn sse(&self, details: bool) -> Event {

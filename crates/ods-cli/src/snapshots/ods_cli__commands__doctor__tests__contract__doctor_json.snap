@@ -4,8 +4,8 @@ expression: output
 ---
 {
   "schema_version": {
-    "major": 0,
-    "minor": 1
+    "major": 1,
+    "minor": 0
   },
   "command": "doctor",
   "ods_version": "[ods-version]",

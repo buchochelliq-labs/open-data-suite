@@ -46,6 +46,7 @@ use ods_sdk::contracts::error_catalogue::{
 use ods_sdk::contracts::run_events::{
     CheckStatus, CheckSummary, ErrorSummary, NodeRunStats, NodeRunStatus, RunSummary,
 };
+use serde::{Deserialize, Serialize};
 
 /// How many earlier runs of a node its history looks at.
 pub const HISTORY_RUNS: usize = 5;
@@ -359,7 +360,8 @@ fn found_failing_rows(facts: &FailureFacts<'_>, check: &CheckSummary) -> bool {
 /// values it accepts), so neither the id nor a generic test's name is kept here; a
 /// test's own name only for a test the provider marks
 /// [singular](CheckTarget::singular).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct CheckDescription {
     /// The check's [handle](check_handle).

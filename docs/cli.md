@@ -65,7 +65,7 @@ literally.
 
 ```json
 {
-  "schema_version": {"major": 0, "minor": 1},
+  "schema_version": {"major": 1, "minor": 0},
   "command": "usage",
   "ods_version": "0.0.1",
   "result": null,
@@ -756,7 +756,7 @@ an event at a time; nothing else is needed, and the dashboard still only reads.
 
 | Route | Returns |
 |---|---|
-| `/api/runs/live` | the runs that are *probably* running: their journal doesn't say they finished and changed in the last 10 minutes (`status: probably_running`, `inferred: true`, since a journal changing is the only sign), with the command, when each started, how many nodes finished, run or failed so far, and links to the live view and the Run page. Only runs of the dashboard's scope, at `schema_version` 1 |
+| `/api/runs/live` | the runs that are *probably* running: their journal doesn't say they finished and changed in the last 10 minutes (`status: probably_running`, `inferred: true`, since a journal changing is the only sign), with the command, when each started, how many nodes finished, run or failed so far, and links to the live view and the Run page. Only runs of the dashboard's scope, at `schema_version` 2 |
 | `/api/runs/<run_id>/events` | the run's journal as [Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html): every line from the start, then each new line as it is written, then `end` |
 | `/api/runs/<run_id>/events?since=<n>` | the same messages after line `n`, once, as JSON lines (`application/x-ndjson`), for clients without `EventSource`; at most 2,000 per answer, then ask again from the last `id` |
 
@@ -767,6 +767,10 @@ The stream's messages:
 | `run_event` | the journal line's number, from 1 | the run event (`run_started`, `node_queued`, `node_started`, `node_finished`, `check_finished`, `run_finished`), as the journal keeps it, except that a `check_finished`'s `check` is the test's handle (`check-<12 hex digits>`), never dbt's id for it, which holds a generic test's arguments |
 | `unreadable` | the line's number | `{"line": n}`: a line that isn't an event of this run: a newer version, a line cut short (sent before `end` when the run stopped mid-write), one longer than 256 KiB, or another run's event |
 | `end` | none | `{"reason", "outcome", "inferred", "note"}`: `finished` after `run_finished`; `stopped` (inferred) when the journal doesn't say it finished and hasn't grown for 10 minutes; `replaced` when the journal was replaced or got shorter |
+
+Every message's `data` also carries `live_schema_version` (2), the stream's own version:
+a run event's `schema_version` is the journal's, which didn't change when the stream
+started sending a check's handle.
 
 A client that reconnects with `Last-Event-ID` (browsers do it on their own) gets only
 the lines after it; without one, the stream replays from the start, so a page opened

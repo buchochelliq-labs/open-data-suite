@@ -440,6 +440,7 @@ fn a_check_is_streamed_by_its_handle_never_its_id() {
         .find(|m| m["data"]["kind"] == "check_finished")
         .unwrap();
     assert_eq!(check["data"]["check"], handle.as_str(), "{check:#}");
+    assert_eq!(check["data"]["live_schema_version"], 2, "{check:#}");
     assert_eq!(check["data"]["covers"][0], "model.orders");
     assert_eq!(check["data"]["failures"], 3);
 
@@ -574,7 +575,7 @@ fn runs_going_on_now_are_listed_as_probably_running() {
     let (status, body) = get(addr, "/api/runs/live");
     assert_eq!(status, 200);
     let live: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(live["schema_version"], 1);
+    assert_eq!(live["schema_version"], 2);
     let runs = live["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 1, "{body}");
     let run = &runs[0];
