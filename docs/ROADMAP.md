@@ -138,12 +138,15 @@ v0.0.1 also carries the first dashboard screens (#310–#313, listed below and u
   playback (#322, [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md),
   [ADR-0026](adr/0026-run-playback.md)), and failed nodes and tests explained (#323,
   [ADR-0025](adr/0025-error-explanations.md)).
-- Moved out of M1 on 2026-10-04, with their v0.0.1 slice merged and in use: #12 (the
-  formal `ArtifactProvider` contract), #13 (the pluggable `FingerprintProvider`), #14
-  (`RelationState`), #16 (the `ChangeSet` type and `ChangeProvider` contract), #17 and #19
-  (the remainders below), #25 (plan history) and #26 (a JSON store for debugging) go to
-  M2. #73 (a syntax-tree and symbol API with source ranges) goes to M5, which needs it.
-  #99 and #192 (conformance and property tests) go to R2.
+- Moved out of M1 on 2026-10-04, with their v0.0.1 slice merged and in use; what's
+  left of each goes to M2: #12 (the formal `ArtifactProvider` contract), #13 (the
+  pluggable `FingerprintProvider`), #14 (`RelationState`), #16 (the `ChangeSet` type
+  and `ChangeProvider` contract), #17 and #19 (the remainders below) and #25 (plan
+  history). #73's preview is done too, and its syntax-tree and symbol API with source
+  ranges goes to M5, which needs it.
+- Moved out of M1 with no work merged, since v0.0.1 doesn't need them: #26 (a JSON
+  store for debugging) goes to M2, and #99 and #192 (the conformance suite and property
+  tests) go to R2.
 - Left in M1: cutting the release (#356) and accepting the ADRs that shipped (#357).
 
 **Why data awareness moved into M1:** skipping only on code changes still rebuilds
