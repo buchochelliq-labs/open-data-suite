@@ -14,7 +14,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 - Homebrew: `brew install buchochelliq-labs/tap/ods` installs the release binary on
-  macOS and Linux ([Install](docs/install.md)).
+  macOS and Linux ([Install](docs/install.md)) (#362, #212).
 
 ## [0.0.1] - 2026-10-04
 
