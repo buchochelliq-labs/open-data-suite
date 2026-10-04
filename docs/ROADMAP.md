@@ -1,6 +1,6 @@
 # OpenDataSuite (ODS) — Roadmap, Milestones & Release Plan
 
-Status: **proposed** · Last updated: 2026-09-30
+Status: **proposed** · Last updated: 2026-10-04
 
 > **Plans, not promises.** Target dates are proposals for a small team and are revisited
 > at the end of each milestone. Scope, order and dates will change.
@@ -40,8 +40,9 @@ Every milestone must preserve these; reviewers reject PRs that break them.
 | Release | Theme | Milestone(s) | Target | Exit criteria (summary) |
 |---|---|---|---|---|
 | pre-release (internal) | Foundations | M0 | 2026-10-30 | Workspace builds in CI; ADRs for architecture, Rust stack, CLI presentation; plugin SDK + semantic core compile with fake providers; demo dbt fixture project. |
-| **v0.0.1** — *first public release* | **ODS State MVP (code- and data-aware) + first dashboard screens** | M1 | **2026-12-18** | `ods state plan / run / explain / diff / history` on a dbt project using `manifest.json`, SQLite state, exact-selection dbt executor; skips models whose code **and upstream data** are unchanged (dbt source freshness + Delta table versions), with per-node staleness tolerance; failed runs leave prior state authoritative; JSON output; installable binary for Linux/macOS/Windows. `ods serve` dashboard: shell and Home (#310), State Plan and Why, Runs, Run (#311), Lineage with the State overlay (#312), Catalog and the Model page (#313). |
-| v0.0.2, v0.0.3, … | Incremental releases | UX1, and any later-milestone work that lands early | as ready | Public releases stay v0.0.x until the whole dashboard design is built. Work from M2 onwards that is done before then ships in a v0.0.x release. |
+| **v0.0.1** — *first public release* | **ODS State MVP (code- and data-aware) + first dashboard screens** | M1 | **2026-10-30** | `ods state plan / run / explain / diff / history` on a dbt project using `manifest.json`, SQLite state, exact-selection dbt executor; skips models whose code **and upstream data** are unchanged (dbt source freshness + Delta table versions), with per-node staleness tolerance; failed runs leave prior state authoritative; JSON output; installable binary for Linux/macOS/Windows. `ods serve` dashboard: shell and Home (#310), State Plan and Why, Runs, Run (#311), Lineage with the State overlay (#312), Catalog and the Model page (#313). |
+| **v0.0.2** | **ERD, Impact & hardening** | R2 | 2026-11-27 | The ERD page (#64) and the Impact simulator (#347) on the dashboard, both over engines already built; failure explanations for agents and the CLI (#348); `ods state savings` (#210); Databricks error messages recorded from a real run (#349); the plugin conformance suite (#99) and property tests (#192). |
+| v0.0.3, … | Incremental releases | UX1, and any later-milestone work that lands early | as ready | Public releases stay v0.0.x until the whole dashboard design is built. Work from M2 onwards that is done before then ships in a v0.0.x release. |
 | **v0.1.0** | **ODS Dashboard complete** | UX1 | 2027-01-29 | Every screen in the [dashboard design](design/dashboard/README.md) is built (#309): the v0.0.1 screens plus Freshness evidence, Semantic layer placeholder, Impact simulator, ERD, Settings and dark mode. |
 | v0.2.0 (after v0.1.0) | Databricks depth & reuse strategies | M2 | 2027-02-26 | Unity Catalog metadata; full Delta change providers (CDF, watermarks, partitions); remaining freshness/trigger policies incl. WAIT; REUSE/DEFER/CLONE strategies; PostgreSQL store with locking; secrets providers. |
 | v0.3.0 (after v0.1.0) | Schema intelligence: ERD + Usage | M3 | 2027-04-30 | `ods erd generate/inspect/validate` (dbt provider, Mermaid/DOT/PlantUML); `ods usage …` backed by Unity Catalog. |
@@ -129,18 +130,24 @@ v0.0.1 also carries the first dashboard screens (#310–#313, listed below and u
 | **#313** | Dashboard: Catalog (models) and Model page |
 | #73, #74 *(preview)* | SQL parser and open column-level lineage: `ods lineage`, `ods serve`, OpenLineage export, observed lineage from Unity Catalog (#164–#167). Delivered early; the CI integration stays in M4 |
 
-**Status (2026-09-30):**
-- Closed on GitHub: #11, #18, #20, #21, #22, #23, #24, #168, #181, #188, #209, #211,
+**Status (2026-10-04): the M1 scope is merged; what is left is the release itself.**
+- Closed on GitHub: #11, #18, #20, #21, #22, #23, #24, #74, #168, #181, #188, #209, #211,
   #212, #214, #220, #227, #229, #230, #232, #233 and the four dashboard screens
   #310–#313 (merged in #316, #318, #319, #320).
-- Open, with the M1 work merged and in use: #12 (dbt artifacts), #13 (fingerprints),
-  #16 (`sources.json` evidence), #17 (the M1 slice: Delta table versions, #306–#308),
-  #19 (the M1 slice), #25 (the SQLite state store) and #73/#74 (the lineage preview).
-  #26 and #99 have no work merged yet.
-- Beyond the table: #322 (run events, per-node run stats and the run journal,
-  [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md)) has steps 1–3 merged:
-  `ods state` shows each node's stats, `ods state history --run` reads the journal, and
-  the Runs and Run pages show real outcomes. Its live view (step 4) is still to come.
+- Delivered beyond the table: run events, the run journal, the live view and run
+  playback (#322, [ADR-0024](adr/0024-run-events-node-stats-and-run-journal.md),
+  [ADR-0026](adr/0026-run-playback.md)), and failed nodes and tests explained (#323,
+  [ADR-0025](adr/0025-error-explanations.md)).
+- Moved out of M1 on 2026-10-04, with their v0.0.1 slice merged and in use; what's
+  left of each goes to M2: #12 (the formal `ArtifactProvider` contract), #13 (the
+  pluggable `FingerprintProvider`), #14 (`RelationState`), #16 (the `ChangeSet` type
+  and `ChangeProvider` contract), #17 and #19 (the remainders below) and #25 (plan
+  history). #73's preview is done too, and its syntax-tree and symbol API with source
+  ranges goes to M5, which needs it.
+- Moved out of M1 with no work merged, since v0.0.1 doesn't need them: #26 (a JSON
+  store for debugging) goes to M2, and #99 and #192 (the conformance suite and property
+  tests) go to R2.
+- Left in M1: cutting the release (#356) and accepting the ADRs that shipped (#357).
 
 **Why data awareness moved into M1:** skipping only on code changes still rebuilds
 models whose upstream data hasn't changed. Skipping on unchanged code *and* data is the
@@ -159,6 +166,21 @@ Out of scope for v0.0.1: the remaining dashboard screens (UX1, #309), Unity Cata
 watermark/partition triggers, WAIT decisions, clone/defer, distributed locking, server mode.
 The M1 slices keep #17 and #19 open; their remainder ships in M2.
 
+### R2 — ERD, Impact & hardening (→ **v0.0.2**)
+Goal: put on the dashboard what ODS already computes but only shows in the CLI, and
+harden what v0.0.1 ships. The two screens are part of the v0.1.0 design (#309) and
+come first because their engines exist.
+
+| Issue | Title |
+|---|---|
+| **#64** | Dashboard: the ERD page, over `ods-erd` (from M3) |
+| **#347** | Dashboard: the Impact simulator, over `ods lineage impact` |
+| **#348** | Explain a failure from MCP and the CLI (`explain_failure`, `ods state explain-failure`) |
+| #210 | `ods state savings`: builds skipped and time avoided (from M2) |
+| #349 | Record the dbt catalogue's Databricks error messages from a real run |
+| #99 | Plugin conformance test suite |
+| #192 | Property and fuzz tests for the graph, SQL lineage and State invariants |
+
 ### UX1 — ODS Dashboard (→ **v0.1.0**)
 Goal: build every screen of the [dashboard design](design/dashboard/README.md) in
 `ods serve` (server-rendered, read-only, [ADR-0009](adr/0009-hostable-explorer-ods-web.md)).
@@ -171,22 +193,29 @@ v0.0.x.
 | **#311** *(in v0.0.1, tracked in M1)* | State pages (Plan and Why, Runs, Run) |
 | **#312** *(in v0.0.1, tracked in M1)* | Lineage with State overlay |
 | **#313** *(in v0.0.1, tracked in M1)* | Catalog (models) and Model page |
-| **#309** | Remaining screens for v0.1.0: Freshness evidence, Semantic layer placeholder, Impact simulator, ERD, Settings, dark mode for every screen, health badges and coverage from real signals (#117) |
+| **#309** | Remaining screens for v0.1.0 (the umbrella; one issue per screen below) |
+| *#64, #347* *(in v0.0.2, tracked in R2)* | ERD, Impact simulator |
+| **#350** | Freshness evidence (Catalog → Sources) |
+| **#351** | Settings (read-only), with the Server mode placeholders |
+| **#352** | Semantic layer (Catalog → Metrics), read-only placeholder |
+| **#353** | Dark mode checked on every screen |
+| **#354** | Health badges and coverage from real signals (the dashboard slice of #117) |
+| #355 | Run timeline: a per-thread Gantt view (playback follow-up, ADR-0026) |
 
-#310–#313 are in the M1 GitHub milestone because they ship in v0.0.1; the UX1 milestone
-holds #309, which may be split into per-screen issues when work starts.
+#310–#313 are in the M1 GitHub milestone because they ship in v0.0.1, and #64 and #347
+are in R2 because they ship in v0.0.2. #309 closes when every screen is built.
 
 ### M2 — Databricks & data-aware State (→ v0.2.0, after v0.1.0)
-| #15 Databricks/UC metadata provider · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) · #210 `ods state savings` (builds skipped, time/cost avoided) · #215 public benchmark of `ods state run` · #221 reuse hooked models safely (keyed digests of run-time values) · #224 dbt selector parity (`-s`, `--selector`, methods, graph operators; ADR-0015) · #225 `ods dbt …` front-end, also run as `dbt` (ADR-0015) · #231 rebuild or adopt seeds by comparing the table with the CSV (row count + hash) |
+| #15 Databricks/UC metadata provider · #12 dbt `ArtifactProvider` contract · #13 `FingerprintProvider` contract · #14 `RelationState` · #16 `ChangeSet` and `ChangeProvider` · #25 plan history in the SQLite store · #26 JSON StateStore for debugging · #169 `ods mcp` read-only MCP server (ADR-0010) · #173 ODS skills pack for existing coding agents · #170 live Unity Catalog lineage reader · #17 Delta change providers (remainder: CDF, commit history, watermark, partition arrival) · #19 freshness & trigger policies (remainder: AllDependenciesChanged, MinInterval, WatermarkReached, PartitionAvailable, WAIT) · #29 REUSE/DEFER/CLONE abstraction · #30 Databricks shallow clone · #27 PostgreSQL StateStore · #28 locking/leases/fencing · #126 secrets & external config · #31 column-aware invalidation (research) · #215 public benchmark of `ods state run` · #221 reuse hooked models safely (keyed digests of run-time values) · #224 dbt selector parity (`-s`, `--selector`, methods, graph operators; ADR-0015) · #225 `ods dbt …` front-end, also run as `dbt` (ADR-0015) · #231 rebuild or adopt seeds by comparing the table with the CSV (row count + hash) |
 
 ### M3 — ERD & Usage (→ v0.3.0, after v0.1.0)
-| #172 ODS metadata index (queryable lineage/State/ERD/usage) · #60 ERD domain model · #61 dbt ERD provider · #62 relationship inference · #63 render/export · #65 `ods erd` CLI · #55 Usage domain & UsageProvider · #56 Unity Catalog usage provider · #59 `ods usage` CLI · #66 warehouse-native ERD providers (stretch) · #64 interactive ERD web view (stretch) |
+| #172 ODS metadata index (queryable lineage/State/ERD/usage) · #60 ERD domain model · #61 dbt ERD provider · #62 relationship inference · #63 render/export · #65 `ods erd` CLI · #55 Usage domain & UsageProvider · #56 Unity Catalog usage provider · #59 `ods usage` CLI · #66 warehouse-native ERD providers (stretch) |
 
 ### M4 — ODS CI (→ v0.4.0, after v0.1.0)
 | #75 change-impact engine (on the column lineage delivered in M1 preview) · #171 column lineage for Python models · #84 selective CI planner · #85 PR report/check output · #58 usage in CI risk · #109 data diff · #110 data diff in CI · #213 GitHub Action PR impact comment |
 
 ### M5 — LSP & VS Code (→ v0.5.0, after v0.1.0)
-| #67 clean-room LSP architecture · #68 indexing · #69 completion · #70 diagnostics · #71 navigation/hover · #72 semantic rename · #107 VS Code extension · #116 SQL scratch/REPL |
+| #67 clean-room LSP architecture · #73 syntax-tree and symbol API with source ranges (the parser's M1 preview is done) · #68 indexing · #69 completion · #70 diagnostics · #71 navigation/hover · #72 semantic rename · #107 VS Code extension · #116 SQL scratch/REPL |
 
 ### M6 — ODS Agent (→ v0.6.0, after v0.1.0)
 Core: #32 architecture & tool runtime · #33 LLMProvider/BYOK · #34 context planner · #9 policy & approval (pulled forward if State needs it) · #50 patch engine · #51 self-validation · #52 Git-aware review · #53 skills SDK.
