@@ -1427,7 +1427,14 @@ mod tests {
             } else {
                 p.all
                     .iter()
-                    .map(|ph| format!("`{}`", ph.trim()))
+                    .map(|ph| {
+                        // A space at either end matters (`column ` isn't `columnar`):
+                        // shown as `␠`, where a code span would hide it.
+                        let core = ph.trim();
+                        let lead = if ph.starts_with(' ') { "␠" } else { "" };
+                        let trail = if ph.ends_with(' ') { "␠" } else { "" };
+                        format!("`{lead}{core}{trail}`")
+                    })
                     .collect::<Vec<_>>()
                     .join(" and ")
             };

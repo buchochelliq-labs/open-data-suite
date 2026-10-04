@@ -10,7 +10,8 @@ quoted values, numbers and SQL removed (ADR-0024), so a phrase can never match o
 show, a value. The message is lowercased before matching. *Kind* is the error's kind,
 which is either the engine's own (`Binder Error`) or the one dbt's header gave around it
 (`Database Error`); `any` means any kind. The first pattern whose kind and phrases all
-match wins.
+match wins. A space at either end of a phrase matters and is shown as `␠`: `column␠`
+matches `column "x"`, not `columnar`.
 
 *Recorded from real dbt*: `yes` when a message captured from a real run of dbt 1.10,
 1.11 or 1.12 (`fixtures/dbt/jaffle-ods/artifacts/dbt-<version>-errors`) matches it.
@@ -26,7 +27,7 @@ with a written message. Recording the Databricks ones is #349.
 | `dbt-packages-expected` | `packages_missing` | any | `based on packages specified in packages.yml, but found only` and `installed in` | dbt-core's messages | yes |
 | `dbt-profile-not-found` | `profile_not_found` | any | `could not find profile named` | dbt-core's messages | yes |
 | `dbt-target-not-found` | `profile_not_found` | any | `does not have a target named` | dbt-core's messages | no: from the source named |
-| `dbt-template-unexpected` | `template_syntax` | `compilation error` | `unexpected` | dbt-core's messages | yes |
+| `dbt-template-unexpected` | `template_syntax` | `compilation error` | `unexpected␠` | dbt-core's messages | yes |
 | `dbt-template-expected-token` | `template_syntax` | `compilation error` | `expected token` | dbt-core's messages | no: from the source named |
 | `dbt-template-unknown-tag` | `template_syntax` | `compilation error` | `unknown tag` | dbt-core's messages | no: from the source named |
 | `dbt-python-model` | `python_exception` | any | `python model failed` | dbt-core's messages | yes |
@@ -44,10 +45,10 @@ with a written message. Recording the Databricks ones is #349.
 | `duckdb-file-lock` | `lock_conflict` | any | `could not set lock on file` | DuckDB's errors, via dbt-duckdb | no: from the source named |
 | `duckdb-permission` | `permission_denied` | `permission error` | (any message) | DuckDB's errors, via dbt-duckdb | no: from the source named |
 | `duckdb-interrupted` | `query_timeout` | `interrupt error` | (any message) | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `postgres-column-missing` | `missing_column` | `database error` | `column` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
-| `postgres-schema-missing` | `missing_schema` | `database error` | `schema` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
-| `postgres-function-missing` | `missing_function` | `database error` | `function` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
-| `postgres-relation-missing` | `missing_relation` | `database error` | `relation` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
+| `postgres-column-missing` | `missing_column` | `database error` | `column␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
+| `postgres-schema-missing` | `missing_schema` | `database error` | `schema␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
+| `postgres-function-missing` | `missing_function` | `database error` | `function␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
+| `postgres-relation-missing` | `missing_relation` | `database error` | `relation␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
 | `postgres-permission-denied` | `permission_denied` | `database error` | `permission denied for` | PostgreSQL's documented messages | no: from the source named |
 | `postgres-statement-timeout` | `query_timeout` | `database error` | `canceling statement due to statement timeout` | PostgreSQL's documented messages | no: from the source named |
 | `postgres-invalid-input` | `type_mismatch` | `database error` | `invalid input syntax for type` | PostgreSQL's documented messages | no: from the source named |

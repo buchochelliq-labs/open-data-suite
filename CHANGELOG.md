@@ -101,6 +101,10 @@ the changelog was introduced.
   bookmarks and links to the explorer. Its API routes are unchanged (#310).
 
 ### Added
+- The docs list every dbt error pattern ODS recognises, with the symptom each means,
+  the text it matches, where that text comes from, and whether it was recorded from a
+  real dbt run ([dbt error patterns](docs/reference/error-patterns.md)); a test keeps
+  the page in step with the code (#357).
 - Run playback ([ADR-0026](docs/adr/0026-run-playback.md)): `ods serve` replays any run
   whose journal it keeps on the Lineage page (`/lineage?replay=<run_id>`, *Replay on
   the DAG* on the Run page, or *Replay* when a live run finishes). Play, pause, step
