@@ -20,7 +20,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   lineage is unknown; plus what can be skipped, the column trail, the `ods state build -s …`
   command for exactly what must run, and the tests that run. Opened from a column's *Simulate* link on its Model page or the
   explorer's *Impact* tab; `/api/lineage/impact` returns the same as JSON
-  ([dashboard](docs/cli.md#the-impact-simulator)) (#347).
+  ([dashboard](docs/cli.md#the-impact-simulator)) (#365, #347).
 - Homebrew: `brew install buchochelliq-labs/tap/ods` installs the release binary on
   macOS and Linux ([Install](docs/install.md)) (#362, #212).
 - Chocolatey: each release is packaged as `opendatasuite` and pushed to the Chocolatey
