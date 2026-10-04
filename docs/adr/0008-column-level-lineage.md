@@ -1,6 +1,6 @@
 # ADR-0008: Open, fast column-level lineage
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-25
 - **Issues:** #74 (column lineage), #73 (SQL parser), #31 (column-aware invalidation), #92 (OpenMetadata); related #12, #75, #84, #100
 - **Deciders:** @n1ckyb

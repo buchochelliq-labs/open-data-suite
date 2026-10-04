@@ -1,6 +1,6 @@
 # ADR-0001: Monorepo architecture and module boundaries
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Not built yet, and still the target: the layer-1 crates `ods-events` and `ods-policy` (only `ods-config` exists; `check-layering.py` reserves their names). Since written, ADR-0009 added the EDGE layer (`ods-web`, `ods-mcp`) and ADR-0008 the `ods-lineage` module, which the diagram doesn't show.
 - **Date:** 2026-09-24
 - **Issues:** #1 (also informs #2, #4, #5, #6, #101)
 - **Deciders:** @n1ckyb

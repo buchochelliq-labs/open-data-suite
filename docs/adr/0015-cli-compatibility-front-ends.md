@@ -1,6 +1,6 @@
 # ADR-0015: A dbt-shaped CLI, and compatibility front-ends for other tools' CLIs
 
-- **Status:** Proposed
+- **Status:** Proposed (reviewed 2026-10-04). Mostly not built: selector parity beyond `name`, `+name` and `name+` (#224), and the `ods dbt` / `dbt` front-end (#225). Shipped through its amendments: `-s`, `--dbt-profile`, `DBT_*` defaults and `ods state retry`.
 - **Date:** 2026-09-26
 - **Issues:** #220 (where this came up), #224, #225, #226
 - **Deciders:** @n1ckyb

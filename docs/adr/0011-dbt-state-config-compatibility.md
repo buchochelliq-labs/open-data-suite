@@ -1,6 +1,6 @@
 # ADR-0011: Read dbt State configuration as-is
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Since written: ADR-0010 exists, and every `ods state` subcommand this text calls planned is available.
 - **Date:** 2026-09-25
 - **Issues:** #168, #19
 - **Deciders:** @n1ckyb

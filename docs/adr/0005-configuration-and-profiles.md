@@ -1,6 +1,6 @@
 # ADR-0005: Configuration and profiles
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-24
 - **Issues:** #7 (secret resolution is #126; policy semantics are #9)
 - **Deciders:** @n1ckyb

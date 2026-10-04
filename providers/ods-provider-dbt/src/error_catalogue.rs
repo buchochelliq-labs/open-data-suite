@@ -1391,6 +1391,103 @@ mod tests {
         assert!(missing.is_empty(), "no message reaches {missing:?}");
     }
 
+    /// Where a pattern's text comes from, by its id's prefix (see the module docs).
+    fn source_of(id: &str) -> &'static str {
+        match id.split('-').next().unwrap_or_default() {
+            "dbt" => "dbt-core's messages",
+            "duckdb" => "DuckDB's errors, via dbt-duckdb",
+            "postgres" => "PostgreSQL's documented messages",
+            "spark" => "Apache Spark's `error-conditions.json`",
+            "delta" => "Delta Lake's `delta-error-classes.json`",
+            "databricks" => "dbt-databricks's source (1.12)",
+            other => panic!("no source for the prefix {other}: add one here and in the reference"),
+        }
+    }
+
+    /// The reference's table of patterns, from `PATTERNS`: what the docs page holds
+    /// between its markers.
+    fn reference_table() -> String {
+        let mut seen = std::collections::BTreeSet::new();
+        for version in VERSIONS {
+            for (_, node, message) in recorded(version) {
+                if let Classification::Recognised(m) =
+                    DbtErrorCatalogue.classify(&summary_of(node.as_ref(), &message))
+                {
+                    seen.insert(m.id);
+                }
+            }
+        }
+        let mut out = String::from(
+            "| Pattern | Symptom | Kind | The message holds | Source | Recorded from real dbt |\n|---|---|---|---|---|---|\n",
+        );
+        for p in PATTERNS {
+            let symptom = serde_json::to_value(p.symptom).unwrap();
+            let phrases = if p.all.is_empty() {
+                "(any message)".to_owned()
+            } else {
+                p.all
+                    .iter()
+                    .map(|ph| {
+                        // A space at either end matters (`column ` isn't `columnar`):
+                        // shown as `␠`, where a code span would hide it.
+                        let core = ph.trim();
+                        let lead = if ph.starts_with(' ') { "␠" } else { "" };
+                        let trail = if ph.ends_with(' ') { "␠" } else { "" };
+                        format!("`{lead}{core}{trail}`")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            };
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(
+                    "| `{}` | `{}` | {} | {} | {} | {} |\n",
+                    p.id,
+                    symptom.as_str().unwrap(),
+                    p.kind
+                        .map_or_else(|| "any".to_owned(), |k| format!("`{k}`")),
+                    phrases,
+                    source_of(p.id),
+                    if seen.contains(p.id) {
+                        "yes"
+                    } else {
+                        "no: from the source named"
+                    },
+                ),
+            );
+        }
+        out
+    }
+
+    /// `docs/reference/error-patterns.md` lists every pattern as the code has it:
+    /// `ODS_UPDATE_DOCS=1 cargo test -p ods-provider-dbt reference` rewrites its table.
+    #[test]
+    fn the_error_pattern_reference_matches_the_catalogue() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/reference/error-patterns.md");
+        // A Windows checkout may give the page CRLF line endings.
+        let page = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\r\n", "\n");
+        let (begin, end) = ("<!-- patterns:begin -->\n", "<!-- patterns:end -->");
+        let start = page.find(begin).expect("the begin marker") + begin.len();
+        let stop = page.find(end).expect("the end marker");
+        let table = reference_table();
+        if std::env::var_os("ODS_UPDATE_DOCS").is_some() {
+            std::fs::write(&path, format!("{}{table}{}", &page[..start], &page[stop..])).unwrap();
+            return;
+        }
+        assert_eq!(
+            &page[start..stop],
+            table,
+            "the reference is out of date: ODS_UPDATE_DOCS=1 cargo test -p ods-provider-dbt reference"
+        );
+        assert!(
+            page.contains(&format!("catalogue version **{CATALOGUE_VERSION}**")),
+            "the reference names the catalogue's version"
+        );
+    }
+
     #[test]
     fn a_missing_schema_or_sql_function_is_its_own_symptom() {
         // Not the symptom it resembles (a missing relation, an undefined macro), whose

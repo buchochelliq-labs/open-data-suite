@@ -1,6 +1,6 @@
 # ADR-0004: CLI framework, module registration and exit codes
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Since written: `ods state plan`, the example of a planned command, is available. Not built yet: policy in `Context` (#9), and external `ods-<name>` plugins.
 - **Date:** 2026-09-24
 - **Issues:** #6 (builds on ADR-0003 / #108; config is #7)
 - **Deciders:** @n1ckyb

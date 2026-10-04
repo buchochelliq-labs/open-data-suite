@@ -1,6 +1,6 @@
 # ADR-0014: The Executor contract and `ods state run`
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). The executor contract's later versions (0.5, 0.6) are recorded in ADR-0024 and ADR-0025.
 - **Date:** 2026-09-25
 - **Issues:** #23 (dbt execution provider), #24 (`ods state run`), #211 (exact selection), #220 (run/test modes)
 - **Deciders:** @n1ckyb

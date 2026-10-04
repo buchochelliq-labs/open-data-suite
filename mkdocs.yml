@@ -75,6 +75,8 @@ nav:
   - State on Databricks: databricks.md
   - More capabilities: capabilities.md
   - CLI reference: cli.md
+  - Reference:
+      - dbt error patterns: reference/error-patterns.md
   - Principles: principles.md
   - Architecture: architecture.md
   - Contributing:

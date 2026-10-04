@@ -1,6 +1,6 @@
 # ADR-0025: Explaining failed nodes: a neutral taxonomy, provider pattern catalogues and evidence joins
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). The dbt catalogue's patterns are listed in [the reference](../reference/error-patterns.md), kept in step with the code by a test.
 - **Date:** 2026-09-30
 - **Issues:** #323 (explain dbt errors), #322 (run events and journal), #320 (values removed from messages), #181 (`ods doctor`)
 - **Deciders:** @n1ckyb
@@ -133,43 +133,25 @@ declared; classification is deterministic; unknown text is never recognised, and
 without a kind the category is `unknown`; and no classification quotes anything, with
 a sentinel from the raw message never coming back.
 
-### The dbt catalogue (`ods-provider-dbt::error_catalogue`, version 1)
-Patterns over the summary's kind and lowercased message, each grounded in public text
-and, for dbt and DuckDB, recorded from a real dbt 1.10 + DuckDB run
-(`fixtures/dbt/jaffle-ods/capture-errors.sh`, `artifacts/dbt-1.10-errors/`):
-- dbt-core: an undefined macro (`'x' is undefined. This can happen when calling a macro
-  that does not exist`), a ref to a missing node, packages not installed, a missing
-  profile or target, Jinja syntax errors, a Python model's failure (the exception type
-  and its line are kept from the traceback's last lines), a failed test;
-- DuckDB: missing columns (`Binder Error`), missing tables and views (`Catalog Error`),
-  conversion, constraint, dependent entries, write-write conflicts, file locks,
-  permission and interrupt errors;
-- PostgreSQL's documented messages (missing column or relation, permission denied,
-  statement timeout, invalid input, unique and not-null violations, password
-  authentication, connection);
-- Apache Spark's public error conditions (`UNRESOLVED_COLUMN`,
-  `TABLE_OR_VIEW_NOT_FOUND`, `CAST_INVALID_INPUT`, `DATATYPE_MISMATCH`) and Delta Lake's
-  `DELTA_CONCURRENT_*` classes, which Databricks reports.
+### The dbt catalogue (`ods-provider-dbt::error_catalogue`)
+Patterns over the summary's kind and lowercased message, each grounded in public text:
+dbt-core's messages; DuckDB's errors as dbt-duckdb reports them, recorded from real runs
+of dbt 1.10, 1.11 and 1.12 (`fixtures/dbt/jaffle-ods/capture-errors.sh`,
+`artifacts/dbt-<version>-errors/`) and checked on each; PostgreSQL's documented
+messages; Apache Spark's `error-conditions.json` and Delta Lake's
+`delta-error-classes.json`, which Databricks reports; and dbt-databricks's own messages.
+Every pattern is listed, with its symptom, kind, phrases, source and whether a real
+run's message matches it, in [the dbt error patterns reference](../reference/error-patterns.md),
+which a test keeps in step with the code. The catalogue's version changes with any
+pattern (5 at the time of writing). Every pattern must be reached by a message in a test
+(`every_pattern_is_reached_by_a_message`). That test, added in version 4 (2026-10-04),
+found three PostgreSQL patterns that could never match: two now match on dbt's kind
+(see the amendment below), and the third (`cannot drop … because other objects depend
+on it`, whose `drop …` the summary removes as SQL) was removed.
 
-*Amended 2026-10-04 (version 4).* Added, from public Apache-2.0 sources: Spark's
-`CHECK_CONSTRAINT_VIOLATION` and `NOT_NULL_CONSTRAINT_VIOLATION`, and Delta's `DELTA_NOT_NULL_CONSTRAINT_VIOLATED` and
-`DELTA_VIOLATE_CONSTRAINT_WITH_VALUES`; and dbt-databricks's (1.12) own messages: a
-cluster that can't be started or asked for its state and a connection that can't be
-made (warehouse unavailable, with `dbt debug` to try), a command or Python model run
-that timed out, and OAuth or client credentials its profile is missing. Each pattern
-is now reached by a message in a test (`every_pattern_is_reached_by_a_message`), which
-found two faults: PostgreSQL's `cannot drop … because other objects depend on it` never
-reached the catalogue (the summary removes `drop …` as SQL), so that pattern is gone;
-and PostgreSQL phrases that end in a colon (`invalid input syntax for type integer:`,
-`could not connect to server:`) are read as the error's kind, so those two patterns no
-longer require dbt's `Database Error`. Not yet recorded from a real Databricks run: the
-messages are dbt-databricks's own text, as its source raises them.
-
-Anything else is not recognised. A missing scalar function (DuckDB's `Scalar Function
-with name … does not exist`, Spark's `UNRESOLVED_ROUTINE`) is deliberately left
-unrecognised: it isn't a macro, and ODS has no evidence to say more. So is Spark's
-`SCHEMA_NOT_FOUND`: a missing schema isn't a missing table or view, and the evidence
-for one (an upstream never built) would wrongly confirm it.
+Anything else is not recognised. An error that resembles a symptom without being it
+gets no pattern, or a symptom of its own (a missing schema, a missing SQL function:
+see the amendment below), so unrelated evidence can't confirm the wrong cause.
 
 ### Evidence joins (`ods_state::explain_failure`)
 A pure, synchronous function of `FailureFacts`: the classification, the node's

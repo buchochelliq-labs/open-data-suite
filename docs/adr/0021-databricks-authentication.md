@@ -1,6 +1,6 @@
 # ADR-0021: Databricks authentication: U2M first, M2M for CI, tokens never persisted
 
-- **Status:** Proposed
+- **Status:** Proposed (reviewed 2026-10-04). Not built yet: ODS doesn't talk to Databricks directly; only the workspace `host` and `workspace_id` settings are used (Catalog Explorer links).
 - **Date:** 2026-09-28
 - **Issues:** #297 (related: #294, #295, #126, #17, #30)
 - **Deciders:** @n1ckyb

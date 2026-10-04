@@ -1,6 +1,6 @@
 # ADR-0003: CLI presentation boundary and rs-rich-cli
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04). Not built yet, now a follow-up: a generated JSON Schema per command (§3), and JSON and plain contract snapshots for every command (`ods erd`, most of `ods lineage` and `ods mcp` have none). The output envelope is at 1.0 (#342).
 - **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9)
 - **Issues:** #108 (also #6, #21, #22, #85, #107)
 - **Deciders:** @n1ckyb

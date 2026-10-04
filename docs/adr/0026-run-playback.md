@@ -1,6 +1,6 @@
 # ADR-0026: Run playback: replaying a run's journal on the Lineage page
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Issues:** follow-up to #322 (run events, journal and live view)
 - **Deciders:** @n1ckyb

@@ -1,6 +1,6 @@
 # ADR-0016: Check that a relation still exists before reusing it
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-26
 - **Issues:** #230
 - **Deciders:** @n1ckyb

@@ -1,6 +1,6 @@
 # ADR-0017: State per dbt target, with a non-secret target identity
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-09-26
 - **Issues:** #227
 - **Deciders:** @n1ckyb
