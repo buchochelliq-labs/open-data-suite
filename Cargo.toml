@@ -61,6 +61,7 @@ pep440_rs = { version = "0.7", default-features = false }
 # Decodes the percent-encoded answer of the dbt relation probe (ADR-0022).
 percent-encoding = "2"
 # Graph algorithms: dependency order, cycles, shortest join paths.
+proptest = { version = "1", default-features = false, features = ["std"] }
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"

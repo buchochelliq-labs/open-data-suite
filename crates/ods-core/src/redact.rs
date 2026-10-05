@@ -54,7 +54,8 @@ fn is_word(c: char) -> bool {
 /// Replaces quoted spans (`'…'`, `"…"`, `` `…` ``) and dollar-quoted spans (`$$…$$`,
 /// `$tag$…$tag$`) by [`REMOVED`], line by line, failing closed:
 /// - a quote opens a span only when it doesn't follow a letter or digit, so the
-///   apostrophe in `can't` or `column's` opens nothing;
+///   apostrophe in `can't` or `column's` opens nothing, unless it starts a prefixed
+///   literal (`X'1F'`, `r'…'`) or the word after it runs into another `'`;
 /// - there are no escapes: a span ends at the next quote of its kind (a doubled quote,
 ///   `'it''s'`, stays inside), and a close right after a backslash can't be read;
 /// - if a span doesn't close on its line, or its closing quote runs straight into a
@@ -71,6 +72,26 @@ fn spans(text: &str) -> String {
     out
 }
 
+/// Whether the `'` at `at`, right after a word, opens a literal rather than being an
+/// apostrophe: the word is a string prefix (`X'1F'`, `r'…'`, `E'…'`), or the word after
+/// the quote runs straight into another `'` (`v'secret'`), which no apostrophe does.
+fn prefixed(chars: &[char], at: usize) -> bool {
+    const PREFIXES: [&str; 8] = ["b", "br", "e", "n", "r", "rb", "u", "x"];
+    let start = chars[..at]
+        .iter()
+        .rposition(|c| !is_word(*c))
+        .map_or(0, |p| p + 1);
+    let word: String = chars[start..at].iter().collect();
+    if PREFIXES.contains(&word.to_lowercase().as_str()) {
+        return true;
+    }
+    let after = chars[at + 1..]
+        .iter()
+        .position(|c| !is_word(*c))
+        .map_or(chars.len(), |p| at + 1 + p);
+    after > at + 1 && chars.get(after) == Some(&'\'')
+}
+
 fn line_spans(line: &str) -> String {
     let chars: Vec<char> = line.chars().collect();
     // Where the line's first span opened: what can't be read is removed from there.
@@ -84,7 +105,7 @@ fn line_spans(line: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
         // Only `'` doubles as an apostrophe (`can't`, `users'`).
-        let apostrophe = c == '\'' && i > 0 && is_word(chars[i - 1]);
+        let apostrophe = c == '\'' && i > 0 && is_word(chars[i - 1]) && !prefixed(&chars, i);
         if c == '$' {
             // `$tag$`: a tag of letters, digits and `_`, possibly empty.
             let tag_end = chars[i + 1..]
@@ -539,6 +560,10 @@ mod tests {
             ("path 'C:\\' token=pw 'y'", "token=pw"),
             ("'it's a secret_word'", "secret_word"),
             ("O'Brien said 'hunter3'", "hunter3"),
+            // Prefixed literals, and a value glued to a word (#192).
+            ("cannot cast X'5345435245' to INT", "5345435245"),
+            ("bad pattern r'a secret' here", "secret"),
+            ("value v'hunter4' rejected", "hunter4"),
         ] {
             let out = literals(input);
             assert!(!out.contains(secret), "{input:?} => {out:?}");
@@ -554,6 +579,10 @@ mod tests {
         // A backslash before a close could be an escape: the rest can't be read.
         assert_eq!(literals("path 'C:\\' token=pw 'y'"), "path [value removed]");
         assert_eq!(literals("'a'b 'c'"), "[value removed]");
+        assert_eq!(
+            literals("can't cast X'1F' to INT"),
+            "can't cast X[value removed] to INT"
+        );
     }
 
     /// Property: whatever sits inside a quoted span of the input, for any mix of

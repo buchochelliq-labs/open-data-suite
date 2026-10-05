@@ -69,6 +69,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   community repository, where it is listed once Chocolatey approves it
   ([Install](docs/install.md)) (#363, #212).
 
+### Fixed
+- Error summaries no longer keep a quoted value written straight after a word: a prefixed
+  literal (`X'…'`, `r'…'`, `E'…'`) or a value glued to a word (`v'…'`) is now removed like
+  any other quoted value. Property tests over `ods-core`'s graph order, fingerprints,
+  timestamps, strategy choice and redaction found it (#PR, #192)
+
 ## [0.0.1] - 2026-10-04
 
 The first public release: the State MVP and the first dashboard screens.
