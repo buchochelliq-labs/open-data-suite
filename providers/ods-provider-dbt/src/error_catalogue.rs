@@ -17,8 +17,10 @@
 //!   `[UNRESOLVED_ROUTINE]`, `[CAST_INVALID_INPUT]`, `[DATATYPE_MISMATCH…]`,
 //!   `[CHECK_CONSTRAINT_VIOLATION]`, `[NOT_NULL_CONSTRAINT_VIOLATION]`) and Delta Lake's
 //!   (Apache-2.0, `delta-error-classes.json`: `[DELTA_CONCURRENT_…]`,
-//!   `[DELTA_NOT_NULL_CONSTRAINT_VIOLATED]`, `[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES]`),
-//!   which Databricks reports;
+//!   `[DELTA_NOT_NULL_CONSTRAINT_VIOLATED]`, `[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES]`,
+//!   `[DELTA_NEW_NOT_NULL_VIOLATION]`, `[DELTA_NEW_CHECK_CONSTRAINT_VIOLATION]`), which
+//!   Databricks reports: the ones its SQL warehouse gave dbt-databricks are recorded in
+//!   `fixtures/dbt/jaffle-ods/artifacts/dbt-databricks-errors` (#349);
 //! - dbt-databricks's own messages (Apache-2.0, 1.12): a cluster that can't be started
 //!   or asked for its state, a connection that can't be made, a command or Python model
 //!   run that timed out, and credentials its profile is missing.
@@ -52,8 +54,9 @@ use crate::{Manifest, ResourceType};
 /// timeouts and missing credentials, Spark's and Delta's constraint violations. 5:
 /// missing schemas and SQL functions (`DuckDB`, PostgreSQL, Spark) as their own symptoms;
 /// a pattern's kind may be dbt's header kind ([`ErrorSummary::outer_kind`]), which
-/// `postgres-invalid-input` and `postgres-connect` need.
-pub const CATALOGUE_VERSION: &str = "5";
+/// `postgres-invalid-input` and `postgres-connect` need. 6: Delta's violations of a
+/// constraint added to a table whose rows break it, as recorded from Databricks.
+pub const CATALOGUE_VERSION: &str = "6";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly: the message's own,
 /// or the one dbt's header gave around it), and phrases its lowercased message must
@@ -352,6 +355,20 @@ const PATTERNS: &[Pattern] = &[
         Symptom::ConstraintViolation,
         None,
         &["[delta_violate_constraint_with_values]"],
+    ),
+    // A constraint added to a table whose rows already break it, as a dbt model
+    // contract's constraints are (recorded from Databricks).
+    p(
+        "delta-new-not-null-constraint",
+        Symptom::ConstraintViolation,
+        None,
+        &["[delta_new_not_null_violation]"],
+    ),
+    p(
+        "delta-new-check-constraint",
+        Symptom::ConstraintViolation,
+        None,
+        &["[delta_new_check_constraint_violation]"],
     ),
     p(
         "spark-schema-not-found",
@@ -910,7 +927,12 @@ mod tests {
     /// two the real-dbt CI job runs.
     const VERSIONS: [&str; 3] = ["1.10", "1.11", "1.12"];
 
-    /// The messages real dbt `version` + `DuckDB` runs gave (`capture-errors.sh`).
+    /// Every recording: the `DuckDB` runs, and dbt-databricks on a SQL warehouse
+    /// (`.github/databricks/capture-errors.py`, #349).
+    const RECORDINGS: [&str; 4] = ["1.10", "1.11", "1.12", "databricks"];
+
+    /// The messages a recorded run gave: real dbt `version` + `DuckDB`
+    /// (`capture-errors.sh`), or `databricks`.
     fn recorded(version: &str) -> Vec<(String, Option<String>, String)> {
         let path = format!(
             "{}/../../fixtures/dbt/jaffle-ods/artifacts/dbt-{version}-errors/errors.json",
@@ -994,6 +1016,49 @@ mod tests {
                     "{version} {name}: {json}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_recorded_databricks_error_classifies_as_expected() {
+        // The scenario, the pattern it must reach, and the line Databricks gave.
+        let expected = [
+            ("missing-column", "spark-unresolved-column", Some(31)),
+            ("unresolved-column", "spark-unresolved-column", Some(17)),
+            (
+                "missing-relation",
+                "spark-table-or-view-not-found",
+                Some(17),
+            ),
+            // A table in a schema that doesn't exist: Databricks reports the table, not
+            // `[SCHEMA_NOT_FOUND]`, so ODS can't tell the two apart and says what the
+            // warehouse said.
+            ("missing-schema", "spark-table-or-view-not-found", Some(17)),
+            ("missing-function", "spark-unresolved-routine", Some(17)),
+            ("type-mismatch", "spark-cast-invalid-input", Some(17)),
+            ("datatype-mismatch", "spark-datatype-mismatch", Some(17)),
+            ("not-null-constraint", "delta-new-not-null-constraint", None),
+            ("check-constraint", "delta-new-check-constraint", None),
+            ("test-failure", "dbt-test-failed", None),
+        ];
+        let recorded = recorded("databricks");
+        assert_eq!(recorded.len(), expected.len(), "every scenario is checked");
+        for (name, node, message) in &recorded {
+            let (_, id, line) = expected
+                .iter()
+                .find(|(n, _, _)| n == name)
+                .unwrap_or_else(|| panic!("{name} isn't expected"));
+            let summary = summary_of(node.as_ref(), message);
+            let got = DbtErrorCatalogue.classify(&summary);
+            let Classification::Recognised(m) = &got else {
+                panic!("{name}: {summary:?} gave {got:?}")
+            };
+            assert_eq!(m.id, *id, "{name}: {summary:?}");
+            assert_eq!(summary.line(), *line, "{name}: {summary:?}");
+            let json = serde_json::to_string(&(&summary, &got)).unwrap();
+            assert!(!json.contains(SENTINEL), "{name}: {json}");
+            // Nothing from the warehouse's namespace or the SQL reaches a summary.
+            assert!(!json.contains("no_such"), "{name}: {json}");
         }
     }
 
@@ -1374,7 +1439,7 @@ mod tests {
             assert!(!json.contains(SENTINEL), "{id}: {json}");
             reached.insert(m.id.clone());
         }
-        for version in VERSIONS {
+        for version in RECORDINGS {
             for (_, node, message) in recorded(version) {
                 if let Classification::Recognised(m) =
                     DbtErrorCatalogue.classify(&summary_of(node.as_ref(), &message))
@@ -1408,7 +1473,7 @@ mod tests {
     /// between its markers.
     fn reference_table() -> String {
         let mut seen = std::collections::BTreeSet::new();
-        for version in VERSIONS {
+        for version in RECORDINGS {
             for (_, node, message) in recorded(version) {
                 if let Classification::Recognised(m) =
                     DbtErrorCatalogue.classify(&summary_of(node.as_ref(), &message))
@@ -1773,6 +1838,26 @@ mod tests {
                         }
                     })
                 })
+                .chain(
+                    [
+                        ("missing-column", Symptom::MissingColumn),
+                        ("type-mismatch", Symptom::TypeMismatch),
+                        ("missing-function", Symptom::MissingFunction),
+                        ("check-constraint", Symptom::ConstraintViolation),
+                    ]
+                    .into_iter()
+                    .map(|(name, expected)| {
+                        let recorded = recorded("databricks");
+                        let (_, node, message) =
+                            recorded.iter().find(|(n, _, _)| n == name).unwrap();
+                        Sample {
+                            name: Box::leak(format!("databricks {name}").into_boxed_str()),
+                            summary: summary_of(node.as_ref(), message),
+                            expected: Some(expected),
+                            sentinel: Some(SENTINEL),
+                        }
+                    }),
+                )
                 // Every recorded failure is recognised now; one no pattern knows, as
                 // dbt-duckdb reports a `DuckDB` error kind no pattern names.
                 .chain(std::iter::once(Sample {

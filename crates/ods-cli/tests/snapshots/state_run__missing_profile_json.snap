@@ -13,7 +13,7 @@ expression: "serde_json::to_string_pretty(failure).unwrap()"
   "confidence": "known_pattern_with_evidence",
   "pattern": {
     "catalogue": "dbt",
-    "version": "5",
+    "version": "6",
     "id": "dbt-profile-not-found"
   },
   "headline": "The profile or target isn't defined",

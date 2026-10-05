@@ -624,6 +624,27 @@ fn sql_echo_line(line: &str) -> Option<u32> {
         .flatten()
 }
 
+/// The line a Spark error gives its position at (Apache Spark's query context, as
+/// Databricks reports it): `…; line 31 pos 4` ending the message, or a
+/// `== SQL (line 17, position 14) ==` heading over the SQL it quotes.
+fn spark_position_line(line: &str) -> Option<u32> {
+    let digits = |s: &str| -> Option<(u32, usize)> {
+        let n = s.bytes().take_while(u8::is_ascii_digit).count();
+        (n > 0)
+            .then(|| s[..n].parse().ok().map(|v| (v, n)))
+            .flatten()
+    };
+    if let Some(rest) = line.strip_prefix("== SQL (line ") {
+        let (at, n) = digits(rest)?;
+        return rest[n..].starts_with(", position ").then_some(at);
+    }
+    let (_, rest) = line.rsplit_once("; line ")?;
+    let (at, n) = digits(rest)?;
+    let pos = rest[n..].strip_prefix(" pos ")?;
+    let (_, m) = digits(pos)?;
+    (m == pos.len()).then_some(at)
+}
+
 /// What dbt says first when a Python model raises: the exception follows, as the last
 /// line of a traceback.
 const PYTHON_FAILED: &str = "Python model failed:";
@@ -657,7 +678,7 @@ fn python_exception<'a>(lines: &[&'a str]) -> (Option<&'a str>, Option<u32>) {
 /// node (`Runtime Error in model orders (models/orders.sql)`) and puts the engine's own
 /// message on the next line; the summary is that line, with the header's kind when
 /// the line has none. SQL echo lines (`LINE 35: …`) are never used, but their line
-/// number is kept (#323). A Python model's failure is summarised by its exception
+/// number is kept (#323), as is the line a Spark error gives its position at (#349). A Python model's failure is summarised by its exception
 /// (`Python model failed: KeyError: [value removed]`) and the line it was raised at.
 pub fn error_summary(message: &str) -> Option<ErrorSummary> {
     let all: Vec<&str> = message
@@ -665,7 +686,10 @@ pub fn error_summary(message: &str) -> Option<ErrorSummary> {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
-    let line = all.iter().find_map(|l| sql_echo_line(l));
+    let line = all
+        .iter()
+        .find_map(|l| sql_echo_line(l))
+        .or_else(|| all.iter().find_map(|l| spark_position_line(l)));
     let mut lines = all.iter().copied().filter(|l| !is_sql_echo(l));
     let first = lines.next()?;
     let summary = match (header_kind(first), lines.next()) {
@@ -777,6 +801,35 @@ pub fn project_failure(output: &str) -> Option<ProjectFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spark_errors_position_gives_the_line() {
+        assert_eq!(
+            spark_position_line("[X] Cannot be resolved. SQLSTATE: 42703; line 31 pos 4"),
+            Some(31)
+        );
+        assert_eq!(
+            spark_position_line("== SQL (line 17, position 14) =="),
+            Some(17)
+        );
+        for not in [
+            "a line 3 pos 4",
+            "; line 3 pos",
+            "; line x pos 4",
+            "; line 3 pos 4 more",
+            "== SQL (line 17) ==",
+        ] {
+            assert_eq!(spark_position_line(not), None, "{not}");
+        }
+        let s = error_summary(
+            "Database Error in model x (models/x.sql)\n  [UNRESOLVED_ROUTINE] Cannot resolve routine `f`. SQLSTATE: 42883; line 17 pos 13\n  compiled code at target/run/x.sql",
+        )
+        .unwrap();
+        assert_eq!(s.line(), Some(17));
+        // An echo line, when there is one, still wins.
+        let s = error_summary("Binder Error: no\nLINE 5: select 1; line 9 pos 1").unwrap();
+        assert_eq!(s.line(), Some(5));
+    }
 
     #[test]
     fn dbt_error_headers_give_the_kind_and_the_next_line_the_message() {

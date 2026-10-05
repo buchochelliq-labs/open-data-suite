@@ -20,7 +20,7 @@ expression: "redact(&serde_json::to_string_pretty(failure).unwrap())"
   "confidence": "known_pattern_with_evidence",
   "pattern": {
     "catalogue": "dbt",
-    "version": "5",
+    "version": "6",
     "id": "dbt-test-failed"
   },
   "headline": "The `not_null` test on `customer_id` of `customers` failed: 5 rows don't pass",
