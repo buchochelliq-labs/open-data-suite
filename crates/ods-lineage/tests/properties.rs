@@ -2,14 +2,16 @@
 //! lineage, impact never misses a node that a brute-force propagation says may change
 //! (rule 3: never under-report), never drops a reader of a changed relation silently
 //! (rule 4: an unaffected reader is reported as pruned), and doesn't depend on the order
-//! nodes are listed in.
+//! nodes are listed in. An exported graph document never names a node it doesn't hold,
+//! whatever it is focused on.
 
 use std::collections::BTreeSet;
 
 use ods_core::{ColumnRef, Confidence, DirectKind, EdgeKind, IndirectKind, RelationName};
+use ods_lineage::export::Endpoint;
 use ods_lineage::{
-    Change, ColumnChangeKind, ColumnGraph, Impact, LineageNode, LineageProject, MemoryCache,
-    NodeKind, build,
+    Change, ColumnChangeKind, ColumnGraph, GraphFilter, Impact, LineageNode, LineageProject,
+    MemoryCache, NodeKind, build,
 };
 use ods_provider_fake::FakeSqlLineageAnalyzer;
 use ods_sdk::contracts::sql_lineage::{OutputColumn, QueryLineage};
@@ -314,4 +316,48 @@ fn most_changes_reach_a_model() {
         reached * 4 > total,
         "only {reached} of {total} changes reach a model"
     );
+}
+
+proptest! {
+    #[test]
+    fn a_graph_document_has_no_phantom_nodes(
+        project in project(),
+        focus in prop::option::of((0_usize..8, prop::option::of(0..COLUMNS))),
+        upstream in prop::option::of(0_usize..3),
+        downstream in prop::option::of(0_usize..3),
+    ) {
+        let order: Vec<usize> = (0..project.len()).collect();
+        let built = graph(&project, &order);
+        let name = |id: &str| id.to_owned();
+        let full = built.document(&name, &GraphFilter::default());
+        let filter = match focus {
+            None => GraphFilter::default(),
+            Some((node, column)) => GraphFilter::focused(vec![Endpoint {
+                node: format!("n{}", node % project.len()),
+                column: column.map(|c| format!("c{c}")),
+            }])
+            .with_depth(upstream, downstream),
+        };
+        let reversed: Vec<usize> = order.iter().rev().copied().collect();
+        let document = built.document(&name, &filter);
+        prop_assert_eq!(
+            &document,
+            &graph(&project, &reversed).document(&name, &filter),
+            "listing order changes the document"
+        );
+
+        let ids: Vec<&str> = document.nodes.iter().map(|n| n.id.as_str()).collect();
+        let held: BTreeSet<&str> = ids.iter().copied().collect();
+        prop_assert_eq!(held.len(), ids.len(), "a node is listed twice");
+        prop_assert!(ids.windows(2).all(|w| w[0] < w[1]), "nodes aren't sorted by id");
+        let all: BTreeSet<&str> = full.nodes.iter().map(|n| n.id.as_str()).collect();
+        prop_assert!(held.is_subset(&all), "the filter invented a node");
+        prop_assert_eq!(all.len(), project.len(), "the unfiltered document drops a node");
+        for edge in &document.node_edges {
+            prop_assert!(held.contains(edge.from.as_str()) && held.contains(edge.to.as_str()), "{:?}", edge);
+        }
+        for edge in &document.column_edges {
+            prop_assert!(held.contains(edge.from.node.as_str()) && held.contains(edge.to.node.as_str()), "{:?}", edge);
+        }
+    }
 }
