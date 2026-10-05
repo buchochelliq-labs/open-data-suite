@@ -12,7 +12,22 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Breaking
+- The SQLite state database migrates to version 2 when a run opens it (a new `runs`
+  table, the run ledger, ADR-0029); a copy of version 1 is kept beside it. **What to
+  do:** nothing, unless you go back to an older `ods`: it refuses the migrated database,
+  so restore the copy (`ods state doctor` says where it is).
+- `SDK_VERSION` is now 0.7 (#210): the `state_store` contract is 0.3, with
+  `record_run` and `runs` (the run ledger) behind the new capability `run_ledger`; both
+  default to `Unsupported`. **What to do:** rebuild out-of-process plugins against it; a
+  store that keeps no ledger needs no change.
+
 ### Added
+- `ods state savings [--since DATE]`: what reuse saved, per run and in total, as
+  estimates from each build's last measured time. It reads a new run ledger in the state
+  database, to which every run that goes ahead adds an entry, a run with nothing to build
+  included ([docs](docs/cli.md#what-reuse-saved),
+  [ADR-0029](docs/adr/0029-build-timings-and-the-run-ledger.md)) (#370, #210).
 - `ods state run`, `build`, `seed`, `snapshot` and `retry` say what reuse saved:
   `saved: ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)`, and `savings`
   in JSON (also in `ods state plan`, for what a run would save). Each build's time is

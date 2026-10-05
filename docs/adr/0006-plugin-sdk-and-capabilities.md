@@ -88,7 +88,8 @@ then have to break.
     `atomic_replace`, `change_tracking`, `query_history`, `source_freshness`,
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry`,
     `fencing_tokens`, `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md))
-    `error_explain` ([ADR-0025](0025-error-explanations.md)) and `relation_link` (§7).
+    `error_explain` ([ADR-0025](0025-error-explanations.md)), `relation_link` (§7) and
+    `run_ledger` ([ADR-0029](0029-build-timings-and-the-run-ledger.md)).
   - Third parties extend the vocabulary with `x-<namespace>.<name>`, a validated
     `CustomCapability` that can only be built by parsing, so it can never spell a
     well-known name.

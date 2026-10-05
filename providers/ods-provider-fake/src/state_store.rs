@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 
 use async_trait::async_trait;
-use ods_core::CapabilitySet;
-use ods_core::state::{SnapshotId, StateSnapshot};
+use ods_core::state::{RunEntry, SnapshotId, StateSnapshot, Timestamp};
+use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::state_store::{
     ProblemKind, ScopeSummary, SnapshotSummary, StateScope, StateStore, StoreCheck, StoreProblem,
-    StoredSnapshot, check_readable,
+    StoredSnapshot, check_readable, check_run_readable,
 };
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -20,6 +20,8 @@ struct Inner {
     /// Every snapshot, by id, with its scope.
     snapshots: BTreeMap<SnapshotId, (StateScope, StateSnapshot)>,
     heads: BTreeMap<StateScope, SnapshotId>,
+    /// Each scope's run ledger, in the order runs were recorded.
+    runs: BTreeMap<StateScope, Vec<RunEntry>>,
 }
 
 /// An in-memory state store: the executable specification of [`StateStore`].
@@ -45,7 +47,7 @@ impl Provider for FakeStateStore {
             KIND,
             "fake",
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::new(),
+            CapabilitySet::from_iter([Capability::RunLedger]),
         )
     }
 }
@@ -162,5 +164,41 @@ impl StateStore for FakeStateStore {
             })
             .collect();
         Ok(StoreCheck::new(None, scopes, problems))
+    }
+
+    async fn record_run(&self, scope: &StateScope, entry: &RunEntry) -> Result<(), ProviderError> {
+        check_run_readable(entry)?;
+        self.inner()
+            .runs
+            .entry(scope.clone())
+            .or_default()
+            .push(entry.clone());
+        Ok(())
+    }
+
+    async fn runs(
+        &self,
+        scope: &StateScope,
+        since: Option<Timestamp>,
+        limit: usize,
+    ) -> Result<Vec<RunEntry>, ProviderError> {
+        let inner = self.inner();
+        let mut runs: Vec<(usize, &RunEntry)> = inner
+            .runs
+            .get(scope)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, e)| since.is_none_or(|since| e.finished_at >= since))
+            .collect();
+        // Newest first: by when they finished, then by when they were recorded.
+        runs.sort_by(|(i, a), (j, b)| b.finished_at.cmp(&a.finished_at).then(j.cmp(i)));
+        runs.into_iter()
+            .take(limit)
+            .map(|(_, e)| {
+                check_run_readable(e)?;
+                Ok(e.clone())
+            })
+            .collect()
     }
 }

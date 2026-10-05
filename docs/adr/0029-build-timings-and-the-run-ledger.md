@@ -71,8 +71,9 @@ number and a label, no secrets (ADR-0005).
 
 ### Delivery
 1. §1 and §2 (timings and the one-line summary).
-2. §3 (the ledger: contract, fake, conformance, SQLite migration 2).
-3. §4 (`ods state savings`, `[state.cost]`, the dashboard).
+2. §3 (the ledger: contract, fake, conformance, SQLite migration 2) and §4's
+   `ods state savings`.
+3. The rest of §4 (`[state.cost]`, the dashboard).
 
 ## Consequences
 - Snapshots grow by one number per node.

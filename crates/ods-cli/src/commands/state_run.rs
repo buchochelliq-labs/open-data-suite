@@ -23,7 +23,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_core::state::{
-    ExecutionPlan, PlanAction, ReasonCode, SnapshotId, TargetIdentity, Timestamp,
+    ExecutionPlan, PlanAction, ReasonCode, RunAction, RunEntry, RunEntryOutcome, RunNode,
+    SnapshotId, TargetIdentity, Timestamp,
 };
 use ods_core::{Capability, Strategy, choose};
 use ods_provider_dbt::RunResults;
@@ -37,7 +38,7 @@ use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::run_events::{
     CollectedEvents, RunEvent, RunEventKind, RunEventSink, RunSummary,
 };
-use ods_sdk::contracts::state_store::{StateStore, StoredSnapshot};
+use ods_sdk::contracts::state_store::{StateScope, StateStore, StoredSnapshot};
 use ods_state::{
     Outcome, Recorded, RecordedSources, RelationFact, RunResult, SourceCheck, SourceCheckAction,
     TestResult, VersionReading,
@@ -1892,11 +1893,27 @@ impl RunReport {
             return Ok((report, None));
         }
         let checked_sources = source_requests(&report.source_tests);
-        let (Some(store), false) = (store, requested.is_empty() && checked_sources.is_empty())
-        else {
-            steps.note("nothing to build, so dbt doesn't run again");
-            report.outcome = RunOutcome::NothingToBuild;
-            return Ok((report, None));
+        let nothing = requested.is_empty() && checked_sources.is_empty();
+        let store = match store {
+            Some(store) if !nothing => store,
+            store => {
+                steps.note("nothing to build, so dbt doesn't run again");
+                report.outcome = RunOutcome::NothingToBuild;
+                if let Some(store) = &store {
+                    // No executor, so no run id: ODS's own, to the millisecond (ADR-0029).
+                    let now = Timestamp::now();
+                    let run_id =
+                        format!("ods-{}", ods_core::state::TimestampMs::now().unix_millis());
+                    report.write_ledger(
+                        store,
+                        &ws.scope,
+                        &run_id,
+                        (Some(now), now),
+                        latest.as_ref(),
+                    );
+                }
+                return Ok((report, None));
+            }
         };
 
         report.execute(
@@ -2025,6 +2042,80 @@ impl RunReport {
                 (self, Some(error))
             }
         })
+        .map(|(mut report, error)| {
+            if let Some(execution) = report.execution.clone() {
+                report.write_ledger(
+                    store,
+                    &ws.scope,
+                    &execution.run_id,
+                    (execution.started_at, execution.finished_at),
+                    latest,
+                );
+            }
+            (report, error)
+        })
+    }
+
+    /// Appends this run to the store's run ledger (ADR-0029): what it reused, with
+    /// each build's last measured time, and what it built, failed or skipped. Evidence,
+    /// not state: if it can't be written, the run says so and carries on.
+    fn write_ledger(
+        &mut self,
+        store: &SqliteStateStore,
+        scope: &StateScope,
+        run_id: &str,
+        (started_at, finished_at): (Option<Timestamp>, Timestamp),
+        before: Option<&StoredSnapshot>,
+    ) {
+        let outcome = match self.outcome {
+            RunOutcome::NothingToBuild => RunEntryOutcome::NothingToBuild,
+            RunOutcome::Succeeded => RunEntryOutcome::Succeeded,
+            RunOutcome::Failed => RunEntryOutcome::Failed,
+            RunOutcome::NotRecorded => RunEntryOutcome::NotRecorded,
+            RunOutcome::Compiled | RunOutcome::DryRun => return,
+        };
+        let mut nodes = BTreeMap::new();
+        for entry in self.plan.with_action(PlanAction::Reuse) {
+            let last = before.and_then(|b| b.snapshot.nodes.get(&entry.node));
+            nodes.insert(
+                entry.node.clone(),
+                RunNode::new(RunAction::Reused).timed(
+                    last.and_then(|n| n.build_ms),
+                    last.map_or("", |n| n.run_id.as_str()),
+                ),
+            );
+        }
+        for node in self.execution.iter().flat_map(|e| &e.nodes) {
+            let action = match node.status {
+                ExecutionStatus::Success => RunAction::Built,
+                ExecutionStatus::Skipped => RunAction::Skipped,
+                _ => RunAction::Failed,
+            };
+            let took = (action == RunAction::Built)
+                .then(|| {
+                    self.observed
+                        .run_stats
+                        .as_ref()
+                        .and_then(|r| r.get(&node.node))
+                        .and_then(|n| n.stats.took_ms())
+                })
+                .flatten();
+            nodes.insert(node.node.clone(), RunNode::new(action).timed(took, run_id));
+        }
+        let entry = RunEntry::new(run_id, finished_at, outcome, nodes)
+            .started(started_at)
+            .snapshots(
+                before.map(|b| b.id),
+                self.record.as_ref().and_then(|r| r.snapshot),
+            );
+        let written = block_on(store.record_run(scope, &entry))
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()));
+        if let Err(why) = written {
+            self.warnings.push(format!(
+                "this run couldn't be added to the run ledger, so `ods state savings` won't count it: {why}; the state was recorded as usual"
+            ));
+        }
     }
 }
 

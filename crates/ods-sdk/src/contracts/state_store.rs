@@ -21,12 +21,23 @@
 //!   written by a newer build is refused, never downgraded.
 //! - [`check`](StateStore::check) reads the whole store without changing it and reports
 //!   every problem it finds, so a person can decide how to recover.
+//!
+//! # The run ledger (0.3, #210, ADR-0029)
+//! - A store with the `run_ledger` capability also keeps, per scope, one [`RunEntry`]
+//!   per run: [`record_run`](StateStore::record_run) appends it, and
+//!   [`runs`](StateStore::runs) lists them, newest first.
+//! - Entries are evidence, not state: recording one never moves a head, and a run whose
+//!   snapshot was refused records its entry all the same.
+//! - A store without the capability answers both with [`ProviderError::Unsupported`],
+//!   which is what the default methods do.
 
 use std::fmt;
 
 use async_trait::async_trait;
-use ods_core::SchemaVersion;
-use ods_core::state::{STATE_SCHEMA_VERSION, SnapshotId, StateSnapshot, Timestamp};
+use ods_core::state::{
+    RUN_SCHEMA_VERSION, RunEntry, STATE_SCHEMA_VERSION, SnapshotId, StateSnapshot, Timestamp,
+};
+use ods_core::{Capability, SchemaVersion};
 use serde::Serialize;
 
 use crate::error::ProviderError;
@@ -35,7 +46,7 @@ use crate::provider::{Contract, Provider};
 /// The `state_store` contract.
 pub const STATE_STORE: Contract = Contract {
     name: "state_store",
-    version: SchemaVersion::new(0, 2),
+    version: SchemaVersion::new(0, 3),
 };
 
 /// Whose state: `<project>/<environment>`, e.g. `jaffle_shop/prod`.
@@ -332,6 +343,51 @@ pub trait StateStore: Provider {
     /// Returns [`ProviderError`] only if the check couldn't run at all; problems it
     /// finds are in the result.
     async fn check(&self) -> Result<StoreCheck, ProviderError>;
+
+    /// Appends `entry` to the scope's run ledger (0.3, ADR-0029). It changes no head.
+    ///
+    /// # Errors
+    /// Returns [`ProviderError::Unsupported`] without the `run_ledger` capability (the
+    /// default), or [`ProviderError`] if it can't be written.
+    async fn record_run(&self, scope: &StateScope, entry: &RunEntry) -> Result<(), ProviderError> {
+        let _ = (scope, entry);
+        Err(ProviderError::Unsupported(Capability::RunLedger))
+    }
+
+    /// The scope's runs, newest first (by when they finished, then by when they were
+    /// recorded): those that finished at or after `since`, at most `limit`.
+    ///
+    /// # Errors
+    /// Returns [`ProviderError::Unsupported`] without the `run_ledger` capability (the
+    /// default), or [`ProviderError`] if the ledger can't be read or holds an entry
+    /// this build can't read.
+    async fn runs(
+        &self,
+        scope: &StateScope,
+        since: Option<Timestamp>,
+        limit: usize,
+    ) -> Result<Vec<RunEntry>, ProviderError> {
+        let _ = (scope, since, limit);
+        Err(ProviderError::Unsupported(Capability::RunLedger))
+    }
+}
+
+/// Refuses a run entry this build can't read, rather than guessing (ADR-0029).
+///
+/// # Errors
+/// Returns [`ProviderError::Other`] for a newer schema, as [`check_readable`] does.
+pub fn check_run_readable(entry: &RunEntry) -> Result<(), ProviderError> {
+    if RUN_SCHEMA_VERSION.can_read(entry.schema_version) {
+        return Ok(());
+    }
+    Err(ProviderError::Other(format!(
+        "run {} was recorded with run schema {}.{}, which this ODS (reads {}.{}) can't read; upgrade ODS",
+        entry.run_id,
+        entry.schema_version.major,
+        entry.schema_version.minor,
+        RUN_SCHEMA_VERSION.major,
+        RUN_SCHEMA_VERSION.minor
+    )))
 }
 
 #[cfg(test)]

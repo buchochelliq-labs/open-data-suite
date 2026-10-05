@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use ods_core::state::{ExecutionPlan, PlanAction, StateSnapshot};
+use ods_core::state::{ExecutionPlan, PlanAction, RunAction, RunEntry, StateSnapshot};
 use serde::Serialize;
 
 /// The build time a run avoided by reusing builds: an estimate.
@@ -36,6 +36,49 @@ impl Savings {
     pub fn is_lower_bound(&self) -> bool {
         self.untimed > 0
     }
+
+    /// Adds `other`'s counts and time to these: totals over several runs.
+    pub fn add(&mut self, other: &Savings) {
+        self.reused += other.reused;
+        self.built += other.built;
+        self.timed += other.timed;
+        self.untimed += other.untimed;
+        self.avoided_ms = self.avoided_ms.saturating_add(other.avoided_ms);
+        let runs: BTreeSet<String> = self
+            .timed_by
+            .iter()
+            .chain(&other.timed_by)
+            .cloned()
+            .collect();
+        self.timed_by = runs.into_iter().collect();
+    }
+}
+
+/// The savings of a run, from its entry in the run ledger: the timings frozen when
+/// it was recorded (ADR-0029 §3). Built counts the nodes it built.
+pub fn run_savings(entry: &RunEntry) -> Savings {
+    let mut estimate = Savings {
+        built: entry.count(RunAction::Built),
+        ..Savings::default()
+    };
+    let mut runs = BTreeSet::new();
+    for node in entry
+        .nodes
+        .values()
+        .filter(|n| n.action == RunAction::Reused)
+    {
+        estimate.reused += 1;
+        match (node.build_ms, &node.timed_by) {
+            (Some(ms), by) => {
+                estimate.timed += 1;
+                estimate.avoided_ms = estimate.avoided_ms.saturating_add(ms);
+                runs.extend(by.clone());
+            }
+            (None, _) => estimate.untimed += 1,
+        }
+    }
+    estimate.timed_by = runs.into_iter().collect();
+    estimate
 }
 
 /// The savings of a run that reuses what `plan` reuses and builds `built` nodes,

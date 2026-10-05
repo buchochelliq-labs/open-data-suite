@@ -4,8 +4,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use ods_core::Capability;
 use ods_core::state::{
-    DataVersion, Exactness, Fingerprint, NodeState, SnapshotId, StateSnapshot, Timestamp,
+    DataVersion, Exactness, Fingerprint, NodeState, RunAction, RunEntry, RunEntryOutcome, RunNode,
+    SnapshotId, StateSnapshot, Timestamp,
 };
 
 use super::Report;
@@ -197,6 +199,98 @@ async fn failed_commits_leave_the_store_sound(store: &dyn StateStore) {
     );
 }
 
+fn run_entry(run: &str, finished_at: i64, outcome: RunEntryOutcome) -> RunEntry {
+    RunEntry::new(
+        run,
+        Timestamp::from_unix(finished_at),
+        outcome,
+        BTreeMap::from([
+            (
+                "model.suite.orders".to_owned(),
+                RunNode::new(RunAction::Reused).timed(Some(1_250), "run-0"),
+            ),
+            (
+                "model.suite.customers".to_owned(),
+                RunNode::new(RunAction::Built).timed(Some(800), run),
+            ),
+            (
+                "model.suite.report".to_owned(),
+                RunNode::new(RunAction::Skipped),
+            ),
+        ]),
+    )
+    .started(Some(Timestamp::from_unix(finished_at - 60)))
+}
+
+/// Without `run_ledger`, both methods say so; with it, entries round-trip, newest first,
+/// filtered by `since` and limited, each scope's apart, and recording one moves no head
+/// (0.3, ADR-0029).
+async fn the_run_ledger_keeps_runs_apart_from_state(store: &dyn StateStore) {
+    let a = scope("ledger-a");
+    if !store.info().capabilities.contains(&Capability::RunLedger) {
+        let entry = run_entry("run-1", 3_000, RunEntryOutcome::Succeeded);
+        assert!(
+            matches!(
+                store.record_run(&a, &entry).await,
+                Err(ProviderError::Unsupported(Capability::RunLedger))
+            ),
+            "ledger: unsupported without the capability"
+        );
+        assert!(
+            matches!(
+                store.runs(&a, None, 10).await,
+                Err(ProviderError::Unsupported(Capability::RunLedger))
+            ),
+            "ledger: unsupported without the capability"
+        );
+        return;
+    }
+    let b = scope("ledger-b");
+    let head = store.commit(&a, &snapshot(None, "run-1")).await.unwrap();
+    let first = run_entry("run-1", 3_000, RunEntryOutcome::Succeeded).snapshots(None, Some(head));
+    let second =
+        run_entry("run-2", 4_000, RunEntryOutcome::NothingToBuild).snapshots(Some(head), None);
+    // Recorded out of order: listed by when they finished.
+    store.record_run(&a, &second).await.unwrap();
+    store.record_run(&a, &first).await.unwrap();
+    // A failed run's entry, in another scope.
+    let other = run_entry("run-b", 5_000, RunEntryOutcome::Failed);
+    store.record_run(&b, &other).await.unwrap();
+
+    assert_eq!(
+        store.runs(&a, None, 10).await.unwrap(),
+        [second.clone(), first.clone()],
+        "ledger: entries round-trip exactly, newest first"
+    );
+    assert_eq!(
+        store.runs(&a, None, 1).await.unwrap(),
+        std::slice::from_ref(&second),
+        "ledger: limited"
+    );
+    assert_eq!(
+        store
+            .runs(&a, Some(Timestamp::from_unix(3_500)), 10)
+            .await
+            .unwrap(),
+        [second],
+        "ledger: since"
+    );
+    assert_eq!(
+        store.runs(&b, None, 10).await.unwrap(),
+        [other],
+        "ledger: scopes are isolated"
+    );
+    assert_eq!(
+        store.latest(&a).await.unwrap().map(|s| s.id),
+        Some(head),
+        "ledger: recording a run moves no head"
+    );
+    assert!(
+        store.latest(&b).await.unwrap().is_none(),
+        "ledger: a run's entry is not state"
+    );
+}
+
 /// Runs every case against fresh stores from `harness`.
 ///
 /// # Panics
@@ -219,5 +313,9 @@ pub async fn run(harness: &dyn StateStoreHarness) -> Report {
     report.passed.push("a_fresh_store_is_sound");
     failed_commits_leave_the_store_sound(harness.store().await.as_ref()).await;
     report.passed.push("failed_commits_leave_the_store_sound");
+    the_run_ledger_keeps_runs_apart_from_state(harness.store().await.as_ref()).await;
+    report
+        .passed
+        .push("the_run_ledger_keeps_runs_apart_from_state");
     report
 }

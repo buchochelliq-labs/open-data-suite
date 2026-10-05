@@ -1484,6 +1484,36 @@ plan --json`, for what a run would save) has `savings`: `reused`, `built`, `time
 `untimed`, `avoided_ms` and `timed_by`, the runs whose timings it used. Snapshots
 record each node's `build_ms` from state schema 1.3; older snapshots read as untimed.
 
+Every run that goes ahead (not `--dry-run` or `compile`) also adds an entry to the state
+database's **run ledger**: what it reused, each with the build time it had then, and
+what it built, failed or skipped. A run with nothing to build is in it too, under an id
+of ODS's own (`ods-<milliseconds>`), though it commits no snapshot and writes no journal.
+The ledger is evidence, not state: nothing ODS plans reads it, and if an entry can't be
+written the run warns and carries on. `ods state savings` reports from it:
+
+```sh
+ods state savings                      # per run (the 20 newest) and in total
+ods state savings --since 2026-10-01   # only runs since then (a date, or RFC 3339)
+```
+
+```text
+saved: ~5.5s of build time (estimate, serial: 22 of 39 nodes reused across 3 runs)
+timings from: 1 run
+
+Runs
+run      finished              outcome           reused  built  saved
+3f1c9a2e 2026-10-05T09:12:03Z  succeeded         9       4      ~2.3s
+ods-1…   2026-10-05T09:11:40Z  nothing to build  13      0      ~3.3s
+8b20d4c1 2026-10-05T09:10:58Z  succeeded         0       13     —
+```
+
+A run whose reused nodes have no build time shows `at least` its figure, or `—` when
+none has one. `--json` has `run_count`, `runs` (each with `run_id`, `finished_at`,
+`outcome` and the fields of `savings` above) and `totals`, with `estimate: true`. Runs
+from before the ledger existed (ODS 0.0.1) aren't in it. The ledger is the `runs` table
+of the state database, added by its migration 2 (the database is copied first, as
+for every migration, [ADR-0018](adr/0018-state-store-migrations-and-recovery.md)).
+
 `ods state history --run <run_id>` shows the same stats for any run whose journal is
 kept (below):
 
