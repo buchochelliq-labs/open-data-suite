@@ -11,12 +11,15 @@ use rich::measure::Measurement;
 use rich::panel::Panel;
 use rich::protocol::Renderable;
 use rich::segment::Segment;
+use rich::style::Style;
 use rich::table::Table;
 use rich::text::Text;
 use rich::theme::Theme;
 use rich::tree::Tree;
 use rich::{Console, ConsoleOptions, HorizontalAlign, Justify};
 
+#[cfg(all(test, unix))]
+use super::super::view::Link;
 use super::super::view::{Level, Span, Tone, TreeItem, ViewNode, sanitize};
 use crate::output::{ColorChoice, term_is_dumb};
 
@@ -59,6 +62,9 @@ fn ods_theme() -> Theme {
 /// Renders view trees with `rs-rich`.
 pub struct RichRenderer {
     console: Console,
+    /// Whether spans' links are written (as OSC 8 hyperlinks): only to a terminal that
+    /// follows them, and only with colour, since rs-rich writes them with the styles.
+    links: bool,
 }
 
 impl RichRenderer {
@@ -68,7 +74,18 @@ impl RichRenderer {
     /// disables colour for `TERM=dumb`. `Always` overrides `NO_COLOR`; `Never` wins over
     /// everything.
     pub fn new(color: ColorChoice, width: Option<usize>) -> Self {
-        Self::with_environment(color, width, term_is_dumb())
+        let mut renderer = Self::with_environment(color, width, term_is_dumb());
+        // `supports-hyperlinks` knows which terminals follow OSC 8, and honours
+        // `FORCE_HYPERLINK`; an unknown terminal gets no links.
+        renderer.links = supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout);
+        renderer
+    }
+
+    /// Writes spans' links (tests; `new` decides from the terminal).
+    #[cfg(test)]
+    fn with_links(mut self, links: bool) -> Self {
+        self.links = links;
+        self
     }
 
     fn with_environment(color: ColorChoice, width: Option<usize>, dumb_terminal: bool) -> Self {
@@ -91,12 +108,19 @@ impl RichRenderer {
         }
         Self {
             console: builder.build(),
+            links: false,
         }
     }
 
     /// Renders `node` to a string (ANSI escapes included when colour is enabled).
     pub fn render(&self, node: &ViewNode) -> String {
-        self.console.capture(|console| render_node(console, node))
+        if self.links {
+            self.console.capture(|console| render_node(console, node))
+        } else {
+            let mut node = node.clone();
+            node.drop_links();
+            self.console.capture(|console| render_node(console, &node))
+        }
     }
 }
 
@@ -293,10 +317,20 @@ fn text(line: &[Span]) -> Text {
 
 fn append_spans(text: &mut Text, line: &[Span]) {
     for span in line {
+        let start = text.plain().len();
         text.append(
             &sanitize(&span.text),
             span.tone.map(|tone| theme_key(tone).into()),
         );
+        // Over the tone's style, so the text looks the same with or without a link.
+        // Only renderers built with links get here with one (see `RichRenderer`).
+        if let Some(link) = &span.link {
+            text.stylize(
+                Style::new().with_link(link.as_str()),
+                start,
+                text.plain().len(),
+            );
+        }
     }
 }
 
@@ -456,6 +490,47 @@ mod tests {
                 .any(|l| l.trim_matches(|c| c == '│' || c == ' ').is_empty()),
             "{out}"
         );
+    }
+
+    // Unix paths: on Windows the same path gains a drive.
+    #[cfg(unix)]
+    #[test]
+    fn links_are_written_only_when_the_terminal_follows_them() {
+        let link = Link::file(std::path::Path::new("/tmp/runs/r.jsonl"));
+        let node = ViewNode::Paragraph(vec![
+            Span::toned("/tmp/runs/r.jsonl", Tone::Code).linked(link.clone()),
+        ]);
+        let renderer = || RichRenderer::with_environment(ColorChoice::Always, Some(80), false);
+        let with = renderer().with_links(true).render(&node);
+        assert!(
+            with.contains("\x1b]8;;file:///tmp/runs/r.jsonl\x1b\\"),
+            "{with:?}"
+        );
+        // The same text and colours either way.
+        let without = renderer().with_links(false).render(&node);
+        assert!(!without.contains("\x1b]8"), "{without:?}");
+        assert!(without.contains("\x1b[36m/tmp/runs/r.jsonl"), "{without:?}");
+    }
+
+    // Unix paths: on Windows the same path gains a drive.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_cant_carry_a_control_character_out_of_its_escape() {
+        // A file name with ESC, BEL and the OSC terminator in it.
+        let link = Link::file(std::path::Path::new("/tmp/a\x1b\\b\x07c")).unwrap();
+        assert!(
+            !link.as_str().chars().any(char::is_control),
+            "{}",
+            link.as_str()
+        );
+        let out = RichRenderer::with_environment(ColorChoice::Always, Some(80), false)
+            .with_links(true)
+            .render(&ViewNode::Paragraph(vec![
+                Span::plain("x").linked(Some(link)),
+            ]));
+        // One link opened and closed: nothing in the URL ends the escape early.
+        assert_eq!(out.matches("\x1b]8;;").count(), 2, "{out:?}");
+        assert!(!out.contains('\x07'), "{out:?}");
     }
 
     #[test]
