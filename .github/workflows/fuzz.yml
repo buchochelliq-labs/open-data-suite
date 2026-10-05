@@ -45,9 +45,9 @@ jobs:
           - uc_lineage
     steps:
       - uses: actions/checkout@v4
+      # `rust-toolchain.toml` pins stable for ODS; fuzzing needs nightly, so every
+      # cargo-fuzz call names it (`cargo +nightly`).
       - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
@@ -59,8 +59,10 @@ jobs:
       - name: Fuzz
         env:
           SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '600' }}
+        # The prebuilt cargo-fuzz defaults to the target it was built for (musl);
+        # build for the runner's own.
         run: >-
-          cargo fuzz run ${{ matrix.target }} --
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} --
           -max_total_time=$SECONDS_PER_TARGET -rss_limit_mb=2048
       # A crash leaves the input that caused it: download it and run
       # `cargo +nightly fuzz run <target> <file>` to reproduce.
