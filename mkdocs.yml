@@ -80,6 +80,7 @@ nav:
   - Principles: principles.md
   - Architecture: architecture.md
   - Contributing:
+      - Writing a provider: plugins.md
       - Testing against Databricks: contributing-databricks.md
       - Recording the docs: recordings.md
   - UX designs:

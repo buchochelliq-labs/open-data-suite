@@ -18,9 +18,11 @@ pub mod changes;
 pub mod error_catalogue;
 pub mod executor;
 pub mod lock;
+pub mod observed_lineage;
 pub mod probe;
 pub mod relation_link;
 pub mod relations;
+pub mod sql_lineage;
 pub mod state_store;
 
 /// What a suite run did.

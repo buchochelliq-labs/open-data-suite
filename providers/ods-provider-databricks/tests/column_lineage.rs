@@ -103,3 +103,42 @@ fn a_file_that_is_not_a_column_lineage_export_is_an_error() {
     );
     assert!(UcColumnLineage::from_path(dir.path().join("x.parquet")).is_err());
 }
+
+/// The export reader passes the `ObservedLineageSource` conformance suite (#99), over
+/// both fixtures and a file that isn't an export.
+#[test]
+fn conforms() {
+    use std::sync::Arc;
+
+    use ods_sdk::conformance::observed_lineage::{ObservedLineageHarness, run};
+
+    struct Harness {
+        export: &'static str,
+        malformed: PathBuf,
+    }
+
+    impl ObservedLineageHarness for Harness {
+        fn source(&self) -> Arc<dyn ObservedLineageSource> {
+            Arc::new(UcColumnLineage::from_path(fixture(self.export)).unwrap())
+        }
+
+        fn malformed(&self) -> Option<Arc<dyn ObservedLineageSource>> {
+            Some(Arc::new(UcColumnLineage::new(
+                self.malformed.clone(),
+                ExportFormat::Csv,
+            )))
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let malformed = dir.path().join("not-an-export.csv");
+    std::fs::write(&malformed, "these,are,not\nthe,lineage,columns\n").unwrap();
+    for export in ["column_lineage.csv", "column_lineage.json"] {
+        let report = run(&Harness {
+            export,
+            malformed: malformed.clone(),
+        });
+        assert!(report.skipped.is_empty(), "{export}: {report:?}");
+        assert_eq!(report.passed.len(), 3, "{export}: {report:?}");
+    }
+}
