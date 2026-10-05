@@ -1,7 +1,7 @@
 # ADR-0003: CLI presentation boundary and rs-rich-cli
 
 - **Status:** Accepted (2026-10-04). Not built yet, now a follow-up: a generated JSON Schema per command (§3), and JSON and plain contract snapshots for every command (`ods erd`, most of `ods lineage` and `ods mcp` have none). The output envelope is at 1.0 (#342).
-- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, proposed)
+- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, accepted 2026-10-05)
 - **Issues:** #108 (also #6, #21, #22, #85, #107)
 - **Deciders:** @n1ckyb
 
@@ -283,7 +283,7 @@ policy, macOS CI or 0.1 roadmap.
 Named semantic styles are *not* a gap: `rich::theme::Theme` already maps style names to
 styles.
 
-### 7. Hyperlinks (amendment, proposed 2026-10-05)
+### 7. Hyperlinks (amendment, accepted 2026-10-05)
 A terminal that follows OSC 8 hyperlinks lets people open a file ODS names (a run's
 journal, later a failing model's file) without copying its path. Links are data that
 reaches the terminal inside an escape sequence, so they are held to the same rules as
