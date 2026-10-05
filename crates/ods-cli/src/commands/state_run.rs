@@ -54,7 +54,7 @@ use super::state_retry::{LastOutcome, RetryFailed};
 use super::state_settings::{Origin, Setting, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
-use crate::present::{Level, Line, Present, Span, Tone, ViewNode};
+use crate::present::{Level, Line, Link, Present, Span, Tone, ViewNode};
 
 /// Options shared by the commands that run dbt (`run`, `test`).
 pub(super) fn dbt_options(command: Command) -> Command {
@@ -2271,7 +2271,10 @@ impl RunReport {
         if let Some(journal) = &self.observed.journal {
             summary.push((
                 "journal".into(),
-                vec![Span::toned(journal.display().to_string(), Tone::Code)],
+                vec![
+                    Span::toned(journal.display().to_string(), Tone::Code)
+                        .linked(Link::file(journal)),
+                ],
             ));
         }
         if let Some(record) = &self.record {

@@ -40,13 +40,45 @@ impl Tone {
     ];
 }
 
-/// A run of text with an optional tone.
+/// The site ODS's documentation is published at (`site_url` in `mkdocs.yml`).
+const DOCS_SITE: &str = "https://buchochelliq-labs.github.io/open-data-suite/";
+
+/// Where a span leads when a terminal can follow links (ADR-0003 §7): a local file, or
+/// a page of ODS's documentation. It is always a URL ODS built itself, never text from
+/// data, so nothing a project or an engine says becomes a link; and `url` encodes it,
+/// so it can't carry a control character out of the escape that holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link(url::Url);
+
+impl Link {
+    /// A local file, made absolute against the current directory (as the path would be
+    /// opened). `None` if it can't be expressed as a `file:` URL.
+    pub fn file(path: &std::path::Path) -> Option<Self> {
+        let path = std::path::absolute(path).ok()?;
+        url::Url::from_file_path(path).ok().map(Self)
+    }
+
+    /// A page of ODS's documentation, e.g. `cli/#exit-status`.
+    pub fn docs(page: &'static str) -> Option<Self> {
+        url::Url::parse(DOCS_SITE).ok()?.join(page).ok().map(Self)
+    }
+
+    /// The URL.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+/// A run of text with an optional tone, and optionally a link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
     /// The literal text. Never interpreted as markup by any backend.
     pub text: String,
     /// How the text should be emphasised, if at all.
     pub tone: Option<Tone>,
+    /// Where it leads, for backends that can link. The text says the same thing on its
+    /// own: a link only saves copying it.
+    pub link: Option<Link>,
 }
 
 impl Span {
@@ -55,6 +87,7 @@ impl Span {
         Self {
             text: text.into(),
             tone: None,
+            link: None,
         }
     }
 
@@ -63,7 +96,15 @@ impl Span {
         Self {
             text: text.into(),
             tone: Some(tone),
+            link: None,
         }
+    }
+
+    /// The span, leading to `link` where a terminal can follow it.
+    #[must_use]
+    pub fn linked(mut self, link: Option<Link>) -> Self {
+        self.link = link;
+        self
     }
 }
 
@@ -209,6 +250,36 @@ pub enum ViewNode {
     Group(Vec<ViewNode>),
 }
 
+impl ViewNode {
+    /// Removes every span's link, for output that can't follow them.
+    pub fn drop_links(&mut self) {
+        fn line(spans: &mut [Span]) {
+            for span in spans {
+                span.link = None;
+            }
+        }
+        fn tree(item: &mut TreeItem) {
+            line(&mut item.label);
+            item.children.iter_mut().for_each(tree);
+        }
+        match self {
+            ViewNode::Heading(_) => {}
+            ViewNode::Paragraph(l) | ViewNode::Notice { message: l, .. } => line(l),
+            ViewNode::KeyValue(pairs) => pairs.iter_mut().for_each(|(_, l)| line(l)),
+            ViewNode::Table { rows, footer, .. } => {
+                rows.iter_mut().flatten().for_each(|l| line(l));
+                footer.iter_mut().flatten().for_each(|l| line(l));
+            }
+            ViewNode::Tree(root) => tree(root),
+            ViewNode::Panel { title, body, .. } => {
+                line(title);
+                body.drop_links();
+            }
+            ViewNode::Group(children) => children.iter_mut().for_each(ViewNode::drop_links),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +329,40 @@ mod tests {
             engine_line(Some("12:00:00"), "1 of 2 OK\rERROR"),
             "12:00:00  1 of 2 OK\nERROR"
         );
+    }
+
+    #[test]
+    fn links_can_be_dropped_everywhere() {
+        let link = Link::docs("cli/#exit-status");
+        assert_eq!(
+            link.as_ref().map(Link::as_str),
+            Some("https://buchochelliq-labs.github.io/open-data-suite/cli/#exit-status")
+        );
+        let linked = || vec![Span::plain("x").linked(link.clone())];
+        let mut node = ViewNode::Group(vec![
+            ViewNode::Paragraph(linked()),
+            ViewNode::KeyValue(vec![("k".into(), linked())]),
+            ViewNode::Table {
+                title: None,
+                columns: vec!["c".into()],
+                rows: vec![vec![linked()]],
+                breaks: Vec::new(),
+                footer: Some(vec![linked()]),
+            },
+            ViewNode::Tree(TreeItem {
+                label: linked(),
+                children: vec![TreeItem::leaf(linked())],
+            }),
+            ViewNode::Panel {
+                title: linked(),
+                level: Level::Error,
+                body: Box::new(ViewNode::Notice {
+                    level: Level::Info,
+                    message: linked(),
+                }),
+            },
+        ]);
+        node.drop_links();
+        assert!(!format!("{node:?}").contains("Link("), "{node:?}");
     }
 }

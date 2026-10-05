@@ -1,7 +1,7 @@
 # ADR-0003: CLI presentation boundary and rs-rich-cli
 
 - **Status:** Accepted (2026-10-04). Not built yet, now a follow-up: a generated JSON Schema per command (§3), and JSON and plain contract snapshots for every command (`ods erd`, most of `ods lineage` and `ods mcp` have none). The output envelope is at 1.0 (#342).
-- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9)
+- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, proposed)
 - **Issues:** #108 (also #6, #21, #22, #85, #107)
 - **Deciders:** @n1ckyb
 
@@ -282,6 +282,37 @@ policy, macOS CI or 0.1 roadmap.
 
 Named semantic styles are *not* a gap: `rich::theme::Theme` already maps style names to
 styles.
+
+### 7. Hyperlinks (amendment, proposed 2026-10-05)
+A terminal that follows OSC 8 hyperlinks lets people open a file ODS names (a run's
+journal, later a failing model's file) without copying its path. Links are data that
+reaches the terminal inside an escape sequence, so they are held to the same rules as
+the rest of the output:
+
+- **A `Span` may carry a `Link`, and a link is only ever a URL ODS built itself:** a
+  local file (`Link::file`, a `file:` URL of the path made absolute) or a page of ODS's
+  own documentation (`Link::docs`, a fixed page under `site_url`). There is no
+  constructor from text, so nothing a project, an engine or a warehouse says becomes a
+  link, and links can't point anywhere ODS didn't choose.
+- **Encoded, never raw.** The URL is built with the `url` crate, which percent-encodes
+  control characters. rs-rich writes a link's URL into the escape as is, so a raw
+  string could end it early (`ESC \`, `BEL`) and inject terminal sequences. A test
+  pins that a path holding them still opens and closes exactly one link.
+- **Only where it can be followed.** The rich backend writes links when
+  `supports-hyperlinks` says stdout is a terminal that follows them (it honours
+  `FORCE_HYPERLINK`); otherwise it drops them before rendering. rs-rich writes them only
+  with colour on. The plain backend and JSON never write them; JSON already carries the
+  paths as data.
+- **A link never says more than its text.** The text shows the same path or page, so
+  output reads the same without links, and recordings and snapshots don't change.
+
+First use: the journal path of `ods state run` (and `build`, `seed`, `snapshot`, `test`,
+`retry`) and `ods state history --run`. Linking a failing model's file needs the project
+directory in the failure view, and a docs link per error code needs errors rendered as
+views; both are left for later.
+
+New dependencies: `url` (MIT OR Apache-2.0, already in the tree) and
+`supports-hyperlinks` (Apache-2.0).
 
 ## Consequences
 - **Positive:**

@@ -26,6 +26,10 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- In a terminal that follows hyperlinks, the run's journal path (`ods state run`,
+  `build`, `seed`, `snapshot`, `test`, `retry`, `ods state history --run`) is a link to
+  the file. ODS only links paths and pages it builds itself; set `FORCE_HYPERLINK=0` to
+  turn links off, or `1` to force them (#379)
 - Conformance suites for the `sql_lineage` and `observed_lineage` contracts, so every
   contract in `ods-sdk` now has one; the SQL parser (in every dialect), the Unity
   Catalog lineage export reader and the fakes run them. A new guide, Writing a provider,
