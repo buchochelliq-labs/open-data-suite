@@ -81,7 +81,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   keeps its table shape; only the row order of plans changes (#377)
 - Each failure under **Why it failed** is framed in the terminal, titled with what failed
   (`customer_segments failed`, `test not_null on customers.customer_id failed`). In plain
-  output that title replaces the `failed:`/`failed test:` line (#PR)
+  output that title replaces the `failed:`/`failed test:` line (#378)
 
 ### Fixed
 - A carriage return in a value shown in the terminal (a node name, an engine's message or
