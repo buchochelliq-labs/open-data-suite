@@ -55,13 +55,13 @@ impl StateStoreHarness for MemoryHarness {
 #[tokio::test]
 async fn a_file_database_conforms() {
     let report = run(&FileHarness(std::sync::Mutex::default())).await;
-    assert_eq!(report.passed.len(), 7, "{report:?}");
+    assert_eq!(report.passed.len(), 8, "{report:?}");
 }
 
 #[tokio::test]
 async fn an_in_memory_database_conforms() {
     let report = run(&MemoryHarness).await;
-    assert_eq!(report.passed.len(), 7, "{report:?}");
+    assert_eq!(report.passed.len(), 8, "{report:?}");
 }
 
 fn snapshot(parent: Option<ods_core::state::SnapshotId>, run: &str) -> StateSnapshot {
@@ -87,7 +87,7 @@ async fn state_survives_reopening_and_migrations_are_recorded() {
     let scope = StateScope::new("p", "dev").unwrap();
     let id = {
         let store = SqliteStateStore::open(&db.path).await.unwrap();
-        assert_eq!(store.schema_version().await.unwrap(), 1);
+        assert_eq!(store.schema_version().await.unwrap(), 2);
         store
             .commit(&scope, &snapshot(None, "run-1"))
             .await
@@ -96,7 +96,7 @@ async fn state_survives_reopening_and_migrations_are_recorded() {
     let store = SqliteStateStore::open(&db.path).await.unwrap();
     assert_eq!(
         store.schema_version().await.unwrap(),
-        1,
+        2,
         "migrations run once"
     );
     assert_eq!(store.latest(&scope).await.unwrap().unwrap().id, id);

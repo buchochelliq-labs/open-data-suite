@@ -12,17 +12,19 @@
 //!   database written by a newer ODS is refused (#188, ADR-0018).
 //! - A damaged file, or a snapshot that can't be decoded, is
 //!   [`ProviderError::Corrupt`]; [`check`](StateStore::check) says what is wrong.
+//! - The run ledger (ADR-0029) is a `runs` table, one versioned JSON document per run
+//!   (migration 2). It is evidence, never joined to the heads.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use ods_core::CapabilitySet;
-use ods_core::state::{SnapshotId, StateSnapshot, Timestamp};
+use ods_core::state::{RunEntry, SnapshotId, StateSnapshot, Timestamp};
+use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::state_store::{
     ProblemKind, ScopeSummary, SnapshotSummary, StateScope, StateStore, StoreCheck, StoreProblem,
-    StoreSchema, StoredSnapshot, check_readable,
+    StoreSchema, StoredSnapshot, check_readable, check_run_readable,
 };
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 use sqlx::pool::PoolConnection;
@@ -36,9 +38,10 @@ pub const KIND: &str = "sqlite";
 type Migrations = &'static [(i64, &'static str)];
 
 /// This build's migrations.
-const MIGRATIONS: Migrations = &[(
-    1,
-    "CREATE TABLE snapshots (
+const MIGRATIONS: Migrations = &[
+    (
+        1,
+        "CREATE TABLE snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scope TEXT NOT NULL,
         parent INTEGER,
@@ -54,7 +57,22 @@ const MIGRATIONS: Migrations = &[(
         scope TEXT PRIMARY KEY,
         snapshot_id INTEGER NOT NULL REFERENCES snapshots (id)
     );",
-)];
+    ),
+    (
+        2,
+        // The run ledger (ADR-0029): one row per run, a run with nothing to build too.
+        "CREATE TABLE runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        finished_at INTEGER NOT NULL,
+        schema_major INTEGER NOT NULL,
+        schema_minor INTEGER NOT NULL,
+        document TEXT NOT NULL
+    );
+    CREATE INDEX runs_by_scope ON runs (scope, finished_at, id);",
+    ),
+];
 
 /// How long a writer waits for another writer before giving up.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -594,7 +612,7 @@ impl Provider for SqliteStateStore {
             KIND,
             "default",
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::new(),
+            CapabilitySet::from_iter([Capability::RunLedger]),
         )
     }
 }
@@ -674,6 +692,53 @@ impl StateStore for SqliteStateStore {
             .collect()
     }
 
+    async fn record_run(&self, scope: &StateScope, entry: &RunEntry) -> Result<(), ProviderError> {
+        // Never write what this build couldn't read back.
+        check_run_readable(entry)?;
+        let document = serde_json::to_string(entry)
+            .map_err(|e| ProviderError::Other(format!("can't serialize the run: {e}")))?;
+        sqlx::query(
+            "INSERT INTO runs (scope, run_id, finished_at, schema_major, schema_minor, document) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(scope.as_str())
+        .bind(&entry.run_id)
+        .bind(entry.finished_at.unix())
+        .bind(i64::from(entry.schema_version.major))
+        .bind(i64::from(entry.schema_version.minor))
+        .bind(document)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| db_error(&e))?;
+        Ok(())
+    }
+
+    async fn runs(
+        &self,
+        scope: &StateScope,
+        since: Option<Timestamp>,
+        limit: usize,
+    ) -> Result<Vec<RunEntry>, ProviderError> {
+        let rows = sqlx::query(
+            "SELECT id, document FROM runs WHERE scope = ? AND finished_at >= ? ORDER BY finished_at DESC, id DESC LIMIT ?",
+        )
+        .bind(scope.as_str())
+        .bind(since.map_or(i64::MIN, Timestamp::unix))
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| db_error(&e))?;
+        rows.into_iter()
+            .map(|r| {
+                let id: i64 = r.get(0);
+                let entry: RunEntry = serde_json::from_str(r.get(1)).map_err(|e| {
+                    ProviderError::Corrupt(format!("run {id} of the ledger can't be decoded: {e}"))
+                })?;
+                check_run_readable(&entry)?;
+                Ok(entry)
+            })
+            .collect()
+    }
+
     async fn check(&self) -> Result<StoreCheck, ProviderError> {
         let mut problems = Vec::new();
         // Damage anywhere is a finding, not a failure to check.
@@ -742,7 +807,40 @@ impl SqliteStateStore {
         }
 
         let scopes = self.check_records(problems).await?;
+        // From version 2 the run ledger is part of the store (ADR-0029): missing, it was
+        // lost, and the next run couldn't record itself.
+        if tables.iter().any(|t| t == "runs") {
+            self.check_runs(problems).await?;
+        } else if version >= 2 {
+            problems.push(StoreProblem::new(
+                ProblemKind::Damaged,
+                "schema version 2 or later has a `runs` table (the run ledger), and it is missing"
+                    .to_owned(),
+            ));
+        }
         Ok(StoreCheck::new(schema, scopes, std::mem::take(problems)))
+    }
+
+    /// Checks every entry of the run ledger decodes, and is a version this build reads
+    /// (ADR-0029).
+    async fn check_runs(&self, problems: &mut Vec<StoreProblem>) -> Result<(), ProviderError> {
+        let rows = sqlx::query("SELECT id, scope, document FROM runs ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| db_error(&e))?;
+        for row in &rows {
+            let (id, scope): (i64, String) = (row.get(0), row.get(1));
+            let read = serde_json::from_str::<RunEntry>(row.get(2))
+                .map_err(|e| e.to_string())
+                .and_then(|e| check_run_readable(&e).map_err(|e| e.to_string()));
+            if let Err(why) = read {
+                problems.push(StoreProblem::new(
+                    ProblemKind::UnreadableRun,
+                    format!("run {id} of the ledger of `{scope}`: {why}"),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Checks every snapshot decodes, and every head and parent points at a snapshot in
@@ -860,20 +958,17 @@ mod tests {
         StateSnapshot::new(None, Timestamp::from_unix(1), run, BTreeMap::new())
     }
 
-    // Synthetic schema versions after this build's first.
-    const V2: Migrations = &[
-        (1, MIGRATIONS[0].1),
-        (2, "CREATE TABLE synthetic_v2 (x INTEGER)"),
-    ];
+    // Version 2 is this build's (the run ledger); version 3 is synthetic, after it.
+    const V2: Migrations = &[(1, MIGRATIONS[0].1), (2, MIGRATIONS[1].1)];
     const V3: Migrations = &[
         (1, MIGRATIONS[0].1),
-        (2, "CREATE TABLE synthetic_v2 (x INTEGER)"),
+        (2, MIGRATIONS[1].1),
         (3, "ALTER TABLE snapshots ADD COLUMN synthetic_v3 TEXT"),
     ];
     // Its first statement works, its second fails: the whole migration must not apply.
     const BROKEN_V3: Migrations = &[
         (1, MIGRATIONS[0].1),
-        (2, "CREATE TABLE synthetic_v2 (x INTEGER)"),
+        (2, MIGRATIONS[1].1),
         (
             3,
             "CREATE TABLE half_done (x INTEGER); CREATE TABLE snapshots (x INTEGER)",
@@ -919,6 +1014,67 @@ mod tests {
             .unwrap();
         assert_eq!(first.schema_version().await.unwrap(), 1);
         assert_eq!(first.latest(&scope).await.unwrap().unwrap().id, id);
+    }
+
+    /// Migration 2 (ADR-0029): a database from before the run ledger keeps its state,
+    /// a 1.2 snapshot reads as untimed, and runs can be recorded.
+    #[tokio::test]
+    async fn a_database_before_the_run_ledger_migrates_and_keeps_its_state() {
+        use ods_core::state::{RunEntry, RunEntryOutcome};
+        let (_dir, db) = temp_db("ledger");
+        let scope = StateScope::new("p", "dev").unwrap();
+        let mut old = snapshot("run-1");
+        old.schema_version = ods_core::SchemaVersion::new(1, 2);
+        let id = {
+            let store = SqliteStateStore::open_with(&db, &MIGRATIONS[..1])
+                .await
+                .unwrap();
+            store.commit(&scope, &old).await.unwrap()
+        };
+        let store = SqliteStateStore::open(&db).await.unwrap();
+        assert_eq!(store.schema_version().await.unwrap(), 2);
+        let latest = store.latest(&scope).await.unwrap().unwrap();
+        assert_eq!((latest.id, latest.snapshot), (id, old));
+        assert_eq!(backups(&db).len(), 1, "a copy of version 1 is kept");
+        let entry = RunEntry::new(
+            "run-2",
+            Timestamp::from_unix(10),
+            RunEntryOutcome::NothingToBuild,
+            BTreeMap::new(),
+        );
+        store.record_run(&scope, &entry).await.unwrap();
+        assert_eq!(store.runs(&scope, None, 5).await.unwrap(), [entry]);
+        assert!(store.check().await.unwrap().is_sound());
+    }
+
+    /// From version 2, a missing run ledger is damage, and an entry that can't be read
+    /// is an `unreadable run` (ADR-0029).
+    #[tokio::test]
+    async fn the_check_reads_the_run_ledger() {
+        let (_dir, db) = temp_db("ledger-check");
+        let store = SqliteStateStore::open(&db).await.unwrap();
+        sqlx::query(
+            "INSERT INTO runs (scope, run_id, finished_at, schema_major, schema_minor, document) VALUES ('p/dev', 'run-x', 1, 1, 0, 'not json')",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let problems = store.check().await.unwrap().problems;
+        assert_eq!(
+            problems.iter().map(|p| p.kind).collect::<Vec<_>>(),
+            [ProblemKind::UnreadableRun],
+            "{problems:?}"
+        );
+        sqlx::query("DROP TABLE runs")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let problems = store.check().await.unwrap().problems;
+        assert_eq!(
+            problems.iter().map(|p| p.kind).collect::<Vec<_>>(),
+            [ProblemKind::Damaged],
+            "{problems:?}"
+        );
     }
 
     #[tokio::test]

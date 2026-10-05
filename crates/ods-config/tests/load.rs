@@ -236,6 +236,37 @@ fn value_rules_are_enforced() {
             .to_string()
             .contains("minimum of 20")
     );
+    // `[state.cost]` (ADR-0029): a rate of at least 0 and a short unit label.
+    let cost = dir.write(
+        "d/ods.toml",
+        "[state.cost]\nrate_per_hour = 4\nunit = \"USD\"\n",
+    );
+    let loaded = load(&inputs(None, Some(cost), None)).unwrap();
+    let rate = loaded.config.state.cost.as_ref().unwrap();
+    assert_eq!((rate.rate_per_hour, rate.unit.as_str()), (4.0, "USD"));
+    assert!((rate.cost_of(1_800_000) - 2.0).abs() < 1e-9, "half an hour");
+    for (name, text, says) in [
+        ("e", "rate_per_hour = -1\nunit = \"USD\"", "at least 0"),
+        ("f", "rate_per_hour = 4\nunit = \"\"", "short label"),
+        ("g", "rate_per_hour = 4", "unit"),
+        (
+            "h",
+            "rate_per_hour = 4\nunit = \"USD\"\nper = \"run\"",
+            "per",
+        ),
+    ] {
+        let file = dir.write(
+            &format!("{name}/ods.toml"),
+            &format!("[state.cost]\n{text}\n"),
+        );
+        let error = load(&inputs(None, Some(file), None))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(says) && error.contains("state.cost"),
+            "{error}"
+        );
+    }
     let bad_format = dir.write("c/ods.toml", "[output]\nformat = \"yaml\"\n");
     assert_eq!(
         load(&inputs(None, Some(bad_format), None))

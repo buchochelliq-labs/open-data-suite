@@ -541,6 +541,146 @@ pub struct StateSnapshot {
     pub sources: BTreeMap<String, SourceState>,
 }
 
+// ---------------------------------------------------------------------------- run ledger
+
+/// Version of [`RunEntry`] documents (ADR-0029).
+pub const RUN_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+
+/// How a run ended, as the run ledger keeps it (ADR-0029).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RunEntryOutcome {
+    /// Nothing the command builds needed building, so nothing ran: everything of its
+    /// kinds could be reused.
+    NothingToBuild,
+    /// Every node built, and every check passed.
+    Succeeded,
+    /// Some nodes or checks failed; the successes were recorded.
+    Failed,
+    /// The engine ran, but nothing could be recorded.
+    NotRecorded,
+}
+
+/// What a run did with one node (ADR-0029).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RunAction {
+    /// Built it. Its checks, if they ran with it, may still have failed.
+    Built,
+    /// Reused its last build.
+    Reused,
+    /// Tried to build it, and failed.
+    Failed,
+    /// Was to build it, but didn't, e.g. because something upstream failed.
+    Skipped,
+}
+
+/// One node's part in a run, as the ledger keeps it (ADR-0029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct RunNode {
+    /// What the run did with it.
+    pub action: RunAction,
+    /// How long its build took, in milliseconds: this run's for a built node, its last
+    /// build's for a reused one, as known when the run was recorded. `None` if unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_ms: Option<u64>,
+    /// The run that measured [`build_ms`](Self::build_ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timed_by: Option<String>,
+}
+
+impl RunNode {
+    /// A node's part in a run, untimed.
+    pub fn new(action: RunAction) -> Self {
+        Self {
+            action,
+            build_ms: None,
+            timed_by: None,
+        }
+    }
+
+    /// With the build time `build_ms`, measured by run `run`.
+    #[must_use]
+    pub fn timed(mut self, build_ms: Option<u64>, run: &str) -> Self {
+        self.build_ms = build_ms;
+        self.timed_by = build_ms.map(|_| run.to_owned());
+        self
+    }
+}
+
+/// One run, as the run ledger keeps it: evidence of what it reused and built, never
+/// read by the planner (ADR-0029, AGENTS.md rule 5). Every run that went ahead writes
+/// one, a run with nothing to build included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct RunEntry {
+    /// Document version ([`RUN_SCHEMA_VERSION`]).
+    pub schema_version: SchemaVersion,
+    /// The run's id: the executor's, or ODS's own for a run that ran nothing.
+    pub run_id: String,
+    /// When it started, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<Timestamp>,
+    /// When it finished.
+    pub finished_at: Timestamp,
+    /// How it ended.
+    pub outcome: RunEntryOutcome,
+    /// The snapshot its plan read, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on: Option<SnapshotId>,
+    /// The snapshot it committed, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<SnapshotId>,
+    /// Each node it built or reused, by id.
+    pub nodes: BTreeMap<String, RunNode>,
+}
+
+impl RunEntry {
+    /// A run that finished at `finished_at`.
+    pub fn new(
+        run_id: impl Into<String>,
+        finished_at: Timestamp,
+        outcome: RunEntryOutcome,
+        nodes: BTreeMap<String, RunNode>,
+    ) -> Self {
+        Self {
+            schema_version: RUN_SCHEMA_VERSION,
+            run_id: run_id.into(),
+            started_at: None,
+            finished_at,
+            outcome,
+            based_on: None,
+            snapshot: None,
+            nodes,
+        }
+    }
+
+    /// Started at `at`.
+    #[must_use]
+    pub fn started(mut self, at: Option<Timestamp>) -> Self {
+        self.started_at = at;
+        self
+    }
+
+    /// Planned against `based_on`, and committed `snapshot`.
+    #[must_use]
+    pub fn snapshots(mut self, based_on: Option<SnapshotId>, snapshot: Option<SnapshotId>) -> Self {
+        self.based_on = based_on;
+        self.snapshot = snapshot;
+        self
+    }
+
+    /// How many of its nodes it did `action` to.
+    pub fn count(&self, action: RunAction) -> usize {
+        self.nodes.values().filter(|n| n.action == action).count()
+    }
+}
+
 /// The last time a source's checks all passed, and on which data (#232). A source is
 /// an input with checks: they vouch for a version of its data, as a node's checks vouch
 /// for a build.
@@ -993,6 +1133,44 @@ mod tests {
         assert!(!Exactness::Proxy.allows_reuse());
         assert!(Exactness::Semantic.allows_reuse());
         assert!(Exactness::Exact.allows_reuse());
+    }
+
+    /// A run entry, as the ledger stores it (ADR-0029): a golden document, so its
+    /// shape only changes on purpose.
+    #[test]
+    fn run_entries_have_a_stable_document() {
+        let entry = RunEntry::new(
+            "run-2",
+            Timestamp::from_unix(120),
+            RunEntryOutcome::NothingToBuild,
+            BTreeMap::from([
+                (
+                    "model.p.a".to_owned(),
+                    RunNode::new(RunAction::Reused).timed(Some(1_250), "run-1"),
+                ),
+                ("model.p.b".to_owned(), RunNode::new(RunAction::Reused)),
+            ]),
+        )
+        .started(Some(Timestamp::from_unix(60)))
+        .snapshots(Some(SnapshotId(1)), None);
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "schema_version": {"major": 1, "minor": 0},
+                "run_id": "run-2",
+                "started_at": "1970-01-01T00:01:00Z",
+                "finished_at": "1970-01-01T00:02:00Z",
+                "outcome": "nothing_to_build",
+                "based_on": 1,
+                "nodes": {
+                    "model.p.a": {"action": "reused", "build_ms": 1250, "timed_by": "run-1"},
+                    "model.p.b": {"action": "reused"}
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<RunEntry>(json).unwrap(), entry);
+        assert_eq!(entry.count(RunAction::Reused), 2);
     }
 
     /// A 1.2 node, from before build times (ADR-0029), reads as untimed; one with a time

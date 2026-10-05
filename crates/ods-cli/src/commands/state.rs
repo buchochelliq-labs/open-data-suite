@@ -17,7 +17,7 @@ use serde::Serialize;
 
 use super::{
     Planned, state_doctor, state_explain, state_export, state_failure, state_plan, state_retry,
-    state_run, state_test,
+    state_run, state_savings, state_test,
 };
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
@@ -36,7 +36,7 @@ impl Module for State {
     fn command(&self) -> Command {
         Command::new("state")
             .about(format!(
-                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`, `doctor`, `retry`, `explain`, `explain-failure`, `diff`, `graph`, `export`; more in {MILESTONE}]"
+                "{ABOUT} [preview: `run`, `plan`, `record`, `history`, `policies`, `doctor`, `retry`, `explain`, `explain-failure`, `diff`, `graph`, `export`, `savings`; more in {MILESTONE}]"
             ))
             .args_conflicts_with_subcommands(true)
             .subcommand(
@@ -83,6 +83,7 @@ impl Module for State {
             .subcommand(state_explain::diff_command())
             .subcommand(state_explain::graph_command())
             .subcommand(state_failure::explain_failure_command())
+            .subcommand(state_savings::savings_command())
             .subcommand(state_doctor::doctor_command())
             .subcommand(state_doctor::backup_command())
             .subcommand(state_doctor::reset_command())
@@ -130,6 +131,9 @@ impl Module for State {
             Some(("explain-failure", args)) => ctx.emit(
                 &state_failure::ExplainFailureReport::build(args, ctx.config)?,
             ),
+            Some(("savings", args)) => {
+                ctx.emit(&state_savings::SavingsReport::build(args, ctx.config)?)
+            }
             Some(("diff", args)) => ctx.emit(&state_explain::DiffReport::build(args, ctx.config)?),
             Some(("graph", args)) => {
                 let report = state_explain::GraphReport::build(args, ctx.config)?;

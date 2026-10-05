@@ -1189,14 +1189,18 @@ fn build_times_are_recorded_kept_and_estimate_what_reuse_saves() {
         Timestamp::from_unix(T0 + 60),
     )
     .unwrap();
-    let saved = ods_state::savings(&plan, 0, Some(&first));
+    let saved = ods_state::plan_savings(&plan, 0, Some(&first));
     assert_eq!((saved.reused, saved.timed, saved.untimed), (5, 4, 1));
     assert_eq!(saved.avoided_ms, 1_200 + 800 + 3_000 + 50);
     assert!(saved.is_lower_bound(), "report has no timing");
     assert_eq!(saved.timed_by, ["run-1"]);
     // No state: nothing is reused, so nothing is saved.
     let fresh = plan_all(&p);
-    assert_eq!(ods_state::savings(&fresh, 5, None).avoided_ms, 0);
+    assert_eq!(ods_state::plan_savings(&fresh, 5, None).avoided_ms, 0);
+    // Only what the command would build counts: reusing a model saves a seed command
+    // nothing.
+    let only = ods_state::savings(["model.p.orders"], 0, Some(&first));
+    assert_eq!((only.reused, only.avoided_ms), (1, 3_000));
 }
 
 fn plan_all(project: &Project) -> ods_core::state::ExecutionPlan {

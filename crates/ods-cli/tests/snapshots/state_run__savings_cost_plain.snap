@@ -1,0 +1,5 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: line
+---
+cost avoided: ~3.25 credits (estimate, at 3600 credits per hour of build time, `[state.cost]`)

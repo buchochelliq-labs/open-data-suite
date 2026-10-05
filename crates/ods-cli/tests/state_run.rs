@@ -4511,6 +4511,21 @@ fn only_a_failure_before_running_is_reported_as_one() {
     );
     let hint = json["diagnostics"][0]["hint"].as_str().unwrap_or_default();
     assert!(hint.contains("ods state history --run"), "{json:#}");
+    // dbt started, so the run went ahead: the run ledger keeps it, as not recorded,
+    // under the journal's run id (ADR-0029).
+    let (_, ledger) = project.ods(&["state", "savings"]);
+    assert_eq!(ledger["result"]["run_count"], 1, "{ledger:#}");
+    assert_eq!(ledger["result"]["runs"][0]["outcome"], "not_recorded");
+    assert!(
+        hint.contains(ledger["result"]["runs"][0]["run_id"].as_str().unwrap()),
+        "{hint}"
+    );
+    // Nothing was reused yet: no saving, rather than an unknown one.
+    let plain = project.ods_plain(&["state", "savings"]);
+    assert!(
+        plain.contains("saved: none: no run has reused a node yet"),
+        "{plain}"
+    );
 
     let built = Project::new("test-compile-failure");
     built.run_ok(&[]);
@@ -4651,4 +4666,135 @@ fn a_run_says_what_reuse_saved() {
         .find(|l| l.starts_with("saved:"))
         .unwrap_or_else(|| panic!("{plain}"));
     insta::assert_snapshot!("savings_plain", line);
+}
+
+/// #210, ADR-0029: every run that goes ahead adds an entry to the run ledger, one with
+/// nothing to build too (it commits no snapshot and writes no journal), and a dry run
+/// none. `ods state savings` reports from it, per run and in total, as estimates.
+#[test]
+fn the_run_ledger_counts_every_run_and_savings_reports_it() {
+    let project = Project::new("ledger");
+    let first = project.run_ok(&[]);
+    let first_run = first["execution"]["run_id"].as_str().unwrap().to_owned();
+    assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
+    let (code, _) = project.run(&["--dry-run"]);
+    assert_eq!(code, 0);
+    project.change_code("model.jaffle_ods.customers");
+    let third = project.run_ok(&[]);
+    let third_run = third["execution"]["run_id"].as_str().unwrap().to_owned();
+
+    let (code, json) = project.ods(&["state", "savings"]);
+    assert_eq!(code, 0, "{json:#}");
+    let report = &json["result"];
+    assert_eq!(report["estimate"], true);
+    assert_eq!(
+        report["run_count"], 3,
+        "no entry for the dry run: {report:#}"
+    );
+    let runs = report["runs"].as_array().unwrap();
+    assert_eq!(runs[0]["run_id"], third_run.as_str());
+    assert_eq!(runs[1]["outcome"], "nothing_to_build");
+    assert!(
+        runs[1]["run_id"].as_str().unwrap().starts_with("ods-"),
+        "ODS's own id for a run that ran nothing: {report:#}"
+    );
+    assert_eq!(
+        (runs[1]["reused"].clone(), runs[1]["timed"].clone()),
+        (Value::from(13), Value::from(13))
+    );
+    assert_eq!(runs[1]["timed_by"], serde_json::json!([first_run]));
+    assert_eq!(runs[2]["run_id"], first_run.as_str());
+    assert_eq!(runs[2]["reused"], 0);
+    assert_eq!(runs[2]["built"], 13);
+    let totals = &report["totals"];
+    assert_eq!(totals["reused"], 13 + 9);
+    assert_eq!(
+        totals["avoided_ms"].as_u64(),
+        Some(runs[0]["avoided_ms"].as_u64().unwrap() + runs[1]["avoided_ms"].as_u64().unwrap())
+    );
+
+    // Only runs since a time: none from the future.
+    let (code, later) = project.ods(&["state", "savings", "--since", "2999-01-01"]);
+    assert_eq!(code, 0, "{later:#}");
+    assert_eq!(later["result"]["run_count"], 0);
+    let (code, bad) = project.ods(&["state", "savings", "--since", "yesterday"]);
+    assert_eq!(code, 2, "{bad:#}");
+
+    let plain = project.ods_plain(&["state", "savings"]);
+    let mut redacted = plain
+        .replace(&first_run, "<run-1>")
+        .replace(&third_run, "<run-3>")
+        .replace(runs[1]["run_id"].as_str().unwrap(), "<run-2>")
+        .replace(project.db().to_str().unwrap(), "<state-db>");
+    for run in runs {
+        redacted = redacted.replace(run["finished_at"].as_str().unwrap(), "<time>");
+    }
+    insta::assert_snapshot!("savings_report_plain", redacted.trim_end());
+    let mut stable = report.clone();
+    for run in stable["runs"].as_array_mut().unwrap() {
+        run["run_id"] = Value::String("<run>".into());
+        run["finished_at"] = Value::String("<time>".into());
+        let timed_by = run["timed_by"].as_array().unwrap().len();
+        run["timed_by"] = vec![Value::String("<run>".into()); timed_by].into();
+    }
+    stable["totals"]["timed_by"] = Value::String("<runs>".into());
+    stable["state_db"] = Value::String("<state-db>".into());
+    insta::assert_snapshot!(
+        "savings_report_json",
+        serde_json::to_string_pretty(&stable).unwrap()
+    );
+
+    // `ods state seed` would only have built seeds: reusing models saves it nothing.
+    let (_, planned) = project.ods(&["state", "plan"]);
+    let seeds = planned["result"]["plan"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "seed" && e["action"] == "reuse")
+        .count();
+    assert!(seeds > 0 && seeds < 13, "{seeds}");
+    let (code, seeded) = project.command("seed", &[]);
+    assert_eq!(code, 0, "{seeded:#}");
+    assert_eq!(seeded["result"]["savings"]["reused"], seeds, "{seeded:#}");
+    let (_, after) = project.ods(&["state", "savings", "--limit", "1"]);
+    let newest = &after["result"]["runs"][0];
+    assert_eq!(newest["outcome"], "nothing_to_build");
+    assert_eq!(newest["reused"], seeds, "{after:#}");
+}
+
+/// #210, ADR-0029: with `[state.cost]` in `ods.toml`, `ods state savings` puts a cost on
+/// the time avoided: per run and in total, at the configured rate and unit, an estimate.
+#[test]
+fn savings_cost_what_reuse_avoided_at_the_configured_rate() {
+    let project = Project::new("savings-cost");
+    project.run_ok(&[]);
+    project.run_ok(&[]);
+    std::fs::write(
+        project.dir.join("ods.toml"),
+        "[state.cost]\nrate_per_hour = 3600\nunit = \"credits\"\n",
+    )
+    .unwrap();
+    let (code, json) = project.ods(&["state", "savings"]);
+    assert_eq!(code, 0, "{json:#}");
+    let report = &json["result"];
+    // 3600 per hour is 1 per second: the cost is the time avoided, in seconds.
+    let avoided = report["totals"]["avoided_ms"].as_u64().unwrap();
+    let cost = &report["cost"];
+    assert_eq!(cost["unit"], "credits");
+    #[allow(clippy::cast_precision_loss, reason = "a few seconds")]
+    let expected = avoided as f64 / 1_000.0;
+    assert!(
+        (cost["total"].as_f64().unwrap() - expected).abs() < 1e-9,
+        "{cost}"
+    );
+    assert!(
+        report["runs"][0]["cost"].as_f64().unwrap() > 0.0,
+        "{report:#}"
+    );
+    let plain = project.ods_plain(&["state", "savings"]);
+    let line = plain
+        .lines()
+        .find(|l| l.starts_with("cost avoided:"))
+        .unwrap_or_else(|| panic!("{plain}"));
+    insta::assert_snapshot!("savings_cost_plain", line);
 }

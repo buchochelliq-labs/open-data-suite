@@ -65,6 +65,42 @@ pub struct StateConfig {
     /// The environment whose state is kept, as in `--environment`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    /// What an hour of build time costs, for `ods state savings` (ADR-0029).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<CostConfig>,
+}
+
+/// `[state.cost]`: what an hour of build time costs, to put a figure on what reuse saved
+/// (ADR-0029). A rate and a label of the unit, never a price list or a credential: a
+/// warehouse's own pricing stays out of ODS.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CostConfig {
+    /// The cost of one hour of build time, in [`unit`](Self::unit); at least 0.
+    pub rate_per_hour: f64,
+    /// What the rate is counted in, as shown, e.g. `USD` or `credits`.
+    pub unit: String,
+}
+
+impl CostConfig {
+    /// A rate of `rate_per_hour` `unit`s per hour of build time.
+    pub fn new(rate_per_hour: f64, unit: impl Into<String>) -> Self {
+        Self {
+            rate_per_hour,
+            unit: unit.into(),
+        }
+    }
+
+    /// What `ms` of build time costs, in [`unit`](Self::unit).
+    pub fn cost_of(&self, ms: u64) -> f64 {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "build times are far below 2^52 ms; the cost is an estimate"
+        )]
+        let hours = ms as f64 / 3_600_000.0;
+        hours * self.rate_per_hour
+    }
 }
 
 /// `[output]`.

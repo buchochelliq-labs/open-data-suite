@@ -12,7 +12,30 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Breaking
+- The SQLite state database migrates to version 2 the first time an `ods state`
+  command that opens it for use (`run`, `build`, `plan`, `history`, `test`, `export`, …)
+  runs (a new `runs` table, the run ledger, ADR-0029); a copy of version 1 is kept beside
+  it. `ods state savings` and `ods state doctor` read it without migrating. **What to
+  do:** nothing, unless you go back to an older `ods`, or the database is read-only: an
+  older `ods` refuses the migrated database, so restore the copy (`ods state doctor`
+  lists it); a read-only one must be migrated where it is writable first.
+- `SDK_VERSION` is now 0.7 (#210): the `state_store` contract is 0.3, with
+  `record_run` and `runs` (the run ledger) behind the new capability `run_ledger`; both
+  default to `Unsupported`. **What to do:** rebuild out-of-process plugins against it; a
+  store that keeps no ledger needs no change.
+
 ### Added
+- What reuse saved, as a cost: `[state.cost] rate_per_hour` and `unit` in `ods.toml`
+  make `ods state savings` add the cost avoided at that rate, per run and in total (an
+  estimate, like the time). The dashboard's Runs page shows what reuse saved, from the
+  run ledger (`savings` in `/api/state/runs`) ([docs](docs/cli.md#what-reuse-saved))
+  (#371, #210).
+- `ods state savings [--since DATE] [--limit N]`: what reuse saved, per run and in
+  total, as estimates from each build's last measured time. It reads a new run ledger in the state
+  database, to which every run that goes ahead adds an entry, a run with nothing to build
+  included ([docs](docs/cli.md#what-reuse-saved),
+  [ADR-0029](docs/adr/0029-build-timings-and-the-run-ledger.md)) (#370, #210).
 - `ods state explain-failure <node> [--run <id>]`: why one model, seed, snapshot or test
   failed in the last run (or any run whose journal is kept), with the evidence and what
   to try, as `ods state history --run` explains it. A node that didn't fail says how it

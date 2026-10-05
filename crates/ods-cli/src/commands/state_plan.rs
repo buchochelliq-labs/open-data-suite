@@ -627,7 +627,7 @@ impl PlanReport {
         let build = plan.with_action(PlanAction::Build).count();
         Ok(Self {
             dbt_command: dbt_command(&plan),
-            savings: ods_state::savings(&plan, build, before.as_ref()),
+            savings: ods_state::plan_savings(&plan, build, before.as_ref()),
             build,
             reuse: plan.with_action(PlanAction::Reuse).count(),
             based_on,

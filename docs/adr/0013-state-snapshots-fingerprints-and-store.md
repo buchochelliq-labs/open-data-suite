@@ -1,6 +1,6 @@
 # ADR-0013: State snapshots, fingerprints and the state store
 
-- **Status:** Accepted (2026-10-04). Amended by ADR-0016, 0017, 0018 and 0022. Since written: Delta table versions shipped (ADR-0022), `ods state run` records its own runs, and the `state_store` contract is 0.2.
+- **Status:** Accepted (2026-10-04). Amended by ADR-0016, 0017, 0018 and 0022. Since written: Delta table versions shipped (ADR-0022), `ods state run` records its own runs, and the `state_store` contract is 0.3 (the run ledger, ADR-0029).
 - **Date:** 2026-09-25
 - **Issues:** #11 (state model), #13 (fingerprints; formatting-insensitive SQL #209; hooks #218), #16 (change evidence), #18 (invalidation), #20 (planner), #22 (`ods state plan`), #25 (SQLite store), #232 (source tests)
 - **Deciders:** @n1ckyb
