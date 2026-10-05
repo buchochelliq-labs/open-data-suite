@@ -8,7 +8,7 @@ use ods_core::state::{
     DataVersion, Exactness, Fingerprint, NodeState, SourceState, StateSnapshot, TargetIdentity,
     TestRecord, Timestamp,
 };
-use ods_sdk::contracts::state_store::{StateScope, StateStore};
+use ods_sdk::contracts::state_store::{SnapshotSummary, StateScope, StateStore, StoredSnapshot};
 use ods_store_sqlite::SqliteStateStore;
 use proptest::prelude::*;
 
@@ -18,8 +18,15 @@ fn text() -> impl Strategy<Value = String> {
     prop::collection::vec(any::<char>(), 0..10).prop_map(|c| c.into_iter().collect())
 }
 
+/// Any timestamp: mostly within the range a `Timestamp` holds (years -9999 to 9999,
+/// which `from_unix` clamps to), sometimes past either end, which clamps to it.
 fn timestamp() -> impl Strategy<Value = Timestamp> {
-    any::<i64>().prop_map(Timestamp::from_unix)
+    prop_oneof![
+        8 => -377_705_023_201_i64..=253_402_207_200,
+        1 => Just(i64::MIN),
+        1 => Just(i64::MAX),
+    ]
+    .prop_map(Timestamp::from_unix)
 }
 
 fn exactness() -> impl Strategy<Value = Exactness> {
@@ -158,8 +165,15 @@ proptest! {
                 let stored = store.get(&scope, *id).await.unwrap().unwrap();
                 prop_assert_eq!(&stored.snapshot, snapshot);
             }
+            // History is read from its own columns, not the document: every line is
+            // the committed snapshot's, newest first, and no snapshot appears or goes.
             let history = store.history(&scope, committed.len() + 1).await.unwrap();
-            prop_assert_eq!(history.len(), committed.len(), "no snapshot appears or goes");
+            let expected: Vec<SnapshotSummary> = committed
+                .iter()
+                .rev()
+                .map(|(id, snapshot)| SnapshotSummary::of(&StoredSnapshot::new(*id, snapshot.clone())))
+                .collect();
+            prop_assert_eq!(history, expected);
             Ok(())
         })?;
     }
