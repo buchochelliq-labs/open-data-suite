@@ -502,7 +502,11 @@ fn the_erd_page_shows_what_ods_erd_generate_finds() {
     let page: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(page["erd"]["relationships"], cli["relationships"]);
     assert_eq!(page["erd"]["entities"], cli["entities"]);
-    assert!(!page["missing"].as_array().unwrap().is_empty());
+    assert_ne!(
+        page["missing"].as_array().map(Vec::len),
+        Some(0),
+        "untested relationships are listed"
+    );
     let snippets: Vec<&str> = page["missing"]
         .as_array()
         .unwrap()

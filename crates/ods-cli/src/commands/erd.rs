@@ -200,14 +200,18 @@ pub(super) fn dashboard_erd(loaded: &Loaded) -> ods_web::erd::ErdInput {
     );
     erd.diagnostics.append(&mut diagnostics);
     erd.diagnostics.sort();
-    let suggestions = relationship_tests(&erd, artifacts.manifest.dbt_version.as_deref());
+    let suggestions = relationship_tests(&erd, loaded.dbt_version(), loaded.project_name());
     ods_web::erd::ErdInput::new(Ok(erd), suggestions)
 }
 
 /// A dbt `relationships` test for each single-column relationship that is only joined
 /// in SQL or inferred, to paste under the referencing column, in the syntax of the
 /// project's dbt version.
-fn relationship_tests(erd: &Erd, dbt_version: Option<&str>) -> Vec<ods_web::erd::Suggestion> {
+fn relationship_tests(
+    erd: &Erd,
+    dbt_version: Option<&str>,
+    root_project: Option<&str>,
+) -> Vec<ods_web::erd::Suggestion> {
     let mut out = Vec::new();
     for r in erd
         .relationships
@@ -226,9 +230,8 @@ fn relationship_tests(erd: &Erd, dbt_version: Option<&str>) -> Vec<ods_web::erd:
         let ([column], [field]) = (r.from_columns.as_slice(), r.to_columns.as_slice()) else {
             continue;
         };
-        let target = match (to.kind, to.name.split_once('.')) {
-            (EntityKind::Source, Some((source, table))) => format!("source('{source}', '{table}')"),
-            _ => format!("ref('{}')", to.name),
+        let Some(target) = reference_to(&to.id, root_project) else {
+            continue;
         };
         let add_under = match (from.kind, from.name.split_once('.')) {
             (EntityKind::Source, Some((source, table))) => {
@@ -248,10 +251,45 @@ fn relationship_tests(erd: &Erd, dbt_version: Option<&str>) -> Vec<ods_web::erd:
     out
 }
 
+/// What test YAML references the node `id` by, from its dbt id: `ref('orders')`;
+/// `ref('pkg', 'orders')` for a node of another package than `root_project`, so it can't
+/// bind to a local namesake; `ref('orders', v=2)` for a model version (the id says which,
+/// so it is always pinned); `source('raw', 'orders')` for a source. `None` for anything
+/// else.
+pub(super) fn reference_to(id: &str, root_project: Option<&str>) -> Option<String> {
+    let parts: Vec<&str> = id.split('.').collect();
+    match parts.as_slice() {
+        ["source", _package, source, table @ ..] if !table.is_empty() => {
+            Some(format!("source('{source}', '{}')", table.join(".")))
+        }
+        [kind, package, name, rest @ ..] if matches!(*kind, "model" | "seed" | "snapshot") => {
+            let named = match root_project {
+                Some(root) if root != *package => format!("'{package}', '{name}'"),
+                _ => format!("'{name}'"),
+            };
+            let version = match rest {
+                [] => String::new(),
+                [v] => {
+                    let v = v.strip_prefix('v')?;
+                    if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()) {
+                        format!(", v={v}")
+                    } else {
+                        format!(", v='{v}'")
+                    }
+                }
+                _ => return None,
+            };
+            Some(format!("ref({named}{version})"))
+        }
+        _ => None,
+    }
+}
+
 /// The YAML of a `relationships` test on `column`, referencing `field` of `target`
-/// (`ref('…')` or `source('…', '…')`), as the dbt version expects it: `data_tests:`
-/// from 1.8 (`tests:` before), and the test's arguments under `arguments:` from 1.10.
-/// An unknown version gets the newest syntax.
+/// (from [`reference_to`]), as the project's dbt version accepts it: `data_tests:` from
+/// 1.8 (`tests:` before), and the test's arguments under `arguments:` from 1.10.5
+/// (directly under the test before). An unknown version gets what every version
+/// accepts: `tests:`, with the arguments directly under the test.
 pub(super) fn relationships_test(
     column: &str,
     target: &str,
@@ -259,22 +297,26 @@ pub(super) fn relationships_test(
     dbt_version: Option<&str>,
 ) -> String {
     let version = dbt_version.and_then(|v| {
-        let mut parts = v.trim_start_matches('v').split('.');
+        let mut parts = v.trim_start_matches('v').split('.').map(|p| {
+            let digits: String = p.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<u32>().ok()
+        });
         Some((
-            parts.next()?.parse::<u32>().ok()?,
-            parts.next()?.parse::<u32>().ok()?,
+            parts.next()??,
+            parts.next()??,
+            parts.next().flatten().unwrap_or(0),
         ))
     });
     let key = match version {
-        Some(v) if v < (1, 8) => "tests",
-        _ => "data_tests",
+        Some(v) if v >= (1, 8, 0) => "data_tests",
+        _ => "tests",
     };
     match version {
-        Some(v) if v < (1, 10) => format!(
-            "- name: {column}\n  {key}:\n    - relationships:\n        to: {target}\n        field: {field}"
+        Some(v) if v >= (1, 10, 5) => format!(
+            "- name: {column}\n  {key}:\n    - relationships:\n        arguments:\n          to: {target}\n          field: {field}"
         ),
         _ => format!(
-            "- name: {column}\n  {key}:\n    - relationships:\n        arguments:\n          to: {target}\n          field: {field}"
+            "- name: {column}\n  {key}:\n    - relationships:\n        to: {target}\n        field: {field}"
         ),
     }
 }
@@ -836,21 +878,48 @@ impl Present for ErdReport {
 
 #[cfg(test)]
 mod tests {
-    use super::relationships_test;
+    use super::{reference_to, relationships_test};
 
     #[test]
     fn the_relationships_test_follows_the_dbt_version() {
-        let newest = relationships_test("customer_id", "ref('customers')", "id", Some("1.10.2"));
+        let test = |v| relationships_test("customer_id", "ref('customers')", "id", v);
+        let newest = test(Some("1.10.5"));
         assert!(newest.contains("data_tests:") && newest.contains("arguments:"));
-        assert_eq!(
-            relationships_test("customer_id", "ref('customers')", "id", None),
-            newest,
-            "an unknown version gets the newest syntax"
-        );
-        let older = relationships_test("customer_id", "ref('customers')", "id", Some("1.9.4"));
-        assert!(older.contains("data_tests:") && !older.contains("arguments:"));
-        assert!(older.contains("        to: ref('customers')"));
-        let oldest = relationships_test("customer_id", "ref('customers')", "id", Some("1.7.0"));
+        assert!(test(Some("1.11.0b2")).contains("arguments:"));
+        // `arguments:` only exists from 1.10.5.
+        let before = test(Some("1.10.4"));
+        assert!(before.contains("data_tests:") && !before.contains("arguments:"));
+        assert!(before.contains("        to: ref('customers')"));
+        let oldest = test(Some("1.7.0"));
         assert!(oldest.contains("  tests:") && !oldest.contains("data_tests"));
+        // Unknown: what every version accepts.
+        assert_eq!(test(None), oldest);
+        assert_eq!(test(Some("unknown")), oldest);
+    }
+
+    #[test]
+    fn references_keep_the_package_and_version() {
+        let root = Some("shop");
+        assert_eq!(
+            reference_to("model.shop.orders", root).as_deref(),
+            Some("ref('orders')")
+        );
+        assert_eq!(
+            reference_to("model.other.orders", root).as_deref(),
+            Some("ref('other', 'orders')")
+        );
+        assert_eq!(
+            reference_to("model.shop.orders.v2", root).as_deref(),
+            Some("ref('orders', v=2)")
+        );
+        assert_eq!(
+            reference_to("source.shop.raw.orders", root).as_deref(),
+            Some("source('raw', 'orders')")
+        );
+        assert_eq!(
+            reference_to("seed.shop.countries", None).as_deref(),
+            Some("ref('countries')")
+        );
+        assert_eq!(reference_to("test.shop.unique_x", root), None);
     }
 }

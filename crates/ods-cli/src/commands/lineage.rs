@@ -340,6 +340,10 @@ pub(super) struct Loaded {
     relations: BTreeMap<String, String>,
     /// The warehouse the manifest names (`metadata.adapter_type`).
     adapter_type: Option<String>,
+    /// The dbt version that wrote the manifest, and the root project's name, for test
+    /// YAML in the project's own syntax (#64).
+    dbt_version: Option<String>,
+    project_name: Option<String>,
 }
 
 impl Loaded {
@@ -394,6 +398,8 @@ impl Loaded {
             .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
             .collect();
         let adapter_type = artifacts.manifest.adapter_type.clone();
+        let dbt_version = artifacts.manifest.dbt_version.clone();
+        let project_name = artifacts.manifest.project_name.clone();
         let (mut graph, stats) = build(&project, &analyzer, cache)
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
         let observed = match &options.observed {
@@ -423,6 +429,8 @@ impl Loaded {
             observed,
             relations,
             adapter_type,
+            dbt_version,
+            project_name,
         })
     }
 
@@ -434,6 +442,16 @@ impl Loaded {
     /// Which artifacts were read.
     pub(super) fn preference(&self) -> ArtifactPreference {
         self.preference
+    }
+
+    /// The dbt version that wrote the manifest, if it says.
+    pub(super) fn dbt_version(&self) -> Option<&str> {
+        self.dbt_version.as_deref()
+    }
+
+    /// The root project's name, if the manifest says.
+    pub(super) fn project_name(&self) -> Option<&str> {
+        self.project_name.as_deref()
     }
 
     /// Warehouse links for this project's target (#329).

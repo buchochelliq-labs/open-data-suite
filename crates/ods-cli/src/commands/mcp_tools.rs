@@ -431,7 +431,7 @@ fn test_gaps(project: &Project, arguments: &Value) -> ToolOutput {
         Ok(loaded) => loaded,
         Err(e) => return ToolOutput::Error(error_text(&e)),
     };
-    let mut suggestions = key_gaps(&erd);
+    let mut suggestions = key_gaps(&erd, &loaded);
     suggestions.extend(join_gaps(&erd, &loaded));
     if let Some(model) = only {
         suggestions.retain(|s| s["model"] == model || s["model_id"] == model);
@@ -464,7 +464,7 @@ fn suggestion(
 }
 
 /// Untested keys and relationships the ERD inferred, and keys missing half their tests.
-fn key_gaps(erd: &Erd) -> Vec<Value> {
+fn key_gaps(erd: &Erd, loaded: &Loaded) -> Vec<Value> {
     let mut out = Vec::new();
     for entity in &erd.entities {
         if let Some(key) = &entity.primary_key
@@ -513,11 +513,14 @@ fn key_gaps(erd: &Erd) -> Vec<Value> {
         let (Some(column), Some(field)) = (rel.from_columns.first(), rel.to_columns.first()) else {
             continue;
         };
+        let Some(target) = super::erd::reference_to(&to.id, loaded.project_name()) else {
+            continue;
+        };
         out.push(suggestion(
             from,
             column,
             "relationships",
-            &super::erd::relationships_test(column, &format!("ref('{}')", to.name), field, None),
+            &super::erd::relationships_test(column, &target, field, loaded.dbt_version()),
             &format!("`{column}` looks like a reference to `{}.{field}`", to.name),
         ));
     }
