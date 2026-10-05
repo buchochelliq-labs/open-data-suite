@@ -559,9 +559,10 @@ fetch `graph.json` from a `file://` page, so use `ods lineage view` for local fi
 - the [dashboard](#the-dashboard) at `/`;
 - the explorer at `/lineage`, inside the dashboard, with the
   [State overlay](#the-lineage-page) and an *Impact* tab that runs impact on the server;
+- the [Impact simulator](#the-impact-simulator) at `/lineage/impact`;
 - a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
   `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home`,
-  `/api/lineage/overlay` and `/healthz`;
+  `/api/lineage/overlay`, `/api/lineage/impact` and `/healthz`;
 - a run's events as it runs ([live runs](#live-runs)): `/api/runs/live` and
   `/api/runs/<run_id>/events`.
 
@@ -625,7 +626,9 @@ Click a node (or tab to it and press Enter) for its side panel:
   ↓ downstream; a column traces it through the graph. At an opaque node the trail
   can't be followed: the panel names where it stops, and every node past it is shown as
   *may change* (dashed amber), never as unaffected;
-- **Impact:** what must run if its rows or a column change (nothing runs);
+- **Impact:** what must run if its rows or a column change (nothing runs); for a
+  column, *Open in the Impact simulator* takes it to the
+  [Impact simulator](#the-impact-simulator);
 - **Open** goes to its Model page (`/catalog/<id>`); *Copy as JSON* and *Copy selector*
   copy the node and `+name+`.
 
@@ -636,6 +639,53 @@ the counts, the warnings (including that reuse was taken on trust), and per node
 `decision`, `summary`, `reasons`, `changed_components`, `components`, `relation`,
 `last_built`, `opaque` and the two links. Beyond loopback it omits error text. The
 graph's `node_edges` say how each edge is known: `"via": "sql"` or `"declared"`.
+
+### The Impact simulator
+
+`/lineage/impact` (#347) answers "what happens downstream if I change this column?"
+before you change it. Pick a column (`model.column`, with suggestions), a change
+(*rename*, *type change* or *drop*) and, for a rename, the new name; add more columns
+to change them together. *Simulate* shows:
+
+- **Must run:** the model being changed and every model the change reaches, the ones
+  that would break first. Each says what the change does to it:
+  - **breaks:** its SQL names a column that would no longer exist (a drop, or the old
+    name of a rename), so its build fails until it's updated;
+  - **loses column:** it passes the column through `select *`, so the column
+    disappears from it too, and whatever names it downstream breaks;
+  - **unknown:** its lineage is unknown (a Python model, SQL that couldn't be parsed),
+    or, after a drop or rename, it reads such a model (even if it also reads the
+    changed one directly), or a model whose columns were never known. ODS can't tell
+    whether it breaks, so it never says it doesn't;
+  - **affected:** its values or rows may change, but it names nothing that goes away.
+    A type change removes no column, so nothing is known to break from it, but SQL
+    that relies on the old type (a cast, a date function, a sum) can still fail: the
+    page says so.
+
+  The header counts them: how many must run, how many are known to break, how many
+  are unknown.
+
+  With each: whether its lineage is *parsed*, *opaque* or *inferred* (reached only
+  through an opaque model), the columns the change reaches (`[unknown]` when not
+  known), how it reads them (direct, aggregation, filter, `select *`, …) and why.
+- **Skipped:** readers of a changed model that don't use the changed column, with the
+  reason, and how many other nodes aren't downstream at all.
+- **Column trail:** how the change travels from column to column.
+- **Build command:** `ods state build -s …` with exactly what must run, to copy; the
+  readers that can be skipped keep their last build.
+- **Tests that run with it:** the tests declared on those models.
+
+The models that must run are exactly those `ods lineage impact` gives for the same
+change (a drop is `=removed`, a type change `=modified`, a rename `=removed` plus
+`=added` for the new name). Nothing is run or written: the change is simulated on the
+column lineage. The URL holds the change (`?column=orders.amount&change=drop`, and
+`&to=` for the new name or type), so a simulation is a link to share. Each column on a
+Model page's *Columns* tab has a *Simulate* link that opens it with that column.
+`/api/lineage/impact` takes the same query and returns the page's view model at
+`schema_version` 2.
+
+The simulator doesn't yet read dbt model contracts or exposures, so it can't warn that
+an enforced contract must change too, or name the dashboards downstream.
 
 ### The dashboard
 

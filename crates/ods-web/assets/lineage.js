@@ -749,6 +749,12 @@ if (typeof document !== "undefined") (async function () {
         } catch (err) { out.replaceChildren(h("p", "Impact failed: " + err, "warn")); }
       });
     }
+    if (column != null) {
+      // The Impact simulator (#347) says what would break, and takes renames and type changes.
+      const a = h("a", "Open in the Impact simulator", null, h("p", null, "note", body));
+      // By id, which no other node shares; the simulator shows the name when it is unique.
+      a.href = baseUrl + "lineage/impact?" + new URLSearchParams({ column: `${node}.${column}` });
+    }
     rich("p", "Computed from column lineage; nothing runs. `ods lineage impact` gives the same answer in a terminal.", "note more", body);
   }
 

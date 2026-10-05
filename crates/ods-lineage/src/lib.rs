@@ -18,6 +18,7 @@
 //! column-lineage facets, which catalogs such as `OpenMetadata`, `DataHub` and `Marquez`
 //! read (ADR-0008).
 
+mod breaks;
 mod build;
 mod cache;
 mod diff;
@@ -28,6 +29,7 @@ mod observed;
 pub mod openlineage;
 mod project;
 
+pub use breaks::{Breaks, Uncertain};
 pub use build::{BuildError, BuildStats, build};
 pub use cache::{LineageCache, MemoryCache, cache_key};
 pub use diff::{Change, ColumnChangeKind, diff};

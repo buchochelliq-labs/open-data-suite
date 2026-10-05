@@ -1,0 +1,103 @@
+
+/* ---- Impact simulator (#347). Values from the Impact board. */
+:root {
+  --imp-break-bg: #FBE4E3; --imp-break-fg: #A12623;
+  --imp-loses-bg: #FCEFD9; --imp-loses-fg: #8A5A00;
+  --imp-changed-bg: #E8EBFB; --imp-changed-fg: #2B3AA8;
+  --imp-run-bg: #DCE8FB; --imp-run-fg: #1F4FA0;
+  --imp-skip-bg: #D5F0EC; --imp-skip-fg: #0B6B60;
+  --imp-chip-bg: #EEF1F5; --imp-head-bg: #EEF1F5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --imp-break-bg: #3A1716; --imp-break-fg: #F79A96;
+    --imp-loses-bg: #33270F; --imp-loses-fg: #E3B341;
+    --imp-changed-bg: #232B4A; --imp-changed-fg: #B3C0FF;
+    --imp-run-bg: #1B2E52; --imp-run-fg: #9CC0FF;
+    --imp-skip-bg: #10332F; --imp-skip-fg: #6FE3CF;
+    --imp-chip-bg: #1E2530; --imp-head-bg: #1B2129;
+  }
+}
+.impact { display: flex; flex-grow: 1; min-height: 0; align-items: flex-start; }
+.imp-main { flex-grow: 1; min-width: 0; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+.imp-side { width: 324px; flex-shrink: 0; align-self: stretch; background: var(--surface); border-left: 1px solid var(--border); }
+.imp-side section { padding: 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.imp-side h2 { font-size: 16px; margin: 0; }
+.imp-side p { margin: 0; font-size: 12px; line-height: 1.45; }
+.imp-intro { margin: 0; color: var(--muted); max-width: 720px; line-height: 1.5; }
+.imp-default { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.imp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.imp-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; background: var(--surface); }
+
+.impact .btn { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); font: inherit; color: var(--fg); cursor: pointer; white-space: nowrap; }
+.impact .btn:hover { text-decoration: none; background: var(--line); color: var(--fg); }
+.impact .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.impact .btn.primary:hover { background: var(--accent-strong); }
+.impact .btn.ghost { border-color: transparent; color: var(--muted); align-self: flex-end; }
+
+.imp-form form { display: flex; flex-direction: column; gap: 12px; }
+.imp-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; border: none; margin: 0; padding: 0; min-width: 0; }
+.imp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.imp-field > span:first-child { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.imp-field input { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  color: var(--fg); font: 13px var(--mono); min-width: 0; }
+.imp-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgb(63 81 216 / .2); }
+.imp-field input[aria-invalid="true"] { border-color: var(--bad); }
+.imp-field.col input { width: 240px; }
+.imp-to { display: flex; align-items: center; gap: 8px; }
+.imp-to input { width: 160px; }
+.imp-from { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; height: 36px; }
+.seg label { display: flex; cursor: pointer; }
+.seg label + label { border-left: 1px solid var(--border); }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg span { display: flex; align-items: center; padding: 0 14px; font-size: 13px; color: var(--fg); background: var(--surface); }
+.seg input:checked + span { background: var(--active-bg); color: var(--accent-strong); font-weight: 600; }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+.imp-actions { display: flex; gap: 8px; }
+.imp-problem { margin: 0; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--bad); color: var(--bad); font-size: 13px; }
+.imp-note { margin: 0; padding: 8px 12px; border-radius: 6px; background: var(--imp-loses-bg); color: var(--imp-loses-fg); font-size: 13px; }
+
+.imp-results-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.imp-results-head h2 { font-size: 18px; margin: 0; }
+.imp-results-head .btn { margin-left: auto; }
+.imp-table { padding: 0; gap: 0; overflow: hidden; }
+.imp-table-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; flex-wrap: wrap; }
+.imp-table-head h3 { margin: 0; font-size: 15px; }
+.imp-table-head .muted { font-size: 13px; }
+.tag { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 4px; }
+.tag.run { background: var(--imp-run-bg); color: var(--imp-run-fg); }
+.tag.skip { background: var(--imp-skip-bg); color: var(--imp-skip-fg); }
+.imp-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.imp-table th { text-align: left; font-weight: 500; color: var(--muted); background: var(--imp-head-bg); padding: 8px 16px; font-size: 12px; }
+.imp-table td { padding: 10px 16px; border-top: 1px solid var(--line); vertical-align: top; }
+.imp-table td.cols { font-size: 12px; min-width: 120px; max-width: 240px; overflow-wrap: break-word; }
+.imp-table .why p { margin: 0 0 4px; line-height: 1.45; }
+.imp-table .why p:last-child { margin: 0; }
+.imp-table code { font-family: var(--mono); font-size: 12px; }
+.imp-empty { margin: 0; padding: 10px 16px; font-size: 13px; border-top: 1px solid var(--line); }
+.chip-how { display: inline-block; font-size: 11px; padding: 2px 8px; margin: 0 4px 4px 0; border-radius: 4px; background: var(--imp-chip-bg); white-space: nowrap; }
+.verdict { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: 0.02em; }
+.verdict.breaks { background: var(--imp-break-bg); color: var(--imp-break-fg); }
+.verdict.loses { background: var(--imp-loses-bg); color: var(--imp-loses-fg); }
+.verdict.changed { background: var(--imp-changed-bg); color: var(--imp-changed-fg); }
+.verdict.affected { background: var(--imp-run-bg); color: var(--imp-run-fg); }
+.verdict.unknown { background: var(--surface); color: var(--heading-muted); border: 1px dashed var(--unknown); padding: 1px 7px; }
+.lin { display: inline-block; margin-top: 4px; font-size: 11px; padding: 0 6px; border-radius: 999px; line-height: 1.6; }
+.lin.parsed { border: 1px solid var(--ok); color: var(--ok); }
+.lin.opaque { border: 1px solid var(--warn); color: var(--warn); }
+.lin.inferred { border: 1px dashed var(--unknown); color: var(--muted); }
+
+.trail { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.trail li { padding-left: calc(var(--depth, 0) * 12px); line-height: 1.5; overflow-wrap: anywhere; }
+.trail code, .tests code { font-family: var(--mono); font-size: 12px; }
+.selector { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.imp-side .btn { align-self: flex-start; height: 32px; }
+.tests { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+@media (max-width: 1100px) {
+  .impact { flex-direction: column; }
+  .imp-side { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+}

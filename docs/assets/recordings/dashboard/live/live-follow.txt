@@ -8,6 +8,8 @@ dev · duckdb
 Home
 Catalog
 Lineage
+Graph
+Impact simulator
 State
 ERD
 PLANNED

@@ -556,7 +556,14 @@ type SectionPages = (
 );
 
 /// Each section's pages.
-const SECTION_ITEMS: [SectionPages; 2] = [
+const SECTION_ITEMS: [SectionPages; 3] = [
+    (
+        "lineage",
+        &[
+            ("graph", "Graph", Some("lineage")),
+            ("impact", "Impact simulator", Some("lineage/impact")),
+        ],
+    ),
     (
         "catalog",
         &[

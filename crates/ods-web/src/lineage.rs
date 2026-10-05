@@ -605,7 +605,7 @@ pub(crate) fn lineage_page(
         crumbs: None,
         root: "",
         status,
-        sub: None,
+        sub: Some("graph"),
         // The toolbar's search is the page's; the header's would search elsewhere.
         search: false,
         css: &css,

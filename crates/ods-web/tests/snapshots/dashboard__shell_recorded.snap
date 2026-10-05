@@ -41,6 +41,18 @@ expression: pretty(&body)
     },
     {
       "href": "lineage",
+      "items": [
+        {
+          "href": "lineage",
+          "key": "graph",
+          "label": "Graph"
+        },
+        {
+          "href": "lineage/impact",
+          "key": "impact",
+          "label": "Impact simulator"
+        }
+      ],
       "key": "lineage",
       "label": "Lineage",
       "note": null,

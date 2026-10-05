@@ -56,6 +56,7 @@ Usage
 PLANNED
 Columns 2
 Column	Type	Description	Tests	Constraints	Computed from
-customer_id	unknown	Primary key.	not_null · unique		← stg_customers.customer_id
-lifetime_value	unknown	Sum of non-returned order amounts, in dollars.			← orders.amount
+Impact
+customer_id	unknown	Primary key.	not_null · unique		← stg_customers.customer_id	Simulate
+lifetime_value	unknown	Sum of non-returned order amounts, in dollars.			← orders.amount	Simulate
 A type is only shown when the artifacts record it: from the warehouse catalog, or declared in the project (marked declared).

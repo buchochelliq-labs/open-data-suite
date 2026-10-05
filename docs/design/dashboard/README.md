@@ -29,7 +29,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | Lineage: State overlay | **Built** (#312, merged in #320) |
 | State: Plan and Why, Runs, one Run | **Built** (#311, merged in #318); real run outcomes, durations and per-node stats from run journals (#322 steps 1 and 3) |
 | Live run on the DAG, with follow mode | **Built** (#322): the event stream, the Live overlay on Lineage, follow mode and scopes, node stats, the Home banner |
-| Freshness evidence, Semantic layer, Impact simulator, ERD, Settings | Designed (#309) |
+| Lineage: Impact simulator | **Built** (#347): rename, type change and drop, with what breaks; no contract warning or exposures yet |
+| Freshness evidence, Semantic layer, ERD, Settings | Designed (#309) |
 | Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
@@ -132,7 +133,8 @@ no font files, so it falls back to the system fonts.
 
 ### Lineage: impact simulator
 
-Not built as designed (#309); the Lineage page's *Impact* tab runs impact for one node.
+**Built** (#347) at `/lineage/impact`, opened from the Lineage section, a column's
+*Simulate* link on its Model page, or the explorer's *Impact* tab.
 
 ![Impact simulator](images/impact.png)
 
@@ -141,8 +143,14 @@ Not built as designed (#309); the Lineage page's *Impact* tab runs impact for on
   or opaque.
 - **Skipped:** each node left out, with the reason.
 - **Side panel:** the column trail, a copyable selector, and the tests that run with
-  it.
-- **Contracts:** a warning when an enforced contract would break.
+  it. As built, the selector is an `ods state build -s …` command.
+- **Contracts:** a warning when an enforced contract would break. *Not built:* ODS
+  doesn't read model contracts yet; nor exposures, which the design's side panel lists.
+
+As built, each node that must run also says what the change does to it: *breaks* (its
+SQL names a column that goes away), *loses column* (passed through `select *`),
+*unknown* (opaque lineage, never "not affected") or *affected*. The board's *Export
+CSV* is a *JSON* link to `/api/lineage/impact` instead.
 
 **Needs:** column-level impact (`ods lineage impact`). Nothing is run.
 

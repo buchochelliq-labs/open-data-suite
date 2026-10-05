@@ -1,5 +1,5 @@
-//! The Catalog's routes (#313): its page, the model pages, and their JSON API. GET
-//! only; the same view models back the pages and the API. Pages are built on a
+//! The Catalog's routes (#313): its page, the model pages, and their JSON API; and the
+//! Impact simulator's (#347). GET only; the same view models back the pages and the API. Pages are built on a
 //! blocking thread, as the State pages are: building one may plan.
 
 use std::sync::atomic::Ordering;
@@ -11,6 +11,7 @@ use axum::response::{Html, IntoResponse, Json, Response};
 
 use super::{Shared, error};
 use crate::catalog::CatalogQuery;
+use crate::impact::{ImpactQuery, impact_view};
 use crate::state_pages::blocking;
 
 /// `/catalog`: every node, filtered by the query.
@@ -112,6 +113,53 @@ pub(super) async fn model_api(
             Some(view) => Json(view).into_response(),
             None => error(StatusCode::NOT_FOUND, "no such node"),
         }
+    })
+    .await
+}
+
+/// `/lineage/impact`: the Impact simulator (#347), simulating the query's changes.
+pub(super) async fn impact_page(
+    State(state): State<Shared>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Response {
+    blocking(move || {
+        let generation = state.generation.load(Ordering::SeqCst);
+        let snapshot = state.current();
+        let dashboard = snapshot.dashboard();
+        let query = ImpactQuery::from_pairs(&pairs);
+        let view = impact_view(
+            &snapshot.graph,
+            &snapshot.names(),
+            &dashboard.catalog,
+            &query,
+        );
+        Html(crate::impact_page::impact_page(
+            &dashboard.shell("lineage"),
+            &view,
+            &pairs,
+            query.add,
+            generation,
+        ))
+        .into_response()
+    })
+    .await
+}
+
+/// `/api/lineage/impact`: the Impact simulator's view model, for the same query.
+pub(super) async fn impact_api(
+    State(state): State<Shared>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Response {
+    blocking(move || {
+        let snapshot = state.current();
+        let dashboard = snapshot.dashboard();
+        Json(impact_view(
+            &snapshot.graph,
+            &snapshot.names(),
+            &dashboard.catalog,
+            &ImpactQuery::from_pairs(&pairs),
+        ))
+        .into_response()
     })
     .await
 }

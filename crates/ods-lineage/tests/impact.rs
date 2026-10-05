@@ -654,3 +654,43 @@ fn missing_columns_name_the_upstream_and_what_it_was_renamed_to() {
         graph.missing_columns("nope")
     );
 }
+
+#[test]
+fn a_removed_column_breaks_the_sql_that_names_it_and_is_unknown_to_opaque_readers() {
+    let graph = graph();
+    let breaks = graph.breaks(&[col("orders", "status")]);
+    // `status` filters both readers: their SQL names it.
+    assert_eq!(
+        breaks.broken.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["customers", "rank"]
+    );
+    assert_eq!(breaks.broken["rank"], [col("orders", "status")].into());
+    // The opaque reader may name it or not: unknown, never safe.
+    assert_eq!(
+        breaks
+            .unknown
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["legacy_report"]
+    );
+    assert!(breaks.dropped.is_empty());
+}
+
+#[test]
+fn a_column_passed_through_select_star_is_lost_downstream_not_broken() {
+    let graph = graph();
+    let breaks = graph.breaks(&[col("customers", "lifetime_value")]);
+    assert!(breaks.broken.is_empty(), "{breaks:?}");
+    assert_eq!(
+        breaks.dropped["customers_all"],
+        [col("customers_all", "lifetime_value")].into()
+    );
+    // An unused column breaks nothing; `rank` reads `orders` but not `amount`.
+    let breaks = graph.breaks(&[col("orders", "amount")]);
+    assert_eq!(
+        breaks.broken.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["customers"]
+    );
+    assert!(!breaks.broken.contains_key("rank"));
+}
