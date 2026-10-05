@@ -26,7 +26,7 @@ use ods_state::{
 
 use super::lineage::{LoadOptions, Loaded, shared_cache};
 use super::state_plan::display_name;
-use crate::present::{Line, Span, Tone, TreeItem, ViewNode};
+use crate::present::{Level, Line, Span, Tone, TreeItem, ViewNode};
 
 /// How many earlier journals are read for a node's history.
 const HISTORY_JOURNALS: usize = 20;
@@ -592,17 +592,29 @@ pub(super) fn serialize_execution<S: serde::Serializer>(
 }
 
 /// One failed node's (or test's) explanation, as the terminal shows it.
-pub(super) fn view(explanation: &ErrorExplanation) -> ViewNode {
-    let recognised = explanation.confidence() != Confidence::NotRecognised;
-    let failed = match explanation.check() {
-        Some(check) => ("failed test".to_owned(), check_label(check)),
-        None => (
-            "failed".to_owned(),
-            vec![Span::toned(display_name(explanation.node()), Tone::Code)],
-        ),
+/// One failure in a panel of its own, titled with what failed.
+pub(super) fn panel(explanation: &ErrorExplanation) -> ViewNode {
+    let mut title = match explanation.check() {
+        Some(check) => {
+            let mut title = vec![Span::plain("test ")];
+            title.extend(check_label(check));
+            title
+        }
+        None => vec![Span::toned(display_name(explanation.node()), Tone::Code)],
     };
+    title.push(Span::plain(" failed"));
+    ViewNode::Panel {
+        title,
+        level: Level::Error,
+        body: Box::new(view(explanation)),
+    }
+}
+
+/// Why one node or test failed: what, how sure ODS is, the evidence, where, and what to
+/// try.
+fn view(explanation: &ErrorExplanation) -> ViewNode {
+    let recognised = explanation.confidence() != Confidence::NotRecognised;
     let mut blocks = vec![ViewNode::KeyValue(vec![
-        failed,
         ("what".into(), {
             let mut l = line(explanation.headline());
             for span in &mut l {
@@ -677,7 +689,7 @@ pub(super) fn section(explanations: &[ErrorExplanation]) -> Vec<ViewNode> {
             count(tests, "test")
         ),
     })];
-    blocks.extend(explanations.iter().map(view));
+    blocks.extend(explanations.iter().map(panel));
     blocks
 }
 

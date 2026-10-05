@@ -8,7 +8,7 @@ outcome: failed before any node ran: nothing was built or recorded
 
 Why it failed
 
-failed: stg_payments
+stg_payments failed
 what: The macro cent_to_dollars isn't defined
 kind: compilation error · unknown macro
 confidence: known pattern + evidence

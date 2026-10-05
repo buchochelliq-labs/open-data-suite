@@ -1554,7 +1554,8 @@ recent journals are kept; older ones are deleted when a run starts. `ods state h
 
 ### Why a node failed
 
-When a node fails, the report ends with **Why it failed**: each failed node explained
+When a node fails, the report ends with **Why it failed**: each failed node explained, in a
+frame of its own in the terminal,
 in plain language (#323, [ADR-0025](adr/0025-error-explanations.md)). `ods state run`,
 `seed`, `snapshot`, `build` and `test` show it, and so does `ods state history --run
 <run_id>` for any run whose journal is kept.
@@ -1636,7 +1637,7 @@ pass, named by what the test tests (its kind, column and model, from the manifes
 never by the name dbt gives a generic test, which can hold its arguments:
 
 ```text
-failed test: not_null on customers.customer_id
+test not_null on customers.customer_id failed
 what: The not_null test on customer_id of customers failed: 5 rows don't pass
 kind: test failure · test failed
 confidence: known pattern + evidence

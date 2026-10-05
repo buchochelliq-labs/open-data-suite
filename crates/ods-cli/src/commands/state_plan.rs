@@ -26,7 +26,7 @@ use serde::Serialize;
 
 use super::state_settings::{DEFAULT_STORE, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
-use crate::present::{Level, Line, Present, Span, Tone, ViewNode};
+use crate::present::{Level, Line, Link, Present, Span, Tone, ViewNode};
 
 /// Arguments every State command takes.
 pub(super) fn common(command: Command) -> Command {
@@ -1296,7 +1296,10 @@ impl Present for RunHistoryReport {
         summary.extend(super::run_stats::totals(run));
         summary.push((
             "journal".into(),
-            vec![Span::toned(self.journal.display().to_string(), Tone::Code)],
+            vec![
+                Span::toned(self.journal.display().to_string(), Tone::Code)
+                    .linked(Link::file(&self.journal)),
+            ],
         ));
         let mut blocks = vec![
             ViewNode::Heading("Run".into()),
