@@ -1,0 +1,72 @@
+name: fuzz
+
+# Coverage-guided fuzzing of ODS's readers of untrusted input (#192): dbt artifacts and
+# messages, SQL, redaction and Unity Catalog lineage exports. Nightly for ten minutes
+# per target; on a pull request that changes `fuzz/`, a build and a one-minute smoke
+# run. The fuzz crate is its own workspace, so `libfuzzer-sys` never reaches ODS's
+# build or `cargo deny` (docs/contributing-fuzzing.md).
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds to fuzz each target
+        default: "600"
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - dbt_manifest
+          - dbt_run_results
+          - dbt_messages
+          - sql_analyzer
+          - redact
+          - uc_lineage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo fmt --check --manifest-path fuzz/Cargo.toml
+      - run: fuzz/seed.sh
+      - name: Fuzz
+        env:
+          SECONDS_PER_TARGET: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '600' }}
+        run: >-
+          cargo fuzz run ${{ matrix.target }} --
+          -max_total_time=$SECONDS_PER_TARGET -rss_limit_mb=2048
+      # A crash leaves the input that caused it: download it and run
+      # `cargo +nightly fuzz run <target> <file>` to reproduce.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
