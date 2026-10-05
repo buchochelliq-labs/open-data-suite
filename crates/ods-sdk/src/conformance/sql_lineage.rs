@@ -139,12 +139,15 @@ fn a_selected_column_is_its_identity(analyzer: &dyn SqlLineageAnalyzer) {
     let output = lineage
         .output(&id)
         .unwrap_or_else(|| panic!("analyze: the output `{id}` is listed: {lineage:?}"));
-    assert!(
-        output.inputs.contains(&(
+    // Exactly that input: an extra one (`amount`) would be a false dependency in
+    // lineage and impact.
+    assert_eq!(
+        output.inputs,
+        BTreeSet::from([(
             ColumnRef::new(relation, id.clone()),
             EdgeKind::Direct(DirectKind::Identity)
-        )),
-        "analyze: `{id}` is the identity of its input: {output:?}"
+        )]),
+        "analyze: `{id}` is the identity of its one input, and depends on nothing else"
     );
 }
 
