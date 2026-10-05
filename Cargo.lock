@@ -1269,6 +1269,7 @@ dependencies = [
  "ods-web",
  "opener",
  "petgraph",
+ "proptest",
  "rs-rich",
  "serde",
  "serde_json",
