@@ -1077,22 +1077,7 @@ impl RunHistoryReport {
         let settings = StateSettings::resolve(args, config)?;
         let state_db = settings.state_db();
         let run_id = args.get_one::<String>("run").map_or("", String::as_str);
-        let no_journal = |why: String| {
-            CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why).with_hint(format!(
-                "journals are kept beside the state database, in {}, for the {} most recent runs that ran dbt",
-                super::run_journal::dir_for(&state_db).display(),
-                super::run_journal::KEEP
-            ))
-        };
-        let Some(journal) = super::run_journal::path_for(&state_db, run_id) else {
-            return Err(no_journal(format!(
-                "`{}` isn't a run id",
-                run_id.escape_debug()
-            )));
-        };
-        let read = super::run_journal::read(&journal)
-            .map_err(|why| CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why))?
-            .ok_or_else(|| no_journal(format!("run {run_id} has no journal")))?;
+        let (journal, read) = read_journal(&state_db, Some(run_id))?;
         let run = ods_sdk::contracts::run_events::RunSummary::from_events(&read.events);
         let failures = explain_history(args, &settings, &run);
         Ok(Self {
@@ -1105,10 +1090,55 @@ impl RunHistoryReport {
     }
 }
 
+/// The journal of run `run_id`, or of the last run that has one, read: its path and
+/// events. An unknown run, or none at all, is an input error saying where journals are
+/// kept.
+pub(super) fn read_journal(
+    state_db: &Path,
+    run_id: Option<&str>,
+) -> Result<(PathBuf, super::run_journal::ReadJournal), CliError> {
+    let no_journal = |why: String| {
+        CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why).with_hint(format!(
+            "journals are kept beside the state database, in {}, for the {} most recent runs that ran dbt",
+            super::run_journal::dir_for(state_db).display(),
+            super::run_journal::KEEP
+        ))
+    };
+    let (run_id, journal) = if let Some(run_id) = run_id {
+        let Some(journal) = super::run_journal::path_for(state_db, run_id) else {
+            return Err(no_journal(format!(
+                "`{}` isn't a run id",
+                run_id.escape_debug()
+            )));
+        };
+        (run_id.to_owned(), journal)
+    } else {
+        let last = ods_sdk::run_journal::Journals::beside(state_db)
+            .list()
+            .map_err(|e| {
+                CliError::new(
+                    ExitStatus::Failure,
+                    codes::STATE_INPUT,
+                    format!("can't list the run journals: {e}"),
+                )
+            })?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                no_journal(format!("no run of `{}` has a journal", state_db.display()))
+            })?;
+        (last.run_id, last.path)
+    };
+    let read = super::run_journal::read(&journal)
+        .map_err(|why| CliError::new(ExitStatus::Failure, codes::STATE_INPUT, why))?
+        .ok_or_else(|| no_journal(format!("run {} has no journal", run_id.escape_debug())))?;
+    Ok((journal, read))
+}
+
 /// Explains a past run's failed nodes from what is known now: the project as it is,
 /// and the state before and after the run. Best effort: without a project or a store,
 /// with less evidence.
-fn explain_history(
+pub(super) fn explain_history(
     args: &ArgMatches,
     settings: &StateSettings,
     run: &ods_sdk::contracts::run_events::RunSummary,

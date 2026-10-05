@@ -5,7 +5,7 @@ Usage: ods [OPTIONS] <COMMAND>
 
 Commands:
   state        Plan and run only what needs to run, with explanations [preview: `run`, `plan`, `record`, `history`, `pol
-icies`, `doctor`, `retry`, `explain`, `diff`, `graph`, `export`; more in M1 State MVP (v0.0.1)]
+icies`, `doctor`, `retry`, `explain`, `explain-failure`, `diff`, `graph`, `export`; more in M1 State MVP (v0.0.1)]
   erd          Generate and inspect entity-relationship models [planned: M3 ERD & Usage (v0.3.0)] (`ods erd generate` is
  available)
   usage        Inspect real downstream usage of assets and columns [planned: M3 ERD & Usage (v0.3.0)]

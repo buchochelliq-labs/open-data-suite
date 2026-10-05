@@ -124,7 +124,7 @@ meanings get new numbers.
 | `ODS-E0301` | `ods serve` can't bind its address (e.g. the port is in use) or stopped with an I/O error. |
 | `ODS-E0401` | The state database can't be opened, read or written, or was written by a newer ODS. |
 | `ODS-E0402` | Another run recorded state first; plan again and retry. |
-| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. `ods state export`: the upstream manifest can't be read, is another project's or an unsupported version, or `--dbt-state` names the upstream or dbt's target directory. `ods state history --run`: the run has no journal (never ran dbt, or its journal was pruned). |
+| `ODS-E0403` | `run_results.json` or `sources.json` can't be read, or a State option (e.g. `--environment`) is invalid. `ods state export`: the upstream manifest can't be read, is another project's or an unsupported version, or `--dbt-state` names the upstream or dbt's target directory. `ods state history --run` and `explain-failure`: the run has no journal (never ran dbt, or its journal was pruned). `explain-failure` (exit 2): the node is in neither the run nor the project, or its name is shared. |
 | `ODS-E0405` | The state database is damaged: it can't be read, or holds a record that can't be decoded. Nothing was changed; `ods state doctor` says what is wrong. |
 | `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
 | `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
@@ -1668,6 +1668,34 @@ Don't run other dbt commands against the same target directory while it runs.
 ODS checks that the manifest it records from comes from its own build, and records
 nothing if it doesn't.
 
+### ods state explain-failure
+
+`ods state explain-failure <node> [--run <run_id>]` explains one node's failure (#348),
+in the last run by default, or in any run whose journal is kept. It gives the same
+explanation as `ods state history --run`, without the rest of the run.
+- `<node>` is a model, seed or snapshot by name or unique id. A failed test is named by
+  its handle (`check-…`, as the explanations show it) or its name.
+- The last run is the last of the project's scope (its target), as `ods state history`
+  lists it.
+- A model that built while tests on it failed gets those tests' explanations.
+- A node that didn't fail says how it ended (`outcome`: `succeeded`, `skipped`,
+  `warned`, `not_finished`, `unknown`, or `not_in_run` for a node of the project the run
+  didn't include), and exits 0. When lines of the journal couldn't be read
+  (`unreadable_lines`), a node it doesn't show finishing, or at all, is `unknown`. A skipped one names what blocked it (`blocked_by`) and the
+  command that explains that.
+- An unknown run, or none with a journal yet, is `ODS-E0403` (exit 1). A name that is
+  in neither the run nor the project, or that several nodes share, is a usage error
+  (exit 2).
+
+```sh
+ods state explain-failure customers
+ods state explain-failure check-6c26efb6691a --run 3f1c9a2e --output json
+```
+
+`--output json` holds `run_id`, `scope`, `node` (a test by its handle), `test`,
+`outcome`, `blocked_by`, `unreadable_lines` and `failures`, each explanation as above.
+`ods mcp`'s `ods_explain_failure` tool returns the same JSON.
+
 ## State: test
 
 `ods state test` runs the tests of what ODS built but hasn't tested since, without
@@ -2078,6 +2106,7 @@ The JSON form works for Cursor (`.cursor/mcp.json`), VS Code (`.vscode/mcp.json`
 | `ods_list_opaque` | models whose lineage is unknown, and why |
 | `ods_state_policies` | freshness policies from dbt State configs |
 | `ods_compare_observed` | static lineage against Unity Catalog's recorded lineage |
+| `ods_explain_failure` | why a model or test failed in an `ods state` run (default: the last), as [`ods state explain-failure`](#ods-state-explain-failure) explains it |
 | `ods_find_data` | for data users: tables and columns by meaning (names and descriptions), with each table's grain |
 | `ods_describe_entity` | a table explained: what one row is, columns, what it joins to and how |
 | `ods_plan_query` | a join path and starting SQL for a question over several tables, with warnings where a join repeats rows |
@@ -2098,5 +2127,6 @@ It also serves:
 Artifacts are re-read on every call, and a cache means only changed models are
 re-analyzed. So run `dbt compile` after editing, and the next answer is current. The
 server takes `ods lineage`'s options: `--artifacts`, `--dialect`, `--observed`,
-`--trust-observed`. A tool's result is the same JSON as the matching command's `--json`
+`--trust-observed`, and `--state-db` for the runs `ods_explain_failure` reads (by default,
+the one `ods state` uses). A tool's result is the same JSON as the matching command's `--json`
 output.
