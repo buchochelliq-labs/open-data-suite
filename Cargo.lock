@@ -1453,6 +1453,7 @@ dependencies = [
  "insta",
  "libc",
  "ods-core",
+ "ods-erd",
  "ods-lineage",
  "ods-provider-fake",
  "ods-sdk",
