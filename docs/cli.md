@@ -1010,6 +1010,26 @@ models the pages render, at `schema_version` 2; every tab's data is in the latte
 including `relation_url`, `relation_url_label` and `relation_url_unavailable` (below).
 Beyond loopback they leave out file paths and error text.
 
+**Freshness evidence** (`/catalog/sources`, under Catalog) shows how ODS knows whether
+each of the project's inputs changed since the nodes reading it were built:
+- **Sources:** the data version now (`max(<loaded_at_field>)` from `sources.json`), when
+  it was measured, and the versions its readers were last built from. On Databricks,
+  runs read each source's Delta table version first
+  ([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)); the dashboard never
+  connects to the warehouse, so the screen names that version and says it isn't read
+  there. The versions runs read show under *Last recorded*.
+- **Seeds:** the file's checksum, compared with the one the seed was last built from.
+- **Grades:** each piece of evidence is graded *exact*, *semantic*, *proxy*, *inferred*
+  or *unknown*. Only *exact* and *semantic* evidence can let a reader be reused; anything
+  else, or no evidence at all, means its readers build.
+- **Readers:** each input's direct readers, with the plan's decision, a link to its
+  **Why**, and its freshness policy, and every node downstream (what a change can
+  reach; each one's policy decides whether it rebuilds).
+
+The numbers are the plan's: a source's version is the one `ods state explain` shows for
+a model reading it. `/api/catalog/sources` returns the same view model, and leaves out
+seeds' file paths beyond loopback.
+
 ## dbt State configuration
 
 ODS reads dbt State configuration exactly as you already write it

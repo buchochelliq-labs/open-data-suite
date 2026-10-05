@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use html_escape::{encode_double_quoted_attribute as attr, encode_text as text};
 
 use crate::catalog::{
-    CatalogQuery, CatalogRow, CatalogView, Decision, DecisionView, LastBuildView,
+    CatalogQuery, CatalogRow, CatalogView, Decision, DecisionView, DecisionsBasis, LastBuildView,
     LineageConfidence, REUSE_RELATION,
 };
 use crate::dashboard::{ShellView, StateStatus};
@@ -191,8 +191,14 @@ fn toolbar(b: &mut String, view: &CatalogView) {
         shown = view.rows.len(),
         total = view.total,
     );
+    basis_line(b, &view.decisions);
+    b.push_str("</div>");
+    warnings(b, &view.decisions);
+}
+
+/// Which plan the decisions come from, or why there is none, as a dot and a line.
+pub(crate) fn basis_line(b: &mut String, basis: &DecisionsBasis) {
     b.push_str(r#"<span class="cat-basis">"#);
-    let basis = &view.decisions;
     let (dot, message) = match (basis.state, basis.based_on, &basis.error) {
         (_, _, Some(error)) => ("dot none", format!("decisions unknown: {error}")),
         (StateStatus::Recorded, Some(snapshot), None) => {
@@ -212,11 +218,11 @@ fn toolbar(b: &mut String, view: &CatalogView) {
         ),
         _ => ("dot none", "decisions unknown".to_owned()),
     };
-    let _ = write!(
-        b,
-        r#"<span class="{dot}"></span>{}</span></div>"#,
-        text(&message)
-    );
+    let _ = write!(b, r#"<span class="{dot}"></span>{}</span>"#, text(&message));
+}
+
+/// What qualifies the plan, if anything does.
+pub(crate) fn warnings(b: &mut String, basis: &DecisionsBasis) {
     if !basis.warnings.is_empty() {
         b.push_str(r#"<ul class="warnings">"#);
         for warning in &basis.warnings {

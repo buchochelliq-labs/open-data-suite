@@ -179,6 +179,8 @@ impl DashboardSource {
         // snapshot the plan is made against.
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, links);
+        // The Freshness evidence screen (#350): the sources as the planner sees them.
+        let freshness = super::serve_catalog::freshness(&ws);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         let target = self
             .settings
@@ -193,6 +195,7 @@ impl DashboardSource {
             .with_state(state)
             .with_modules(modules(recorded))
             .with_catalog(catalog)
+            .with_freshness(freshness)
             // The live run view (#322): journals are read even before the store
             // exists, since a first run writes its journal before its first snapshot.
             .with_journals(ods_sdk::run_journal::Journals::beside(&ws.state_db))

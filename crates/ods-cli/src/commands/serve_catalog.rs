@@ -17,9 +17,68 @@ use ods_web::catalog::{
     CatalogColumn, CatalogInput, CatalogNode, CatalogTest, ColumnSource, LastBuild, TestKind,
     TypeSource,
 };
+use ods_web::freshness::{FreshnessInput, SourceInput};
 
 use super::relation_links::Links;
-use super::state_plan::{display_name, node_name};
+use super::state_plan::{Workspace, display_name, node_name};
+
+/// What runs read for a source on a warehouse with a change provider: the Delta table
+/// version, from the table's history (ADR-0022).
+const TABLE_VERSION: &str = "table version from the Delta history";
+
+/// The Freshness evidence screen's sources (#350): each one's data version as the
+/// planner is given it, so the screen shows what `ods state explain` does, and how the
+/// project says its new data is measured (`loaded_at_field` or `loaded_at_query`), and
+/// whether runs read a table version the screen can't.
+pub(super) fn freshness(ws: &Workspace) -> FreshnessInput {
+    // Runs read table versions from the warehouse's history first (ADR-0022), which
+    // the dashboard, offline, can't: the screen says so rather than show nothing.
+    let table_versions =
+        super::state_versions::has_change_provider(ws.manifest.adapter_type.as_deref());
+    let declared: BTreeMap<&str, &ManifestNode> = ws
+        .manifest
+        .nodes
+        .iter()
+        .filter(|n| n.resource_type == ResourceType::Source)
+        .map(|n| (n.unique_id.as_str(), n))
+        .collect();
+    let sources = ws
+        .project
+        .sources
+        .iter()
+        .map(|source| {
+            let node = declared.get(source.id.as_str());
+            let measured_with = node.and_then(|n| {
+                n.config
+                    .loaded_at_field
+                    .as_ref()
+                    .map(|field| format!("max({field})"))
+                    .or_else(|| {
+                        n.config
+                            .loaded_at_query
+                            .as_ref()
+                            .map(|_| "loaded_at_query".to_owned())
+                    })
+            });
+            SourceInput::new(&source.id, &source.name)
+                .with_relation(node.and_then(|n| n.relation_name.clone()))
+                .measured_with(measured_with)
+                .read_by_runs(table_versions.then(|| TABLE_VERSION.to_owned()))
+                .with_version(
+                    source.version.clone(),
+                    source.observed_at,
+                    source.version_evidence.clone(),
+                )
+        })
+        .collect();
+    FreshnessInput::new(sources).measured(
+        ws.sources_taken_at,
+        ws.sources_file
+            .as_ref()
+            .and_then(|f| f.file_name())
+            .map(|f| f.to_string_lossy().into_owned()),
+    )
+}
 
 /// How layers are worked out, for people: derived, so it says so.
 const LAYER_SOURCE: &str = "Inferred from each model's first folder under the model paths (its dbt fqn), not declared. Seeds have none.";

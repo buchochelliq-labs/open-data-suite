@@ -1,6 +1,6 @@
-//! The Catalog's routes (#313): its page, the model pages, and their JSON API; and the
-//! Impact simulator's (#347) and the ERD page's (#64). GET only; the same view models
-//! back the pages and the API. Pages are built on a blocking thread, as the State pages
+//! The Catalog's routes (#313): its page, the model pages, the Freshness evidence screen
+//! (#350), and their JSON API; and the Impact simulator's (#347) and the ERD page's
+//! (#64). GET only; the same view models back the pages and the API. Pages are built on a blocking thread, as the State pages
 //! are: building one may plan.
 
 use std::sync::atomic::Ordering;
@@ -115,6 +115,37 @@ pub(super) async fn model_api(
             Some(view) => Json(view).into_response(),
             None => error(StatusCode::NOT_FOUND, "no such node"),
         }
+    })
+    .await
+}
+
+/// `/catalog/sources`: the Freshness evidence screen (#350).
+pub(super) async fn sources_page(State(state): State<Shared>) -> Response {
+    blocking(move || {
+        let generation = state.generation.load(Ordering::SeqCst);
+        let snapshot = state.current();
+        let dashboard = snapshot.dashboard();
+        let view = dashboard.freshness(&snapshot.document, state.details);
+        Html(crate::freshness_page::freshness_page(
+            &dashboard.shell("catalog"),
+            &view,
+            generation,
+        ))
+        .into_response()
+    })
+    .await
+}
+
+/// `/api/catalog/sources`: the Freshness evidence screen's view model.
+pub(super) async fn sources_api(State(state): State<Shared>) -> Response {
+    blocking(move || {
+        let snapshot = state.current();
+        Json(
+            snapshot
+                .dashboard()
+                .freshness(&snapshot.document, state.details),
+        )
+        .into_response()
     })
     .await
 }

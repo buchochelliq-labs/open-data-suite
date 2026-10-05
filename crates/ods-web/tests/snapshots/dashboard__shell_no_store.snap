@@ -24,7 +24,7 @@ expression: pretty(&body)
           "label": "Models"
         },
         {
-          "href": null,
+          "href": "catalog/sources",
           "key": "freshness",
           "label": "Freshness evidence"
         },
