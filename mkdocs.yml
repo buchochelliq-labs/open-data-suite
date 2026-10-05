@@ -116,4 +116,6 @@ nav:
       - adr/0024-run-events-node-stats-and-run-journal.md
       - adr/0025-error-explanations.md
       - adr/0026-run-playback.md
+      - adr/0027-federated-build-graph-across-project-formats.md
+      - adr/0028-open-data-environments.md
   - Legal and trademarks: legal.md
