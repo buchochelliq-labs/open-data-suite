@@ -387,10 +387,6 @@ fn build_then_fail_orders(dir: &Path) -> PathBuf {
     dir.join(".ods/state.db")
 }
 
-/// The State pages (#311) over what `ods state build` recorded: a first build, then a
-/// change to `orders` whose build fails. The Why panel says what `ods state explain`
-/// says, the failed run is shown with the state it kept and the retry, and nothing is
-/// written.
 #[cfg(unix)]
 /// Both runs are in the run ledger (#210, ADR-0029): the savings panel counts them, as
 /// estimates, with no cost unless `[state.cost]` sets a rate.
@@ -403,6 +399,11 @@ fn savings_are_shown(server: &Server, runs: &Value) {
     assert!(page.contains(r#"data-state="savings""#), "{page}");
 }
 
+/// The State pages (#311) over what `ods state build` recorded: a first build, then a
+/// change to `orders` whose build fails. The Why panel says what `ods state explain`
+/// says, the failed run is shown with the state it kept and the retry, and nothing is
+/// written.
+#[cfg(unix)]
 #[test]
 fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     let scratch = tempfile::tempdir().unwrap();
