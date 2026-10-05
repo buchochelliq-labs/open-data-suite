@@ -30,5 +30,7 @@ Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-tem
 | [0024](0024-run-events-node-stats-and-run-journal.md) | Run events, per-node run stats and the run journal | Accepted | #322 |
 | [0025](0025-error-explanations.md) | Explaining failed nodes: a neutral taxonomy, provider pattern catalogues and evidence joins | Accepted | #323 |
 | [0026](0026-run-playback.md) | Run playback: replaying a run's journal on the Lineage page | Accepted | #322 (follow-up) |
+| [0027](0027-federated-build-graph-across-project-formats.md) | A federated build graph across project formats (dbt, SQLMesh, …) | Proposed (exploratory) | #12, #86, #226 |
+| [0028](0028-open-data-environments.md) | Open data environments: versioned physical tables, environments as pointers | Proposed (exploratory) | #29, #30, #114, #120, #195 |
 
 ADR-0007 (the clean-room and licensing policy, #10) is planned and not written yet; until it is, the rule is `AGENTS.md` rule 8, and `deny.toml` checks dependency licences. Each ADR's status line notes what of its decision isn't built yet.

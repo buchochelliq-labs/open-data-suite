@@ -232,7 +232,7 @@ proposes:
   pending the #104 name check.
 
 ### M7 — Platform: Mesh & Server (unscheduled)
-#86 Mesh resolver · #89 registry/contracts · #90 change propagation · #91 cross-platform mapping · #95 server mode · #96 REST API · #97 RBAC/OIDC · #98 audit log · #106 language bindings · #102 docs site · #124 multi-repo discovery.
+#86 Mesh resolver · #89 registry/contracts · #90 change propagation · #91 cross-platform mapping · #95 server mode · #96 REST API · #97 RBAC/OIDC · #98 audit log · #106 language bindings · #102 docs site · #124 multi-repo discovery. Idea, no issue yet: one federated build graph across project formats (dbt + SQLMesh first), with Mesh as the same mechanism for dbt only ([ADR-0027](adr/0027-federated-build-graph-across-project-formats.md)). Open data environments for any build tool, unifying #29, #30, #114, #120 and #195 ([ADR-0028](adr/0028-open-data-environments.md)).
 
 ### M8 — Ecosystem integrations & operations (unscheduled)
 #92 OpenMetadata · #93 Elementary · #94 MetricFlow · #111–#113 cost & optimisation · #117 health scoring · #118 observability store · #119 alert routing · #120 deployment/promotion · #121 package governance · #122 ownership/SLA governance · #125 snapshot/SCD review · #114 dev env cloning · #115 dev sampling · #226 SQLMesh project provider and `ods sqlmesh` front-end (ADR-0015).
