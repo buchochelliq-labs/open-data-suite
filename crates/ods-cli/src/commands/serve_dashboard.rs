@@ -106,7 +106,17 @@ impl DashboardSource {
             .filter(|n| n.opaque)
             .map(|n| (n.id.clone(), n.name.clone(), n.diagnostics.first().cloned()))
             .collect();
-        let dashboard = self.dashboard(&opaque_ids, &loaded.graph, &links);
+        let erd = super::erd::dashboard_erd(loaded);
+        let mut dashboard = self.dashboard(&opaque_ids, &loaded.graph, &links);
+        // The ERD page (#64) shows it for this project, when it could be built.
+        if erd.erd.is_ok() {
+            for module in &mut dashboard.modules {
+                if module.name == "ERD" {
+                    *module = ModuleStatus::new("ERD", ModuleState::Ready, None);
+                }
+            }
+        }
+        let dashboard = dashboard.with_erd(erd);
         Snapshot::new(document, loaded.graph.clone(), source).with_dashboard(dashboard)
     }
 

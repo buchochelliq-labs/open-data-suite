@@ -88,11 +88,11 @@ expression: pretty(&body)
       "status": "available"
     },
     {
-      "href": null,
+      "href": "erd",
       "key": "erd",
       "label": "ERD",
-      "note": "ERD pages are planned; the ERD module works from the CLI (ods erd …)",
-      "status": "planned"
+      "note": null,
+      "status": "available"
     },
     {
       "href": null,

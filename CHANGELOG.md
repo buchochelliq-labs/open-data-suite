@@ -13,6 +13,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Added
+- The ERD page on the dashboard (`/erd`): the project's entities, keys and relationships
+  as `ods erd generate --infer` finds them. Each edge is drawn by its evidence (tested,
+  declared, joined in SQL, or inferred), with cardinality where keys prove it. Click an
+  edge for its evidence, scope it with `--select` and a depth, hide inferred edges or
+  non-key columns, and export SVG. Each untested relationship comes with the
+  `relationships` test to paste. `/api/erd` returns the same as JSON
+  ([dashboard](docs/cli.md#the-erd-page)) (#366, #64).
 - The Impact simulator on the dashboard (`/lineage/impact`): propose a rename, type
   change or drop of one or more columns and see which models must run (the same set as
   `ods lineage impact`), which would break because their SQL names a column that goes

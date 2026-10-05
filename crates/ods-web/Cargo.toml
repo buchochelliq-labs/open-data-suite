@@ -14,6 +14,7 @@ form_urlencoded.workspace = true
 futures-util.workspace = true
 html-escape.workspace = true
 ods-core.workspace = true
+ods-erd.workspace = true
 ods-lineage.workspace = true
 ods-sdk.workspace = true
 ods-state.workspace = true

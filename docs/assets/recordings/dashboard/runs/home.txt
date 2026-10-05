@@ -10,7 +10,6 @@ Catalog
 Lineage
 State
 ERD
-PLANNED
 Usage
 PLANNED
 CI · Impact
@@ -82,7 +81,6 @@ Ready
 State
 Ready
 ERD
-Available
-· ods erd
+Ready
 Usage
 PLANNED

@@ -23,6 +23,8 @@
 pub mod catalog;
 mod catalog_page;
 pub mod dashboard;
+pub mod erd;
+mod erd_page;
 mod fonts;
 mod home;
 pub mod impact;

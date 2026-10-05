@@ -159,6 +159,9 @@ jobs:
       # The Impact simulator (#347) in Chromium: from a column, a change, the verdicts.
       - name: Impact simulator in a browser
         run: python crates/ods-web/tests/browser/impact.py -v
+      # The ERD page (#64) in Chromium: the diagram, toggles, evidence, scope, export.
+      - name: ERD page in a browser
+        run: python crates/ods-web/tests/browser/erd.py -v
 
   msrv:
     runs-on: ubuntu-latest

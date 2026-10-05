@@ -560,9 +560,10 @@ fetch `graph.json` from a `file://` page, so use `ods lineage view` for local fi
 - the explorer at `/lineage`, inside the dashboard, with the
   [State overlay](#the-lineage-page) and an *Impact* tab that runs impact on the server;
 - the [Impact simulator](#the-impact-simulator) at `/lineage/impact`;
+- the [ERD page](#the-erd-page) at `/erd`;
 - a read-only JSON API: `/api/version`, `/api/graph`, `/api/search?q=`, `/api/node?id=`,
   `/api/impact?node=&column=&kind=`, `/api/shell`, `/api/home`,
-  `/api/lineage/overlay`, `/api/lineage/impact` and `/healthz`;
+  `/api/lineage/overlay`, `/api/lineage/impact`, `/api/erd` and `/healthz`;
 - a run's events as it runs ([live runs](#live-runs)): `/api/runs/live` and
   `/api/runs/<run_id>/events`.
 
@@ -686,6 +687,40 @@ Model page's *Columns* tab has a *Simulate* link that opens it with that column.
 
 The simulator doesn't yet read dbt model contracts or exposures, so it can't warn that
 an enforced contract must change too, or name the dashboards downstream.
+
+### The ERD page
+
+`/erd` (#64) draws the project's [entity-relationship diagram](#entity-relationship-diagrams):
+the entities, their keys and the relationships between them, as `ods erd generate --infer`
+finds them. It shows keys and relationships only, never lineage: a model reading another
+is not a relationship.
+
+- **Edges:** each relationship is drawn by its strongest evidence. Solid green is a
+  `relationships` test, solid blue a declared constraint, dashed a join in the project's
+  SQL, dotted only matching column names (*inferred*). Click an edge, or focus it and
+  press Enter, for its evidence: the tests, constraints or models behind it.
+- **Cardinality:** at each end, only as far as keys prove it. *Exactly one* is a key
+  that is never null, *zero or one* a key that may be null, *many* the referencing side,
+  and *?* means it isn't proven: the referenced columns aren't a tested or declared key,
+  or the edge is only inferred.
+- **Entities:** `PK` marks the key, filled when tested or declared and dashed when only
+  inferred; `FK` marks referencing columns. Click an entity for its keys and a link to
+  its model page.
+- **Scope:** `--select` one or more names (space- or comma-separated) with a depth, as
+  `ods erd generate --select … --depth …` does. Without a selection, entities without
+  any relationship are left out unless *Entities without relationships* is ticked.
+  *Inferred edges* and *All columns* hide inferred edges and non-key columns. The URL
+  keeps all of it, so a view is a link to share. *Fit* frames the diagram, and you can
+  drag and scroll to pan and zoom.
+- **Missing relationships:** each joined or inferred relationship, numbered as on the
+  diagram, says what is known and gives the `relationships` test to paste, and where,
+  in the syntax of the project's dbt version. A join between two columns that aren't
+  keys gets no test: which side references which isn't known until a key is tested.
+  *Already tested* lists the rest.
+- **Export SVG** downloads the diagram as drawn. *JSON* is `/api/erd` with the same
+  scope: the view model at `schema_version` 2, with the ERD itself at its own
+  `schema_version` 1. *Every relationship* lists them all as a table, which also works
+  without script.
 
 ### The dashboard
 
@@ -1945,7 +1980,8 @@ nodes that point at this target.
 ## Entity-relationship diagrams
 
 `ods erd generate` draws the keys and relationships your project already asserts
-([ADR-0012](adr/0012-erd-from-tests-and-constraints.md)):
+([ADR-0012](adr/0012-erd-from-tests-and-constraints.md)); `ods serve` draws the same
+on the [ERD page](#the-erd-page), interactively:
 - a model's `unique_key` config (incremental models, snapshots), including a list of
   columns, is a declared primary key;
 - `unique` + `not_null` tests make a primary key (`unique` alone is a nullable unique key);

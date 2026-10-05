@@ -12,7 +12,6 @@ Graph
 Impact simulator
 State
 ERD
-PLANNED
 Usage
 PLANNED
 CI · Impact

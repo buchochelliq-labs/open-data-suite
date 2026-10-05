@@ -56,6 +56,9 @@ pub struct Dashboard {
     pub modules: Vec<ModuleStatus>,
     /// The project's nodes, for the Catalog and the model pages (#313).
     pub catalog: crate::catalog::CatalogInput,
+    /// The project's entities and relationships, for the ERD page (#64); `None` when
+    /// the binary has none to give.
+    pub erd: Option<crate::erd::ErdInput>,
     /// The run journals beside the state database (#322), read for the live view even
     /// before the store exists: a first run writes its journal before its first
     /// snapshot.
@@ -79,6 +82,7 @@ impl Dashboard {
             opaque: Vec::new(),
             modules: Vec::new(),
             catalog: crate::catalog::CatalogInput::default(),
+            erd: None,
             journals: journal::JournalSource::default(),
         }
     }
@@ -148,6 +152,13 @@ impl Dashboard {
     #[must_use]
     pub fn with_catalog(mut self, catalog: crate::catalog::CatalogInput) -> Self {
         self.catalog = catalog;
+        self
+    }
+
+    /// Sets the project's entities and relationships, for the ERD page (#64).
+    #[must_use]
+    pub fn with_erd(mut self, erd: crate::erd::ErdInput) -> Self {
+        self.erd = Some(erd);
         self
     }
 }
@@ -599,12 +610,7 @@ const SECTIONS: [Section; 9] = [
     ("catalog", "Catalog", Some("catalog"), None),
     ("lineage", "Lineage", Some("lineage"), None),
     ("state", "State", Some("state/plan"), None),
-    (
-        "erd",
-        "ERD",
-        None,
-        Some("ERD pages are planned; the ERD module works from the CLI (ods erd …)"),
-    ),
+    ("erd", "ERD", Some("erd"), None),
     ("usage", "Usage", None, None),
     ("ci", "CI · Impact", None, None),
     ("agent", "Agent", None, None),
