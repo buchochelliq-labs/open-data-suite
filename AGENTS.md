@@ -81,6 +81,7 @@ cargo deny check            # licences/advisories (install: cargo install cargo-
 python3 scripts/check-layering.py   # enforces ADR-0001 dependency direction
 python3 scripts/check-vendor-neutral.py   # rule 1: no vendor names in core code (ADR-0006)
 cargo run -p ods-cli -- --help    # binary is named `ods`
+cargo +nightly fuzz run <target>  # fuzz a reader (fuzz/, own workspace; docs/contributing-fuzzing.md)
 ```
 
 The `verify` skill runs all of these and reports results. Do not claim work is done

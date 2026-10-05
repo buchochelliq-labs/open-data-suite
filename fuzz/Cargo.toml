@@ -1,0 +1,70 @@
+# Fuzz targets for ODS's readers of untrusted input (#192). Its own workspace, outside
+# the main one: `libfuzzer-sys` (NCSA) is never linked into `ods`, so `cargo deny` and
+# the release build never see it. Run with `cargo +nightly fuzz run <target>`; see
+# docs/contributing-fuzzing.md.
+[package]
+name = "ods-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ods-core = { path = "../crates/ods-core" }
+ods-sdk = { path = "../crates/ods-sdk" }
+ods-provider-dbt = { path = "../providers/ods-provider-dbt" }
+ods-provider-databricks = { path = "../providers/ods-provider-databricks" }
+ods-provider-sqlparser = { path = "../providers/ods-provider-sqlparser" }
+
+# Not part of the main workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "dbt_manifest"
+path = "fuzz_targets/dbt_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dbt_run_results"
+path = "fuzz_targets/dbt_run_results.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dbt_messages"
+path = "fuzz_targets/dbt_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_analyzer"
+path = "fuzz_targets/sql_analyzer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "redact"
+path = "fuzz_targets/redact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "uc_lineage"
+path = "fuzz_targets/uc_lineage.rs"
+test = false
+doc = false
+bench = false

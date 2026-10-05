@@ -83,6 +83,7 @@ nav:
       - Writing a provider: plugins.md
       - Testing against Databricks: contributing-databricks.md
       - Recording the docs: recordings.md
+      - Fuzzing: contributing-fuzzing.md
   - UX designs:
       - design/README.md
       - Dashboard: design/dashboard/README.md
