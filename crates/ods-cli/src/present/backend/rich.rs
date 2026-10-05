@@ -82,7 +82,7 @@ impl RichRenderer {
     }
 
     /// Writes spans' links (tests; `new` decides from the terminal).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_links(mut self, links: bool) -> Self {
         self.links = links;
         self
