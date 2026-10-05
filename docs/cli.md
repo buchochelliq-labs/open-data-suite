@@ -1230,6 +1230,10 @@ command is one word (#214):
 db = ".ods/state.db"          # --state-db
 environment = "dev"           # --environment
 
+[state.cost]                  # what reuse saved, as a cost: `ods state savings`
+rate_per_hour = 4.0           # what an hour of build time costs, at least 0
+unit = "USD"                  # what it's counted in, as shown: `USD`, `credits`, …
+
 [providers.dbt]
 kind = "dbt"
 
@@ -1508,6 +1512,13 @@ run                                   finished              outcome           re
 ods-1791198700123                     2026-10-05T09:11:40Z  nothing to build  13      0      ~3.3s
 0c9a1e52-6d3b-4f8e-8f2a-7a4c9d0b1e33  2026-10-05T09:10:58Z  succeeded         0       13     none
 ```
+
+With `[state.cost]` in `ods.toml` (above), the report also says what the time avoided
+cost at that rate: a `cost avoided` line (`~3.25 credits (estimate, at 3600 credits per
+hour of build time, [state.cost])`), a column per run, and `cost` in JSON (`total`,
+`rate_per_hour` and `unit`, and each run's `cost`). It is an estimate like the time: ODS
+knows no warehouse's prices, only the rate you give it. The dashboard's Runs page shows
+the same totals (`savings` in `/api/state/runs`).
 
 (Columns are aligned here; `--output plain` separates them with tabs.) Only what the
 command would otherwise have built counts as reused: its kinds of node (`ods state seed`

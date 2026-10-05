@@ -48,6 +48,19 @@ struct RunSavings {
     outcome: RunEntryOutcome,
     #[serde(flatten)]
     savings: ods_state::Savings,
+    /// What the time avoided cost, at `[state.cost]`'s rate, when it is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost: Option<f64>,
+}
+
+/// The rate `[state.cost]` sets, and what the total time avoided cost at it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct Cost {
+    rate_per_hour: f64,
+    unit: String,
+    /// What [`SavingsReport::totals`]'s time avoided cost.
+    total: f64,
 }
 
 /// `ods state savings`'s report.
@@ -68,6 +81,10 @@ pub(super) struct SavingsReport {
     runs: Vec<RunSavings>,
     /// Over every run since `--since`.
     totals: ods_state::Savings,
+    /// What the time avoided cost, when `[state.cost]` sets a rate (ADR-0029): an
+    /// estimate too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost: Option<Cost>,
 }
 
 impl SavingsReport {
@@ -88,7 +105,9 @@ impl SavingsReport {
             run_count: 0,
             runs: Vec::new(),
             totals: ods_state::Savings::default(),
+            cost: None,
         };
+        let rate = config.config.state.cost.clone();
         // Reading changes nothing: no database is created, and none is migrated.
         if !ws.state_db.is_file() {
             return Ok(report);
@@ -130,8 +149,19 @@ impl SavingsReport {
                 finished_at: e.finished_at,
                 outcome: e.outcome,
                 savings: ods_state::run_savings(e),
+                cost: None,
             })
             .collect();
+        if let Some(rate) = rate {
+            for run in &mut report.runs {
+                run.cost = Some(rate.cost_of(run.savings.avoided_ms));
+            }
+            report.cost = Some(Cost {
+                total: rate.cost_of(report.totals.avoided_ms),
+                rate_per_hour: rate.rate_per_hour,
+                unit: rate.unit,
+            });
+        }
         Ok(report)
     }
 }
@@ -170,6 +200,17 @@ fn saved(savings: &ods_state::Savings) -> String {
         format!("at least ~{time}")
     } else {
         format!("~{time}")
+    }
+}
+
+/// A cost, for people: `1.25 USD`, `< 0.01 USD` for a little, `0 USD` for none.
+fn money(amount: f64, unit: &str) -> String {
+    if amount <= 0.0 {
+        format!("0 {unit}")
+    } else if amount < 0.005 {
+        format!("< 0.01 {unit}")
+    } else {
+        format!("{amount:.2} {unit}")
     }
 }
 
@@ -235,6 +276,21 @@ impl Present for SavingsReport {
         }
         total.push(Span::toned(")", Tone::Muted));
         let mut facts = vec![("saved".to_owned(), total)];
+        if let Some(cost) = &self.cost {
+            facts.push((
+                "cost avoided".to_owned(),
+                vec![
+                    Span::toned(format!("~{}", money(cost.total, &cost.unit)), Tone::Success),
+                    Span::toned(
+                        format!(
+                            " (estimate, at {} {} per hour of build time, `[state.cost]`)",
+                            cost.rate_per_hour, cost.unit
+                        ),
+                        Tone::Muted,
+                    ),
+                ],
+            ));
+        }
         if let Some(since) = self.since {
             facts.push(("since".to_owned(), vec![Span::plain(since.to_string())]));
         }
@@ -247,35 +303,56 @@ impl Present for SavingsReport {
             })],
         ));
         blocks.push(ViewNode::KeyValue(facts));
-        blocks.push(ViewNode::Table {
+        blocks.push(self.runs_table());
+        ViewNode::Group(blocks)
+    }
+}
+
+impl SavingsReport {
+    /// The runs listed, newest first, with the cost column when a rate is set.
+    fn runs_table(&self) -> ViewNode {
+        ViewNode::Table {
             title: Some(if self.runs.len() < self.run_count {
                 format!("The {} newest runs", self.runs.len())
             } else {
                 "Runs".to_owned()
             }),
-            columns: vec![
-                "run".into(),
-                "finished".into(),
-                "outcome".into(),
-                "reused".into(),
-                "built".into(),
-                "saved".into(),
-            ],
+            columns: {
+                let mut columns: Vec<String> = vec![
+                    "run".into(),
+                    "finished".into(),
+                    "outcome".into(),
+                    "reused".into(),
+                    "built".into(),
+                    "saved".into(),
+                ];
+                if self.cost.is_some() {
+                    columns.push("cost avoided".into());
+                }
+                columns
+            },
             rows: self
                 .runs
                 .iter()
                 .map(|r| {
-                    vec![
+                    let mut row = vec![
                         vec![Span::toned(r.run_id.as_str(), Tone::Code)],
                         vec![Span::plain(r.finished_at.to_string())],
                         vec![outcome(r.outcome)],
                         vec![Span::plain(r.savings.reused.to_string())],
                         vec![Span::plain(r.savings.built.to_string())],
                         vec![Span::plain(saved(&r.savings))],
-                    ]
+                    ];
+                    if let (Some(cost), Some(amount)) = (&self.cost, r.cost) {
+                        row.push(vec![Span::plain(if r.savings.timed == 0 {
+                            super::run_stats::MISSING.to_owned()
+                        } else {
+                            money(amount, &cost.unit)
+                        })]);
+                    }
+                    row
                 })
                 .collect(),
-        });
-        ViewNode::Group(blocks)
+        }
     }
 }

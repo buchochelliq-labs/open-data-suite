@@ -94,7 +94,7 @@ The typed schema lives in `ods-config` (a foundation crate, per ADR-0001):
 - `[project] name`
 - `[output] format | color | width`
 - `[log] level`
-- `[state] db | environment` (added by #214)
+- `[state] db | environment` (added by #214); `[state.cost] rate_per_hour | unit` (added by #210, [ADR-0029](0029-build-timings-and-the-run-ledger.md))
 - `[providers.<name>] kind` plus a `settings` table
 - `[policy] rules` table
 
