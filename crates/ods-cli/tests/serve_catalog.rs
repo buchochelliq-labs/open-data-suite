@@ -490,3 +490,55 @@ fn freshness_evidence_matches_what_explain_says() {
         "{downstream:?}"
     );
 }
+
+/// On Databricks, runs read a source's Delta table version before deciding (ADR-0022);
+/// the dashboard never connects, so its Freshness evidence screen names that version
+/// and says it isn't read there, rather than calling the source unmeasured (#350).
+#[test]
+fn on_databricks_freshness_evidence_names_the_table_version_runs_read() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let mut manifest: Value = serde_json::from_slice(
+        &std::fs::read(fixtures(
+            "jaffle-ods/artifacts/dbt-1.10-build/manifest.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    manifest["metadata"]["adapter_type"] = serde_json::json!("databricks");
+    // A source with no `loaded_at_field`: only its table version could say it changed.
+    manifest["sources"]["source.jaffle_ods.landing.feed"] = serde_json::json!({
+        "unique_id": "source.jaffle_ods.landing.feed",
+        "resource_type": "source",
+        "name": "feed",
+        "source_name": "landing",
+        "relation_name": "`main`.`landing`.`feed`",
+        "config": {"enabled": true}
+    });
+    manifest["nodes"]["model.jaffle_ods.stg_orders"]["depends_on"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("source.jaffle_ods.landing.feed"));
+    std::fs::write(
+        target.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let server = serve(&target, &[]);
+    let view = json(&server, "api/catalog/sources");
+    let feed = input(&view, "source.jaffle_ods.landing.feed");
+    assert_eq!(
+        feed["evidence"]["method"], "table version from the Delta history (read when a run starts)",
+        "{feed:#}"
+    );
+    assert_eq!(feed["evidence"]["grade"], "unknown", "nothing read here");
+    assert!(
+        feed["evidence"]["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().starts_with("not read here")),
+        "{feed:#}"
+    );
+}

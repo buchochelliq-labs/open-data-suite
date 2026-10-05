@@ -1012,9 +1012,12 @@ Beyond loopback they leave out file paths and error text.
 
 **Freshness evidence** (`/catalog/sources`, under Catalog) shows how ODS knows whether
 each of the project's inputs changed since the nodes reading it were built:
-- **Sources:** the data version now (`max(<loaded_at_field>)` from `sources.json`, or a
-  table version where one was read), when it was measured, and the versions its readers
-  were last built from.
+- **Sources:** the data version now (`max(<loaded_at_field>)` from `sources.json`), when
+  it was measured, and the versions its readers were last built from. On Databricks,
+  runs read each source's Delta table version first
+  ([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)); the dashboard never
+  connects to the warehouse, so the screen names that version and says it isn't read
+  there. The versions runs read show under *Last recorded*.
 - **Seeds:** the file's checksum, compared with the one the seed was last built from.
 - **Grades:** each piece of evidence is graded *exact*, *semantic*, *proxy*, *inferred*
   or *unknown*. Only *exact* and *semantic* evidence can let a reader be reused; anything

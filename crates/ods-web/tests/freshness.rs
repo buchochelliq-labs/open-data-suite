@@ -341,6 +341,27 @@ fn without_a_store_nothing_is_compared_and_unknown_stays_unknown() {
 }
 
 #[test]
+fn a_version_only_runs_read_is_named_but_not_used() {
+    // The warehouse keeps a history runs read versions from; the server never connects,
+    // so its plan has no version now, and the screen says why.
+    let dashboard = recorded().with_freshness(FreshnessInput::new(vec![
+        SourceInput::new(CLICKS, "app.clicks").read_by_runs(Some("table version".into())),
+    ]));
+    let view = view(&dashboard);
+    let evidence = input(&view, CLICKS).evidence.clone().unwrap();
+    assert_eq!(evidence.method, "table version (read when a run starts)");
+    assert_eq!(evidence.grade, Grade::Unknown, "nothing read here");
+    assert!(
+        evidence
+            .notes
+            .iter()
+            .any(|n| n.starts_with("not read here: this screen doesn't connect")),
+        "{:?}",
+        evidence.notes
+    );
+}
+
+#[test]
 fn beyond_loopback_no_file_path_is_shown() {
     let view = recorded().freshness_at(&lineage().document, false, at("2026-09-29T12:00:00Z"));
     assert_eq!(input(&view, SEED).file, None);

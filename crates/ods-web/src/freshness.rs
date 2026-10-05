@@ -67,6 +67,10 @@ pub struct SourceInput {
     /// How the project says its new data is measured, e.g. `max(_loaded_at)`; `None`
     /// when it says nothing, so its data can't be versioned.
     pub measured_with: Option<String>,
+    /// A version a run reads from the warehouse when it starts, e.g. a table version
+    /// from the table's history, which this screen can't: the server never connects to
+    /// the warehouse. `None` when the warehouse offers none.
+    pub read_by_runs: Option<String>,
     /// Its data version now, if anything reports one.
     pub version: Option<DataVersion>,
     /// When `version` was observed.
@@ -84,6 +88,7 @@ impl SourceInput {
             name: name.into(),
             relation: None,
             measured_with: None,
+            read_by_runs: None,
             version: None,
             observed_at: None,
             version_evidence: Vec::new(),
@@ -101,6 +106,14 @@ impl SourceInput {
     #[must_use]
     pub fn measured_with(mut self, how: Option<String>) -> Self {
         self.measured_with = how;
+        self
+    }
+
+    /// Says a run reads `version` (e.g. a table version) from the warehouse when it
+    /// starts, which this screen doesn't.
+    #[must_use]
+    pub fn read_by_runs(mut self, version: Option<String>) -> Self {
+        self.read_by_runs = version;
         self
     }
 
@@ -521,10 +534,15 @@ fn source_view(
     snapshot: Option<&StateSnapshot>,
     source: &SourceInput,
 ) -> InputView {
-    let method = source.measured_with.clone().unwrap_or_else(|| {
-        "nothing: the project doesn't say how its new data is measured".to_owned()
-    });
-    let notes = source
+    // A version runs read from the warehouse comes first, as the planner prefers it
+    // when it is usable (ADR-0022); this screen can only say it exists.
+    let method = match (&source.read_by_runs, &source.measured_with) {
+        (Some(run), Some(here)) => format!("{run} (read when a run starts), else {here}"),
+        (Some(run), None) => format!("{run} (read when a run starts)"),
+        (None, Some(here)) => here.clone(),
+        (None, None) => "nothing: the project doesn't say how its new data is measured".to_owned(),
+    };
+    let mut notes: Vec<String> = source
         .version
         .iter()
         .map(|v| format!("from {}", v.source))
@@ -535,6 +553,11 @@ fn source_view(
                 .filter_map(|e| e.value.as_ref().map(|v| format!("{}: {v}", e.kind))),
         )
         .collect();
+    if let Some(run) = &source.read_by_runs {
+        notes.push(format!(
+            "not read here: this screen doesn't connect to the warehouse, so its decisions don't use the {run}; a run reads it before deciding"
+        ));
+    }
     InputView {
         id: source.id.clone(),
         name: source.name.clone(),
