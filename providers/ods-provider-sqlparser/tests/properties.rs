@@ -16,16 +16,25 @@ const TABLES: [(&str, &[&str]); 2] = [
     ("customers", &["id", "name", "tier"]),
 ];
 
+/// The suite's tables, named as `analyzer` normalizes names (Snowflake upper-cases
+/// unquoted ones), so every dialect resolves them.
+fn tables(analyzer: &SqlparserAnalyzer) -> BTreeMap<RelationName, BTreeSet<String>> {
+    TABLES
+        .iter()
+        .map(|(table, columns)| {
+            (
+                analyzer.relation_name(&format!("db.{table}")).unwrap(),
+                columns.iter().map(|c| analyzer.column_name(c)).collect(),
+            )
+        })
+        .collect()
+}
+
 fn schema(analyzer: &SqlparserAnalyzer) -> MapSchema {
     MapSchema(
-        TABLES
-            .iter()
-            .map(|(table, columns)| {
-                (
-                    RelationName::new(["db", *table]).unwrap(),
-                    columns.iter().map(|c| analyzer.column_name(c)).collect(),
-                )
-            })
+        tables(analyzer)
+            .into_iter()
+            .map(|(relation, columns)| (relation, columns.into_iter().collect()))
             .collect(),
     )
 }
@@ -41,7 +50,7 @@ fn analyze(dialect: SqlDialect, sql: &str) -> QueryLineage {
 }
 
 /// What every result must hold, whatever the SQL.
-fn check(lineage: &QueryLineage, sql: &str) -> Result<(), TestCaseError> {
+fn check(dialect: SqlDialect, lineage: &QueryLineage, sql: &str) -> Result<(), TestCaseError> {
     if lineage.opaque {
         prop_assert_eq!(lineage.confidence, Confidence::Unknown, "{:?}", sql);
         prop_assert!(lineage.outputs.is_empty(), "{:?}", sql);
@@ -56,15 +65,7 @@ fn check(lineage: &QueryLineage, sql: &str) -> Result<(), TestCaseError> {
             prop_assert!(lineage.confidence <= lowest, "{:?}", sql);
         }
     }
-    let known: BTreeMap<RelationName, BTreeSet<&str>> = TABLES
-        .iter()
-        .map(|(t, cols)| {
-            (
-                RelationName::new(["db", *t]).unwrap(),
-                cols.iter().copied().collect(),
-            )
-        })
-        .collect();
+    let known = tables(&SqlparserAnalyzer::new(dialect));
     for output in &lineage.outputs {
         for (input, _) in &output.inputs {
             // An input names a column of a relation it read, and, where the schema
@@ -77,7 +78,7 @@ fn check(lineage: &QueryLineage, sql: &str) -> Result<(), TestCaseError> {
             );
             if let Some(columns) = known.get(&input.relation) {
                 prop_assert!(
-                    columns.contains(input.column.as_str()),
+                    columns.contains(&input.column),
                     "{} isn't a column of {} in {:?}",
                     input.column,
                     input.relation,
@@ -143,7 +144,7 @@ proptest! {
         dialect in prop::sample::select(SqlDialect::ALL.to_vec()),
     ) {
         let lineage = analyze(dialect, &sql);
-        check(&lineage, &sql)?;
+        check(dialect, &lineage, &sql)?;
         prop_assert_eq!(analyze(dialect, &sql), lineage);
     }
 
@@ -153,7 +154,7 @@ proptest! {
         dialect in prop::sample::select(SqlDialect::ALL.to_vec()),
     ) {
         let lineage = analyze(dialect, &sql);
-        check(&lineage, &sql)?;
+        check(dialect, &lineage, &sql)?;
         prop_assert_eq!(analyze(dialect, &sql), lineage);
     }
 
@@ -167,9 +168,9 @@ proptest! {
         let chars: Vec<char> = sql.chars().collect();
         let at = cut.index(chars.len() + 1);
         let mangled: String = chars[..at].iter().copied().chain(junk.chars()).chain(chars[at..].iter().copied()).collect();
-        check(&analyze(dialect, &mangled), &mangled)?;
+        check(dialect, &analyze(dialect, &mangled), &mangled)?;
         let truncated: String = chars[..at].iter().collect();
-        check(&analyze(dialect, &truncated), &truncated)?;
+        check(dialect, &analyze(dialect, &truncated), &truncated)?;
     }
 
     #[test]
@@ -196,11 +197,18 @@ fn most_generated_queries_are_analyzed() {
     let mut runner = TestRunner::deterministic();
     let strategy = query();
     let total = 200;
-    let analyzed = (0..total)
-        .filter(|_| {
-            let sql = strategy.new_tree(&mut runner).unwrap().current();
-            !analyze(SqlDialect::Databricks, &sql).opaque
-        })
-        .count();
-    assert!(analyzed * 2 > total, "only {analyzed} of {total} analyzed");
+    let queries: Vec<String> = (0..total)
+        .map(|_| strategy.new_tree(&mut runner).unwrap().current())
+        .collect();
+    // In every dialect: a schema named the wrong way would make one dialect opaque.
+    for dialect in SqlDialect::ALL {
+        let analyzed = queries
+            .iter()
+            .filter(|sql| !analyze(dialect, sql).opaque)
+            .count();
+        assert!(
+            analyzed * 2 > total,
+            "{dialect:?}: only {analyzed} of {total} analyzed"
+        );
+    }
 }
