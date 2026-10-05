@@ -21,6 +21,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 ods-provider-fake.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true
