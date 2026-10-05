@@ -220,7 +220,9 @@ exist.
    project and why. Users still run each tool themselves.
 3. **Segmented execution.** `ods state run` builds across tools.
 4. **Environment mapping** beyond one shared target, including SQLMesh virtual
-   environments.
+   environments. This builds on open data environments
+   ([ADR-0028](0028-open-data-environments.md)), which give every tool the same
+   environments, delegating to SQLMesh's own where they exist.
 
 ### Signs it has legs, and signs to stop
 - Go: users actually run more than one build tool against one warehouse (ask before
@@ -229,6 +231,45 @@ exist.
 - Stop or rethink: dbt and SQLMesh merge into one tool with one project format. Then
   aim the same design at other formats (Databricks declarative pipelines, plain SQL),
   or fold it into Mesh (#86) for dbt-only use.
+
+### Where this falls apart
+Listed most likely first. Phase 1 (read-only lineage) avoids risks 2–8 because it
+builds nothing.
+
+1. **Upkeep.** SQLMesh has no versioned artifact like dbt's `manifest.json`, so the
+   provider depends on its Python API or CLI output. Each format pair must be tested
+   across versions of both tools. For a small team this is the likeliest reason to
+   stop.
+2. **SQLMesh may not take an exact node set.** If it can't reliably build exactly the
+   requested models in prod outside `plan`, its project runs all or nothing, and
+   execution falls back to Option B. Spike this before phase 3.
+3. **Promotion across tools isn't atomic.** SQLMesh promotes by repointing views, while
+   dbt rebuilds. Prod can briefly mix new SQLMesh data with old dbt models.
+   ADR-0028 is the proposed answer: the same pointer-based promotion for both.
+4. **The boundary loses SQLMesh's change categories.** Unless ODS can read whether a
+   SQLMesh change was breaking, the conservative rule rebuilds everything downstream
+   on the dbt side.
+5. **Success isn't completeness.** A SQLMesh incremental can succeed with intervals
+   still missing. Bindings need interval or watermark evidence (#19), not just node
+   success.
+6. **Matching on table names is weaker than it looks.** Custom schema macros,
+   per-target schemas, SQLMesh's physical tables vs views and catalog case rules all
+   complicate it. A wrong match is a silent wrong build, so declared bindings must be
+   easy and matched ones visibly inferred.
+7. **Two schedulers.** Teams often already run `sqlmesh run` from cron or Airflow. ODS
+   needs locks across tools (#28) and a clear rule on who owns the schedule.
+8. **Partial failures can't be rolled back in the warehouse.** Rule 5 protects ODS's
+   state, but a failed later segment leaves earlier segments' data written. ODS can
+   only report it (or, with ADR-0028, not repoint prod until all segments succeed).
+9. **The demand may be temporary.** Teams adopting SQLMesh often migrate wholesale, and
+   Fivetran owning both tools may shorten that window. The design only stays useful if
+   other formats turn out to be real demand.
+10. **Focus.** Each phase pulls ODS towards orchestration, where Dagster is strong, and
+    users will blame ODS for errors that come from the tools underneath.
+
+Cheapest checks: a spike on risk 2; a count of how many bindings match exactly, with
+no configuration, on the demo dbt project plus a small SQLMesh project (risk 6); and
+asking users whether they run both tools long-term or only while migrating (risk 9).
 
 ## Consequences
 - Positive:
@@ -255,7 +296,7 @@ exist.
     or unbound relations.
   - Federated lineage view (phase 1).
   - Segment scheduler and cross-tool run report (phase 3).
-  - ADR on environment mapping (phase 4).
+  - Environment mapping on top of ADR-0028 (phase 4).
 
 ## Open questions
 - Is a node ID `project:node` enough, or do two dbt projects with the same package name
