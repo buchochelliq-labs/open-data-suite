@@ -289,6 +289,21 @@ async fn the_run_ledger_keeps_runs_apart_from_state(store: &dyn StateStore) {
         store.latest(&b).await.unwrap().is_none(),
         "ledger: a run's entry is not state"
     );
+    // An entry this build couldn't read back is never written.
+    let mut newer = run_entry("run-new", 6_000, RunEntryOutcome::Succeeded);
+    newer.schema_version = ods_core::SchemaVersion::new(
+        ods_core::state::RUN_SCHEMA_VERSION.major,
+        ods_core::state::RUN_SCHEMA_VERSION.minor + 1,
+    );
+    assert!(
+        store.record_run(&a, &newer).await.is_err(),
+        "ledger: a newer entry is refused"
+    );
+    assert_eq!(
+        store.runs(&a, None, 10).await.unwrap().len(),
+        2,
+        "ledger: a refused entry leaves nothing"
+    );
 }
 
 /// Runs every case against fresh stores from `harness`.

@@ -11,6 +11,8 @@ use ods_sdk::ProviderError;
 use ods_sdk::contracts::state_store::StateStore;
 use serde::Serialize;
 
+use ods_store_sqlite::SqliteStateStore;
+
 use super::state_plan::{Sources, Workspace, block_on, common, store_error};
 use super::state_settings::StateSettings;
 use crate::exit::{CliError, ExitStatus, codes};
@@ -87,18 +89,34 @@ impl SavingsReport {
             runs: Vec::new(),
             totals: ods_state::Savings::default(),
         };
-        // Reading never creates a database.
+        // Reading changes nothing: no database is created, and none is migrated.
         if !ws.state_db.is_file() {
             return Ok(report);
         }
-        let store = ws.open_store()?;
+        let store = block_on(SqliteStateStore::open_existing(&ws.state_db))?
+            .map_err(|e| store_error(&e))?;
+        // A database from before the run ledger (version 1) has no runs yet; the next run
+        // that writes migrates it.
+        if block_on(store.schema_version())?.map_err(|e| store_error(&e))? < 2 {
+            return Ok(report);
+        }
         let entries: Vec<RunEntry> = match block_on(store.runs(&ws.scope, since, usize::MAX))? {
             Ok(entries) => entries,
             Err(ProviderError::Unsupported(_)) => {
                 report.ledger = false;
                 return Ok(report);
             }
-            Err(e) => return Err(store_error(&e)),
+            // The ledger, not the state: say so, rather than "the state is damaged".
+            Err(e) => {
+                return Err(CliError::new(
+                    ExitStatus::Failure,
+                    codes::STATE_STORE,
+                    format!("the run ledger can't be read: {e}"),
+                )
+                .with_hint(
+                    "the state itself is unaffected; `ods state doctor` lists the runs it can't read",
+                ));
+            }
         };
         report.run_count = entries.len();
         for entry in &entries {
@@ -138,8 +156,12 @@ fn parse_since(text: &str) -> Result<Timestamp, CliError> {
     })
 }
 
-/// The time saved, for people: `~4m 12s`, `at least ~4m 12s`, or `—` with no timing.
+/// The time saved, for people: `~4m 12s`, `at least ~4m 12s`, `none` when nothing was
+/// reused, or `—` when nothing reused has a build time (unknown, not zero).
 fn saved(savings: &ods_state::Savings) -> String {
+    if savings.reused == 0 {
+        return "none".to_owned();
+    }
     if savings.timed == 0 {
         return super::run_stats::MISSING.to_owned();
     }
@@ -188,10 +210,11 @@ impl Present for SavingsReport {
             return ViewNode::Group(blocks);
         }
         let t = &self.totals;
-        let mut total = vec![Span::toned(
-            format!("{} of build time", saved(t)),
-            Tone::Success,
-        )];
+        let mut total = vec![if t.timed == 0 {
+            Span::toned("unknown: no reused node has a build time", Tone::Muted)
+        } else {
+            Span::toned(format!("{} of build time", saved(t)), Tone::Success)
+        }];
         total.push(Span::toned(
             format!(
                 " (estimate, serial: {} of {} nodes reused across {} run{}",

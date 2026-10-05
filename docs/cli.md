@@ -1497,18 +1497,24 @@ ods state savings --since 2026-10-01   # only runs since then (a date, or RFC 33
 ```
 
 ```text
+What reuse saved in jaffle_ods/default
+
 saved: ~5.5s of build time (estimate, serial: 22 of 39 nodes reused across 3 runs)
 timings from: 1 run
 
 Runs
-run      finished              outcome           reused  built  saved
-3f1c9a2e 2026-10-05T09:12:03Z  succeeded         9       4      ~2.3s
-ods-1…   2026-10-05T09:11:40Z  nothing to build  13      0      ~3.3s
-8b20d4c1 2026-10-05T09:10:58Z  succeeded         0       13     —
+run                                   finished              outcome           reused  built  saved
+4f0f6f7c-0b7e-4d2a-9a51-2f7b6c1d9e10  2026-10-05T09:12:03Z  succeeded         9       4      ~2.3s
+ods-1791198700123                     2026-10-05T09:11:40Z  nothing to build  13      0      ~3.3s
+0c9a1e52-6d3b-4f8e-8f2a-7a4c9d0b1e33  2026-10-05T09:10:58Z  succeeded         0       13     none
 ```
 
-A run whose reused nodes have no build time shows `at least` its figure, or `—` when
-none has one. `--json` has `run_count`, `runs` (each with `run_id`, `finished_at`,
+(Columns are aligned here; `--output plain` separates them with tabs.) Only what the
+command would otherwise have built counts as reused: its kinds of node (`ods state seed`
+saves nothing by reusing models), or, for `retry`, what failed. A run that reused
+nothing shows `none`; one whose reused nodes have no build time shows `at least` its
+figure, or `—` when none has one. Reading changes nothing: a database not yet migrated
+to the ledger reports no runs. `--json` has `run_count`, `runs` (each with `run_id`, `finished_at`,
 `outcome` and the fields of `savings` above) and `totals`, with `estimate: true`. Runs
 from before the ledger existed (ODS 0.0.1) aren't in it. The ledger is the `runs` table
 of the state database, added by its migration 2 (the database is copied first, as
@@ -1924,7 +1930,8 @@ ods state reset --yes            # set it aside: state.db-<time>-<process>.set-a
 - every problem: `damaged` (SQLite's integrity check failed, or it isn't a state
   database), `newer schema`, `unreadable snapshot`, `inconsistent snapshot` (what
   `history` lists disagrees with the snapshot itself), `dangling head` or
-  `broken chain` (a head or parent that points at a missing snapshot);
+  `broken chain` (a head or parent that points at a missing snapshot), or `unreadable
+  run` (an entry of the run ledger it can't read; the state itself is unaffected);
 - any copies it finds beside the database, and what to do.
 
 `backup` works while runs use the database. Take one before anything risky, or on a

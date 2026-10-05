@@ -1,0 +1,58 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "serde_json::to_string_pretty(&stable).unwrap()"
+---
+{
+  "state_db": "<state-db>",
+  "scope": "jaffle_ods/default",
+  "estimate": true,
+  "ledger": true,
+  "run_count": 3,
+  "runs": [
+    {
+      "run_id": "<run>",
+      "finished_at": "<time>",
+      "outcome": "succeeded",
+      "reused": 9,
+      "built": 4,
+      "timed": 9,
+      "untimed": 0,
+      "avoided_ms": 2250,
+      "timed_by": [
+        "<run>"
+      ]
+    },
+    {
+      "run_id": "<run>",
+      "finished_at": "<time>",
+      "outcome": "nothing_to_build",
+      "reused": 13,
+      "built": 0,
+      "timed": 13,
+      "untimed": 0,
+      "avoided_ms": 3250,
+      "timed_by": [
+        "<run>"
+      ]
+    },
+    {
+      "run_id": "<run>",
+      "finished_at": "<time>",
+      "outcome": "succeeded",
+      "reused": 0,
+      "built": 13,
+      "timed": 0,
+      "untimed": 0,
+      "avoided_ms": 0,
+      "timed_by": []
+    }
+  ],
+  "totals": {
+    "reused": 22,
+    "built": 17,
+    "timed": 22,
+    "untimed": 0,
+    "avoided_ms": 5500,
+    "timed_by": "<runs>"
+  }
+}

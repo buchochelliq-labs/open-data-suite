@@ -216,6 +216,7 @@ pub(super) fn problem_label(kind: ProblemKind) -> &'static str {
         ProblemKind::InconsistentSnapshot => "inconsistent snapshot",
         ProblemKind::DanglingHead => "dangling head",
         ProblemKind::BrokenChain => "broken chain",
+        ProblemKind::UnreadableRun => "unreadable run",
         _ => "problem",
     }
 }

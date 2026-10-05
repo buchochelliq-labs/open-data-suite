@@ -807,7 +807,32 @@ impl SqliteStateStore {
         }
 
         let scopes = self.check_records(problems).await?;
+        if tables.iter().any(|t| t == "runs") {
+            self.check_runs(problems).await?;
+        }
         Ok(StoreCheck::new(schema, scopes, std::mem::take(problems)))
+    }
+
+    /// Checks every entry of the run ledger decodes, and is a version this build reads
+    /// (ADR-0029).
+    async fn check_runs(&self, problems: &mut Vec<StoreProblem>) -> Result<(), ProviderError> {
+        let rows = sqlx::query("SELECT id, scope, document FROM runs ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| db_error(&e))?;
+        for row in &rows {
+            let (id, scope): (i64, String) = (row.get(0), row.get(1));
+            let read = serde_json::from_str::<RunEntry>(row.get(2))
+                .map_err(|e| e.to_string())
+                .and_then(|e| check_run_readable(&e).map_err(|e| e.to_string()));
+            if let Err(why) = read {
+                problems.push(StoreProblem::new(
+                    ProblemKind::UnreadableRun,
+                    format!("run {id} of the ledger of `{scope}`: {why}"),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Checks every snapshot decodes, and every head and parent points at a snapshot in

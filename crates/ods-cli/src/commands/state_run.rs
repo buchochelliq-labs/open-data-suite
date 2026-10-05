@@ -1446,6 +1446,9 @@ pub(super) struct RunReport {
     /// The build time reusing saved, estimated from each reused node's last measured
     /// build (#210, ADR-0029).
     savings: ods_state::Savings,
+    /// The nodes reused that this command would otherwise have built, in plan order.
+    #[serde(skip)]
+    reuse_scope: Vec<String>,
     /// Whether the built nodes' tests ran too (`--test`).
     tests: bool,
     /// Nodes to build that this run left out (`--exclude`, `--resource-type`).
@@ -1851,6 +1854,17 @@ impl RunReport {
         }
         let mut source_tests = build_source_checks(tested, args, &ws.project, latest.as_ref())?;
         let retry = retry.map(|r| r.with_sources(&mut source_tests));
+        // What this command reuses that it would otherwise have built: of its kinds of
+        // node, or, retrying, of what failed (ADR-0029). Reusing a model saves `ods state
+        // seed` nothing.
+        let reuse_scope: Vec<String> = match &retry {
+            Some(retry) => retry.reused.iter().map(|n| n.node.clone()).collect(),
+            None => plan
+                .with_action(PlanAction::Reuse)
+                .filter(|e| types.contains(&e.kind))
+                .map(|e| e.node.clone())
+                .collect(),
+        };
         let mut report = Self {
             state_db: ws.state_db.clone(),
             scope: ws.scope.to_string(),
@@ -1859,10 +1873,11 @@ impl RunReport {
             build: requested.len(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
             savings: ods_state::savings(
-                &plan,
+                reuse_scope.iter().map(String::as_str),
                 requested.len(),
                 latest.as_ref().map(|s| &s.snapshot),
             ),
+            reuse_scope,
             tests: tested,
             left_out,
             prepared,
@@ -2075,10 +2090,10 @@ impl RunReport {
             RunOutcome::Compiled | RunOutcome::DryRun => return,
         };
         let mut nodes = BTreeMap::new();
-        for entry in self.plan.with_action(PlanAction::Reuse) {
-            let last = before.and_then(|b| b.snapshot.nodes.get(&entry.node));
+        for node in &self.reuse_scope {
+            let last = before.and_then(|b| b.snapshot.nodes.get(node));
             nodes.insert(
-                entry.node.clone(),
+                node.clone(),
                 RunNode::new(RunAction::Reused).timed(
                     last.and_then(|n| n.build_ms),
                     last.map_or("", |n| n.run_id.as_str()),
@@ -2112,8 +2127,12 @@ impl RunReport {
             .map_err(|e| e.to_string())
             .and_then(|r| r.map_err(|e| e.to_string()));
         if let Err(why) = written {
+            let state = match self.outcome {
+                RunOutcome::Succeeded | RunOutcome::Failed => "; the state was recorded as usual",
+                _ => "; the state is unchanged",
+            };
             self.warnings.push(format!(
-                "this run couldn't be added to the run ledger, so `ods state savings` won't count it: {why}; the state was recorded as usual"
+                "this run couldn't be added to the run ledger, so `ods state savings` won't count it: {why}{state}"
             ));
         }
     }

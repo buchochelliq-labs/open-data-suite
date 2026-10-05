@@ -4485,4 +4485,34 @@ fn the_run_ledger_counts_every_run_and_savings_reports_it() {
         redacted = redacted.replace(run["finished_at"].as_str().unwrap(), "<time>");
     }
     insta::assert_snapshot!("savings_report_plain", redacted.trim_end());
+    let mut stable = report.clone();
+    for run in stable["runs"].as_array_mut().unwrap() {
+        run["run_id"] = Value::String("<run>".into());
+        run["finished_at"] = Value::String("<time>".into());
+        let timed_by = run["timed_by"].as_array().unwrap().len();
+        run["timed_by"] = vec![Value::String("<run>".into()); timed_by].into();
+    }
+    stable["totals"]["timed_by"] = Value::String("<runs>".into());
+    stable["state_db"] = Value::String("<state-db>".into());
+    insta::assert_snapshot!(
+        "savings_report_json",
+        serde_json::to_string_pretty(&stable).unwrap()
+    );
+
+    // `ods state seed` would only have built seeds: reusing models saves it nothing.
+    let (_, planned) = project.ods(&["state", "plan"]);
+    let seeds = planned["result"]["plan"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "seed" && e["action"] == "reuse")
+        .count();
+    assert!(seeds > 0 && seeds < 13, "{seeds}");
+    let (code, seeded) = project.command("seed", &[]);
+    assert_eq!(code, 0, "{seeded:#}");
+    assert_eq!(seeded["result"]["savings"]["reused"], seeds, "{seeded:#}");
+    let (_, after) = project.ods(&["state", "savings", "--limit", "1"]);
+    let newest = &after["result"]["runs"][0];
+    assert_eq!(newest["outcome"], "nothing_to_build");
+    assert_eq!(newest["reused"], seeds, "{after:#}");
 }

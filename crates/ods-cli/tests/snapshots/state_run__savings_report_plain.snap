@@ -11,4 +11,4 @@ Runs
 run	finished	outcome	reused	built	saved
 <run-3>	<time>	succeeded	9	4	~2.3s
 <run-2>	<time>	nothing to build	13	0	~3.3s
-<run-1>	<time>	succeeded	0	13	—
+<run-1>	<time>	succeeded	0	13	none

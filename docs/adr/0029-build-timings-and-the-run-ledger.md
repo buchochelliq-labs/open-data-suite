@@ -35,7 +35,9 @@ old build's. State schema 1.3; the field is optional, so 1.0–1.2 documents rea
 untimed. As with 1.1 and 1.2, an older ODS refuses 1.3 documents.
 
 ### 2. The estimate
-For a run, **build time avoided** is the sum of `build_ms` of each node the plan reused,
+For a run, **build time avoided** is the sum of `build_ms` of each node the plan reused
+that the command would otherwise have built (its kinds of node, or, for `retry`, what
+failed: reusing a model saves `ods state seed` nothing),
 from the snapshot the plan read: the serial build time, an estimate that overstates
 wall-clock time when dbt builds in parallel, and labelled so. Tests aren't counted.
 Reused nodes without a timing are counted (`untimed`), and the total is then a lower
@@ -55,7 +57,7 @@ timing and the run it came from, frozen when written. Every non-dry run writes o
 run with nothing to build included (with an ODS run id, as it has no executor's). It is
 written after the commit attempt, in its own transaction: if it can't be, the run warns
 and carries on; a failed run's entry never touches state. The methods default to
-`Unsupported` (capability `state_store.runs`), so a store without a ledger keeps working
+`Unsupported` (capability `run_ledger`), so a store without a ledger keeps working
 and savings say it keeps no run history. Pruning is left for later.
 
 Options rejected for the ledger:
@@ -64,7 +66,8 @@ Options rejected for the ledger:
 - **A journal event:** no journal when nothing runs, and journals are pruned.
 
 ### 4. Reporting
-`ods state savings [--since DATE] [--environment NAME]` reports per run and in total
+`ods state savings [--since DATE] [--limit N]` (with the State commands' target and
+environment options) reports per run and in total
 from the ledger, plain and JSON, and the dashboard's Runs page shows the same. A cost
 is shown only when `[state.cost]` sets `rate_per_hour` and `unit` in `ods.toml`: a
 number and a label, no secrets (ADR-0005).
@@ -77,7 +80,7 @@ number and a label, no secrets (ADR-0005).
 
 ## Consequences
 - Snapshots grow by one number per node.
-- Savings for runs before §3 ships can't be known; the report says so.
+- Savings for runs before §3 ships can't be known; the docs say so.
 - The serial estimate overstates wall-clock savings under parallelism; showing it as
   "build time" rather than "time" keeps it honest.
 - The ledger grows by one row per run until pruning exists.

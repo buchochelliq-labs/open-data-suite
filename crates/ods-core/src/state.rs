@@ -551,7 +551,8 @@ pub const RUN_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RunEntryOutcome {
-    /// Everything could be reused: nothing ran.
+    /// Nothing the command builds needed building, so nothing ran: everything of its
+    /// kinds could be reused.
     NothingToBuild,
     /// Every node built, and every check passed.
     Succeeded,
@@ -566,7 +567,7 @@ pub enum RunEntryOutcome {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RunAction {
-    /// Built it, successfully.
+    /// Built it. Its checks, if they ran with it, may still have failed.
     Built,
     /// Reused its last build.
     Reused,
@@ -1132,6 +1133,44 @@ mod tests {
         assert!(!Exactness::Proxy.allows_reuse());
         assert!(Exactness::Semantic.allows_reuse());
         assert!(Exactness::Exact.allows_reuse());
+    }
+
+    /// A run entry, as the ledger stores it (ADR-0029): a golden document, so its
+    /// shape only changes on purpose.
+    #[test]
+    fn run_entries_have_a_stable_document() {
+        let entry = RunEntry::new(
+            "run-2",
+            Timestamp::from_unix(120),
+            RunEntryOutcome::NothingToBuild,
+            BTreeMap::from([
+                (
+                    "model.p.a".to_owned(),
+                    RunNode::new(RunAction::Reused).timed(Some(1_250), "run-1"),
+                ),
+                ("model.p.b".to_owned(), RunNode::new(RunAction::Reused)),
+            ]),
+        )
+        .started(Some(Timestamp::from_unix(60)))
+        .snapshots(Some(SnapshotId(1)), None);
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "schema_version": {"major": 1, "minor": 0},
+                "run_id": "run-2",
+                "started_at": "1970-01-01T00:01:00Z",
+                "finished_at": "1970-01-01T00:02:00Z",
+                "outcome": "nothing_to_build",
+                "based_on": 1,
+                "nodes": {
+                    "model.p.a": {"action": "reused", "build_ms": 1250, "timed_by": "run-1"},
+                    "model.p.b": {"action": "reused"}
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<RunEntry>(json).unwrap(), entry);
+        assert_eq!(entry.count(RunAction::Reused), 2);
     }
 
     /// A 1.2 node, from before build times (ADR-0029), reads as untimed; one with a time

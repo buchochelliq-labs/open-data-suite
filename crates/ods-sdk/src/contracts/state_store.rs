@@ -194,6 +194,9 @@ pub enum ProblemKind {
     DanglingHead,
     /// A snapshot's parent is missing or in another scope.
     BrokenChain,
+    /// An entry of the run ledger can't be decoded, or is a version this build can't
+    /// read (0.3, ADR-0029). State is unaffected; savings can't count it.
+    UnreadableRun,
 }
 
 /// One problem [`StateStore::check`] found.
@@ -393,6 +396,23 @@ pub fn check_run_readable(entry: &RunEntry) -> Result<(), ProviderError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newer_run_entries_are_refused() {
+        let entry = RunEntry::new(
+            "run-1",
+            Timestamp::from_unix(1),
+            ods_core::state::RunEntryOutcome::Succeeded,
+            std::collections::BTreeMap::new(),
+        );
+        assert!(check_run_readable(&entry).is_ok());
+        let mut newer = entry;
+        newer.schema_version = SchemaVersion::new(RUN_SCHEMA_VERSION.major + 1, 0);
+        assert!(check_run_readable(&newer).is_err());
+        newer.schema_version =
+            SchemaVersion::new(RUN_SCHEMA_VERSION.major, RUN_SCHEMA_VERSION.minor + 1);
+        assert!(check_run_readable(&newer).is_err());
+    }
 
     #[test]
     fn scopes_are_validated() {
