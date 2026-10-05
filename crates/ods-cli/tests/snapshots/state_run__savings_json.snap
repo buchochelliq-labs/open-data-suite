@@ -1,0 +1,14 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "serde_json::to_string_pretty(saved).unwrap().replace(&first_run, \"<run>\")"
+---
+{
+  "reused": 13,
+  "built": 0,
+  "timed": 13,
+  "untimed": 0,
+  "avoided_ms": 3250,
+  "timed_by": [
+    "<run>"
+  ]
+}

@@ -53,7 +53,7 @@ use super::state_retry::{LastOutcome, RetryFailed};
 use super::state_settings::{Origin, Setting, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
-use crate::present::{Level, Present, Span, Tone, ViewNode};
+use crate::present::{Level, Line, Present, Span, Tone, ViewNode};
 
 /// Options shared by the commands that run dbt (`run`, `test`).
 pub(super) fn dbt_options(command: Command) -> Command {
@@ -1261,7 +1261,7 @@ fn record(
     execution: &ExecutionReport,
     (latest, target): (Option<&StoredSnapshot>, Option<&TargetIdentity>),
     store: &SqliteStateStore,
-    planned_checks: &BTreeMap<String, Option<String>>,
+    (planned_checks, timings): (&BTreeMap<String, Option<String>>, Option<&RunSummary>),
 ) -> Result<RunRecord, CliError> {
     let mut built = Workspace::load(args, settings, sources)?;
     // Each node's checks as planned. The manifest dbt writes while building keeps the
@@ -1305,6 +1305,12 @@ fn record(
                     _ => Outcome::Failed,
                 },
                 n.completed_at,
+            )
+            // How long dbt took to build it, from the run's events (ADR-0029).
+            .timed(
+                timings
+                    .and_then(|run| run.get(&n.node))
+                    .and_then(|s| s.stats.took_ms()),
             );
             // Built with its tests, and they passed.
             if tested && n.fully_checked() {
@@ -1436,6 +1442,9 @@ pub(super) struct RunReport {
     outcome: RunOutcome,
     build: usize,
     reuse: usize,
+    /// The build time reusing saved, estimated from each reused node's last measured
+    /// build (#210, ADR-0029).
+    savings: ods_state::Savings,
     /// Whether the built nodes' tests ran too (`--test`).
     tests: bool,
     /// Nodes to build that this run left out (`--exclude`, `--resource-type`).
@@ -1774,6 +1783,10 @@ impl RunReport {
 
     /// Runs the flow. A failure to record after dbt ran comes back with the report, so
     /// the caller still sees what dbt did.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one flow, in order: prepare, plan, narrow, report"
+    )]
     fn build(
         kind: Kind,
         args: &ArgMatches,
@@ -1844,6 +1857,11 @@ impl RunReport {
             outcome: RunOutcome::DryRun,
             build: requested.len(),
             reuse: plan.with_action(PlanAction::Reuse).count(),
+            savings: ods_state::savings(
+                &plan,
+                requested.len(),
+                latest.as_ref().map(|s| &s.snapshot),
+            ),
             tests: tested,
             left_out,
             prepared,
@@ -1988,7 +2006,7 @@ impl RunReport {
             &execution,
             (latest, self.target.as_ref()),
             store,
-            &self.planned_checks,
+            (&self.planned_checks, self.observed.run_stats.as_ref()),
         );
         self.execution = Some(execution);
         self.explain_failures(ws, settings, latest);
@@ -2011,6 +2029,42 @@ impl RunReport {
 }
 
 impl RunReport {
+    /// What reuse saved, for people: `~4m 12s of build time (estimate: 9 of 13 nodes
+    /// reused)`. Only for a run that went ahead, and reused something.
+    fn saved_line(&self) -> Option<Line> {
+        let saved = &self.savings;
+        if saved.reused == 0 || matches!(self.outcome, RunOutcome::Compiled | RunOutcome::DryRun) {
+            return None;
+        }
+        let of = format!(
+            "{} of {} nodes reused",
+            saved.reused,
+            saved.reused + saved.built
+        );
+        let untimed = match saved.untimed {
+            0 => String::new(),
+            n if n == saved.reused => String::new(),
+            n => format!("; {n} without a build time, not counted, so at least this"),
+        };
+        Some(if saved.timed == 0 {
+            vec![Span::toned(
+                format!("unknown: no reused node has a build time yet ({of})"),
+                Tone::Muted,
+            )]
+        } else {
+            vec![
+                Span::toned(
+                    format!(
+                        "~{} of build time",
+                        super::run_stats::duration(saved.avoided_ms)
+                    ),
+                    Tone::Success,
+                ),
+                Span::toned(format!(" (estimate, serial: {of}{untimed})"), Tone::Muted),
+            ]
+        })
+    }
+
     fn summary(&self) -> ViewNode {
         let mut summary = vec![
             (
@@ -2039,6 +2093,9 @@ impl RunReport {
                 ))],
             ),
         ];
+        if let Some(saved) = self.saved_line() {
+            summary.push(("saved".into(), saved));
+        }
         if let Some(retry) = &self.retry {
             summary.push((
                 "retrying".into(),

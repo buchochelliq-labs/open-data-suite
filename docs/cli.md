@@ -1464,6 +1464,26 @@ and the rows written: `at least 17 (6 nodes didn't report rows)` when some didn'
 report. `--json` has it all under `run_stats`: `nodes` (each with its `stats`) and
 `totals`. A stat that isn't reported is `null`, never `0`.
 
+### What reuse saved
+
+Each build's time (the engine's own timing, as above) is recorded with its state, and
+kept while the build is reused (#210, [ADR-0029](adr/0029-build-timings-and-the-run-ledger.md)).
+`ods state record` takes it from `run_results.json`'s `execution_time`. So a run that
+reuses builds says what that saved:
+
+```text
+saved: ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)
+```
+
+It is an estimate: the sum of each reused node's last measured build, so it overstates
+the wall-clock time of a parallel build, and tests aren't counted. A reused node without
+a build time (built before ODS recorded them, or its run didn't say) is counted, never
+guessed: the line then says how many and that the figure is at least this. When no
+reused node has a time yet, it says so instead of a figure. `--json` (and `ods state
+plan --json`, for what a run would save) has `savings`: `reused`, `built`, `timed`,
+`untimed`, `avoided_ms` and `timed_by`, the runs whose timings it used. Snapshots
+record each node's `build_ms` from state schema 1.3; older snapshots read as untimed.
+
 `ods state history --run <run_id>` shows the same stats for any run whose journal is
 kept (below):
 

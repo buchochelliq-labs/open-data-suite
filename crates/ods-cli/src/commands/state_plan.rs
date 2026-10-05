@@ -452,6 +452,9 @@ pub(super) struct PlanReport {
     sources_file: Option<PathBuf>,
     build: usize,
     reuse: usize,
+    /// The build time reusing would save, estimated from each reused node's last
+    /// measured build (#210, ADR-0029).
+    savings: ods_state::Savings,
     /// The dbt command that builds exactly the BUILD set.
     dbt_command: Option<String>,
     pub(super) plan: ExecutionPlan,
@@ -614,15 +617,18 @@ impl PlanReport {
         } else {
             None
         };
+        let before = latest.as_ref().map(|s| s.snapshot.clone());
         let Planned {
             plan,
             warnings,
             based_on,
             recorded_target,
         } = plan_latest(&ws, &settings, latest, &select_specs(args), now)?;
+        let build = plan.with_action(PlanAction::Build).count();
         Ok(Self {
             dbt_command: dbt_command(&plan),
-            build: plan.with_action(PlanAction::Build).count(),
+            savings: ods_state::savings(&plan, build, before.as_ref()),
+            build,
             reuse: plan.with_action(PlanAction::Reuse).count(),
             based_on,
             recorded_target,
@@ -788,6 +794,8 @@ impl RecordReport {
                         .as_deref()
                         .and_then(|t| Timestamp::parse(t).ok()),
                 )
+                // dbt's `execution_time` (ADR-0029).
+                .timed(r.details.execution_ms)
             })
             .collect();
         let run_id = run

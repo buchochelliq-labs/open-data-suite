@@ -33,6 +33,8 @@ pub struct RunResult {
     /// Whether its checks ran with it and all passed (e.g. `dbt build`). A build that
     /// ran without checks leaves the node untested.
     pub tested: bool,
+    /// How long it took, in milliseconds, when the engine said (ADR-0029).
+    pub build_ms: Option<u64>,
 }
 
 impl RunResult {
@@ -43,7 +45,15 @@ impl RunResult {
             outcome,
             completed_at,
             tested: false,
+            build_ms: None,
         }
+    }
+
+    /// Sets how long the build took, when known.
+    #[must_use]
+    pub fn timed(mut self, build_ms: Option<u64>) -> Self {
+        self.build_ms = build_ms;
+        self
     }
 
     /// Marks a successful build whose checks ran and passed.
@@ -133,6 +143,8 @@ pub fn record(
                     run_id,
                     inputs,
                 );
+                // This build's own time: never the previous build's.
+                state.build_ms = result.build_ms;
                 // Tested only against the checks it has now; with none, nothing is.
                 if let (true, Some(checks)) = (result.tested, &node.checks) {
                     state.tested = Some(TestRecord::new(
