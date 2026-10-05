@@ -409,6 +409,30 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let db = build_then_fail_orders(dir);
+    // What `ods state explain` says, for the Why panel to match. It runs first: it
+    // opens the database for writing, and closing it may checkpoint what a run left in
+    // the write-ahead log into the file, changing its bytes but not its data. After it,
+    // only the dashboard, which opens it read-only, touches the file.
+    let home = tempfile::tempdir().unwrap();
+    let explain = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args([
+            "state",
+            "explain",
+            "orders",
+            "--output",
+            "json",
+            "--target-dir",
+        ])
+        .arg(dir.join("target"))
+        .arg("--state-db")
+        .arg(&db)
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    let explained: Value = serde_json::from_slice(&explain.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&explain.stderr)));
     let before = fs::read(&db).unwrap();
 
     let server = serve(
@@ -432,25 +456,6 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     let (status, body) = get(&server, "api/state/plan/model.jaffle_ods.orders");
     assert_eq!(status, 200, "{body}");
     let why: Value = serde_json::from_str(&body).unwrap();
-    let explain = Command::new(env!("CARGO_BIN_EXE_ods"))
-        .args([
-            "state",
-            "explain",
-            "orders",
-            "--output",
-            "json",
-            "--target-dir",
-        ])
-        .arg(dir.join("target"))
-        .arg("--state-db")
-        .arg(&db)
-        .current_dir(server.home.path())
-        .env_clear()
-        .env("XDG_CONFIG_HOME", server.home.path())
-        .output()
-        .unwrap();
-    let explained: Value = serde_json::from_slice(&explain.stdout)
-        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&explain.stderr)));
     assert_eq!(why["explanation"], explained["result"]["explanation"]);
     assert_eq!(why["verdict"], explained["result"]["verdict"]);
     assert_eq!(why["fingerprint"]["components"][0]["name"], "sql", "{why}");
