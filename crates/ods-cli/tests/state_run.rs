@@ -4281,6 +4281,21 @@ fn only_a_failure_before_running_is_reported_as_one() {
     );
     let hint = json["diagnostics"][0]["hint"].as_str().unwrap_or_default();
     assert!(hint.contains("ods state history --run"), "{json:#}");
+    // dbt started, so the run went ahead: the run ledger keeps it, as not recorded,
+    // under the journal's run id (ADR-0029).
+    let (_, ledger) = project.ods(&["state", "savings"]);
+    assert_eq!(ledger["result"]["run_count"], 1, "{ledger:#}");
+    assert_eq!(ledger["result"]["runs"][0]["outcome"], "not_recorded");
+    assert!(
+        hint.contains(ledger["result"]["runs"][0]["run_id"].as_str().unwrap()),
+        "{hint}"
+    );
+    // Nothing was reused yet: no saving, rather than an unknown one.
+    let plain = project.ods_plain(&["state", "savings"]);
+    assert!(
+        plain.contains("saved: none: no run has reused a node yet"),
+        "{plain}"
+    );
 
     let built = Project::new("test-compile-failure");
     built.run_ok(&[]);

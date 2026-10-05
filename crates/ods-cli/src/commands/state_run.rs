@@ -2018,11 +2018,27 @@ impl RunReport {
             .map_or_else(String::new, |id| {
                 format!("; `ods state history --run {id}` shows and explains what it did")
             });
-        let execution = executed.map_err(|e| {
-            execution_error(&e).with_hint(format!(
-                "nothing was recorded; the last successful state is unchanged{journal_hint}"
-            ))
-        })?;
+        let execution = match executed {
+            Ok(execution) => execution,
+            Err(e) => {
+                // dbt started, so the run went ahead: the ledger keeps it, with what it
+                // reused; what it built isn't known without a report (ADR-0029).
+                self.outcome = RunOutcome::NotRecorded;
+                let run_id = self
+                    .observed
+                    .run_stats
+                    .as_ref()
+                    .and_then(|r| r.run_id.clone())
+                    .unwrap_or_else(|| {
+                        format!("ods-{}", ods_core::state::TimestampMs::now().unix_millis())
+                    });
+                let now = Timestamp::now();
+                self.write_ledger(store, &ws.scope, &run_id, (None, now), latest);
+                return Err(execution_error(&e).with_hint(format!(
+                    "nothing was recorded; the last successful state is unchanged{journal_hint}"
+                )));
+            }
+        };
         if !execution.unrequested.is_empty() {
             self.warnings.push(format!(
                 "dbt also built {}, which weren't requested (the project changed after it was compiled?); they weren't recorded and will be built next run",
@@ -2127,6 +2143,7 @@ impl RunReport {
             .map_err(|e| e.to_string())
             .and_then(|r| r.map_err(|e| e.to_string()));
         if let Err(why) = written {
+            tracing::warn!(error = %why, "the run couldn't be added to the run ledger");
             let state = match self.outcome {
                 RunOutcome::Succeeded | RunOutcome::Failed => "; the state was recorded as usual",
                 _ => "; the state is unchanged",

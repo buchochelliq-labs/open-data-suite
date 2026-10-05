@@ -117,6 +117,19 @@ impl DoctorReport {
             return ctx.emit(&report);
         }
         let n = report.problems.len();
+        if ledger_only(&report.problems) {
+            // The state is sound: say so, rather than "damaged" (ADR-0029).
+            let error = CliError::new(
+                ExitStatus::Failure,
+                codes::STATE_STORE,
+                format!(
+                    "the run ledger has {n} entr{} it can't read; the state itself is sound",
+                    if n == 1 { "y" } else { "ies" }
+                ),
+            )
+            .with_hint("see what to do above; docs/cli.md#recovering-state");
+            return ctx.emit_failed(&report, error);
+        }
         let error = CliError::new(
             ExitStatus::Failure,
             codes::STATE_DAMAGED,
@@ -192,6 +205,18 @@ fn advice(report: &DoctorReport) -> Vec<String> {
         }
         return advice;
     }
+    if ledger_only(&report.problems) {
+        advice.push(
+            "the state itself is sound: every `ods state` command plans, runs and records as usual; only `ods state savings` and the dashboard's savings panel can't read the run ledger, and new runs are still added to it".to_owned(),
+        );
+        if let Some(copy) = report.copies.last() {
+            advice.push(format!(
+                "nothing needs doing; to go back to a copy anyway (state recorded since it was kept is lost): `ods state reset --yes --state-db {db}`, then copy `{}` to `{db}`",
+                copy.display()
+            ));
+        }
+        return advice;
+    }
     advice.push(
         "until this is fixed, `ods state` commands that read this state stop rather than guess"
             .to_owned(),
@@ -206,6 +231,15 @@ fn advice(report: &DoctorReport) -> Vec<String> {
         "to start afresh: `ods state reset --yes --state-db {db}` sets the database aside (nothing is deleted); the next run builds everything and records new state"
     ));
     advice
+}
+
+/// Whether every problem is an unreadable entry of the run ledger: evidence, not state
+/// (ADR-0029), so nothing that plans or records is affected.
+fn ledger_only(problems: &[StoreProblem]) -> bool {
+    !problems.is_empty()
+        && problems
+            .iter()
+            .all(|p| p.kind == ProblemKind::UnreadableRun)
 }
 
 pub(super) fn problem_label(kind: ProblemKind) -> &'static str {
@@ -405,5 +439,38 @@ impl Present for ResetReport {
                 },
             ]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use ods_sdk::contracts::state_store::{ProblemKind, StoreProblem};
+
+    use super::{DoctorReport, advice, ledger_only};
+
+    /// An unreadable run ledger is not damaged state: the advice says so, and never
+    /// suggests setting the state aside (ADR-0029).
+    #[test]
+    fn a_ledger_problem_is_not_called_damaged_state() {
+        let problems = vec![StoreProblem::new(ProblemKind::UnreadableRun, "run 3: bad")];
+        assert!(ledger_only(&problems));
+        let report = DoctorReport {
+            state_db: PathBuf::from(".ods/state.db"),
+            exists: true,
+            schema: None,
+            scopes: Vec::new(),
+            problems,
+            copies: Vec::new(),
+            advice: Vec::new(),
+        };
+        let advice = advice(&report).join("\n");
+        assert!(advice.contains("the state itself is sound"), "{advice}");
+        assert!(!advice.contains("start afresh"), "{advice}");
+        assert!(!ledger_only(&[
+            StoreProblem::new(ProblemKind::UnreadableRun, "run 3"),
+            StoreProblem::new(ProblemKind::BrokenChain, "snapshot 2"),
+        ]));
     }
 }

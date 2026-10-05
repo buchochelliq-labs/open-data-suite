@@ -210,7 +210,9 @@ impl Present for SavingsReport {
             return ViewNode::Group(blocks);
         }
         let t = &self.totals;
-        let mut total = vec![if t.timed == 0 {
+        let mut total = vec![if t.reused == 0 {
+            Span::toned("none: no run has reused a node yet", Tone::Muted)
+        } else if t.timed == 0 {
             Span::toned("unknown: no reused node has a build time", Tone::Muted)
         } else {
             Span::toned(format!("{} of build time", saved(t)), Tone::Success)

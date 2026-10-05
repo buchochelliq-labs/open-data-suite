@@ -807,8 +807,16 @@ impl SqliteStateStore {
         }
 
         let scopes = self.check_records(problems).await?;
+        // From version 2 the run ledger is part of the store (ADR-0029): missing, it was
+        // lost, and the next run couldn't record itself.
         if tables.iter().any(|t| t == "runs") {
             self.check_runs(problems).await?;
+        } else if version >= 2 {
+            problems.push(StoreProblem::new(
+                ProblemKind::Damaged,
+                "schema version 2 or later has a `runs` table (the run ledger), and it is missing"
+                    .to_owned(),
+            ));
         }
         Ok(StoreCheck::new(schema, scopes, std::mem::take(problems)))
     }
@@ -950,20 +958,17 @@ mod tests {
         StateSnapshot::new(None, Timestamp::from_unix(1), run, BTreeMap::new())
     }
 
-    // Synthetic schema versions after this build's first.
-    const V2: Migrations = &[
-        (1, MIGRATIONS[0].1),
-        (2, "CREATE TABLE synthetic_v2 (x INTEGER)"),
-    ];
+    // Version 2 is this build's (the run ledger); version 3 is synthetic, after it.
+    const V2: Migrations = &[(1, MIGRATIONS[0].1), (2, MIGRATIONS[1].1)];
     const V3: Migrations = &[
         (1, MIGRATIONS[0].1),
-        (2, "CREATE TABLE synthetic_v2 (x INTEGER)"),
+        (2, MIGRATIONS[1].1),
         (3, "ALTER TABLE snapshots ADD COLUMN synthetic_v3 TEXT"),
     ];
     // Its first statement works, its second fails: the whole migration must not apply.
     const BROKEN_V3: Migrations = &[
         (1, MIGRATIONS[0].1),
-        (2, "CREATE TABLE synthetic_v2 (x INTEGER)"),
+        (2, MIGRATIONS[1].1),
         (
             3,
             "CREATE TABLE half_done (x INTEGER); CREATE TABLE snapshots (x INTEGER)",
@@ -1040,6 +1045,36 @@ mod tests {
         store.record_run(&scope, &entry).await.unwrap();
         assert_eq!(store.runs(&scope, None, 5).await.unwrap(), [entry]);
         assert!(store.check().await.unwrap().is_sound());
+    }
+
+    /// From version 2, a missing run ledger is damage, and an entry that can't be read
+    /// is an `unreadable run` (ADR-0029).
+    #[tokio::test]
+    async fn the_check_reads_the_run_ledger() {
+        let (_dir, db) = temp_db("ledger-check");
+        let store = SqliteStateStore::open(&db).await.unwrap();
+        sqlx::query(
+            "INSERT INTO runs (scope, run_id, finished_at, schema_major, schema_minor, document) VALUES ('p/dev', 'run-x', 1, 1, 0, 'not json')",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let problems = store.check().await.unwrap().problems;
+        assert_eq!(
+            problems.iter().map(|p| p.kind).collect::<Vec<_>>(),
+            [ProblemKind::UnreadableRun],
+            "{problems:?}"
+        );
+        sqlx::query("DROP TABLE runs")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let problems = store.check().await.unwrap().problems;
+        assert_eq!(
+            problems.iter().map(|p| p.kind).collect::<Vec<_>>(),
+            [ProblemKind::Damaged],
+            "{problems:?}"
+        );
     }
 
     #[tokio::test]
