@@ -1,4 +1,3 @@
-ods ▸ plan: 8 to build, 5 to reuse
 ods ▸   code changed: stg_orders
 ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, customer_segments, customers_snapsh
 ot_view, segment_summary
@@ -35,6 +34,7 @@ State run
 scope          jaffle_ods/default
 compared with  snapshot 1 in .ods/state.db
 plan           8 to build and test, 5 to reuse
+saved          ~1.3s of build time (estimate, serial: 5 of 13 nodes reused)
 dbt            target_dir target (default)
 target         dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
 ran            dbt build --select fqn:jaffle_ods.marts,resource_type:model

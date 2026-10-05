@@ -13,6 +13,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Added
+- `ods state run`, `build`, `seed`, `snapshot` and `retry` say what reuse saved:
+  `saved: ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)`, and `savings`
+  in JSON (also in `ods state plan`, for what a run would save). Each build's time is
+  recorded with its state and kept while it is reused; reused nodes without a time are
+  counted, not guessed ([docs](docs/cli.md#what-reuse-saved),
+  [ADR-0029](docs/adr/0029-build-timings-and-the-run-ledger.md)) (#369, #210).
 - The ERD page on the dashboard (`/erd`): the project's entities, keys and relationships
   as `ods erd generate --infer` finds them. Each edge is drawn by its evidence (tested,
   declared, joined in SQL, or inferred), with cardinality where keys prove it. Click an

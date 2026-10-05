@@ -27,6 +27,7 @@ mod failure;
 mod planner;
 mod recorder;
 mod retry;
+mod savings;
 mod selection;
 mod sources;
 mod versions;
@@ -46,6 +47,7 @@ pub use failure::{
 pub use planner::{PlanError, PlanOptions, plan, plan_with, reuse_candidates};
 pub use recorder::{Outcome, Recorded, RecordedTests, RunResult, TestResult, record, record_tests};
 pub use retry::{HeldBack, RetrySplit, split_retry};
+pub use savings::{Savings, savings};
 pub use selection::{select, select_sources};
 pub use sources::{
     RecordedSources, SourceCheck, SourceCheckAction, record_source_checks, source_checks,

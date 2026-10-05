@@ -10,6 +10,7 @@ State run
 scope          jaffle_ods/default
 compared with  snapshot 2 in .ods/state.db
 plan           2 to build and test, 11 to reuse
+saved          ~2.8s of build time (estimate, serial: 11 of 13 nodes reused)
 retrying       what failed in ods state build: 2 retried, 0 reused, 0 held back
 dbt            target_dir target (default)
 target         dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
@@ -30,7 +31,6 @@ recorded       snapshot 3: 2 nodes advanced
 │ segment_summary   │ success │ 250ms │ —    │ new upstream data in customer_segments │
 └───────────────────┴─────────┴───────┴──────┴────────────────────────────────────────┘
 ❯
-
 
 
 
