@@ -72,7 +72,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ### Fixed
 - A carriage return in a value shown in the terminal (a node name, an engine's message or
   output line) is now shown as a line break: on its own it moved the cursor back, so a
-  value could overwrite what was printed before it (#PR, #192)
+  value could overwrite what was printed before it (#375, #192)
 - Error summaries no longer keep a quoted value written straight after a word: a prefixed
   literal (`X'…'`, `r'…'`, `E'…'`) or a value glued to a word (`v'…'`) is now removed like
   any other quoted value. Property tests over `ods-core`'s graph order, fingerprints,
