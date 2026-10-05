@@ -4516,3 +4516,40 @@ fn the_run_ledger_counts_every_run_and_savings_reports_it() {
     assert_eq!(newest["outcome"], "nothing_to_build");
     assert_eq!(newest["reused"], seeds, "{after:#}");
 }
+
+/// #210, ADR-0029: with `[state.cost]` in `ods.toml`, `ods state savings` puts a cost on
+/// the time avoided: per run and in total, at the configured rate and unit, an estimate.
+#[test]
+fn savings_cost_what_reuse_avoided_at_the_configured_rate() {
+    let project = Project::new("savings-cost");
+    project.run_ok(&[]);
+    project.run_ok(&[]);
+    std::fs::write(
+        project.dir.join("ods.toml"),
+        "[state.cost]\nrate_per_hour = 3600\nunit = \"credits\"\n",
+    )
+    .unwrap();
+    let (code, json) = project.ods(&["state", "savings"]);
+    assert_eq!(code, 0, "{json:#}");
+    let report = &json["result"];
+    // 3600 per hour is 1 per second: the cost is the time avoided, in seconds.
+    let avoided = report["totals"]["avoided_ms"].as_u64().unwrap();
+    let cost = &report["cost"];
+    assert_eq!(cost["unit"], "credits");
+    #[allow(clippy::cast_precision_loss, reason = "a few seconds")]
+    let expected = avoided as f64 / 1_000.0;
+    assert!(
+        (cost["total"].as_f64().unwrap() - expected).abs() < 1e-9,
+        "{cost}"
+    );
+    assert!(
+        report["runs"][0]["cost"].as_f64().unwrap() > 0.0,
+        "{report:#}"
+    );
+    let plain = project.ods_plain(&["state", "savings"]);
+    let line = plain
+        .lines()
+        .find(|l| l.starts_with("cost avoided:"))
+        .unwrap_or_else(|| panic!("{plain}"));
+    insta::assert_snapshot!("savings_cost_plain", line);
+}

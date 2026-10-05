@@ -59,6 +59,33 @@ pub struct History {
     journals: JournalSource,
     /// What explains failed nodes (#323), when the binary has a catalogue.
     explainer: Option<super::explain::Explainer>,
+    /// The scope's run ledger (ADR-0029), when the store keeps one, and the cost rate.
+    ledger: Option<Ledger>,
+}
+
+/// The scope's run ledger, and what an hour of build time costs, for the savings panel
+/// (#210, ADR-0029).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Ledger {
+    /// Every run in it, newest first.
+    pub runs: Vec<ods_core::state::RunEntry>,
+    /// What an hour of build time costs, and in what, when configured.
+    pub rate: Option<(f64, String)>,
+}
+
+impl Ledger {
+    /// A ledger of `runs`, newest first, without a cost.
+    pub fn new(runs: Vec<ods_core::state::RunEntry>) -> Self {
+        Self { runs, rate: None }
+    }
+
+    /// Puts a cost of `rate_per_hour` `unit`s on each hour of build time avoided.
+    #[must_use]
+    pub fn with_rate(mut self, rate_per_hour: f64, unit: impl Into<String>) -> Self {
+        self.rate = Some((rate_per_hour, unit.into()));
+        self
+    }
 }
 
 impl History {
@@ -70,7 +97,15 @@ impl History {
             long_run_ids: OnceLock::new(),
             journals: JournalSource::default(),
             explainer: None,
+            ledger: None,
         }
+    }
+
+    /// The scope's run ledger, for the savings panel (ADR-0029).
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: Ledger) -> Self {
+        self.ledger = Some(ledger);
+        self
     }
 
     /// Explains the failed nodes of the runs the pages show (#323, ADR-0025).
@@ -712,7 +747,7 @@ pub struct RunFilter {
 }
 
 /// The Runs page (`/state/runs`, `/api/state/runs`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct RunsView {
@@ -768,6 +803,36 @@ pub struct RunsView {
     pub recorded: Vec<String>,
     /// The CI runs tab: planned.
     pub ci: &'static str,
+    /// What reuse saved, from the run ledger (#210, ADR-0029); `None` without one.
+    pub savings: Option<SavingsView>,
+}
+
+/// What reuse saved over every run in the ledger: estimates of serial build time.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct SavingsView {
+    /// Always true: every figure is an estimate.
+    pub estimate: bool,
+    /// How many runs the ledger has.
+    pub run_count: usize,
+    /// Over all of them.
+    pub totals: ods_state::Savings,
+    /// What the time avoided cost, when a rate is configured.
+    pub cost: Option<CostView>,
+}
+
+/// A cost, at the configured rate.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CostView {
+    /// What an hour of build time costs.
+    pub rate_per_hour: f64,
+    /// What it is counted in.
+    pub unit: String,
+    /// What the time avoided cost.
+    pub total: f64,
 }
 
 /// A node in a run's timeline.
@@ -1839,6 +1904,33 @@ impl Dashboard {
         }
     }
 
+    /// What reuse saved, from the run ledger (ADR-0029).
+    fn savings_view(&self) -> Option<SavingsView> {
+        let ledger = self.history()?.ledger.as_ref()?;
+        let mut totals = ods_state::Savings::default();
+        for run in &ledger.runs {
+            totals.add(&ods_state::run_savings(run));
+        }
+        let cost = ledger.rate.as_ref().map(|(rate, unit)| {
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "build times are far below 2^52 ms; the cost is an estimate"
+            )]
+            let hours = totals.avoided_ms as f64 / 3_600_000.0;
+            CostView {
+                rate_per_hour: *rate,
+                unit: unit.clone(),
+                total: hours * rate,
+            }
+        });
+        Some(SavingsView {
+            estimate: true,
+            run_count: ledger.runs.len(),
+            totals,
+            cost,
+        })
+    }
+
     /// The Runs page as of `now` (for the date filter, and to tell a run still going).
     #[allow(
         clippy::too_many_lines,
@@ -1981,6 +2073,7 @@ impl Dashboard {
             selected_nodes,
             recorded: RECORDED.iter().map(|&line| line.to_owned()).collect(),
             ci: "CI runs — coming with server mode",
+            savings: self.savings_view(),
         }
     }
 

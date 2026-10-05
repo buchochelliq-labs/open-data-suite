@@ -65,6 +65,8 @@ pub(super) struct DashboardSource {
     settings: StateSettings,
     /// Where warehouse links point (#329), read once like the rest of the settings.
     links: LinkSettings,
+    /// What an hour of build time costs (`[state.cost]`), for the savings panel.
+    cost: Option<ods_config::CostConfig>,
 }
 
 impl DashboardSource {
@@ -73,6 +75,7 @@ impl DashboardSource {
             args: args.clone(),
             settings: StateSettings::resolve(args, config)?,
             links: LinkSettings::read(config),
+            cost: config.config.state.cost.clone(),
         })
     }
 
@@ -235,10 +238,27 @@ impl DashboardSource {
             // the Catalog can say which snapshot a node's last build came from (#313).
             let runs_index = db.history(&ws.scope, RUNS_INDEXED).await?;
             let latest = db.latest(&ws.scope).await?;
+            // The run ledger (ADR-0029), once the database has one: a ledger that can't
+            // be read only leaves the savings panel out.
+            let ledger = if db.schema_version().await? >= 2 {
+                db.runs(&ws.scope, None, usize::MAX)
+                    .await
+                    .inspect_err(
+                        |e| tracing::warn!(error = %e, "dashboard: the run ledger can't be read"),
+                    )
+                    .ok()
+            } else {
+                None
+            };
             db.close().await;
-            Ok::<_, ods_sdk::ProviderError>((history.len(), runs, snapshots, runs_index, latest))
+            Ok::<_, ods_sdk::ProviderError>((
+                history.len(),
+                runs,
+                snapshots,
+                (runs_index, latest, ledger),
+            ))
         });
-        let (counted, runs, snapshots, runs_index, latest) = match read {
+        let (counted, runs, snapshots, (runs_index, latest, ledger)) = match read {
             Ok(Ok(read)) => read,
             Ok(Err(e)) => return (unreadable(e.to_string()), BTreeMap::new()),
             Err(e) => return (unreadable(e.message), BTreeMap::new()),
@@ -275,10 +295,24 @@ impl DashboardSource {
                         // the pages when asked, through ods-sdk's journal reader.
                         .with_journals(journals)
                         // Failed nodes explained with dbt's error catalogue (#323).
-                        .with_explainer(explainer),
+                        .with_explainer(explainer)
+                        .with_ledger(ledger_view(ledger, self.cost.as_ref())),
                 ),
         ));
         (state, last_builds)
+    }
+}
+
+/// The run ledger and the cost rate, for the Runs page's savings panel (ADR-0029); an
+/// empty ledger when the database has none yet.
+fn ledger_view(
+    runs: Option<Vec<ods_core::state::RunEntry>>,
+    cost: Option<&ods_config::CostConfig>,
+) -> ods_web::dashboard::state::Ledger {
+    let ledger = ods_web::dashboard::state::Ledger::new(runs.unwrap_or_default());
+    match cost {
+        Some(cost) => ledger.with_rate(cost.rate_per_hour, cost.unit.clone()),
+        None => ledger,
     }
 }
 

@@ -392,6 +392,17 @@ fn build_then_fail_orders(dir: &Path) -> PathBuf {
 /// says, the failed run is shown with the state it kept and the retry, and nothing is
 /// written.
 #[cfg(unix)]
+/// Both runs are in the run ledger (#210, ADR-0029): the savings panel counts them, as
+/// estimates, with no cost unless `[state.cost]` sets a rate.
+fn savings_are_shown(server: &Server, runs: &Value) {
+    let savings = &runs["savings"];
+    assert_eq!(savings["run_count"], 2, "{savings}");
+    assert_eq!(savings["estimate"], true);
+    assert!(savings["cost"].is_null(), "{savings}");
+    let (_, page) = get(server, "state/runs");
+    assert!(page.contains(r#"data-state="savings""#), "{page}");
+}
+
 #[test]
 fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     let scratch = tempfile::tempdir().unwrap();
@@ -454,6 +465,7 @@ fn the_state_pages_show_the_plan_the_runs_and_a_failed_run() {
     assert_eq!(status, 200, "{body}");
     let runs: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(runs["runs"].as_array().unwrap().len(), 2, "{runs}");
+    savings_are_shown(&server, &runs);
     let failed = journal_rows(&runs);
     orders_failed_in(&server, failed["run_id"].as_str().unwrap());
     let last = &runs["last_run"];

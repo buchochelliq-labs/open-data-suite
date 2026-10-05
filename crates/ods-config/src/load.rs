@@ -621,6 +621,25 @@ fn validate(history: &History, live: &BTreeSet<Vec<String>>) -> Result<Config, C
             ),
         ));
     }
+    if let Some(cost) = &config.state.cost {
+        let rate_ok = cost.rate_per_hour.is_finite() && cost.rate_per_hour >= 0.0;
+        let unit_ok = !cost.unit.trim().is_empty()
+            && cost.unit.chars().count() <= 16
+            && !cost.unit.chars().any(char::is_control);
+        if !rate_ok || !unit_ok {
+            let field = if rate_ok { "unit" } else { "rate_per_hour" };
+            let key = vec!["state".to_owned(), "cost".to_owned(), field.to_owned()];
+            return Err(schema_error(
+                &key,
+                source_for(history, live, &key),
+                if rate_ok {
+                    "the unit must be a short label, 1 to 16 characters (e.g. `USD`)".to_owned()
+                } else {
+                    "the rate must be a number of at least 0".to_owned()
+                },
+            ));
+        }
+    }
     if let Some(width) = config.output.width.filter(|w| *w < 20) {
         let key = vec!["output".to_owned(), "width".to_owned()];
         return Err(schema_error(

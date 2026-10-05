@@ -1,5 +1,6 @@
 ---
 source: crates/ods-web/tests/state_pages.rs
+assertion_line: 1585
 expression: pretty(&body)
 ---
 {
@@ -178,6 +179,7 @@ expression: pretty(&body)
       "triggered_by": null
     }
   ],
+  "savings": null,
   "schema_version": 2,
   "scope": "jaffle_ods/dev",
   "selected": "7d21a0c4-0000-4000-8000-000000000004",
