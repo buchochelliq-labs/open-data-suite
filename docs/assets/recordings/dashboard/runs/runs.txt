@@ -35,6 +35,7 @@ on this machine
 Runs
 jaffle_ods · every run recorded in this state store, newest first
 ODS doesn't schedule anything. A run appears here after ods state build or ods state run records it in this state store, from your terminal or a CI job.
+Reuse saved ~<took> of build time · estimate, serial: 9 of 28 nodes reused across 3 runs. ods state savings lists each run.
 Local runs
 3
 CI runs — coming with server mode

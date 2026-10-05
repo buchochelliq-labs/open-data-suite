@@ -1065,6 +1065,7 @@ fn runs_html(shell: &ShellView, view: &RunsView, generation: u64) -> String {
         r#"<div class="st-title"><h1>Runs</h1><span class="muted">{} · every run recorded in this state store, newest first</span></div><div class="st-notice">{INFO}<span><strong>ODS doesn't schedule anything.</strong> A run appears here after <code>ods state build</code> or <code>ods state run</code> records it in this state store, from your terminal or a CI job.</span></div>"#,
         text(&view.project)
     );
+    savings_card(&mut b, view);
     let more = view.total_capped || view.total > view.limit;
     let _ = write!(
         b,
@@ -1119,6 +1120,65 @@ fn runs_html(shell: &ShellView, view: &RunsView, generation: u64) -> String {
     b.push_str("</div>");
     b.push_str(LIVE);
     runs_frame(shell, view, &b, generation)
+}
+
+/// What reuse saved, from the run ledger (#210, ADR-0029): an estimate of serial build
+/// time, with the cost when a rate is configured. Nothing without a ledger, or before
+/// it has a run.
+fn savings_card(b: &mut String, view: &RunsView) {
+    let Some(savings) = view.savings.as_ref().filter(|s| s.run_count > 0) else {
+        return;
+    };
+    let t = &savings.totals;
+    let figure = if t.timed == 0 {
+        "unknown: no reused node has a build time yet".to_owned()
+    } else if t.is_lower_bound() {
+        format!(
+            "at least ~{} of build time",
+            crate::dashboard::journal::duration(t.avoided_ms)
+        )
+    } else {
+        format!(
+            "~{} of build time",
+            crate::dashboard::journal::duration(t.avoided_ms)
+        )
+    };
+    let mut detail = format!(
+        "{} of {} nodes reused across {}",
+        t.reused,
+        t.reused + t.built,
+        count(savings.run_count, "run")
+    );
+    if t.untimed > 0 {
+        let _ = write!(
+            detail,
+            "; {} reused without a build time, not counted",
+            t.untimed
+        );
+    }
+    let cost = savings
+        .cost
+        .as_ref()
+        .filter(|_| t.timed > 0)
+        .map(|c| {
+            format!(
+                r#" · <span data-cost>~{amount} {unit}</span> <span class="muted">at {rate} {unit} per hour</span>"#,
+                amount = text(&if c.total > 0.0 && c.total < 0.005 {
+                    "< 0.01".to_owned()
+                } else {
+                    format!("{:.2}", c.total)
+                }),
+                unit = text(&c.unit),
+                rate = c.rate_per_hour,
+            )
+        })
+        .unwrap_or_default();
+    let _ = write!(
+        b,
+        r#"<div class="st-notice" data-state="savings">{INFO}<span><strong>Reuse saved {figure}</strong>{cost} <span class="muted">· estimate, serial: {detail}. <code>ods state savings</code> lists each run.</span></span></div>"#,
+        figure = text(&figure),
+        detail = text(&detail),
+    );
 }
 
 /// The last run, when it can't be shown with the runs: it names no target, or which

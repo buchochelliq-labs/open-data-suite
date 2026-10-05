@@ -26,6 +26,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- What reuse saved, as a cost: `[state.cost] rate_per_hour` and `unit` in `ods.toml`
+  make `ods state savings` add the cost avoided at that rate, per run and in total (an
+  estimate, like the time). The dashboard's Runs page shows what reuse saved, from the
+  run ledger (`savings` in `/api/state/runs`) ([docs](docs/cli.md#what-reuse-saved))
+  (#371, #210).
 - `ods state savings [--since DATE] [--limit N]`: what reuse saved, per run and in
   total, as estimates from each build's last measured time. It reads a new run ledger in the state
   database, to which every run that goes ahead adds an entry, a run with nothing to build
