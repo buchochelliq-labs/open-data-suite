@@ -823,7 +823,7 @@ fn words(code: ReasonCode) -> String {
         .unwrap_or_else(|| format!("{code:?}"))
 }
 
-fn short(run_id: &str) -> String {
+pub(crate) fn short(run_id: &str) -> String {
     run_id.chars().take(8).collect()
 }
 
@@ -844,20 +844,20 @@ pub(crate) const REUSE_RELATION: &str = "not checked by this plan; checked when 
 
 /// What the catalog pages need from the dashboard, worked out once per request, with
 /// everything looked up by id indexed once.
-struct Context<'a> {
-    input: &'a CatalogInput,
-    basis: DecisionsBasis,
-    details: bool,
-    entries: BTreeMap<&'a str, &'a PlanEntry>,
+pub(crate) struct Context<'a> {
+    pub(crate) input: &'a CatalogInput,
+    pub(crate) basis: DecisionsBasis,
+    pub(crate) details: bool,
+    pub(crate) entries: BTreeMap<&'a str, &'a PlanEntry>,
     graph: BTreeMap<&'a str, &'a GraphNode>,
-    nodes: BTreeMap<&'a str, &'a CatalogNode>,
-    children: BTreeMap<&'a str, Vec<&'a str>>,
+    pub(crate) nodes: BTreeMap<&'a str, &'a CatalogNode>,
+    pub(crate) children: BTreeMap<&'a str, Vec<&'a str>>,
     /// Run ids to shorten in messages, longest first so none is cut by another.
     runs: Vec<&'a str>,
 }
 
 impl<'a> Context<'a> {
-    fn new(
+    pub(crate) fn new(
         dashboard: &'a Dashboard,
         plan: Option<&'a ExecutionPlan>,
         basis: DecisionsBasis,
@@ -899,7 +899,7 @@ impl<'a> Context<'a> {
     }
 
     /// The plan and what it rests on, for `now`.
-    fn plan(
+    pub(crate) fn plan(
         dashboard: &Dashboard,
         details: bool,
         now: Timestamp,
@@ -949,7 +949,7 @@ impl<'a> Context<'a> {
     }
 
     /// The decision for a node: the plan's, or what the state says without one.
-    fn decision(&self, id: &str) -> DecisionView {
+    pub(crate) fn decision(&self, id: &str) -> DecisionView {
         if let Some(entry) = self.entries.get(id) {
             let reasons: Vec<ReasonView> = entry
                 .reasons
@@ -1026,13 +1026,13 @@ impl<'a> Context<'a> {
     }
 
     /// Long run ids read better short, as in the table.
-    fn shorten(&self, message: &str) -> String {
+    pub(crate) fn shorten(&self, message: &str) -> String {
         self.runs
             .iter()
             .fold(message.to_owned(), |m, run| m.replace(run, &short(run)))
     }
 
-    fn last_build(&self, id: &str) -> Option<LastBuildView> {
+    pub(crate) fn last_build(&self, id: &str) -> Option<LastBuildView> {
         self.input.last_builds.get(id).map(|b| LastBuildView {
             snapshot: b.snapshot,
             run_id: b.run_id.clone(),
@@ -1045,7 +1045,7 @@ impl<'a> Context<'a> {
         LineageConfidence::of(self.graph.get(id).copied())
     }
 
-    fn name(&self, id: &str) -> String {
+    pub(crate) fn name(&self, id: &str) -> String {
         self.nodes
             .get(id)
             .map(|n| n.name.clone())
@@ -1054,7 +1054,7 @@ impl<'a> Context<'a> {
             .unwrap_or_else(|| id.to_owned())
     }
 
-    fn link(&self, id: &str) -> NodeLink {
+    pub(crate) fn link(&self, id: &str) -> NodeLink {
         NodeLink {
             id: id.to_owned(),
             name: self.name(id),

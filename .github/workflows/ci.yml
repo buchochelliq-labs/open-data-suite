@@ -162,6 +162,9 @@ jobs:
       # The ERD page (#64) in Chromium: the diagram, toggles, evidence, scope, export.
       - name: ERD page in a browser
         run: python crates/ods-web/tests/browser/erd.py -v
+      # The Freshness evidence screen (#350) in Chromium, light and dark.
+      - name: Freshness evidence in a browser
+        run: python crates/ods-web/tests/browser/sources.py -v
 
   msrv:
     runs-on: ubuntu-latest

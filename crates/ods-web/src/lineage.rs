@@ -159,7 +159,7 @@ fn model_href(id: &str) -> String {
 }
 
 /// `model.shop.orders` → `state/plan?node=model.shop.orders`.
-fn why_href(id: &str) -> String {
+pub(crate) fn why_href(id: &str) -> String {
     format!("state/plan?node={}", utf8_percent_encode(id, COMPONENT))
 }
 

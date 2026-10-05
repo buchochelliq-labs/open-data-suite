@@ -26,6 +26,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- The dashboard's **Freshness evidence** screen (`/catalog/sources`, under Catalog):
+  for each source and seed, the evidence ODS has about its data now, its grade
+  (*exact*, *semantic*, *proxy*, *inferred*, *unknown*), what its readers were last
+  built from, their decisions with a link to **Why**, and every node that would build
+  if it changed. Unknown evidence always means build. Its numbers are the plan's, as
+  `ods state explain` gives them; `/api/catalog/sources` returns the same view
+  ([docs](docs/cli.md#the-catalog-and-model-pages)) (#386, #350)
 - In a terminal that follows hyperlinks, the run's journal path (`ods state run`,
   `build`, `seed`, `snapshot`, `test`, `retry`, `ods state history --run`) is a link to
   the file. ODS only links paths and pages it builds itself; set `FORCE_HYPERLINK=0` to

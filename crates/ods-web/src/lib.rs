@@ -26,6 +26,8 @@ pub mod dashboard;
 pub mod erd;
 mod erd_page;
 mod fonts;
+pub mod freshness;
+mod freshness_page;
 mod home;
 pub mod impact;
 mod impact_page;

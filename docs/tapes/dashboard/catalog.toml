@@ -32,3 +32,10 @@ caption = "State: the next run's decision, the planner's reasons and the last bu
 expect = ["upstream code changed"]
 pause = 4000
 still = "model-state"
+
+[[step]]
+goto = "/catalog/sources"
+caption = "Freshness evidence: how ODS knows whether each seed and source changed"
+expect = ["file checksum", "Unknown evidence"]
+pause = 4200
+still = "freshness"

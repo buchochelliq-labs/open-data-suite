@@ -318,3 +318,175 @@ fn compiled_code_and_its_secrets_are_never_served() {
     let (_, body) = get(&server, "api/catalog");
     assert!(!body.contains(SECRET));
 }
+
+/// A `sources.json` measuring `source.jaffle_ods.landing.feed`.
+fn sources_json(generated_at: &str, max_loaded_at: &str) -> Value {
+    serde_json::json!({
+        "metadata": {
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/sources/v3.json",
+            "generated_at": generated_at,
+            "invocation_id": "freshness"
+        },
+        "results": [{
+            "unique_id": "source.jaffle_ods.landing.feed",
+            "status": "pass",
+            "max_loaded_at": max_loaded_at,
+            "snapshotted_at": generated_at
+        }],
+        "elapsed_time": 0.1
+    })
+}
+
+/// `ods` on the scratch project, with `--json`: the result.
+fn ods_json(target: &Path, db: &Path, args: &[&str]) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(args)
+        .arg("--target-dir")
+        .arg(target)
+        .arg("--state-db")
+        .arg(db)
+        .arg("--json")
+        .current_dir(target.parent().unwrap())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", target.parent().unwrap())
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert!(out.status.success(), "{json:#}");
+    json["result"].clone()
+}
+
+/// The source `stg_orders` reads, as `ods state explain` sees it: its version's value
+/// and exactness.
+fn explained_version(target: &Path, db: &Path) -> (Value, Value) {
+    let explain = ods_json(target, db, &["state", "explain", "stg_orders"]);
+    let evidence = explain["explanation"]["entry"]["evidence"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no evidence: {explain:#}"))
+        .iter()
+        .find(|e| e["kind"] == "source_data_version")
+        .unwrap_or_else(|| panic!("no source version: {explain:#}"))
+        .clone();
+    (evidence["value"].clone(), evidence["exactness"].clone())
+}
+
+fn input<'a>(view: &'a Value, id: &str) -> &'a Value {
+    view["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == id)
+        .unwrap_or_else(|| panic!("no {id}: {view:#}"))
+}
+
+/// The Freshness evidence screen (#350) on the demo project with a source added: its
+/// seeds, and the source with and without `sources.json`, each source's numbers as
+/// `ods state explain` gives them for a model reading it.
+#[test]
+fn freshness_evidence_matches_what_explain_says() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    let db = scratch.path().join(".ods/state.db");
+    std::fs::create_dir_all(&target).unwrap();
+    for file in ["manifest.json", "run_results.json"] {
+        std::fs::copy(
+            fixtures("jaffle-ods/artifacts/dbt-1.10-build").join(file),
+            target.join(file),
+        )
+        .unwrap();
+    }
+    // A source `stg_orders` reads, whose new data is measured with `_loaded_at`.
+    let path = target.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest["sources"]["source.jaffle_ods.landing.feed"] = serde_json::json!({
+        "unique_id": "source.jaffle_ods.landing.feed",
+        "resource_type": "source",
+        "name": "feed",
+        "source_name": "landing",
+        "relation_name": "\"landing\".\"feed\"",
+        "loaded_at_field": "_loaded_at",
+        "config": {"enabled": true}
+    });
+    manifest["nodes"]["model.jaffle_ods.stg_orders"]["depends_on"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("source.jaffle_ods.landing.feed"));
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    // Measured just before the build, then recorded.
+    let sources = target.join("sources.json");
+    std::fs::write(
+        &sources,
+        sources_json("2026-09-25T06:40:00Z", "2026-09-25T06:30:00+00:00").to_string(),
+    )
+    .unwrap();
+    ods_json(&target, &db, &["state", "record"]);
+
+    // Without `sources.json`: the source's version is unknown, and its reader builds.
+    std::fs::remove_file(&sources).unwrap();
+    let server = serve(&target, &["--state-db", db.to_str().unwrap()]);
+    let view = json(&server, "api/catalog/sources");
+    assert_eq!(
+        (view["sources"].as_u64(), view["seeds"].as_u64()),
+        (Some(1), Some(3))
+    );
+    let feed = input(&view, "source.jaffle_ods.landing.feed");
+    assert_eq!(feed["evidence"]["grade"], "unknown", "{feed:#}");
+    assert!(feed["evidence"]["value"].is_null());
+    assert_eq!(feed["evidence"]["method"], "max(_loaded_at)");
+    assert_eq!(feed["relation"], "\"landing\".\"feed\"");
+    let (value, exactness) = explained_version(&target, &db);
+    assert!(value.is_null(), "explain agrees: {value}");
+    assert_eq!(exactness, "none");
+    let reader = &feed["readers"][0];
+    assert_eq!(reader["node"]["id"], "model.jaffle_ods.stg_orders");
+    assert_eq!(reader["decision"]["decision"], "build", "{reader:#}");
+    assert_eq!(
+        reader["decision"]["reasons"][0]["code"],
+        "missing_data_evidence"
+    );
+    // What it was last built from is still recorded.
+    assert_eq!(feed["recorded"][0]["grade"], "semantic", "{feed:#}");
+    // The seeds: exact checksums, unchanged since the build, so reused.
+    for seed in ["raw_customers", "raw_orders", "raw_payments"] {
+        let seed = input(&view, &format!("seed.jaffle_ods.{seed}"));
+        assert_eq!(seed["evidence"]["grade"], "exact", "{seed:#}");
+        assert_eq!(seed["decision"]["decision"], "reuse", "{seed:#}");
+        assert_eq!(seed["evidence"]["value"], seed["recorded"][0]["value"]);
+        assert_ne!(seed["downstream"].as_array().unwrap().len(), 0, "{seed:#}");
+    }
+    let (status, page) = get(&server, "catalog/sources");
+    assert_eq!(status, 200);
+    assert!(page.contains(r#"data-input="source.jaffle_ods.landing.feed""#));
+    drop(server);
+
+    // Measured again after the build, with new data: semantic, and its reader builds.
+    std::fs::write(
+        &sources,
+        sources_json("2026-09-25T11:00:00Z", "2026-09-25T10:45:00+00:00").to_string(),
+    )
+    .unwrap();
+    let server = serve(&target, &["--state-db", db.to_str().unwrap()]);
+    let view = json(&server, "api/catalog/sources");
+    let feed = input(&view, "source.jaffle_ods.landing.feed");
+    let (value, exactness) = explained_version(&target, &db);
+    assert_eq!(feed["evidence"]["value"], value, "{feed:#}");
+    assert_eq!(feed["evidence"]["grade"], exactness);
+    assert_eq!(feed["evidence"]["grade"], "semantic");
+    assert_ne!(feed["evidence"]["value"], feed["recorded"][0]["value"]);
+    assert_eq!(
+        feed["readers"][0]["decision"]["reasons"][0]["code"],
+        "new_upstream_data"
+    );
+    assert_eq!(view["measured_by"], "sources.json");
+    let downstream: Vec<&str> = feed["downstream"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        downstream.contains(&"stg_orders") && downstream.contains(&"orders"),
+        "{downstream:?}"
+    );
+}

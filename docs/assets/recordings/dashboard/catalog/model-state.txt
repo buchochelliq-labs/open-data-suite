@@ -9,7 +9,6 @@ Home
 Catalog
 Models
 Freshness evidence
-Planned
 Semantic layer
 Planned
 Lineage

@@ -281,6 +281,12 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         .route(&at("/api/runs/{run}/events"), get(crate::live::events))
         // The Catalog and the model pages (#313).
         .route(&at("/catalog"), get(catalog_routes::page))
+        // Before `/catalog/{id}`: no node id is `sources`, but the route is fixed.
+        .route(&at("/catalog/sources"), get(catalog_routes::sources_page))
+        .route(
+            &at("/api/catalog/sources"),
+            get(catalog_routes::sources_api),
+        )
         .route(&at("/catalog/{id}"), get(catalog_routes::model))
         .route(&at("/catalog/"), {
             let to = at("/catalog");

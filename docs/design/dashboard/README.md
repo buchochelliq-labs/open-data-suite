@@ -31,7 +31,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | Live run on the DAG, with follow mode | **Built** (#322): the event stream, the Live overlay on Lineage, follow mode and scopes, node stats, the Home banner |
 | Lineage: Impact simulator | **Built** (#347): rename, type change and drop, with what breaks; no contract warning or exposures yet |
 | ERD | **Built** (#64): the diagram with edge evidence, cardinality, scope, missing relationships with their tests, and SVG export |
-| Freshness evidence, Semantic layer, Settings | Designed (#309) |
+| Catalog: freshness evidence | **Built** (#350): sources and seeds, their evidence and grade, what readers were built from, and what would build |
+| Semantic layer, Settings | Designed (#309) |
 | Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
@@ -75,7 +76,12 @@ outcome on Home reads *recorded* (the Runs page has the journal's outcome).
 
 ### Catalog: freshness evidence
 
-Not built yet (#309).
+**Built** (#350) at `/catalog/sources`. The grades are the planner's own (*exact*,
+*semantic*, *proxy*, *inferred*, *unknown*), where the board groups the middle ones as
+*timestamp*; a source's numbers are the ones `ods state explain` gives for a model
+reading it.
+
+![Freshness evidence in ods serve](../../assets/recordings/dashboard/catalog/freshness.png)
 
 ![Freshness evidence](images/sources.png)
 

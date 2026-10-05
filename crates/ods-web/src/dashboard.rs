@@ -59,6 +59,9 @@ pub struct Dashboard {
     /// The project's entities and relationships, for the ERD page (#64); `None` when
     /// the binary has none to give.
     pub erd: Option<crate::erd::ErdInput>,
+    /// The project's sources and what is known about their data, for the Freshness
+    /// evidence screen (#350).
+    pub freshness: crate::freshness::FreshnessInput,
     /// The run journals beside the state database (#322), read for the live view even
     /// before the store exists: a first run writes its journal before its first
     /// snapshot.
@@ -83,6 +86,7 @@ impl Dashboard {
             modules: Vec::new(),
             catalog: crate::catalog::CatalogInput::default(),
             erd: None,
+            freshness: crate::freshness::FreshnessInput::default(),
             journals: journal::JournalSource::default(),
         }
     }
@@ -159,6 +163,13 @@ impl Dashboard {
     #[must_use]
     pub fn with_erd(mut self, erd: crate::erd::ErdInput) -> Self {
         self.erd = Some(erd);
+        self
+    }
+
+    /// Sets the project's sources, for the Freshness evidence screen (#350).
+    #[must_use]
+    pub fn with_freshness(mut self, freshness: crate::freshness::FreshnessInput) -> Self {
+        self.freshness = freshness;
         self
     }
 }
@@ -579,8 +590,8 @@ const SECTION_ITEMS: [SectionPages; 3] = [
         "catalog",
         &[
             ("models", "Models", Some("catalog")),
-            // Sources and freshness evidence, and the semantic layer (#309).
-            ("freshness", "Freshness evidence", None),
+            ("freshness", "Freshness evidence", Some("catalog/sources")),
+            // The semantic layer (#309).
             ("semantic", "Semantic layer", None),
         ],
     ),

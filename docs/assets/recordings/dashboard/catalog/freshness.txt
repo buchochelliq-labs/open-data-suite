@@ -1,0 +1,108 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Models
+Freshness evidence
+Semantic layer
+Planned
+Lineage
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+PLANNED
+Local · read-only
+Catalog
+/
+Freshness evidence
+/
+snapshot 3 ·
+<when>
+Freshness evidence
+How ODS knows whether each project input changed since the nodes reading it were built. 0 sources, 3 seeds.
+decisions against snapshot 3
+exact
+Identifies the exact data: a file checksum or a table version.
+semantic
+Shows new data arrived, e.g. the latest load time of a source.
+proxy
+Correlated with the data, e.g. a last-modified time. Not enough to prove it unchanged.
+inferred
+Derived indirectly. Shown as inferred, never as fact.
+unknown
+No evidence at all. Nothing to compare, so readers build.
+Inputs 0 sources · 3 seeds
+JSON
+Input	Evidence now	Last recorded	Read by	Would build if it changed
+raw_customers
+seed · seeds/raw_customers.csv
+exact
+file checksum
+11979d0d6048…
+REUSE
+exact
+11979d0d6048…
+built <time> · <run>
+REUSE stg_customers Why
+5 nodes
+customer_segments · customers · customers_snapshot_view · segment_summary · stg_customers
+raw_orders
+seed · seeds/raw_orders.csv
+exact
+file checksum
+248e8d163e97…
+REUSE
+exact
+248e8d163e97…
+built <time> · <run>
+REUSE stg_orders Why
+8 nodes
+customer_order_rank · customer_segments · customers · customers_snapshot_view · order_events · orders
+2 more
+raw_payments
+seed · seeds/raw_payments.csv
+exact
+file checksum
+eb143d5e7ed5…
+REUSE
+exact
+eb143d5e7ed5…
+built <time> · <run>
+REUSE stg_payments Why
+8 nodes
+customer_order_rank · customer_segments · customers · customers_snapshot_view · order_events · orders
+2 more
+No sources declared
+When the project declares sources, each appears here with its evidence. A source that says how its new data is measured gets a version ODS can compare; one that doesn't is unknown, and everything reading it builds.
+RULE
+Unknown evidence ⇒ build
+ODS reuses a node only when it can show the node's inputs are unchanged. When the evidence is missing, or not good enough, the answer is build, never a silent reuse.
+exact
+REUSE if equal
+Identifies the exact data: a file checksum or a table version.
+semantic
+REUSE if equal
+Shows new data arrived, e.g. the latest load time of a source.
+proxy
+BUILD
+Correlated with the data, e.g. a last-modified time. Not enough to prove it unchanged.
+inferred
+BUILD
+Derived indirectly. Shown as inferred, never as fact.
+unknown
+BUILD
+No evidence at all. Nothing to compare, so readers build.
+In this project
+3 of 3 seeds match their last build and are reused.
+Open plan
