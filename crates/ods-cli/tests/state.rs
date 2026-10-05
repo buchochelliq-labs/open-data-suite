@@ -120,8 +120,25 @@ fn without_state_everything_is_built_and_planning_writes_nothing() {
     assert!(!s.db().exists(), "plan must not create or change state");
     assert_eq!(
         plan["plan"]["schema_version"],
-        json!({"major": 1, "minor": 2})
+        json!({"major": 1, "minor": 3})
     );
+}
+
+/// #210, ADR-0029: `ods state record` keeps each build's `execution_time` from
+/// `run_results.json`, so a plan says what reusing them would save: their sum, an
+/// estimate naming the recorded run.
+#[test]
+fn record_keeps_build_times_and_the_plan_estimates_savings() {
+    let s = Scratch::new("savings");
+    s.ok(&["state", "record"]);
+    let saved = &s.plan(&[])["savings"];
+    assert_eq!(
+        (saved["reused"].clone(), saved["timed"].clone()),
+        (json!(13), json!(13))
+    );
+    assert_eq!(saved["untimed"], 0);
+    assert!(saved["avoided_ms"].as_u64().unwrap() > 0, "{saved}");
+    assert_eq!(saved["timed_by"].as_array().unwrap().len(), 1, "{saved}");
 }
 
 #[test]

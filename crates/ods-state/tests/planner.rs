@@ -1138,3 +1138,67 @@ fn sources_are_selected_as_ancestors_only() {
     );
     assert!(select_sources(&project, &["+nope".to_owned()]).is_err());
 }
+
+/// #210, ADR-0029: a build's time is recorded with it and kept while it is reused; a
+/// rebuild without a timing never inherits the old one. What a plan reuses is then
+/// estimated from those timings, untimed nodes counted, not guessed.
+#[test]
+fn build_times_are_recorded_kept_and_estimate_what_reuse_saves() {
+    let p = project();
+    let timed = |id: &str, ms: Option<u64>| {
+        RunResult::new(
+            format!("model.p.{id}"),
+            Outcome::Success,
+            Some(Timestamp::from_unix(T0)),
+        )
+        .timed(ms)
+    };
+    let results = [
+        timed("stg_orders", Some(1_200)),
+        timed("stg_users", Some(800)),
+        timed("orders", Some(3_000)),
+        timed("report", None),
+        timed("lonely", Some(50)),
+    ];
+    let first = record(&p, None, &results, "run-1", Timestamp::from_unix(T0), true).snapshot;
+    assert_eq!(first.nodes["model.p.orders"].build_ms, Some(3_000));
+    assert_eq!(first.nodes["model.p.report"].build_ms, None);
+
+    // Run 2 rebuilds stg_orders without a timing: it doesn't keep run 1's.
+    let second = record(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &[RunResult::new(
+            "model.p.stg_orders",
+            Outcome::Success,
+            Some(Timestamp::from_unix(T0 + 10)),
+        )],
+        "run-2",
+        Timestamp::from_unix(T0 + 10),
+        true,
+    )
+    .snapshot;
+    assert_eq!(second.nodes["model.p.stg_orders"].build_ms, None);
+    assert_eq!(second.nodes["model.p.orders"].build_ms, Some(3_000), "kept");
+
+    // Nothing changed since run 1: everything is reused.
+    let plan = plan(
+        &p,
+        Some((SnapshotId(1), &first)),
+        &all(&p),
+        Timestamp::from_unix(T0 + 60),
+    )
+    .unwrap();
+    let saved = ods_state::savings(&plan, 0, Some(&first));
+    assert_eq!((saved.reused, saved.timed, saved.untimed), (5, 4, 1));
+    assert_eq!(saved.avoided_ms, 1_200 + 800 + 3_000 + 50);
+    assert!(saved.is_lower_bound(), "report has no timing");
+    assert_eq!(saved.timed_by, ["run-1"]);
+    // No state: nothing is reused, so nothing is saved.
+    let fresh = plan_all(&p);
+    assert_eq!(ods_state::savings(&fresh, 5, None).avoided_ms, 0);
+}
+
+fn plan_all(project: &Project) -> ods_core::state::ExecutionPlan {
+    plan(project, None, &all(project), Timestamp::from_unix(T0)).unwrap()
+}

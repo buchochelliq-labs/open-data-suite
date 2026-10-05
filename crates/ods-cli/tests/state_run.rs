@@ -4377,3 +4377,48 @@ fn real_dbt_explains_a_missing_column_and_an_unknown_macro() {
     );
     assert_eq!(failure["location"]["line"], 5, "{failure:#}");
 }
+
+/// #210, ADR-0029: each build's time is recorded with it, so a run that reuses it says
+/// what that saved: an estimate of serial build time, naming the run whose timings it
+/// used. A node rebuilt since says so too: one reused, the rest counted.
+#[test]
+fn a_run_says_what_reuse_saved() {
+    let project = Project::new("savings");
+    let first = project.run_ok(&[]);
+    let first_run = first["execution"]["run_id"].as_str().unwrap().to_owned();
+
+    // Nothing changed: everything is reused, and the build time of each is saved.
+    let again = project.run_ok(&[]);
+    assert_eq!(again["outcome"], "nothing_to_build");
+    let saved = &again["savings"];
+    assert_eq!(saved["built"], 0);
+    assert_eq!(saved["reused"], saved["timed"], "{saved}");
+    assert_eq!(saved["untimed"], 0);
+    assert_eq!(saved["timed_by"], serde_json::json!([first_run]));
+    assert!(saved["avoided_ms"].as_u64().unwrap() > 0, "{saved}");
+    insta::assert_snapshot!(
+        "savings_json",
+        serde_json::to_string_pretty(saved)
+            .unwrap()
+            .replace(&first_run, "<run>")
+    );
+
+    // One model changed: it is built, its downstream too, the rest reused.
+    project.change_code("model.jaffle_ods.customers");
+    let (code, plain) = project.ods_plain_status(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+        "--exclude-resource-type",
+        "test",
+    ]);
+    assert_eq!(code, 0, "{plain}");
+    let line = plain
+        .lines()
+        .find(|l| l.starts_with("saved:"))
+        .unwrap_or_else(|| panic!("{plain}"));
+    insta::assert_snapshot!("savings_plain", line);
+}

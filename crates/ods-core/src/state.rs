@@ -17,8 +17,9 @@ use crate::SchemaVersion;
 use crate::freshness::FreshnessPolicy;
 
 /// Version of [`StateSnapshot`] and [`ExecutionPlan`] documents.
-/// 1.1 adds [`StateSnapshot::target`]; 1.2 adds [`StateSnapshot::sources`].
-pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 2);
+/// 1.1 adds [`StateSnapshot::target`]; 1.2 adds [`StateSnapshot::sources`]; 1.3 adds
+/// [`NodeState::build_ms`] (ADR-0029).
+pub const STATE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 3);
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -447,6 +448,11 @@ pub struct NodeState {
     /// haven't run since it was built, or failed (#220).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tested: Option<TestRecord>,
+    /// How long this build took, in milliseconds, as the engine measured it (ADR-0029).
+    /// Carried unchanged while the build is reused; `None` when the run didn't say, and
+    /// in records written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_ms: Option<u64>,
 }
 
 /// Checks that passed on a node's build (#220).
@@ -505,6 +511,7 @@ impl NodeState {
             inputs,
             parents: BTreeMap::new(),
             tested: None,
+            build_ms: None,
         }
     }
 }
@@ -988,6 +995,26 @@ mod tests {
         assert!(Exactness::Exact.allows_reuse());
     }
 
+    /// A 1.2 node, from before build times (ADR-0029), reads as untimed; one with a time
+    /// keeps it, and an untimed one is written without it.
+    #[test]
+    fn nodes_before_build_times_read_as_untimed() {
+        let old = serde_json::json!({
+            "fingerprint": serde_json::to_value(Fingerprint::from_content([("file", "x")])).unwrap(),
+            "built_at": "1970-01-01T00:00:10Z",
+            "run_id": "run-1",
+            "inputs": {}
+        });
+        let untimed: NodeState = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(untimed.build_ms, None);
+        let written = serde_json::to_value(&untimed).unwrap();
+        assert!(written.get("build_ms").is_none(), "{written}");
+        let mut timed = old;
+        timed["build_ms"] = serde_json::json!(1_250);
+        let timed: NodeState = serde_json::from_value(timed).unwrap();
+        assert_eq!(timed.build_ms, Some(1_250));
+    }
+
     #[test]
     fn snapshots_round_trip_with_their_schema_version() {
         let node = NodeState::new(
@@ -1015,7 +1042,7 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(
             json["schema_version"],
-            serde_json::json!({"major": 1, "minor": 2})
+            serde_json::json!({"major": 1, "minor": 3})
         );
         assert_eq!(json["parent"], 3);
         // No target or sources: left out, so older documents and ours look alike.
