@@ -1,0 +1,18 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "redact(&serde_json::to_string_pretty(&serde_json::json!({\n    \"node\": one[\"result\"][\"node\"], \"test\": one[\"result\"][\"test\"], \"outcome\":\n    one[\"result\"][\"outcome\"], \"headline\": failure[\"headline\"], \"category\":\n    failure[\"category\"], \"check\": failure[\"check\"],\n})).unwrap())"
+---
+{
+  "node": "check-6c26efb6691a",
+  "test": true,
+  "outcome": "failed",
+  "headline": "The `accepted_values` test on `status` of `orders` failed: 3 rows don't pass",
+  "category": "test_failure",
+  "check": {
+    "covers": [
+      "model.jaffle_ods.orders"
+    ],
+    "test": "accepted_values",
+    "column": "status"
+  }
+}

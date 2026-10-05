@@ -6,9 +6,10 @@
 //! local; tools that mirror a CLI command run that command in-process with `--json`, so
 //! an MCP result is exactly what `ods … --json` prints.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::{ArgMatches, Command};
+use clap::{Arg, ArgMatches, Command};
 use ods_mcp::{
     PromptArgument, PromptDefinition, Prompts, ReadError, ResourceContent, ResourceDefinition,
     ResourceTemplate, Resources, Server, ServerInfo, ToolOutput,
@@ -38,6 +39,7 @@ columns (`orders.amount=removed`) or another build's target directory.
 - Which tests are missing? `ods_test_gaps`.
 - Freshness policies (dbt State configs): `ods_state_policies`.
 - Where lineage is unknown (Python models, unparseable SQL): `ods_list_opaque`.
+- Why did a model or test fail in the last `ods state` run? `ods_explain_failure`.
 
 For someone who uses the data but doesn't know the project, answering a question with SQL: `ods_find_data` (tables and columns by meaning), `ods_describe_entity` (what one row is, the columns, what it joins to), then `ods_plan_query` (join path and SQL skeleton). Write SQL only with the columns and join conditions these tools return; a key may span several columns, so join on all of them. State the grain of the answer and every assumption, and repeat any warning about joins that repeat rows.
 
@@ -52,22 +54,31 @@ impl Module for Mcp {
             Command::new("mcp")
                 .about("Serve the ODS tools to AI agents over the Model Context Protocol (stdio)"),
         )
+        .arg(
+            Arg::new("state-db")
+                .long("state-db")
+                .value_name("PATH")
+                .help("The state database whose runs `ods_explain_failure` explains [default: as `ods state` finds it]"),
+        )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let project = Arc::new(Project::new(
-            artifacts_dir(matches, ctx.config)?,
-            LoadOptions::from_args(matches),
-            match matches.get_one::<String>("artifacts").map(String::as_str) {
-                Some("json") => ArtifactPreference::Json,
-                Some("info-schema") => ArtifactPreference::InfoSchema,
-                _ => ArtifactPreference::Auto,
-            },
-            matches
-                .get_one::<String>("artifacts")
-                .cloned()
-                .unwrap_or_else(|| "auto".into()),
-        ));
+        let project = Arc::new(
+            Project::new(
+                artifacts_dir(matches, ctx.config)?,
+                LoadOptions::from_args(matches),
+                match matches.get_one::<String>("artifacts").map(String::as_str) {
+                    Some("json") => ArtifactPreference::Json,
+                    Some("info-schema") => ArtifactPreference::InfoSchema,
+                    _ => ArtifactPreference::Auto,
+                },
+                matches
+                    .get_one::<String>("artifacts")
+                    .cloned()
+                    .unwrap_or_else(|| "auto".into()),
+            )
+            .with_state_db(matches.get_one::<String>("state-db").map(PathBuf::from)),
+        );
         // A missing target directory is not fatal: the agent may run `dbt compile`
         // after starting the server. Say so on stderr, which MCP clients log.
         if let Err(e) = project.load() {

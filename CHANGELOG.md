@@ -13,6 +13,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Added
+- `ods state explain-failure <node> [--run <id>]`: why one model, seed, snapshot or test
+  failed in the last run (or any run whose journal is kept), with the evidence and what
+  to try, as `ods state history --run` explains it. A node that didn't fail says how it
+  ended, and a skipped one what blocked it. `ods mcp` gains the matching
+  `ods_explain_failure` tool and a `--state-db` option
+  ([docs](docs/cli.md#ods-state-explain-failure)) (#368, #348).
 - The ERD page on the dashboard (`/erd`): the project's entities, keys and relationships
   as `ods erd generate --infer` finds them. Each edge is drawn by its evidence (tested,
   declared, joined in SQL, or inferred), with cardinality where keys prove it. Click an
