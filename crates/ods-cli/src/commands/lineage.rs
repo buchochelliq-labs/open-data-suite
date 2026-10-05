@@ -786,6 +786,8 @@ fn models_table(c: &Comparison) -> ViewNode {
                 ]
             })
             .collect(),
+        breaks: Vec::new(),
+        footer: None,
     }
 }
 
@@ -1468,6 +1470,8 @@ impl Present for ImpactReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         ViewNode::Group(blocks)

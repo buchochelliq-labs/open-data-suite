@@ -342,6 +342,8 @@ impl Present for PoliciesReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             },
         ];
         for model in &self.models {
@@ -387,6 +389,8 @@ impl Present for PoliciesReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         ViewNode::Group(blocks)

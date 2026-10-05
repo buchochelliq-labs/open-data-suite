@@ -2351,38 +2351,16 @@ impl RunReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             },
-            None => ViewNode::Table {
-                title: None,
-                columns: vec!["node".into(), "action".into(), "why".into()],
-                rows: self
-                    .plan
-                    .entries
-                    .iter()
-                    .map(|e| {
-                        vec![
-                            vec![Span::toned(e.name.as_str(), Tone::Code)],
-                            vec![match e.action {
-                                PlanAction::Build
-                                    if self.retry.is_some()
-                                        && !self.requested.contains(&e.node) =>
-                                {
-                                    Span::toned("not retried", Tone::Muted)
-                                }
-                                PlanAction::Build => Span::toned("build", Tone::Warning),
-                                _ => Span::toned("reuse", Tone::Success),
-                            }],
-                            vec![Span::plain(
-                                e.reasons
-                                    .iter()
-                                    .map(|r| r.message.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join("; "),
-                            )],
-                        ]
-                    })
-                    .collect(),
-            },
+            None => super::state_plan::plan_table(&self.plan.entries, |e| match e.action {
+                PlanAction::Build if self.retry.is_some() && !self.requested.contains(&e.node) => {
+                    Span::toned("not retried", Tone::Muted)
+                }
+                PlanAction::Build => Span::toned("build", Tone::Warning),
+                _ => Span::toned("reuse", Tone::Success),
+            }),
         }
     }
 
@@ -2566,6 +2544,8 @@ impl Present for RunReport {
                     self.execution.as_ref(),
                     &self.observed.check_names,
                 ),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         blocks.extend(super::failures::section(&self.observed.failures));

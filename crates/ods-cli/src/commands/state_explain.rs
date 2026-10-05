@@ -519,6 +519,8 @@ impl Present for NodeHistoryReport {
                     "why".into(),
                 ],
                 rows,
+                breaks: Vec::new(),
+                footer: None,
             },
         ])
     }
@@ -651,6 +653,8 @@ impl Present for DiffReport {
             title: None,
             columns: vec!["node".into(), "change".into(), "what".into()],
             rows,
+            breaks: Vec::new(),
+            footer: None,
         });
         ViewNode::Group(blocks)
     }

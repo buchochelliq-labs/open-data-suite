@@ -362,6 +362,8 @@ impl SavingsReport {
                     row
                 })
                 .collect(),
+            breaks: Vec::new(),
+            footer: None,
         }
     }
 }

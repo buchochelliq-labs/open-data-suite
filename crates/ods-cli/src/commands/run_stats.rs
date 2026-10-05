@@ -122,12 +122,19 @@ pub(super) fn detail(stats: &NodeRunStats) -> String {
 
 /// The run's totals, e.g. `13.3s · 5 built · 1 failed · 1 skipped`.
 pub(super) fn totals_line(run: &RunSummary) -> String {
-    let totals = &run.totals;
-    let mut parts = vec![
-        totals
+    format!(
+        "{} · {}",
+        run.totals
             .duration_ms
             .map_or_else(|| format!("time {MISSING}"), duration),
-    ];
+        counts_line(run)
+    )
+}
+
+/// How many nodes ended each way: `3 built · 1 failed`.
+fn counts_line(run: &RunSummary) -> String {
+    let totals = &run.totals;
+    let mut parts = Vec::new();
     for (status, word) in [
         (NodeRunStatus::Success, success_word(run.mode)),
         (NodeRunStatus::Error, "failed"),
@@ -163,6 +170,15 @@ pub(super) fn rows_line(totals: &RunTotals) -> String {
         )
     } else {
         totals.rows_affected.to_string()
+    }
+}
+
+/// Rows affected in total, short enough for a table cell: `298`, `≥ 298`, or `—`.
+fn rows_cell(totals: &RunTotals) -> String {
+    match (totals.rows_is_lower_bound(), totals.rows_affected) {
+        (true, 0) => MISSING.to_owned(),
+        (true, n) => format!("≥ {n}"),
+        (false, n) => n.to_string(),
     }
 }
 
@@ -203,6 +219,32 @@ pub(super) fn nodes_table(run: &RunSummary) -> ViewNode {
                 ]
             })
             .collect(),
+        breaks: Vec::new(),
+        // The run as a whole: wall time, not the sum of the nodes' times, which
+        // overlap when nodes build in parallel.
+        footer: Some(vec![
+            vec![Span::toned(
+                format!(
+                    "{} {}",
+                    run.nodes.len(),
+                    if run.nodes.len() == 1 {
+                        "node"
+                    } else {
+                        "nodes"
+                    }
+                ),
+                Tone::Emphasis,
+            )],
+            vec![Span::plain(counts_line(run))],
+            vec![Span::plain(
+                run.totals
+                    .duration_ms
+                    .map_or_else(|| MISSING.to_owned(), duration),
+            )],
+            vec![Span::plain(rows_cell(&run.totals))],
+            Vec::new(),
+            Vec::new(),
+        ]),
     }
 }
 

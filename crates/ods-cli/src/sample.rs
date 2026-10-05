@@ -112,6 +112,8 @@ impl Present for SamplePlan {
                 title: None,
                 columns: vec!["node".into(), "action".into(), "reasons".into()],
                 rows,
+                breaks: Vec::new(),
+                footer: None,
             },
             ViewNode::Tree(reasons),
             ViewNode::Notice {
