@@ -1,6 +1,6 @@
 # ADR-0006: Plugin SDK, contracts and capabilities
 
-- **Status:** Accepted (2026-10-04). Not built yet, now follow-ups: the CLI builds providers directly rather than through `Registry` and `ProviderFactory` from `[providers.*]` (§2), and the `sql_lineage` and `observed_lineage` contracts have no conformance suite (#99). `SDK_VERSION` is 0.6 and the output envelope 1.0, not the 0.3 and 0.1 this text names.
+- **Status:** Accepted (2026-10-04). Not built yet, now follow-ups: the CLI builds providers directly rather than through `Registry` and `ProviderFactory` from `[providers.*]` (§2). `SDK_VERSION` is 0.7 and the output envelope 1.0, not the 0.3 and 0.1 this text names.
 - **Date:** 2026-09-24
 - **Issues:** #2 (plugin SDK), #3 (capability negotiation); related #99 (conformance), #28 (locking)
 - **Deciders:** @n1ckyb

@@ -17,6 +17,7 @@ sqlparser.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
+ods-sdk = { workspace = true, features = ["conformance"] }
 serde_json.workspace = true
 
 [lints]

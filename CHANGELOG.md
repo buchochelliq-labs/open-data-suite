@@ -26,6 +26,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- Conformance suites for the `sql_lineage` and `observed_lineage` contracts, so every
+  contract in `ods-sdk` now has one; the SQL parser (in every dialect), the Unity
+  Catalog lineage export reader and the fakes run them. A new guide, Writing a provider,
+  shows how a provider built outside this repository runs the suites
+  ([docs](docs/plugins.md)) (#PR, #99)
 - What reuse saved, as a cost: `[state.cost] rate_per_hour` and `unit` in `ods.toml`
   make `ods state savings` add the cost avoided at that rate, per run and in total (an
   estimate, like the time). The dashboard's Runs page shows what reuse saved, from the

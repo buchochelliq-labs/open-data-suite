@@ -31,7 +31,7 @@ flowchart BT
   fallback).
 - **`ods-sdk`**: the contracts providers implement, for example reading a project or
   analyzing SQL. Each contract has a fake implementation and conformance tests that
-  every real provider runs too.
+  every real provider runs too ([Writing a provider](plugins.md)).
 - **Modules** hold the logic: lineage graph and impact, ERD building, and State
   (fingerprints, the planner and its explanations). They never import a provider, and
   never depend on each other unless explicitly allowed.
