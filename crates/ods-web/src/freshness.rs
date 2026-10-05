@@ -320,9 +320,10 @@ pub struct InputView {
     pub recorded: Vec<RecordedVersion>,
     /// What the plan says about it: for a seed, its own decision.
     pub decision: Option<DecisionView>,
-    /// The nodes reading it directly, and their decisions.
+    /// The nodes reading it directly, as the plan has them, and their decisions.
     pub readers: Vec<ReaderView>,
-    /// Every node that would build if it changed: its readers, and theirs.
+    /// Every node downstream: what a change to it can reach, its readers and theirs.
+    /// Whether each rebuilds is up to its policy, so it isn't claimed here.
     pub downstream: Vec<NodeLink>,
 }
 
@@ -399,13 +400,33 @@ fn value_text(value: &str) -> String {
     }
 }
 
-/// Everything downstream of `id`, by the Catalog's dependencies.
-fn downstream<'a>(cx: &Context<'a>, id: &str) -> Vec<&'a str> {
+/// Each node's direct readers, by id.
+type Children<'a> = BTreeMap<&'a str, Vec<&'a str>>;
+
+/// Who reads what: the plan's dependencies when there is a plan, which skip what the
+/// planner doesn't plan (an ephemeral model's readers read through it), so a reader
+/// shown is one the plan decides; else the Catalog's.
+fn children<'a>(cx: &Context<'a>, planned: bool) -> Children<'a> {
+    if !planned {
+        return cx.children.clone();
+    }
+    let mut children: Children<'a> = BTreeMap::new();
+    for (id, entry) in &cx.entries {
+        for parent in &entry.depends_on {
+            children.entry(parent.as_str()).or_default().push(id);
+        }
+    }
+    children
+}
+
+/// Everything downstream of `id`: what a change to it can reach. Whether each one
+/// rebuilds is up to its policy (a lag tolerance can still reuse it).
+fn downstream<'a>(children: &Children<'a>, id: &str) -> Vec<&'a str> {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
-    let mut queue: VecDeque<&str> = cx.children.get(id).into_iter().flatten().copied().collect();
+    let mut queue: VecDeque<&str> = children.get(id).into_iter().flatten().copied().collect();
     while let Some(next) = queue.pop_front() {
         if seen.insert(next) {
-            queue.extend(cx.children.get(next).into_iter().flatten().copied());
+            queue.extend(children.get(next).into_iter().flatten().copied());
         }
     }
     seen.into_iter().collect()
@@ -463,6 +484,7 @@ impl Dashboard {
     ) -> FreshnessView {
         let (plan, basis) = Context::plan(self, details, now);
         let cx = Context::new(self, plan.as_ref(), basis, document, details);
+        let children = children(&cx, plan.is_some());
         // The snapshot the plan compares against: what readers were last built from.
         let based_on = plan.as_ref().and_then(|p| p.based_on).map(|s| s.0);
         let snapshot = self.history().and_then(|h| {
@@ -475,7 +497,7 @@ impl Dashboard {
             .freshness
             .sources
             .iter()
-            .map(|source| source_view(&cx, snapshot, source))
+            .map(|source| source_view(&cx, &children, snapshot, source))
             .collect();
         sources.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
         let mut seeds: Vec<InputView> = cx
@@ -483,7 +505,7 @@ impl Dashboard {
             .nodes
             .iter()
             .filter(|n| n.resource_type == "seed")
-            .map(|seed| seed_view(&cx, snapshot, seed))
+            .map(|seed| seed_view(&cx, &children, snapshot, seed))
             .collect();
         seeds.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
         let summary = summary(&sources, &seeds, plan.is_some());
@@ -502,9 +524,8 @@ impl Dashboard {
 }
 
 /// The nodes reading `id` directly, by name, with the plan's decisions.
-fn readers(cx: &Context<'_>, id: &str) -> Vec<ReaderView> {
-    let mut readers: Vec<ReaderView> = cx
-        .children
+fn readers(cx: &Context<'_>, children: &Children<'_>, id: &str) -> Vec<ReaderView> {
+    let mut readers: Vec<ReaderView> = children
         .get(id)
         .into_iter()
         .flatten()
@@ -519,8 +540,8 @@ fn readers(cx: &Context<'_>, id: &str) -> Vec<ReaderView> {
 }
 
 /// Links to everything downstream of `id`, by name.
-fn downstream_links(cx: &Context<'_>, id: &str) -> Vec<NodeLink> {
-    let mut links: Vec<NodeLink> = downstream(cx, id)
+fn downstream_links(cx: &Context<'_>, children: &Children<'_>, id: &str) -> Vec<NodeLink> {
+    let mut links: Vec<NodeLink> = downstream(children, id)
         .into_iter()
         .map(|id| cx.link(id))
         .collect();
@@ -531,6 +552,7 @@ fn downstream_links(cx: &Context<'_>, id: &str) -> Vec<NodeLink> {
 /// A source's row: its version now, as the planner was given it.
 fn source_view(
     cx: &Context<'_>,
+    children: &Children<'_>,
     snapshot: Option<&StateSnapshot>,
     source: &SourceInput,
 ) -> InputView {
@@ -577,8 +599,8 @@ fn source_view(
         }),
         recorded: recorded_versions(snapshot, &source.id),
         decision: None,
-        readers: readers(cx, &source.id),
-        downstream: downstream_links(cx, &source.id),
+        readers: readers(cx, children, &source.id),
+        downstream: downstream_links(cx, children, &source.id),
     }
 }
 
@@ -586,6 +608,7 @@ fn source_view(
 /// carries the digest, unless the file couldn't be read.
 fn seed_view(
     cx: &Context<'_>,
+    children: &Children<'_>,
     snapshot: Option<&StateSnapshot>,
     seed: &crate::catalog::CatalogNode,
 ) -> InputView {
@@ -629,8 +652,8 @@ fn seed_view(
         evidence,
         recorded,
         decision: entry.map(|_| cx.decision(&seed.id)),
-        readers: readers(cx, &seed.id),
-        downstream: downstream_links(cx, &seed.id),
+        readers: readers(cx, children, &seed.id),
+        downstream: downstream_links(cx, children, &seed.id),
     }
 }
 

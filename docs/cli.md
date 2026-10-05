@@ -1023,7 +1023,8 @@ each of the project's inputs changed since the nodes reading it were built:
   or *unknown*. Only *exact* and *semantic* evidence can let a reader be reused; anything
   else, or no evidence at all, means its readers build.
 - **Readers:** each input's direct readers, with the plan's decision, a link to its
-  **Why**, and its freshness policy, and every node that would build if it changed.
+  **Why**, and its freshness policy, and every node downstream (what a change can
+  reach; each one's policy decides whether it rebuilds).
 
 The numbers are the plan's: a source's version is the one `ods state explain` shows for
 a model reading it. `/api/catalog/sources` returns the same view model, and leaves out

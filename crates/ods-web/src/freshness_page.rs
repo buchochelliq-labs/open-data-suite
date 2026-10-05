@@ -133,7 +133,7 @@ fn inputs(b: &mut String, view: &FreshnessView) {
         return;
     }
     b.push_str(
-        r#"<div class="cat-table"><table class="fresh-table"><thead><tr><th scope="col" class="c-in">Input</th><th scope="col" class="c-ev">Evidence now</th><th scope="col" class="c-rec">Last recorded</th><th scope="col" class="c-rd">Read by</th><th scope="col" class="c-dn">Would build if it changed</th></tr></thead><tbody>"#,
+        r#"<div class="cat-table"><table class="fresh-table"><thead><tr><th scope="col" class="c-in">Input</th><th scope="col" class="c-ev">Evidence now</th><th scope="col" class="c-rec">Last recorded</th><th scope="col" class="c-rd">Read by</th><th scope="col" class="c-dn" title="What a change to it can reach; whether each rebuilds is up to its policy">Downstream</th></tr></thead><tbody>"#,
     );
     for input in &view.inputs {
         row(b, input);

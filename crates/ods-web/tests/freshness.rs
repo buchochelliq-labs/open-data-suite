@@ -72,7 +72,7 @@ fn lineage() -> Snapshot {
 }
 
 /// `raw_orders` (a seed) and `app.events` feed `orders`, which feeds `customers`;
-/// `app.clicks` feeds `clicks_daily`.
+/// `app.clicks` feeds `clicks_daily` through the ephemeral `int_clicks`.
 fn nodes() -> Vec<CatalogNode> {
     let mut seed = CatalogNode::new(SEED, "raw_orders", "seed");
     seed.file = Some("seeds/raw_orders.csv".into());
@@ -81,9 +81,12 @@ fn nodes() -> Vec<CatalogNode> {
     orders.depends_on = vec![SEED.into(), EVENTS.into()];
     let mut customers = CatalogNode::new("model.shop.customers", HOSTILE, "model");
     customers.depends_on = vec!["model.shop.orders".into()];
+    let mut ephemeral = CatalogNode::new("model.shop.int_clicks", "int_clicks", "model");
+    ephemeral.materialization = Some("ephemeral".into());
+    ephemeral.depends_on = vec![CLICKS.into()];
     let mut clicks = CatalogNode::new("model.shop.clicks_daily", "clicks_daily", "model");
-    clicks.depends_on = vec![CLICKS.into()];
-    vec![seed, orders, customers, clicks]
+    clicks.depends_on = vec!["model.shop.int_clicks".into()];
+    vec![seed, orders, customers, ephemeral, clicks]
 }
 
 fn entry(id: &str, action: PlanAction, code: ReasonCode, message: &str, depth: u32) -> PlanEntry {
@@ -116,33 +119,36 @@ fn plan() -> ExecutionPlan {
         Some(seed_digest().digest),
         Exactness::Exact,
     )];
+    let mut orders = entry(
+        "model.shop.orders",
+        PlanAction::Build,
+        ReasonCode::NewUpstreamData,
+        "new data in app.events",
+        1,
+    );
+    orders.depends_on = vec![SEED.into(), EVENTS.into()];
+    let mut clicks = entry(
+        "model.shop.clicks_daily",
+        PlanAction::Build,
+        ReasonCode::MissingDataEvidence,
+        "no usable data version for app.clicks",
+        0,
+    );
+    // It reads `app.clicks` through the ephemeral `int_clicks`, which the planner
+    // doesn't plan: its dependency is the source itself.
+    clicks.depends_on = vec![CLICKS.into()];
+    let mut customers = entry(
+        "model.shop.customers",
+        PlanAction::Build,
+        ReasonCode::NewUpstreamData,
+        "orders is built with new data",
+        2,
+    );
+    customers.depends_on = vec!["model.shop.orders".into()];
     ExecutionPlan::new(
         Some(SnapshotId(2)),
         at("2026-09-29T12:00:00Z"),
-        vec![
-            seed,
-            entry(
-                "model.shop.orders",
-                PlanAction::Build,
-                ReasonCode::NewUpstreamData,
-                "new data in app.events",
-                1,
-            ),
-            entry(
-                "model.shop.clicks_daily",
-                PlanAction::Build,
-                ReasonCode::MissingDataEvidence,
-                "no usable data version for app.clicks",
-                0,
-            ),
-            entry(
-                "model.shop.customers",
-                PlanAction::Build,
-                ReasonCode::NewUpstreamData,
-                "orders is built with new data",
-                2,
-            ),
-        ],
+        vec![seed, orders, clicks, customers],
     )
 }
 
@@ -300,6 +306,9 @@ fn sources_then_seeds_each_with_its_evidence() {
     assert!(evidence.method.starts_with("nothing"));
     assert_eq!(clicks.recorded.len(), 1);
     assert_eq!(clicks.recorded[0].grade, Grade::Unknown);
+    // Its reader is the one the plan decides, not the ephemeral model in between.
+    let readers: Vec<&str> = clicks.readers.iter().map(|r| r.node.id.as_str()).collect();
+    assert_eq!(readers, ["model.shop.clicks_daily"]);
     assert_eq!(clicks.readers[0].decision.decision, Decision::Build);
 
     // The seed: its file's checksum, the same as when it was built, so reused.
@@ -325,6 +334,13 @@ fn sources_then_seeds_each_with_its_evidence() {
 #[test]
 fn without_a_store_nothing_is_compared_and_unknown_stays_unknown() {
     let view = view(&no_store());
+    // Without a plan, readers come from the project's own dependencies.
+    let readers: Vec<&str> = input(&view, CLICKS)
+        .readers
+        .iter()
+        .map(|r| r.node.id.as_str())
+        .collect();
+    assert_eq!(readers, ["model.shop.int_clicks"]);
     let seed = input(&view, SEED);
     assert_eq!(seed.evidence, None, "nothing to compare the file with");
     assert_eq!(seed.recorded.len(), 0);

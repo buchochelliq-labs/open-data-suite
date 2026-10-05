@@ -44,7 +44,7 @@ unknown
 No evidence at all. Nothing to compare, so readers build.
 Inputs 0 sources · 3 seeds
 JSON
-Input	Evidence now	Last recorded	Read by	Would build if it changed
+Input	Evidence now	Last recorded	Read by	Downstream
 raw_customers
 seed · seeds/raw_customers.csv
 exact
