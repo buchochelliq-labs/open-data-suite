@@ -4050,6 +4050,42 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         "{history}"
     );
 
+    // `ods state explain-failure`, by the test's handle (#348): the same explanation,
+    // and the test by its handle, never its id.
+    let (code, one) = project.ods(&["state", "explain-failure", &handle, "--run", &run_id]);
+    assert_eq!(code, 0, "{one:#}");
+    assert!(!leaks(&one.to_string()), "{one:#}");
+    assert_eq!(one["result"]["node"], handle.as_str());
+    assert_eq!(one["result"]["test"], true);
+    assert_eq!(one["result"]["outcome"], "failed");
+    let failure = explained(&one["result"]["failures"]);
+    let redact = |text: &str| text.replace(&run_id, "<run>");
+    insta::assert_snapshot!(
+        "explain_failure_test_json",
+        redact(
+            &serde_json::to_string_pretty(&serde_json::json!({
+                "node": one["result"]["node"],
+                "test": one["result"]["test"],
+                "outcome": one["result"]["outcome"],
+                "headline": failure["headline"],
+                "category": failure["category"],
+                "check": failure["check"],
+            }))
+            .unwrap()
+        )
+    );
+    let plain = project.ods_plain(&["state", "explain-failure", &handle, "--run", &run_id]);
+    assert!(!leaks(&plain), "{plain}");
+    assert!(
+        plain.contains("failed test: accepted_values on orders.status"),
+        "{plain}"
+    );
+    // The model the test is on: its failed test, explained.
+    let (code, on) = project.ods(&["state", "explain-failure", "orders", "--run", &run_id]);
+    assert_eq!(code, 0, "{on:#}");
+    assert!(!leaks(&on.to_string()), "{on:#}");
+    explained(&on["result"]["failures"]);
+
     // `ods state test`: the whole output.
     let (code, tested) = project.test(&[]);
     assert_eq!(code, 1, "{tested:#}");
@@ -4079,6 +4115,200 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         };
         assert!(plain.lines().any(|l| l == named), "{command}: {plain}");
     }
+}
+
+/// #348: `ods state explain-failure` explains one node of a run, the last one by
+/// default, as `ods state history --run` does, and the secret in dbt's message never
+/// reaches it, JSON or plain. A node that didn't fail says how it ended (a skipped one,
+/// what blocked it), with exit status 0; an unknown run or node is an error.
+#[test]
+#[allow(clippy::too_many_lines, reason = "one run, asked about each way")]
+fn explain_failure_explains_one_node_of_a_run() {
+    let project = Project::new("explain-failure");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.customers");
+    let project = project
+        .with("FAKE_DBT_FAIL", "customers")
+        .with("FAKE_DBT_FAIL_MESSAGE", MISSING_COLUMN);
+    let (code, json) = project.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    let run_id = json["result"]["execution"]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let leaks = |text: &str| text.contains("SENTINEL");
+    let redact = |text: &str| {
+        text.replace(&run_id, "<run>")
+            .replace(project.db().to_str().unwrap(), "<state-db>")
+            .replace(project.dir.to_str().unwrap(), "<project>")
+    };
+
+    // The failed model, by name, in the last run: as `history --run` explains it.
+    let (code, explained) = project.ods(&["state", "explain-failure", "customers"]);
+    assert_eq!(code, 0, "{explained:#}");
+    assert!(!leaks(&explained.to_string()), "{explained:#}");
+    let result = &explained["result"];
+    assert_eq!(result["run_id"], run_id.as_str());
+    assert_eq!(result["node"], "model.jaffle_ods.customers");
+    assert_eq!(result["outcome"], "failed");
+    let (_, history) = project.ods(&["state", "history", "--run", &run_id]);
+    assert_eq!(result["failures"], history["result"]["failures"]);
+    // By id and with the run named: the same.
+    let (_, by_id) = project.ods(&[
+        "state",
+        "explain-failure",
+        "model.jaffle_ods.customers",
+        "--run",
+        &run_id,
+    ]);
+    assert_eq!(by_id["result"], *result);
+    let (code, plain) =
+        project.ods_plain_status(&["state", "explain-failure", "customers", "--run", &run_id]);
+    assert_eq!(code, 0, "{plain}");
+    assert!(!leaks(&plain), "{plain}");
+    insta::assert_snapshot!("explain_failure_model_plain", redact(plain.trim_end()));
+
+    // A node it blocked: skipped, and by what.
+    let (code, skipped) = project.ods(&["state", "explain-failure", "segment_summary"]);
+    assert_eq!(code, 0, "{skipped:#}");
+    assert_eq!(skipped["result"]["outcome"], "skipped");
+    assert_eq!(
+        skipped["result"]["blocked_by"],
+        serde_json::json!(["model.jaffle_ods.customers"])
+    );
+    assert_eq!(skipped["result"]["failures"], serde_json::json!([]));
+    let plain = project.ods_plain(&["state", "explain-failure", "segment_summary"]);
+    insta::assert_snapshot!("explain_failure_skipped_plain", redact(plain.trim_end()));
+
+    // A node of the project this run reused, so didn't run.
+    let (code, elsewhere) = project.ods(&["state", "explain-failure", "stg_orders"]);
+    assert_eq!(code, 0, "{elsewhere:#}");
+    assert_eq!(elsewhere["result"]["outcome"], "not_in_run");
+    assert_eq!(elsewhere["result"]["node"], "model.jaffle_ods.stg_orders");
+
+    // A journal line that can't be read: a node the journal doesn't show isn't known
+    // to have been left out.
+    let journal = elsewhere["result"]["journal"].as_str().unwrap().to_owned();
+    let mut text = std::fs::read_to_string(&journal).unwrap();
+    text.push_str("{\"cut short\n");
+    std::fs::write(&journal, &text).unwrap();
+    let (code, cut) = project.ods(&["state", "explain-failure", "stg_orders"]);
+    assert_eq!(code, 0, "{cut:#}");
+    assert_eq!(cut["result"]["outcome"], "unknown");
+    assert_eq!(cut["result"]["unreadable_lines"], 1);
+    std::fs::write(&journal, text.trim_end_matches("{\"cut short\n")).unwrap();
+
+    // A node of neither: a usage error.
+    let (code, unknown) = project.ods(&["state", "explain-failure", "no_such_model"]);
+    assert_eq!(code, 2, "{unknown:#}");
+    assert_eq!(unknown["diagnostics"][0]["code"], "ODS-E0403");
+
+    // An unknown run.
+    let (code, json) = project.ods(&[
+        "state",
+        "explain-failure",
+        "customers",
+        "--run",
+        "no-such-run",
+    ]);
+    assert_eq!(code, 1, "{json:#}");
+    insta::assert_snapshot!(
+        "explain_failure_unknown_run",
+        redact(&serde_json::to_string_pretty(&json["diagnostics"]).unwrap())
+    );
+}
+
+/// #348: `ods mcp`'s `ods_explain_failure` tool answers as `ods state explain-failure
+/// --json` does, read-only, and the secret in dbt's message never reaches the agent.
+#[test]
+fn the_mcp_tool_explains_a_failure_of_the_last_run() {
+    use std::io::Write as _;
+    let project = Project::new("explain-failure-mcp");
+    project.run_ok(&[]);
+    project.change_code("model.jaffle_ods.customers");
+    let project = project
+        .with("FAKE_DBT_FAIL", "customers")
+        .with("FAKE_DBT_FAIL_MESSAGE", MISSING_COLUMN);
+    let (code, _) = project.run(&[]);
+    assert_eq!(code, 1);
+    let (_, cli) = project.ods(&["state", "explain-failure", "customers"]);
+
+    let call = |id: u32, arguments: Value| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                           "params": {"name": "ods_explain_failure", "arguments": arguments}})
+        .to_string()
+    };
+    let input = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "1"}}})
+        .to_string(),
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.to_owned(),
+        call(1, serde_json::json!({"node": "customers"})),
+        call(2, serde_json::json!({"node": "--state-db=/elsewhere"})),
+        call(
+            3,
+            serde_json::json!({"node": "customers", "run": "no-such-run"}),
+        ),
+    ]
+    .join("\n");
+    let db = project.db();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args([
+            "mcp",
+            "--target-dir",
+            "target",
+            "--state-db",
+            db.to_str().unwrap(),
+        ])
+        .env_clear()
+        .env("XDG_CONFIG_HOME", &project.dir)
+        .current_dir(&project.dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{input}\n").as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(!stdout.contains("SENTINEL"), "{stdout}");
+    let responses: Vec<Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let by_id = |id: u64| responses.iter().find(|r| r["id"] == id).unwrap();
+    let explained = &by_id(1)["result"];
+    assert_eq!(explained["isError"], false, "{explained:#}");
+    assert_eq!(explained["structuredContent"], cli["result"]);
+    assert_eq!(explained["structuredContent"]["outcome"], "failed");
+    // A value that looks like a flag is refused, not read as one.
+    assert_eq!(by_id(2)["result"]["isError"], true);
+    let unknown = &by_id(3)["result"];
+    assert_eq!(unknown["isError"], true);
+    assert!(
+        unknown["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ODS-E0403"),
+        "{unknown:#}"
+    );
+}
+
+/// #348: no run has a journal yet: `ods state explain-failure` says where they are kept.
+#[test]
+fn explain_failure_without_a_run_says_so() {
+    let project = Project::new("explain-failure-none");
+    let (code, json) = project.ods(&["state", "explain-failure", "customers"]);
+    assert_eq!(code, 1, "{json:#}");
+    assert_eq!(json["diagnostics"][0]["code"], "ODS-E0403");
+    let message = json["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("has a journal"), "{message}");
 }
 
 /// #323: when `dbt compile` fails in the prepare step, nothing runs; the report says

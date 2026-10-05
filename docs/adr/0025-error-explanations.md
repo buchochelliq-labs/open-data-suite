@@ -212,6 +212,9 @@ and its hint names the run's journal instead.
   try with commands, and dbt's redacted message); `ods state history --run` too. A
   command that failed before running shows the explanation with outcome
   `failed_before_running`.
+- **One node, and agents (#348):** `ods state explain-failure <node> [--run]` and
+  `ods mcp`'s `ods_explain_failure` tool pick a node's (or test's) explanations from
+  `history --run`'s: the same `explain_failure`, no logic of their own.
 - **JSON:** a `failures` array of `ErrorExplanation`s in the same results.
 - **Dashboard:** the Run page's Nodes tab and the Runs side panel render the same model
   as board 9 (#323 part 2).
@@ -389,7 +392,8 @@ rows and redacted message, ADR-0024 1.1) and the project:
     profiles locations (the working directory, then `~/.dbt`) when no directory is
     named, and doctor evidence on the dashboard and for `ods state history --run`.
   - Did-you-mean for a missing `source()`, once its message is recorded from real dbt.
-  - "Ask the ODS agent to investigate" (M6) and an MCP tool `explain_failure`.
+  - "Ask the ODS agent to investigate" (M6). ~~An MCP tool `explain_failure`~~
+    (done, #348: `ods_explain_failure`).
 
 ## References
 - #323, #322, #320; [ADR-0006](0006-plugin-sdk-and-capabilities.md),

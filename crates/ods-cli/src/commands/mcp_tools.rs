@@ -28,6 +28,9 @@ pub(super) struct Project {
     load: LoadOptions,
     preference: ArtifactPreference,
     artifacts_flag: String,
+    /// The state database, when `ods mcp` was given one; otherwise the State commands'
+    /// own default (configuration, then `.ods/state.db`).
+    state_db: Option<PathBuf>,
 }
 
 impl Project {
@@ -42,7 +45,15 @@ impl Project {
             load,
             preference,
             artifacts_flag,
+            state_db: None,
         }
+    }
+
+    /// Reads runs from the state database at `path`.
+    #[must_use]
+    pub(super) fn with_state_db(mut self, path: Option<PathBuf>) -> Self {
+        self.state_db = path;
+        self
     }
 
     /// Reads and analyzes the project now; artifacts may have changed since the last
@@ -370,6 +381,33 @@ fn state_policies(project: &Project, arguments: &Value) -> ToolOutput {
     args.extend(project.artifact_args());
     if let Some(model) = text_arg(arguments, "model") {
         args.push(format!("--model={model}"));
+    }
+    run_cli(&args)
+}
+
+/// One node's or test's failure in a run, explained, as `ods state explain-failure`
+/// explains it (#348).
+fn explain_failure(project: &Project, arguments: &Value) -> ToolOutput {
+    let Some(node) = text_arg(arguments, "node") else {
+        return ToolOutput::Error("`node` is required".into());
+    };
+    // A positional value: one that starts like a flag would be read as one.
+    if node.starts_with('-') {
+        return ToolOutput::Error(format!(
+            "`{node}` isn't a node or test: name a model (`customers`), its unique id, or a test's handle (`check-…`)"
+        ));
+    }
+    let mut args = vec![
+        "state".to_owned(),
+        "explain-failure".to_owned(),
+        node.to_owned(),
+        format!("--target-dir={}", project.target_dir.display()),
+    ];
+    if let Some(db) = &project.state_db {
+        args.push(format!("--state-db={}", db.display()));
+    }
+    if let Some(run) = text_arg(arguments, "run") {
+        args.push(format!("--run={run}"));
     }
     run_cli(&args)
 }
@@ -746,6 +784,23 @@ pub(super) fn all(project: &Arc<Project>) -> Vec<Box<dyn Tool>> {
                 ),
             ),
             state_policies,
+        ),
+        (
+            ToolDefinition::read_only(
+                "ods_explain_failure",
+                "Why a node or test failed",
+                "Why a model, seed, snapshot or test failed in a run (default: the last run), from the run's journal: what went wrong, how sure ODS is, the evidence, where, what it blocked, and what to try. dbt's message is kept with literal values and SQL removed. A node that didn't fail says how it ended (`outcome`), and a skipped one what blocked it. Tests are named by their handle (`check-…`), never their id.",
+                schema(
+                    &json!({
+                        "node": {"type": "string",
+                                 "description": "Model name or unique_id, or a failed test's handle (`check-…`)"},
+                        "run": {"type": "string",
+                                "description": "A run's id (default: the last run)"}
+                    }),
+                    &["node"],
+                ),
+            ),
+            explain_failure,
         ),
         (
             ToolDefinition::read_only(

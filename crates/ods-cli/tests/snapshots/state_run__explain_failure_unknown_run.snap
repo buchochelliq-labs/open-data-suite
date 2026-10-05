@@ -1,0 +1,12 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: "redact(&serde_json::to_string_pretty(&json[\"diagnostics\"]).unwrap())"
+---
+[
+  {
+    "level": "error",
+    "code": "ODS-E0403",
+    "message": "run no-such-run has no journal",
+    "hint": "journals are kept beside the state database, in <state-db>.runs, for the 50 most recent runs that ran dbt"
+  }
+]

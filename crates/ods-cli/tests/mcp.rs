@@ -117,7 +117,7 @@ fn every_tool_answers_from_the_fixture() {
         ],
     );
     let tools = r[0]["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 14);
     assert!(
         tools
             .iter()

@@ -36,6 +36,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   database, to which every run that goes ahead adds an entry, a run with nothing to build
   included ([docs](docs/cli.md#what-reuse-saved),
   [ADR-0029](docs/adr/0029-build-timings-and-the-run-ledger.md)) (#370, #210).
+- `ods state explain-failure <node> [--run <id>]`: why one model, seed, snapshot or test
+  failed in the last run (or any run whose journal is kept), with the evidence and what
+  to try, as `ods state history --run` explains it. A node that didn't fail says how it
+  ended, and a skipped one what blocked it. `ods mcp` gains the matching
+  `ods_explain_failure` tool and a `--state-db` option
+  ([docs](docs/cli.md#ods-state-explain-failure)) (#368, #348).
 - `ods state run`, `build`, `seed`, `snapshot` and `retry` say what reuse saved:
   `saved: ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)`, and `savings`
   in JSON (also in `ods state plan`, for what a run would save). Each build's time is

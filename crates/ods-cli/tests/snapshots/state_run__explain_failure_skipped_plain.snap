@@ -1,0 +1,10 @@
+---
+source: crates/ods-cli/tests/state_run.rs
+expression: redact(plain.trim_end())
+---
+run: <run>
+scope: jaffle_ods/default
+
+info: segment_summary didn't fail in this run: it was skipped.
+
+It was skipped because customers failed; to see why: ods state explain-failure model.jaffle_ods.customers --run <run> --state-db <state-db>
