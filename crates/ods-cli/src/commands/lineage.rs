@@ -325,6 +325,8 @@ struct Observed {
 /// A project analyzed end to end.
 pub(super) struct Loaded {
     target_dir: PathBuf,
+    /// Which artifacts were read, so others read from the same directory match.
+    preference: ArtifactPreference,
     analyzer: SqlparserAnalyzer,
     /// dbt `unique_id` → node name, for friendly lookups.
     names: BTreeMap<String, String>,
@@ -411,6 +413,7 @@ impl Loaded {
         };
         Ok(Self {
             target_dir: target_dir.to_owned(),
+            preference: options.preference,
             analyzer,
             names,
             checksums,
@@ -421,6 +424,16 @@ impl Loaded {
             relations,
             adapter_type,
         })
+    }
+
+    /// The directory the artifacts were read from.
+    pub(super) fn target_dir(&self) -> &Path {
+        &self.target_dir
+    }
+
+    /// Which artifacts were read.
+    pub(super) fn preference(&self) -> ArtifactPreference {
+        self.preference
     }
 
     /// Warehouse links for this project's target (#329).

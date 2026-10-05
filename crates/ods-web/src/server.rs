@@ -262,6 +262,9 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         // The Impact simulator (#347).
         .route(&at("/lineage/impact"), get(catalog_routes::impact_page))
         .route(&at("/api/lineage/impact"), get(catalog_routes::impact_api))
+        // The ERD page (#64).
+        .route(&at("/erd"), get(catalog_routes::erd_page))
+        .route(&at("/api/erd"), get(catalog_routes::erd_api))
         // The Lineage page's State overlay (#312).
         .route(&at("/api/lineage/overlay"), get(lineage_overlay))
         .route(&at("/healthz"), get(|| async { "ok" }))

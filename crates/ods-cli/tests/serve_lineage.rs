@@ -478,3 +478,44 @@ fn the_impact_simulator_reaches_what_ods_lineage_impact_says() {
     assert_eq!(status, 200);
     assert!(page.contains(r#"<tr data-node="model.jaffle_ods.customers" data-verdict="breaks">"#));
 }
+
+/// The ERD page (#64) draws the relationships `ods erd generate --infer` finds, on the
+/// demo project, and says how to test each untested one in dbt's own YAML.
+#[test]
+fn the_erd_page_shows_what_ods_erd_generate_finds() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["erd", "generate", "--target-dir"])
+        .arg(&target)
+        .args(["--format", "json", "--infer"])
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
+        .output()
+        .unwrap();
+    let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let server = serve(&target, None, &[]);
+    let (status, body) = get(&server, "api/erd");
+    assert_eq!(status, 200, "{body}");
+    let page: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(page["erd"]["relationships"], cli["relationships"]);
+    assert_eq!(page["erd"]["entities"], cli["entities"]);
+    assert!(!page["missing"].as_array().unwrap().is_empty());
+    let snippets: Vec<&str> = page["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["suggestion"]["snippet"].as_str())
+        .collect();
+    assert!(
+        snippets
+            .iter()
+            .any(|s| s.contains("relationships:") && s.contains("to: ref('customers')")),
+        "{snippets:?}"
+    );
+    let (status, html) = get(&server, "erd");
+    assert_eq!(status, 200);
+    assert!(html.contains(r#"aria-current="page" data-section="erd""#));
+}

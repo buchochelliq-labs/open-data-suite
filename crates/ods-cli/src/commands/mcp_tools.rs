@@ -517,10 +517,7 @@ fn key_gaps(erd: &Erd) -> Vec<Value> {
             from,
             column,
             "relationships",
-            &format!(
-                "- name: {column}\n  data_tests:\n    - relationships:\n        arguments:\n          to: ref('{}')\n          field: {field}",
-                to.name
-            ),
+            &super::erd::relationships_test(column, &format!("ref('{}')", to.name), field, None),
             &format!("`{column}` looks like a reference to `{}.{field}`", to.name),
         ));
     }

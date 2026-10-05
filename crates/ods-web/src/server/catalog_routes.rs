@@ -1,6 +1,7 @@
 //! The Catalog's routes (#313): its page, the model pages, and their JSON API; and the
-//! Impact simulator's (#347). GET only; the same view models back the pages and the API. Pages are built on a
-//! blocking thread, as the State pages are: building one may plan.
+//! Impact simulator's (#347) and the ERD page's (#64). GET only; the same view models
+//! back the pages and the API. Pages are built on a blocking thread, as the State pages
+//! are: building one may plan.
 
 use std::sync::atomic::Ordering;
 
@@ -11,6 +12,7 @@ use axum::response::{Html, IntoResponse, Json, Response};
 
 use super::{Shared, error};
 use crate::catalog::CatalogQuery;
+use crate::erd::{ErdQuery, erd_view};
 use crate::impact::{ImpactQuery, impact_view};
 use crate::state_pages::blocking;
 
@@ -158,6 +160,41 @@ pub(super) async fn impact_api(
             &snapshot.names(),
             &dashboard.catalog,
             &ImpactQuery::from_pairs(&pairs),
+        ))
+        .into_response()
+    })
+    .await
+}
+
+/// `/erd`: the ERD page (#64), scoped by the query.
+pub(super) async fn erd_page(
+    State(state): State<Shared>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Response {
+    blocking(move || {
+        let generation = state.generation.load(Ordering::SeqCst);
+        let snapshot = state.current();
+        let dashboard = snapshot.dashboard();
+        let view = erd_view(dashboard.erd.as_ref(), &ErdQuery::from_pairs(&pairs));
+        match crate::erd_page::erd_page(&dashboard.shell("erd"), &view, &pairs, generation) {
+            Ok(page) => Html(page).into_response(),
+            Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    })
+    .await
+}
+
+/// `/api/erd`: the ERD page's view model, for the same query.
+pub(super) async fn erd_api(
+    State(state): State<Shared>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Response {
+    blocking(move || {
+        let snapshot = state.current();
+        let dashboard = snapshot.dashboard();
+        Json(erd_view(
+            dashboard.erd.as_ref(),
+            &ErdQuery::from_pairs(&pairs),
         ))
         .into_response()
     })

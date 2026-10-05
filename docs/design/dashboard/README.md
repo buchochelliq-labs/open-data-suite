@@ -30,7 +30,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | State: Plan and Why, Runs, one Run | **Built** (#311, merged in #318); real run outcomes, durations and per-node stats from run journals (#322 steps 1 and 3) |
 | Live run on the DAG, with follow mode | **Built** (#322): the event stream, the Live overlay on Lineage, follow mode and scopes, node stats, the Home banner |
 | Lineage: Impact simulator | **Built** (#347): rename, type change and drop, with what breaks; no contract warning or exposures yet |
-| Freshness evidence, Semantic layer, ERD, Settings | Designed (#309) |
+| ERD | **Built** (#64): the diagram with edge evidence, cardinality, scope, missing relationships with their tests, and SVG export |
+| Freshness evidence, Semantic layer, Settings | Designed (#309) |
 | Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
@@ -233,7 +234,7 @@ A run still going isn't followed live yet (#322 step 4).
 
 ### ERD
 
-Not built yet (#309); `ods erd generate` draws it from the command line.
+**Built** (#64) at `/erd`, from the same ERD as `ods erd generate --infer`.
 
 ![ERD](images/erd.png)
 
@@ -241,6 +242,11 @@ Not built yet (#309); `ods erd generate` draws it from the command line.
   tested, declared constraint, joined in SQL, or inferred.
 - **Cardinality:** only where tests prove it.
 - **Missing relationships:** each comes with the YAML test that would make it tested.
+
+As built, the board's saved views (*jaffle_ods marts* in the navigation) aren't there
+yet: the scope is the `--select` box and a depth, kept in the URL. Clicking an entity
+or an edge shows its keys or evidence in the side panel, and *Every relationship* lists
+them as a table.
 
 **Needs:** `ods erd generate`.
 

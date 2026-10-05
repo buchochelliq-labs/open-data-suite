@@ -175,6 +175,110 @@ pub(super) fn project_erd(
     })
 }
 
+/// The ERD the dashboard's ERD page shows (#64): every entity, with inferred keys and
+/// relationships (the page can hide them), and how to test each relationship that is
+/// only joined in SQL or inferred. Never fails: what can't be read is said instead.
+pub(super) fn dashboard_erd(loaded: &Loaded) -> ods_web::erd::ErdInput {
+    let artifacts = match Artifacts::load_with(loaded.target_dir(), loaded.preference()) {
+        Ok(artifacts) => artifacts,
+        Err(e) => {
+            return ods_web::erd::ErdInput::new(
+                Err(format!(
+                    "{e}. Run `dbt parse` or `dbt compile` (and `dbt docs generate` for column types) first."
+                )),
+                Vec::new(),
+            );
+        }
+    };
+    // Read apart from `loaded`'s own read: if the artifacts change in between, the next
+    // reload (which a change triggers) brings both back in step.
+    let (entities, facts, mut diagnostics) = erd_input(&artifacts, Some(loaded));
+    let mut erd = build(
+        &entities,
+        &facts,
+        BuildOptions::default().with_inference(true),
+    );
+    erd.diagnostics.append(&mut diagnostics);
+    erd.diagnostics.sort();
+    let suggestions = relationship_tests(&erd, artifacts.manifest.dbt_version.as_deref());
+    ods_web::erd::ErdInput::new(Ok(erd), suggestions)
+}
+
+/// A dbt `relationships` test for each single-column relationship that is only joined
+/// in SQL or inferred, to paste under the referencing column, in the syntax of the
+/// project's dbt version.
+fn relationship_tests(erd: &Erd, dbt_version: Option<&str>) -> Vec<ods_web::erd::Suggestion> {
+    let mut out = Vec::new();
+    for r in erd
+        .relationships
+        .iter()
+        .filter(|r| matches!(r.basis, Basis::Joined | Basis::Inferred))
+    {
+        // A join between two non-keys says nothing about which side references which:
+        // a test in either direction would be a guess.
+        if r.basis == Basis::Joined && r.cardinality == ods_erd::Cardinality::Unknown {
+            continue;
+        }
+        let (Some(from), Some(to)) = (erd.entity(&r.from), erd.entity(&r.to)) else {
+            continue;
+        };
+        // dbt's `relationships` test takes one column; a composite reference has none.
+        let ([column], [field]) = (r.from_columns.as_slice(), r.to_columns.as_slice()) else {
+            continue;
+        };
+        let target = match (to.kind, to.name.split_once('.')) {
+            (EntityKind::Source, Some((source, table))) => format!("source('{source}', '{table}')"),
+            _ => format!("ref('{}')", to.name),
+        };
+        let add_under = match (from.kind, from.name.split_once('.')) {
+            (EntityKind::Source, Some((source, table))) => {
+                format!("under the {source} source › tables › {table} › columns")
+            }
+            _ => format!("under {} › columns", from.name),
+        };
+        out.push(ods_web::erd::Suggestion::new(
+            r.from.clone(),
+            r.from_columns.clone(),
+            r.to.clone(),
+            r.to_columns.clone(),
+            add_under,
+            relationships_test(column, &target, field, dbt_version),
+        ));
+    }
+    out
+}
+
+/// The YAML of a `relationships` test on `column`, referencing `field` of `target`
+/// (`ref('…')` or `source('…', '…')`), as the dbt version expects it: `data_tests:`
+/// from 1.8 (`tests:` before), and the test's arguments under `arguments:` from 1.10.
+/// An unknown version gets the newest syntax.
+pub(super) fn relationships_test(
+    column: &str,
+    target: &str,
+    field: &str,
+    dbt_version: Option<&str>,
+) -> String {
+    let version = dbt_version.and_then(|v| {
+        let mut parts = v.trim_start_matches('v').split('.');
+        Some((
+            parts.next()?.parse::<u32>().ok()?,
+            parts.next()?.parse::<u32>().ok()?,
+        ))
+    });
+    let key = match version {
+        Some(v) if v < (1, 8) => "tests",
+        _ => "data_tests",
+    };
+    match version {
+        Some(v) if v < (1, 10) => format!(
+            "- name: {column}\n  {key}:\n    - relationships:\n        to: {target}\n        field: {field}"
+        ),
+        _ => format!(
+            "- name: {column}\n  {key}:\n    - relationships:\n        arguments:\n          to: {target}\n          field: {field}"
+        ),
+    }
+}
+
 /// A node's display name: `model.pkg.orders` → `orders`, `source.pkg.raw.orders` →
 /// `raw.orders`.
 fn display_name(node: &ManifestNode) -> String {
@@ -727,5 +831,26 @@ impl Present for ErdReport {
             });
         }
         ViewNode::Group(blocks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relationships_test;
+
+    #[test]
+    fn the_relationships_test_follows_the_dbt_version() {
+        let newest = relationships_test("customer_id", "ref('customers')", "id", Some("1.10.2"));
+        assert!(newest.contains("data_tests:") && newest.contains("arguments:"));
+        assert_eq!(
+            relationships_test("customer_id", "ref('customers')", "id", None),
+            newest,
+            "an unknown version gets the newest syntax"
+        );
+        let older = relationships_test("customer_id", "ref('customers')", "id", Some("1.9.4"));
+        assert!(older.contains("data_tests:") && !older.contains("arguments:"));
+        assert!(older.contains("        to: ref('customers')"));
+        let oldest = relationships_test("customer_id", "ref('customers')", "id", Some("1.7.0"));
+        assert!(oldest.contains("  tests:") && !oldest.contains("data_tests"));
     }
 }
