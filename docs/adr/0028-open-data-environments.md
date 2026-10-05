@@ -13,8 +13,9 @@
 ## Context
 SQLMesh's best-known feature is its virtual environments:
 
-1. Each version of a model is written once to a **physical table named after its
-   fingerprint**, and never overwritten.
+1. Each version of a model gets its own **physical table, named after a fingerprint**
+   of the model's code and its parents' versions. Later runs refresh that table's data;
+   a code change makes a new table.
 2. An **environment** (`prod`, `dev_alice`, `pr_123`) is a schema of **views**
    pointing at the physical tables for the versions it uses.
 3. A model that hasn't changed is **shared** between environments, so a dev
@@ -34,8 +35,9 @@ layer that any build tool can use**, rather than a feature of one tool?
 
 ODS already has much of the machinery:
 
-- **Fingerprints** (ADR-0013): a reproducible content identity for every node, which is
-  what you need to name physical tables.
+- **Fingerprints** (ADR-0013): a reproducible identity for every node's code, the
+  basis for naming physical tables. On their own they aren't enough: see *Version key*
+  below.
 - **Reuse** is the State module's job: the planner already decides what can be reused
   and why.
 - **Pointing dbt at chosen relations** (ADR-0020): ODS already writes a dbt state
@@ -58,8 +60,10 @@ ODS already has much of the machinery:
   a retention period, and a dry run by default.
 - **Rule 4.** `ods env diff` and `ods env promote` explain every pointer change: node,
   version, fingerprint, and why it changed.
-- **Rule 5.** Promotion is all or nothing from ODS's point of view. A failed promotion
-  leaves the target environment's last good pointers recorded and restorable.
+- **Rule 5.** A promotion that fails partway must not leave readers on a mix of old and
+  new versions without saying so, and must not record a pointer set that isn't what
+  readers see. Promotion is atomic only where the warehouse offers it; everywhere else
+  it is refused unless explicitly allowed (see *Promotion* below).
 - **Rule 9.** Grants and credentials are referenced, never copied into environment
   records.
 - **Adoption.** Teams already have prod tables with real names and real readers. ODS
@@ -100,11 +104,21 @@ strategy among several and the fallback of building in place always available.**
 contract is fixed by this ADR.
 
 ### Concepts
-- **Node version.** A node plus its fingerprint (ADR-0013). Same fingerprint, same
-  version, same physical table.
+- **Version key.** A node's code fingerprint (ADR-0013) combined with the version keys
+  of its parents, so that a parent's code change gives every node downstream a new
+  version even when their own code didn't change. Two details:
+  - The code fingerprint must be computed with parents identified by version key, not
+    by the relation names the compiled SQL happens to contain. Otherwise the same model
+    would get a different fingerprint in every environment, because its `ref()`s
+    render to different names there.
+  - The version key covers **code only, not data**. Upstream data is evidence, as
+    today (ADR-0013 change evidence, ADR-0022). Putting data in the key would create a
+    new table on every run, and promotion would lose its point.
 - **Physical table.** Where a node version's data lives, in a schema ODS manages, named
-  from the node and a short fingerprint digest (`ods_physical.orders__3f9a1c`). Written
-  once, never overwritten.
+  from the node and a short version-key digest (`ods_physical.orders__3f9a1c`). One
+  table per version; **its data is refreshed in place** by later builds of that
+  version (see *Data refreshes*). It is "write-once" only in the sense that a new code
+  version never reuses an old version's table.
 - **Environment.** A named set of pointers, one per node, from the name readers use
   (`analytics.orders` in prod, `analytics__dev_alice.orders` in dev) to a physical
   table. It is also the state scope of ADR-0017: the same name, now naming something
@@ -139,6 +153,56 @@ ods env rollback prod                  # restore the previous pointer set
 ods env gc --dry-run                   # physical tables no environment references
 ods env eject prod                     # make prod's tables real again, then stop managing it
 ```
+
+### Data refreshes: who may write a shared table
+Same code with new upstream data is the same version, so the build writes to the
+same physical table. Several environments may point at that table, so writes need an
+owner:
+- Each physical table has exactly one **owning environment**, recorded with it: the
+  environment that first built it, or the one it was promoted into. Promotion
+  transfers ownership to the target.
+- Only the owner's runs refresh the table, with ADR-0014's semantics (a failed build
+  leaves the last good data, and only what succeeded is recorded).
+- Another environment sharing the table reads it as it is, like `--defer` today. If
+  its plan decides the node must build (upstream data it has, the owner hasn't seen),
+  it builds into **its own** physical table for that version (named with the
+  environment too, e.g. `orders__3f9a1c__dev_alice`) and repoints only its own name
+  there. It never writes a table it doesn't own (rule 3).
+- When a refresh changes a shared table, the change is visible in every environment
+  pointing at it. That is the intent (dev reads prod's latest data). `ods env diff`
+  shows which environments share each table.
+- A clone is a copy as of when it was made, not a live pointer. With the clone
+  strategy, each refresh re-clones the names that point at the refreshed table, as part
+  of the same run.
+
+### Promotion
+A promotion changes many pointers. Most warehouses can't change many objects in one
+transaction, so atomicity is a capability, not an assumption:
+- **`atomic_multi_pointer`** (for example, a catalog branch merged in one commit, or a
+  catalog that can swap several objects in one transaction): the provider applies the
+  whole pointer set at once. Readers see the old set or the new set. ODS records the
+  new set only after the commit succeeds.
+- **Without it, promotion is refused by default** (rule 3), naming the missing
+  capability. It runs only when allowed explicitly (`--allow-non-atomic`, or a
+  per-environment setting that `ods env promote` prints every time), and then follows
+  a protocol that fails closed:
+  1. **Stage:** prepare every new pointer under a staging name (a clone, view or table
+     next to the target name). Readers see nothing yet. Any failure here aborts with
+     prod untouched.
+  2. **Journal:** write the planned switch (old and new pointer for each node) to a
+     promotion journal before touching prod.
+  3. **Switch:** repoint names one by one, parents before children, recording each in
+     the journal.
+  4. **On failure:** switch the already-switched names back, from the journal, and
+     report the window in which readers saw a mix of versions, naming the nodes. If
+     switching back fails too, `ods env promote` exits with an error, the journal says
+     exactly which names point where, and `ods env rollback --resume` finishes the
+     job. ODS records what readers actually see, never the intended set.
+  5. **On success:** record the new pointer set, then delete the journal.
+- Non-atomic promotion isn't safer than today's process, but it isn't worse either: a
+  dbt build in prod already updates tables one at a time, over the length of the whole
+  build. Promotion shortens that window to the time it takes to switch pointers, and
+  the protocol says exactly which nodes were inconsistent and when.
 
 ### What is opted out, and built in place as today
 Default rule: if a node depends on owning a fixed table, it builds in place in each
@@ -184,7 +248,7 @@ graph LR
     prod["prod<br/>analytics.orders"]
     dev["dev_alice<br/>analytics__dev_alice.orders"]
   end
-  subgraph phys["ods_physical (write-once)"]
+  subgraph phys["ods_physical (one table per version)"]
     v1["orders__3f9a1c"]
     v2["orders__b72e04"]
   end
@@ -199,10 +263,12 @@ Layering: environment planning (versions, diff, promotion, gc) is neutral and li
 write redirection in build-tool providers, all through `ods-sdk` contracts (ADR-0001).
 
 ### Phasing
-1. **dbt on Databricks, table models only.** Physical tables named by fingerprint,
+1. **dbt on Databricks, table models only.** Physical tables named by version key,
    pointers by shallow clone or view, `create`, `diff`, `promote`, `rollback`,
    `adopt`, `eject`. Incrementals, snapshots and streaming are opted out. Also
-   replaces #114's cloning.
+   replaces #114's cloning. Unless the spike finds a Databricks transaction that covers
+   every object a promotion touches, phase 1 promotion uses the staged, journaled
+   protocol and needs the explicit opt-in.
 2. **Cleanup** with retention and reference checks (`gc`).
 3. **Forward-only changes and versioned incrementals.**
 4. **More pointer strategies** (catalog branches, swaps) and **more tools**, including
@@ -238,8 +304,11 @@ write redirection in build-tool providers, all through `ods-sdk` contracts (ADR-
 - Follow-up issues (not to open until phase 1 is scheduled):
   - Spike: build dbt nodes into ODS-chosen schemas and aliases, and point `ref()`
     there, on the demo project and on a project with a custom `generate_schema_name`.
-  - Physical table naming, and the environment record as a persisted format with a
+  - Version keys (code fingerprints with parents by version key, independent of
+    rendered relation names), physical table naming, table ownership, and the
+    environment record and promotion journal as persisted formats with a
     `schema_version` (an ADR of its own).
+  - Which warehouses can offer `atomic_multi_pointer`, and how.
   - Pointer strategy capabilities in the Databricks provider (#30).
   - `ods env` commands; `adopt` and `eject` first.
   - Reframe #29, #114, #120 and #195 against this ADR.

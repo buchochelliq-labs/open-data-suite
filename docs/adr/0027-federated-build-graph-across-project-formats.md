@@ -245,7 +245,9 @@ builds nothing.
    execution falls back to Option B. Spike this before phase 3.
 3. **Promotion across tools isn't atomic.** SQLMesh promotes by repointing views, while
    dbt rebuilds. Prod can briefly mix new SQLMesh data with old dbt models.
-   ADR-0028 is the proposed answer: the same pointer-based promotion for both.
+   ADR-0028 is the proposed answer: the same pointer-based promotion for both,
+   atomic where the warehouse can do it and otherwise staged, journaled and refused by
+   default.
 4. **The boundary loses SQLMesh's change categories.** Unless ODS can read whether a
    SQLMesh change was breaking, the conservative rule rebuilds everything downstream
    on the dbt side.
