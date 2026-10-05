@@ -4,7 +4,7 @@ expression: redact(&why_it_failed(&plain))
 ---
 Why it failed
 
-failed test: not_null on customers.customer_id
+test not_null on customers.customer_id failed
 what: The not_null test on customer_id of customers failed: 5 rows don't pass
 kind: test failure · test failed
 confidence: known pattern + evidence

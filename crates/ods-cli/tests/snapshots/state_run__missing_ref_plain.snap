@@ -8,7 +8,7 @@ outcome: failed before any node ran: nothing was built or recorded
 
 Why it failed
 
-failed: project
+project failed
 what: The model refers to a node the project doesn't have
 kind: dependency or ref · missing ref
 confidence: known pattern

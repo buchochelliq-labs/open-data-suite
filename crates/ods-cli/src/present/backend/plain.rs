@@ -55,6 +55,10 @@ fn write_node(out: &mut String, node: &ViewNode) {
             };
             push_line(out, &format!("{prefix}: {}", text(message)));
         }
+        ViewNode::Panel { title, body, .. } => {
+            push_line(out, &text(title));
+            write_node(out, body);
+        }
         ViewNode::Group(children) => {
             for (i, child) in children.iter().enumerate() {
                 if i > 0 {
@@ -124,6 +128,19 @@ mod tests {
             footer: Some(vec![vec![Span::plain("2 rows")]]),
         };
         assert_eq!(render(&node), "a\n1\n2\n");
+    }
+
+    #[test]
+    fn a_panel_is_its_title_then_its_body() {
+        let node = ViewNode::Panel {
+            title: vec![Span::toned("orders", Tone::Code), Span::plain(" failed")],
+            level: Level::Error,
+            body: Box::new(ViewNode::KeyValue(vec![(
+                "what".into(),
+                vec![Span::plain("x")],
+            )])),
+        };
+        assert_eq!(render(&node), "orders failed\nwhat: x\n");
     }
 
     #[test]

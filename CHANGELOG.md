@@ -79,6 +79,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   is reused, each in plan order, as separate sections of the table, with a footer of
   totals in the terminal. Run results tables end with a totals row too. Plain output
   keeps its table shape; only the row order of plans changes (#377)
+- Each failure under **Why it failed** is framed in the terminal, titled with what failed
+  (`customer_segments failed`, `test not_null on customers.customer_id failed`). In plain
+  output that title replaces the `failed:`/`failed test:` line (#PR)
 
 ### Fixed
 - A carriage return in a value shown in the terminal (a node name, an engine's message or

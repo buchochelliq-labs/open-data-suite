@@ -132,6 +132,8 @@ graph LR
   A `Table` may split its rows into sections and carry a footer row of totals; both are
   decoration that repeats nothing new, so the plain backend leaves them out and its
   tables stay data rows only.
+  A `Panel { title, level, body }` frames any view under a title (one failure and why);
+  the plain backend prints the title as a line and the body as it would anyway.
   Views carry **semantic styles** (`Emphasis`, `Muted`, `Added`,
   `Removed`, `Warning`, `Error`, `Success`, `Code`) and never raw colours or markup.
   The mapping from result to view is a pure function and is unit-tested.
