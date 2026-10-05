@@ -194,6 +194,17 @@ pub enum ViewNode {
         /// The message.
         message: Line,
     },
+    /// A block set apart under a title, e.g. one failure and why it happened. Its level
+    /// colours the frame. The plain backend prints the title as a line of its own and
+    /// the body as it would anyway.
+    Panel {
+        /// What the panel is about.
+        title: Line,
+        /// How severe its content is.
+        level: Level,
+        /// What it holds.
+        body: Box<ViewNode>,
+    },
     /// Blocks rendered in order, separated by a blank line.
     Group(Vec<ViewNode>),
 }

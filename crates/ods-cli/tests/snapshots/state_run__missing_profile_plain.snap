@@ -8,7 +8,7 @@ outcome: failed before any node ran: nothing was built or recorded
 
 Why it failed
 
-failed: project
+project failed
 what: The profile or target isn't defined
 kind: configuration or profile · profile or target not found
 confidence: known pattern + evidence

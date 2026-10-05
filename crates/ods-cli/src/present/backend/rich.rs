@@ -7,11 +7,15 @@
 
 use rich::cells::cell_len;
 use rich::color::ColorSystem;
+use rich::measure::Measurement;
+use rich::panel::Panel;
+use rich::protocol::Renderable;
+use rich::segment::Segment;
 use rich::table::Table;
 use rich::text::Text;
 use rich::theme::Theme;
 use rich::tree::Tree;
-use rich::{Console, Justify};
+use rich::{Console, ConsoleOptions, HorizontalAlign, Justify};
 
 use super::super::view::{Level, Span, Tone, TreeItem, ViewNode, sanitize};
 use crate::output::{ColorChoice, term_is_dumb};
@@ -96,21 +100,103 @@ impl RichRenderer {
     }
 }
 
+/// Prints `node`. Groups and key-value lines print one renderable at a time, as rs-rich
+/// prints a top-level `Text` at its own width; everything else prints as one renderable.
 fn render_node(console: &Console, node: &ViewNode) {
     match node {
-        ViewNode::Heading(title) => console.print(&Text::styled(sanitize(title), "bold underline")),
-        ViewNode::Paragraph(line) => console.print(&text(line)),
-        ViewNode::KeyValue(pairs) => {
-            let keys: Vec<String> = pairs.iter().map(|(key, _)| sanitize(key)).collect();
-            let key_width = keys.iter().map(|key| cell_len(key)).max().unwrap_or(0);
-            for (key, (_, value)) in keys.iter().zip(pairs) {
-                let mut line = Text::new("");
-                line.append(key, Some(theme_key(Tone::Emphasis).into()));
-                line.append(&" ".repeat(key_width - cell_len(key) + 2), None);
-                append_spans(&mut line, value);
+        ViewNode::Group(children) => {
+            for (i, child) in children.iter().enumerate() {
+                if i > 0 {
+                    console.print(&Text::new(""));
+                }
+                render_node(console, child);
+            }
+        }
+        ViewNode::KeyValue(_) => {
+            for line in key_value_lines(node) {
                 console.print(&line);
             }
         }
+        _ => console.print(&Nested(renderable(node))),
+    }
+}
+
+/// A shared renderable as a renderable of its own, for `Panel`'s boxed child.
+struct Nested(Shared);
+
+impl Renderable for Nested {
+    fn rich_render(&self, console: &Console, options: &ConsoleOptions) -> Vec<Segment> {
+        self.0.rich_render(console, options)
+    }
+
+    fn measure(&self, console: &Console, options: &ConsoleOptions) -> Measurement {
+        self.0.measure(console, options)
+    }
+
+    fn fit_to_measurement(&self) -> bool {
+        self.0.fit_to_measurement()
+    }
+
+    fn printed_text(&self) -> Option<Text> {
+        self.0.printed_text()
+    }
+}
+
+/// Aligned `key  value` lines.
+fn key_value_lines(node: &ViewNode) -> Vec<Text> {
+    let ViewNode::KeyValue(pairs) = node else {
+        return Vec::new();
+    };
+    let keys: Vec<String> = pairs.iter().map(|(key, _)| sanitize(key)).collect();
+    let key_width = keys.iter().map(|key| cell_len(key)).max().unwrap_or(0);
+    keys.iter()
+        .zip(pairs)
+        .map(|(key, (_, value))| {
+            let mut line = Text::new("");
+            line.append(key, Some(theme_key(Tone::Emphasis).into()));
+            line.append(&" ".repeat(key_width - cell_len(key) + 2), None);
+            append_spans(&mut line, value);
+            line
+        })
+        .collect()
+}
+
+/// A view as one renderable, so views nest (a panel holds any view).
+type Shared = Box<dyn Renderable>;
+
+/// Renderables one after another, each on its own lines (as rs-rich's `Renderables`,
+/// which needs `Send + Sync` children that `Panel` isn't).
+struct Stack(Vec<Shared>);
+
+impl Renderable for Stack {
+    fn rich_render(&self, console: &Console, options: &ConsoleOptions) -> Vec<Segment> {
+        let options = options.reset_height();
+        let mut segments = Vec::new();
+        for part in &self.0 {
+            let rendered = console.render(part.as_ref(), Some(&options));
+            if !segments.is_empty() {
+                segments.push(Segment::line());
+            }
+            segments.extend(rendered);
+        }
+        segments
+    }
+}
+
+fn stacked(parts: Vec<Shared>) -> Shared {
+    Box::new(Stack(parts))
+}
+
+fn renderable(node: &ViewNode) -> Shared {
+    match node {
+        ViewNode::Heading(title) => Box::new(Text::styled(sanitize(title), "bold underline")),
+        ViewNode::Paragraph(line) => Box::new(text(line)),
+        ViewNode::KeyValue(_) => stacked(
+            key_value_lines(node)
+                .into_iter()
+                .map(|line| Box::new(line) as Shared)
+                .collect(),
+        ),
         ViewNode::Table {
             title,
             columns,
@@ -142,33 +228,51 @@ fn render_node(console: &Console, node: &ViewNode) {
                 }
                 table.add_row_text(row.iter().map(|cell| text(cell)).collect());
             }
-            console.print(&table);
+            Box::new(table)
         }
         ViewNode::Tree(root) => {
             let mut tree = Tree::new(text(&root.label));
             add_children(&mut tree, &root.children);
-            console.print(&tree);
+            Box::new(tree)
         }
         ViewNode::Notice { level, message } => {
-            let (label, tone) = match level {
-                Level::Info => ("info:", Tone::Muted),
-                Level::Warning => ("warning:", Tone::Warning),
-                Level::Error => ("error:", Tone::Error),
-            };
+            let (label, tone) = level_label(*level);
             let mut line = Text::new("");
             line.append(label, Some(theme_key(tone).into()));
             line.append(" ", None);
             append_spans(&mut line, message);
-            console.print(&line);
+            Box::new(line)
+        }
+        ViewNode::Panel { title, level, body } => {
+            let (_, tone) = level_label(*level);
+            // The title is `Text`, never markup, like every other piece of data.
+            Box::new(
+                Panel::new(Box::new(Nested(renderable(body))))
+                    .title_as_text(text(title))
+                    .title_align(HorizontalAlign::Left)
+                    .border_style(theme_key(tone))
+                    .padding((0, 1, 0, 1)),
+            )
         }
         ViewNode::Group(children) => {
+            let mut parts: Vec<Shared> = Vec::new();
             for (i, child) in children.iter().enumerate() {
                 if i > 0 {
-                    console.print(&Text::new(""));
+                    parts.push(Box::new(Text::new("")));
                 }
-                render_node(console, child);
+                parts.push(renderable(child));
             }
+            stacked(parts)
         }
+    }
+}
+
+/// How a level is labelled and coloured.
+fn level_label(level: Level) -> (&'static str, Tone) {
+    match level {
+        Level::Info => ("info:", Tone::Muted),
+        Level::Warning => ("warning:", Tone::Warning),
+        Level::Error => ("error:", Tone::Error),
     }
 }
 
@@ -310,6 +414,48 @@ mod tests {
         let last_row = lines.iter().position(|l| l.contains("reuse")).unwrap();
         assert!(footer > last_row, "{totalled}");
         assert!(lines[footer].contains("1 build"), "{totalled}");
+    }
+
+    #[test]
+    fn a_panel_frames_any_view_under_a_literal_title() {
+        let renderer = RichRenderer::with_environment(ColorChoice::Never, Some(50), false);
+        let out = renderer.render(&ViewNode::Panel {
+            title: vec![
+                Span::toned("[bold]orders", Tone::Code),
+                Span::plain(" failed"),
+            ],
+            level: Level::Error,
+            body: Box::new(ViewNode::Group(vec![
+                ViewNode::KeyValue(vec![("what".into(), vec![Span::plain("it broke")])]),
+                ViewNode::Tree(TreeItem {
+                    label: vec![Span::plain("why")],
+                    children: vec![TreeItem::leaf(vec![Span::plain("evidence")])],
+                }),
+            ])),
+        });
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(
+            lines[0].starts_with('╭') && lines[0].contains("[bold]orders failed"),
+            "{out}"
+        );
+        assert!(lines.last().unwrap().starts_with('╰'), "{out}");
+        for inner in ["what  it broke", "why", "evidence"] {
+            let line = lines
+                .iter()
+                .find(|l| l.contains(inner))
+                .unwrap_or_else(|| panic!("{inner}: {out}"));
+            assert!(
+                line.starts_with('│') && line.trim_end().ends_with('│'),
+                "{out}"
+            );
+        }
+        // The group's blank line between the blocks stays inside the frame.
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.trim_matches(|c| c == '│' || c == ' ').is_empty()),
+            "{out}"
+        );
     }
 
     #[test]

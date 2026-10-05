@@ -30,7 +30,7 @@ segment_summary	skipped	—	—	Thread-1 (worker)
 
 Why it failed
 
-failed: customers
+customers failed
 what: A value's type doesn't fit where it is used
 kind: database error · type mismatch
 confidence: known pattern

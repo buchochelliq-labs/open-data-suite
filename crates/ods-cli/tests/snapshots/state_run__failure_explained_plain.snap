@@ -4,7 +4,7 @@ expression: redact(&section)
 ---
 Why it failed
 
-failed: customers
+customers failed
 what: A column this model reads doesn't exist
 kind: database error · missing column
 confidence: known pattern

@@ -4046,7 +4046,7 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
     let history = project.ods_plain(&["state", "history", "--run", &run_id]);
     assert!(!leaks(&history), "{history}");
     assert!(
-        history.contains("failed test: accepted_values on orders.status"),
+        history.contains("test accepted_values on orders.status failed"),
         "{history}"
     );
 
@@ -4077,7 +4077,7 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
     let plain = project.ods_plain(&["state", "explain-failure", &handle, "--run", &run_id]);
     assert!(!leaks(&plain), "{plain}");
     assert!(
-        plain.contains("failed test: accepted_values on orders.status"),
+        plain.contains("test accepted_values on orders.status failed"),
         "{plain}"
     );
     // The model the test is on: its failed test, explained.
@@ -4102,7 +4102,7 @@ fn a_failed_tests_arguments_never_reach_its_explanation() {
         assert_eq!(code, 1, "{plain}");
         let why = why_it_failed(&plain);
         assert!(
-            why.contains("failed test: accepted_values on orders.status"),
+            why.contains("test accepted_values on orders.status failed"),
             "{why}"
         );
         assert!(!leaks(&why), "{command}: {why}");
