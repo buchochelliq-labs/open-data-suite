@@ -30,10 +30,10 @@ journal .ods/state.db.runs/<run-id>.jsonl
 │ customer_segments │ built │ <took> │ — │ Thread-1 (worker) │ │
 │ customers_snapshot_view │ built │ <took> │ — │ Thread-1 (worker) │ │
 │ segment_summary │ built │ <took> │ — │ Thread-1 (worker) │ │
+├─┼─┼─┼─┼─┼─┤
+│ 8 nodes │ 8 built │ <took> │ ≥ 298 │ │ │
 └─┴─┴─┴─┴─┴─┘
 ❯
-
-
 
 
 

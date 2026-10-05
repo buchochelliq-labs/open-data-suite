@@ -177,6 +177,13 @@ pub enum ViewNode {
         columns: Vec<String>,
         /// Rows of cells.
         rows: Vec<Vec<Line>>,
+        /// Indices into `rows` where a new section starts (e.g. what is built, then
+        /// what is reused), shown as a rule between them. Order is the caller's.
+        breaks: Vec<usize>,
+        /// One cell per column summing the rows up (e.g. totals). It repeats what the
+        /// view says elsewhere, so the plain backend, whose tables are data rows only,
+        /// leaves it out.
+        footer: Option<Vec<Line>>,
     },
     /// A hierarchy, e.g. a reason chain or dependency path.
     Tree(TreeItem),

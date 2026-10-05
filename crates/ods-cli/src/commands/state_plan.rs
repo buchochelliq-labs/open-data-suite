@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_config::Loaded;
 use ods_core::state::{
-    DataVersion, Exactness, ExecutionPlan, PlanAction, SnapshotId, StateSnapshot, Timestamp,
+    DataVersion, Exactness, ExecutionPlan, PlanAction, PlanEntry, SnapshotId, StateSnapshot,
+    Timestamp,
 };
 use ods_core::{Capability, CapabilitySet};
 use ods_provider_dbt::fingerprint::{checks_digest, fingerprint};
@@ -25,7 +26,7 @@ use serde::Serialize;
 
 use super::state_settings::{DEFAULT_STORE, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
-use crate::present::{Level, Present, Span, Tone, ViewNode};
+use crate::present::{Level, Line, Present, Span, Tone, ViewNode};
 
 /// Arguments every State command takes.
 pub(super) fn common(command: Command) -> Command {
@@ -642,6 +643,61 @@ impl PlanReport {
     }
 }
 
+/// A plan's nodes as a table, `action` naming each one's action: in sections by action
+/// (each in plan order, what is built first), with the count of each in the footer.
+pub(super) fn plan_table(entries: &[PlanEntry], action: impl Fn(&PlanEntry) -> Span) -> ViewNode {
+    let mut sections: Vec<(String, Vec<Vec<Line>>)> = Vec::new();
+    for e in entries {
+        let label = action(e);
+        let row = vec![
+            vec![Span::toned(e.name.as_str(), Tone::Code)],
+            vec![label.clone()],
+            vec![Span::plain(
+                e.reasons
+                    .iter()
+                    .map(|r| r.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )],
+        ];
+        match sections.iter_mut().find(|(text, _)| *text == label.text) {
+            Some((_, rows)) => rows.push(row),
+            None => sections.push((label.text, vec![row])),
+        }
+    }
+    // What is built comes first, whatever the plan's first node does.
+    sections.sort_by_key(|(text, _)| text != "build");
+    let counts = sections
+        .iter()
+        .map(|(text, rows)| format!("{} {text}", rows.len()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let mut breaks = Vec::new();
+    let mut rows = Vec::new();
+    for (_, section) in sections {
+        breaks.push(rows.len());
+        rows.extend(section);
+    }
+    ViewNode::Table {
+        title: None,
+        columns: vec!["node".into(), "action".into(), "why".into()],
+        rows,
+        breaks,
+        footer: Some(vec![
+            vec![Span::toned(
+                format!(
+                    "{} {}",
+                    entries.len(),
+                    if entries.len() == 1 { "node" } else { "nodes" }
+                ),
+                Tone::Emphasis,
+            )],
+            vec![Span::plain(counts)],
+            Vec::new(),
+        ]),
+    }
+}
+
 impl Present for PlanReport {
     const COMMAND: &'static str = "state.plan";
 
@@ -675,31 +731,10 @@ impl Present for PlanReport {
                     ))],
                 ),
             ]),
-            ViewNode::Table {
-                title: None,
-                columns: vec!["node".into(), "action".into(), "why".into()],
-                rows: self
-                    .plan
-                    .entries
-                    .iter()
-                    .map(|e| {
-                        vec![
-                            vec![Span::toned(e.name.as_str(), Tone::Code)],
-                            vec![match e.action {
-                                PlanAction::Build => Span::toned("build", Tone::Warning),
-                                _ => Span::toned("reuse", Tone::Success),
-                            }],
-                            vec![Span::plain(
-                                e.reasons
-                                    .iter()
-                                    .map(|r| r.message.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join("; "),
-                            )],
-                        ]
-                    })
-                    .collect(),
-            },
+            plan_table(&self.plan.entries, |e| match e.action {
+                PlanAction::Build => Span::toned("build", Tone::Warning),
+                _ => Span::toned("reuse", Tone::Success),
+            }),
         ];
         if let Some(command) = &self.dbt_command {
             blocks.push(ViewNode::KeyValue(vec![(
@@ -938,6 +973,8 @@ impl Present for RecordReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         if self.has_sources && !self.sources_recorded {
@@ -1043,6 +1080,8 @@ impl Present for HistoryReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             },
         ])
     }
@@ -1290,5 +1329,59 @@ mod tests {
             display_name("test.shop.not_null_orders_id.1a2b3c4d5e"),
             "not_null_orders_id"
         );
+    }
+}
+
+#[cfg(test)]
+mod plan_table_tests {
+    use ods_core::state::{PlanAction, Reason, ReasonCode};
+
+    use super::*;
+
+    fn entry(name: &str, action: PlanAction) -> PlanEntry {
+        PlanEntry::new(
+            format!("model.p.{name}"),
+            name,
+            "model",
+            action,
+            vec![Reason::new(ReasonCode::Unchanged, "why")],
+            ods_core::FreshnessPolicy::conservative(),
+            0,
+        )
+    }
+
+    #[test]
+    fn builds_come_first_in_their_own_section_with_counts_below() {
+        let entries = [
+            entry("a", PlanAction::Reuse),
+            entry("b", PlanAction::Build),
+            entry("c", PlanAction::Reuse),
+            entry("d", PlanAction::Build),
+        ];
+        let ViewNode::Table {
+            rows,
+            breaks,
+            footer,
+            ..
+        } = plan_table(&entries, |e| match e.action {
+            PlanAction::Build => Span::toned("build", Tone::Warning),
+            _ => Span::toned("reuse", Tone::Success),
+        })
+        else {
+            panic!("a table");
+        };
+        let names: Vec<String> = rows
+            .iter()
+            .map(|r| crate::present::view::plain_text(&r[0]))
+            .collect();
+        // Each section keeps the plan's order.
+        assert_eq!(names, ["b", "d", "a", "c"]);
+        assert_eq!(breaks, [0, 2]);
+        let footer: Vec<String> = footer
+            .unwrap()
+            .iter()
+            .map(|c| crate::present::view::plain_text(c))
+            .collect();
+        assert_eq!(footer, ["4 nodes", "2 build · 2 reuse", ""]);
     }
 }

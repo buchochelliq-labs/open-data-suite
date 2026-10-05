@@ -129,6 +129,9 @@ graph LR
 - **View tree.** `ods-cli` defines a small `ViewNode` enum in `ods-cli::present`:
   `Heading`, `Paragraph`, `KeyValue`, `Table`, `Tree`, `Notice { level }` and `Group`.
   Further nodes, such as `List` and `Diff`, are added when a command first needs them.
+  A `Table` may split its rows into sections and carry a footer row of totals; both are
+  decoration that repeats nothing new, so the plain backend leaves them out and its
+  tables stay data rows only.
   Views carry **semantic styles** (`Emphasis`, `Muted`, `Added`,
   `Removed`, `Warning`, `Error`, `Success`, `Code`) and never raw colours or markup.
   The mapping from result to view is a pure function and is unit-tested.

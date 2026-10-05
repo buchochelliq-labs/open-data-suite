@@ -23,10 +23,12 @@ fn write_node(out: &mut String, node: &ViewNode) {
                 push_line(out, &format!("{}: {}", one_line(key), text(value)));
             }
         }
+        // Sections and the footer are decoration: the rows stay one table for tools.
         ViewNode::Table {
             title,
             columns,
             rows,
+            ..
         } => {
             if let Some(title) = title {
                 push_line(out, &one_line(title));
@@ -106,8 +108,22 @@ mod tests {
                 vec![Span::plain("x\ty")],
                 vec![Span::toned("line1\r\nline2", Tone::Code)],
             ]],
+            breaks: Vec::new(),
+            footer: None,
         };
         assert_eq!(render(&node), "a\tb\nx y\tline1 line2\n");
+    }
+
+    #[test]
+    fn sections_and_footers_leave_the_rows_one_table() {
+        let node = ViewNode::Table {
+            title: None,
+            columns: vec!["a".into()],
+            rows: vec![vec![vec![Span::plain("1")]], vec![vec![Span::plain("2")]]],
+            breaks: vec![0, 1],
+            footer: Some(vec![vec![Span::plain("2 rows")]]),
+        };
+        assert_eq!(render(&node), "a\n1\n2\n");
     }
 
     #[test]

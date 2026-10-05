@@ -74,6 +74,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   community repository, where it is listed once Chocolatey approves it
   ([Install](docs/install.md)) (#363, #212).
 
+### Changed
+- `ods state plan` and `ods state build --dry-run` list what is built first, then what
+  is reused, each in plan order, as separate sections of the table, with a footer of
+  totals in the terminal. Run results tables end with a totals row too. Plain output
+  keeps its table shape; only the row order of plans changes (#PR)
+
 ### Fixed
 - A carriage return in a value shown in the terminal (a node name, an engine's message or
   output line) is now shown as a line break: on its own it moved the cursor back, so a

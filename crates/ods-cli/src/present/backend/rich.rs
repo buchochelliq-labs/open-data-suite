@@ -115,6 +115,8 @@ fn render_node(console: &Console, node: &ViewNode) {
             title,
             columns,
             rows,
+            breaks,
+            footer,
         } => {
             // The title, headers, cells and tree labels are all passed as `Text`, never
             // as strings: rs-rich parses a plain string there (and `Table::title`) as
@@ -124,10 +126,20 @@ fn render_node(console: &Console, node: &ViewNode) {
             if let Some(title) = title {
                 table = table.title_text(Text::styled(sanitize(title), theme_key(Tone::Emphasis)));
             }
-            for column in columns {
+            for (i, column) in columns.iter().enumerate() {
                 table.add_column_text(Text::new(sanitize(column)), Justify::Default);
+                if let Some(cell) = footer.as_ref().and_then(|f| f.get(i)) {
+                    table.column_footer(text(cell));
+                }
             }
-            for row in rows {
+            if footer.is_some() {
+                table = table.show_footer(true);
+            }
+            for (i, row) in rows.iter().enumerate() {
+                // `add_section` ends the section at the last row added.
+                if i > 0 && breaks.contains(&i) {
+                    table.add_section();
+                }
                 table.add_row_text(row.iter().map(|cell| text(cell)).collect());
             }
             console.print(&table);
@@ -220,6 +232,8 @@ mod tests {
             title: Some("[t]".into()),
             columns: vec!["[h]".into()],
             rows: vec![vec![vec![Span::toned("[bold]x[/]", Tone::Code)]]],
+            breaks: Vec::new(),
+            footer: None,
         });
         assert!(out.contains("[t]"), "{out}");
         assert!(out.contains("[h]"), "{out}");
@@ -238,6 +252,8 @@ mod tests {
                 title: Some(format!("title {name}")),
                 columns: vec![format!("head {name}")],
                 rows: vec![vec![vec![Span::plain(format!("cell {name}"))]]],
+                breaks: Vec::new(),
+                footer: None,
             });
             let tree = renderer.render(&ViewNode::Tree(TreeItem {
                 label: vec![Span::plain(format!("root {name}"))],
@@ -254,6 +270,46 @@ mod tests {
                 "{table}{tree}"
             );
         }
+    }
+
+    #[test]
+    fn sections_are_ruled_off_and_the_footer_follows_the_rows() {
+        let renderer = RichRenderer::with_environment(ColorChoice::Never, Some(40), false);
+        let table = |breaks: Vec<usize>, footer: Option<Vec<crate::present::Line>>| {
+            renderer.render(&ViewNode::Table {
+                title: None,
+                columns: vec!["node".into(), "action".into()],
+                rows: vec![
+                    vec![vec![Span::plain("a")], vec![Span::plain("build")]],
+                    vec![vec![Span::plain("b")], vec![Span::plain("reuse")]],
+                ],
+                breaks,
+                footer,
+            })
+        };
+        let rules = |out: &str| {
+            out.lines()
+                .filter(|l| l.contains('─') || l.contains('━'))
+                .count()
+        };
+        let plain = table(Vec::new(), None);
+        let sectioned = table(vec![0, 1], None);
+        assert_eq!(rules(&sectioned), rules(&plain) + 1, "{plain}\n{sectioned}");
+        let totalled = table(
+            Vec::new(),
+            Some(vec![
+                vec![Span::plain("[b]2 nodes")],
+                vec![Span::plain("1 build")],
+            ]),
+        );
+        let lines: Vec<&str> = totalled.lines().collect();
+        let footer = lines
+            .iter()
+            .position(|l| l.contains("[b]2 nodes"))
+            .expect("footer shown literally");
+        let last_row = lines.iter().position(|l| l.contains("reuse")).unwrap();
+        assert!(footer > last_row, "{totalled}");
+        assert!(lines[footer].contains("1 build"), "{totalled}");
     }
 
     #[test]
@@ -274,6 +330,8 @@ mod tests {
             title: None,
             columns: vec!["c".into()],
             rows: vec![vec![vec![Span::toned("added", Tone::Added)]]],
+            breaks: Vec::new(),
+            footer: None,
         });
         // `ods.added` is green (SGR 32) in the default theme.
         assert!(out.contains("\x1b[32madded"), "{out:?}");
@@ -289,6 +347,8 @@ mod tests {
                 title: None,
                 columns: vec!["c".into()],
                 rows: vec![vec![vec![Span::plain("a\x1bb")]]],
+                breaks: Vec::new(),
+                footer: None,
             },
         ] {
             let out = renderer.render(&node);

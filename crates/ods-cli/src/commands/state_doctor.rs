@@ -315,6 +315,8 @@ impl Present for DoctorReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         for problem in &self.problems {

@@ -183,6 +183,8 @@ impl Present for Explanation {
                     ]
                 })
                 .collect(),
+            breaks: Vec::new(),
+            footer: None,
         });
         let overridden: Vec<TreeItem> = self
             .keys

@@ -510,6 +510,8 @@ impl Present for TestReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         if !self.source_tests.is_empty() {
@@ -521,6 +523,8 @@ impl Present for TestReport {
                     self.execution.as_ref(),
                     &self.observed.check_names,
                 ),
+                breaks: Vec::new(),
+                footer: None,
             });
         }
         blocks.extend(super::failures::section(&self.observed.failures));

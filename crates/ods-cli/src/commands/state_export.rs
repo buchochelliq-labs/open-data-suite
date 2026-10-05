@@ -492,6 +492,28 @@ fn write_export(
     Ok(replaced)
 }
 
+/// The nodes the exported state points at this target, with the run that built each.
+fn here_table(here: &[&PointerChoice]) -> ViewNode {
+    ViewNode::Table {
+        title: Some("Pointing at this target".into()),
+        columns: vec!["node".into(), "built by run".into(), "at".into()],
+        rows: here
+            .iter()
+            .map(|c| {
+                vec![
+                    vec![Span::toned(c.node.as_str(), Tone::Code)],
+                    vec![Span::plain(c.run_id.clone().unwrap_or_default())],
+                    vec![Span::plain(
+                        c.built_at.map(|t| t.to_string()).unwrap_or_default(),
+                    )],
+                ]
+            })
+            .collect(),
+        breaks: Vec::new(),
+        footer: None,
+    }
+}
+
 impl Present for ExportReport {
     const COMMAND: &'static str = "state.export";
 
@@ -555,25 +577,12 @@ impl Present for ExportReport {
                         ]
                     })
                     .collect(),
+                breaks: Vec::new(),
+                footer: None,
             },
         ];
         if !here.is_empty() {
-            blocks.push(ViewNode::Table {
-                title: Some("Pointing at this target".into()),
-                columns: vec!["node".into(), "built by run".into(), "at".into()],
-                rows: here
-                    .iter()
-                    .map(|c| {
-                        vec![
-                            vec![Span::toned(c.node.as_str(), Tone::Code)],
-                            vec![Span::plain(c.run_id.clone().unwrap_or_default())],
-                            vec![Span::plain(
-                                c.built_at.map(|t| t.to_string()).unwrap_or_default(),
-                            )],
-                        ]
-                    })
-                    .collect(),
-            });
+            blocks.push(here_table(&here));
         }
         for warning in &self.warnings {
             blocks.push(ViewNode::Notice {
