@@ -202,6 +202,22 @@ proptest! {
     }
 
     #[test]
+    fn a_quoted_value_never_survives_after_any_word(
+        word in "[a-zA-Z]{1,3}",
+        joiner in prop::sample::select(vec!["'", "'s ", "'s value ", "' ", ""]),
+        filler in "[a-z ]{0,6}",
+        lead in "[ _.,:]{0,2}",
+        secret in "[A-Z0-9]{10,14}",
+        tail in "[ a-z]{0,6}",
+    ) {
+        let message = format!("column {word}{joiner}{filler} '{lead}{secret}'{tail}");
+        prop_assert!(!redact::literals(&message).contains(&secret), "{:?}", message);
+        if let Some(line) = redact::summary_line(&message, 200) {
+            prop_assert!(!line.contains(&secret), "{:?} => {:?}", message, line);
+        }
+    }
+
+    #[test]
     fn a_summary_is_one_short_plain_line(text in any::<String>(), max in 1_usize..80) {
         if let Some(line) = redact::summary_line(&text, max) {
             prop_assert!(line.chars().count() <= max, "{:?} is longer than {}", line, max);

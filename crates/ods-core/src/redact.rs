@@ -54,8 +54,9 @@ fn is_word(c: char) -> bool {
 /// Replaces quoted spans (`'…'`, `"…"`, `` `…` ``) and dollar-quoted spans (`$$…$$`,
 /// `$tag$…$tag$`) by [`REMOVED`], line by line, failing closed:
 /// - a quote opens a span only when it doesn't follow a letter or digit, so the
-///   apostrophe in `can't` or `column's` opens nothing, unless it starts a prefixed
-///   literal (`X'1F'`, `r'…'`) or the word after it runs into another `'`;
+///   apostrophe in `can't` or `column's` opens nothing; but where it may start a
+///   prefixed literal (`X'1F'`, `r'…'`) or the word after it runs into another `'`,
+///   the line can't be read for sure (see below);
 /// - there are no escapes: a span ends at the next quote of its kind (a doubled quote,
 ///   `'it''s'`, stays inside), and a close right after a backslash can't be read;
 /// - if a span doesn't close on its line, or its closing quote runs straight into a
@@ -72,7 +73,7 @@ fn spans(text: &str) -> String {
     out
 }
 
-/// Whether the `'` at `at`, right after a word, opens a literal rather than being an
+/// Whether the `'` at `at`, right after a word, may open a literal rather than be an
 /// apostrophe: the word is a string prefix (`X'1F'`, `r'…'`, `E'…'`), or the word after
 /// the quote runs straight into another `'` (`v'secret'`), which no apostrophe does.
 fn prefixed(chars: &[char], at: usize) -> bool {
@@ -105,7 +106,15 @@ fn line_spans(line: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
         // Only `'` doubles as an apostrophe (`can't`, `users'`).
-        let apostrophe = c == '\'' && i > 0 && is_word(chars[i - 1]) && !prefixed(&chars, i);
+        let after_word = c == '\'' && i > 0 && is_word(chars[i - 1]);
+        // It may instead open a literal (`X'1F'`), or be a possessive (`x's`) of a
+        // word that looks like a prefix: which, can't be told, and either reading can
+        // make a later quote close the wrong span. Fail closed.
+        if after_word && prefixed(&chars, i) {
+            first_open.get_or_insert(i);
+            return unreadable(first_open, i);
+        }
+        let apostrophe = after_word;
         if c == '$' {
             // `$tag$`: a tag of letters, digits and `_`, possibly empty.
             let tag_end = chars[i + 1..]
@@ -581,8 +590,18 @@ mod tests {
         assert_eq!(literals("'a'b 'c'"), "[value removed]");
         assert_eq!(
             literals("can't cast X'1F' to INT"),
-            "can't cast X[value removed] to INT"
+            "can't cast X[value removed]"
         );
+        // A possessive of a prefix-like word never lets a later quote close the wrong
+        // span (#374 review).
+        for input in [
+            "column x's value '_TOKEN' is invalid",
+            "column x's value ' TOKEN' is invalid",
+            "b's 'TOKEN'",
+        ] {
+            let out = literals(input);
+            assert!(!out.contains("TOKEN"), "{input:?} => {out:?}");
+        }
     }
 
     /// Property: whatever sits inside a quoted span of the input, for any mix of

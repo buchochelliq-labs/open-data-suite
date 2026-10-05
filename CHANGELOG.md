@@ -71,8 +71,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Fixed
 - Error summaries no longer keep a quoted value written straight after a word: a prefixed
-  literal (`X'…'`, `r'…'`, `E'…'`) or a value glued to a word (`v'…'`) is now removed like
-  any other quoted value. Property tests over `ods-core`'s graph order, fingerprints,
+  literal (`X'…'`, `r'…'`, `E'…'`) or a value glued to a word (`v'…'`) can't be told from
+  an apostrophe, so the rest of the line is removed from there. Property tests over `ods-core`'s graph order, fingerprints,
   timestamps, strategy choice and redaction found it (#374, #192)
 
 ## [0.0.1] - 2026-10-04
