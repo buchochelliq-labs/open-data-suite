@@ -80,17 +80,25 @@ pub fn plain_text(line: &[Span]) -> String {
 /// Result text often carries data we do not control (node names, SQL, warehouse error
 /// messages). ESC and other C0/C1 controls in it could emit arbitrary terminal
 /// sequences, even in plain mode. Every backend passes displayed text through here.
-/// Tabs, newlines and carriage returns are kept; backends decide how to lay them out.
+/// Tabs and line breaks are kept; backends decide how to lay them out. A carriage
+/// return becomes a newline (`\r\n` one newline): on its own it moves the cursor back
+/// to the start of the line, so a value could overwrite what was printed before it
+/// (e.g. a status) (#192).
 pub fn sanitize(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_control() && !matches!(c, '\n' | '\r' | '\t') {
-                '\u{FFFD}'
-            } else {
-                c
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push('\n');
             }
-        })
-        .collect()
+            '\n' | '\t' => out.push(c),
+            c if c.is_control() => out.push('\u{FFFD}'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A line of an engine's own output (e.g. dbt's), as streamed to stderr while it runs
@@ -206,5 +214,31 @@ mod tests {
             "a\u{FFFD}[31mb\u{FFFD}\u{FFFD}c"
         );
         assert_eq!(sanitize("tab\tnew\nline"), "tab\tnew\nline");
+    }
+
+    proptest::proptest! {
+        /// Whatever a value holds, what reaches the terminal holds no control character
+        /// but a newline or a tab, and sanitizing it again changes nothing.
+        #[test]
+        fn nothing_can_drive_the_terminal(text in proptest::prelude::any::<String>()) {
+            let clean = sanitize(&text);
+            proptest::prop_assert!(
+                !clean.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t')),
+                "{:?}", clean
+            );
+            proptest::prop_assert_eq!(sanitize(&clean), clean.clone());
+            let line = engine_line(Some("12:00:00"), &text);
+            proptest::prop_assert!(!line.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t')));
+        }
+    }
+
+    #[test]
+    fn a_carriage_return_cant_overwrite_what_came_before() {
+        assert_eq!(sanitize("ok\rFAILED"), "ok\nFAILED");
+        assert_eq!(sanitize("a\r\nb\r\r\n"), "a\nb\n\n");
+        assert_eq!(
+            engine_line(Some("12:00:00"), "1 of 2 OK\rERROR"),
+            "12:00:00  1 of 2 OK\nERROR"
+        );
     }
 }
