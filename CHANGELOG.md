@@ -86,6 +86,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 - Each failure under **Why it failed** is framed in the terminal, titled with what failed
   (`customer_segments failed`, `test not_null on customers.customer_id failed`). In plain
   output that title replaces the `failed:`/`failed test:` line (#378)
+- Failure explanations on Databricks are checked against messages recorded from a real
+  dbt-databricks run on a SQL warehouse (error catalogue version 6). A model contract's
+  `not_null` or `check` constraint that the model's rows break is now recognised as a
+  constraint violation, and a Spark error's position (`line 31 pos 4`) gives the failing
+  line. A table in a missing schema is explained as a missing table, as Databricks
+  reports it ([reference](docs/reference/error-patterns.md)) (#383, #349)
 
 ### Fixed
 - A carriage return in a value shown in the terminal (a node name, an engine's message or

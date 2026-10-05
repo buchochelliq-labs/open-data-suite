@@ -1,0 +1,62 @@
+[
+  {
+    "command": "dbt run",
+    "message": "Database Error in model customers (models/marts/customers.sql)\n  [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `c`.`first_name` cannot be resolved. Did you mean one of the following? [`c`.`last_name`, `c`.`given_name`, `s`.`first_order`, `c`.`signup_date`, `c`.`email`]. SQLSTATE: 42703; line 31 pos 4\n  compiled code at target/run/jaffle_ods/models/marts/customers.sql",
+    "name": "missing-column",
+    "node": "model.jaffle_ods.customers"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `no_such_column` cannot be resolved. Did you mean one of the following? [`order_date`, `order_id`, `status`, `customer_id`]. SQLSTATE: 42703; line 17 pos 13\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "unresolved-column",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [TABLE_OR_VIEW_NOT_FOUND] The table or view `<catalog>`.`<schema>`.`no_such_table` cannot be found. Verify the spelling and correctness of the schema and catalog.\n  Search path: [`system`.`session`, `system`.`builtin`, `system`.`ai`, `<catalog>`.`<schema>`].\n  If you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.\n  To tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01; line 17 pos 20\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "missing-relation",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [TABLE_OR_VIEW_NOT_FOUND] The table or view `<catalog>`.`ods_no_such_schema`.`no_such_table` cannot be found. Verify the spelling and correctness of the schema and catalog.\n  Search path: [`system`.`session`, `system`.`builtin`, `system`.`ai`, `<catalog>`.`<schema>`].\n  If you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.\n  To tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01; line 17 pos 20\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "missing-schema",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [UNRESOLVED_ROUTINE] Cannot resolve routine `no_such_function` on search path [`system`.`session`, `system`.`builtin`, `system`.`ai`, `<catalog>`.`<schema>`].\n  Verify the spelling of `no_such_function`, check that the routine exists, and confirm you have `USE` privilege on the catalog and schema, and EXECUTE on the routine. SQLSTATE: 42883; line 17 pos 13\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "missing-function",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [CAST_INVALID_INPUT] The value 'sk_live_SENTINEL_42' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n  == SQL (line 17, position 14) ==\n        select cast('sk_live_SENTINEL_42' as int) as id\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  \n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "type-mismatch",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES] Cannot resolve \"(array(1) + 1)\" due to data type mismatch: the left and right operands of the binary operator have incompatible types (\"ARRAY<INT>\" and \"INT\"). SQLSTATE: 42K09; line 17 pos 13\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "datatype-mismatch",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [DELTA_NEW_NOT_NULL_VIOLATION] 1 rows in <catalog>.<schema>.broken violate the new NOT NULL constraint on id.\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "not-null-constraint",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt run",
+    "message": "Database Error in model broken (models/marts/broken.sql)\n  [DELTA_NEW_CHECK_CONSTRAINT_VIOLATION] 1 rows in <catalog>.<schema>.broken violate the new CHECK constraint (id > 0).\n  compiled code at target/run/jaffle_ods/models/marts/broken.sql",
+    "name": "check-constraint",
+    "node": "model.jaffle_ods.broken"
+  },
+  {
+    "command": "dbt build",
+    "message": "Got 5 results, configured to fail if != 0",
+    "name": "test-failure",
+    "node": "test.jaffle_ods.only_placed_orders"
+  }
+]

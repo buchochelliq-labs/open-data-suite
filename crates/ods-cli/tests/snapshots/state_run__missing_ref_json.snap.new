@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/state_run.rs
+assertion_line: 4395
 expression: "serde_json::to_string_pretty(failure).unwrap()"
 ---
 {

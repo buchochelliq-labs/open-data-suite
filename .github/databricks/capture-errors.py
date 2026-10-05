@@ -10,13 +10,14 @@ the message dbt reported for the failed node, as `capture-errors.sh` does for Du
 
 - missing-column, unresolved-column: a column that doesn't exist (`[UNRESOLVED_COLUMN…]`);
 - missing-relation: a table that doesn't exist (`[TABLE_OR_VIEW_NOT_FOUND]`);
-- missing-schema: a schema that doesn't exist (`[SCHEMA_NOT_FOUND]`);
+- missing-schema: a table in a schema that doesn't exist (Databricks reports the
+  table: `[TABLE_OR_VIEW_NOT_FOUND]`);
 - missing-function: a SQL function that doesn't exist (`[UNRESOLVED_ROUTINE]`);
 - type-mismatch: a cast that can't be made, with a secret sentinel as the value
   (`[CAST_INVALID_INPUT]`);
 - datatype-mismatch: an operator on types it doesn't take (`[DATATYPE_MISMATCH…]`);
 - not-null-constraint, check-constraint: a model contract's constraints violated by
-  its rows (Delta's constraint errors);
+  its rows (Delta's `[DELTA_NEW_…_VIOLATION]`);
 - test-failure: a singular test that returns rows.
 
 The catalog, the run's schema and the workspace host become `<catalog>`, `<schema>` and
