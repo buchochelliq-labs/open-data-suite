@@ -1130,7 +1130,9 @@ fn savings_card(b: &mut String, view: &RunsView) {
         return;
     };
     let t = &savings.totals;
-    let figure = if t.timed == 0 {
+    let figure = if t.reused == 0 {
+        "nothing yet: no run has reused a node".to_owned()
+    } else if t.timed == 0 {
         "unknown: no reused node has a build time yet".to_owned()
     } else if t.is_lower_bound() {
         format!(
@@ -1162,7 +1164,8 @@ fn savings_card(b: &mut String, view: &RunsView) {
         .filter(|_| t.timed > 0)
         .map(|c| {
             format!(
-                r#" · <span data-cost>~{amount} {unit}</span> <span class="muted">at {rate} {unit} per hour</span>"#,
+                r#" · <span data-cost>{bound}~{amount} {unit}</span> <span class="muted">at {rate} {unit} per hour</span>"#,
+                bound = if t.is_lower_bound() { "at least " } else { "" },
                 amount = text(&if c.total > 0.0 && c.total < 0.005 {
                     "< 0.01".to_owned()
                 } else {

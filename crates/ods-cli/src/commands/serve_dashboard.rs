@@ -283,37 +283,40 @@ impl DashboardSource {
             Ok((plan, warnings)) => (Ok(plan), warnings),
             Err(error) => (Err(error), Vec::new()),
         };
+        let mut history = History::new(snapshots)
+            .with_last_run(last_run)
+            // Each run's outcome, times and per-node stats (#322): read by the pages
+            // when asked, through ods-sdk's journal reader.
+            .with_journals(journals)
+            // Failed nodes explained with dbt's error catalogue (#323).
+            .with_explainer(explainer);
+        // The savings panel only from a ledger that was read: one that couldn't be is
+        // left out, never shown as empty (AGENTS rule 3).
+        if let Some(ledger) = ledger_view(ledger, self.cost.as_ref()) {
+            history = history.with_ledger(ledger);
+        }
         let state = StateInput::Recorded(Box::new(
             Recorded::new(store, runs, counted, plan)
                 .capped(counted >= SNAPSHOTS_READ)
                 .with_warnings(warnings)
                 .with_planner(planner)
-                .with_history(
-                    History::new(snapshots)
-                        .with_last_run(last_run)
-                        // Each run's outcome, times and per-node stats (#322): read by
-                        // the pages when asked, through ods-sdk's journal reader.
-                        .with_journals(journals)
-                        // Failed nodes explained with dbt's error catalogue (#323).
-                        .with_explainer(explainer)
-                        .with_ledger(ledger_view(ledger, self.cost.as_ref())),
-                ),
+                .with_history(history),
         ));
         (state, last_builds)
     }
 }
 
-/// The run ledger and the cost rate, for the Runs page's savings panel (ADR-0029); an
-/// empty ledger when the database has none yet.
+/// The run ledger and the cost rate, for the Runs page's savings panel (ADR-0029);
+/// `None` when there is no ledger yet or it couldn't be read.
 fn ledger_view(
     runs: Option<Vec<ods_core::state::RunEntry>>,
     cost: Option<&ods_config::CostConfig>,
-) -> ods_web::dashboard::state::Ledger {
-    let ledger = ods_web::dashboard::state::Ledger::new(runs.unwrap_or_default());
-    match cost {
+) -> Option<ods_web::dashboard::state::Ledger> {
+    let ledger = ods_web::dashboard::state::Ledger::new(runs?);
+    Some(match cost {
         Some(cost) => ledger.with_rate(cost.rate_per_hour, cost.unit.clone()),
         None => ledger,
-    }
+    })
 }
 
 /// What explains failed nodes on the Run pages (#323, ADR-0025): dbt's error

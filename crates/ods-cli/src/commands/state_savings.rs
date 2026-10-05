@@ -280,7 +280,14 @@ impl Present for SavingsReport {
             facts.push((
                 "cost avoided".to_owned(),
                 vec![
-                    Span::toned(format!("~{}", money(cost.total, &cost.unit)), Tone::Success),
+                    Span::toned(
+                        format!(
+                            "{}~{}",
+                            if t.is_lower_bound() { "at least " } else { "" },
+                            money(cost.total, &cost.unit)
+                        ),
+                        Tone::Success,
+                    ),
                     Span::toned(
                         format!(
                             " (estimate, at {} {} per hour of build time, `[state.cost]`)",
@@ -346,6 +353,8 @@ impl SavingsReport {
                     if let (Some(cost), Some(amount)) = (&self.cost, r.cost) {
                         row.push(vec![Span::plain(if r.savings.timed == 0 {
                             super::run_stats::MISSING.to_owned()
+                        } else if r.savings.is_lower_bound() {
+                            format!("at least {}", money(amount, &cost.unit))
                         } else {
                             money(amount, &cost.unit)
                         })]);
