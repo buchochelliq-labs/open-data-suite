@@ -503,3 +503,50 @@ fn a_project_that_points_the_users_probes_at_a_target_needs_trust() {
     let reason = probe(&envelope)["reason"].as_str().unwrap().to_owned();
     assert!(reason.contains("not trusted"), "{reason}");
 }
+
+#[test]
+fn a_probe_that_selects_nothing_says_so_and_fails_strict() {
+    let project = Project::new(&PROBE.replace("[\"orders\"]", "[\"no_such_model\"]"));
+    let (code, envelope) = project.check(&["--allow-scripts"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    assert_eq!(envelope["result"]["unmatched_probes"][0], "orders.has_rows");
+    let warning = &envelope["diagnostics"][0];
+    assert_eq!(warning["code"], "ODS-W0705", "{envelope:#}");
+    assert!(
+        warning["message"]
+            .as_str()
+            .unwrap()
+            .contains("checked nothing"),
+        "{warning:#}"
+    );
+    let (code, _) = project.check(&["--allow-scripts", "--strict"]);
+    assert_eq!(
+        code, 5,
+        "an error-severity probe that checked nothing fails --strict"
+    );
+}
+
+#[test]
+fn changing_the_dbt_profile_a_project_configures_needs_trust_again() {
+    let dbt =
+        "\n[providers.dbt]\nkind = \"dbt\"\n\n[providers.dbt.settings]\nprofile = \"jaffle\"\n";
+    let project = Project::new(&format!("{PROBE}{dbt}"));
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    let (_, envelope) = project.check(&[]);
+    assert!(
+        !probe(&envelope)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not trusted")
+    );
+    project.write(&format!("{PROBE}{}", dbt.replace("jaffle", "elsewhere")));
+    let (_, envelope) = project.check(&[]);
+    assert!(
+        probe(&envelope)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not trusted"),
+        "{envelope:#}"
+    );
+}

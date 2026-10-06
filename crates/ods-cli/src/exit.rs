@@ -105,6 +105,9 @@ pub mod codes {
     /// A warning: `ods health check --allow-elevated-login` let probes run under a login
     /// that wasn't shown to only read.
     pub const HEALTH_ELEVATED_LOGIN: &str = "ODS-W0704";
+    /// A warning: a probe check selected no node health checks see, so it checked
+    /// nothing.
+    pub const HEALTH_UNMATCHED_PROBE: &str = "ODS-W0705";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

@@ -442,6 +442,10 @@ pub struct HealthReport {
     /// allowed it (`--allow-elevated-login`, ADR-0030 §4c): kept, so it is never hidden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elevated_login: Option<ElevatedLogin>,
+    /// Enabled probe checks that select no node in scope (e.g. one naming a source):
+    /// they checked nothing, so `--strict` fails on one at severity `error`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmatched_probes: Vec<String>,
 }
 
 /// A check that ran.
@@ -472,6 +476,12 @@ impl HealthReport {
             .flat_map(|b| &b.findings)
             .any(|f| fails(f.severity, f.status))
             || self.coverage.iter().any(|c| fails(c.severity, c.status))
+            // A probe that selected nothing checked nothing: unknown, as a whole.
+            || self.unmatched_probes.iter().any(|id| {
+                self.checks
+                    .iter()
+                    .any(|c| c.id == *id && fails(c.severity, Status::Unknown))
+            })
     }
 
     /// With each coverage target's verdict.
@@ -607,7 +617,11 @@ impl HealthSettings {
     /// about nodes outside the scope are ignored.
     pub async fn run(&self, scope: &CheckScope, timeout: Duration) -> HealthReport {
         // In-process checks, then probes, which need the warehouse.
-        let (mut probed, elevated_login) = probe::run_all(
+        let probe::ProbeRun {
+            findings: mut probed,
+            elevated: elevated_login,
+            unmatched: unmatched_probes,
+        } = probe::run_all(
             &self.probes,
             &scope.nodes,
             self.connection.as_ref(),
@@ -648,6 +662,7 @@ impl HealthSettings {
             checks,
             coverage: Vec::new(),
             elevated_login,
+            unmatched_probes,
         }
     }
 
@@ -721,6 +736,15 @@ impl HealthSettings {
     /// What a trust entry pins for each probe (ADR-0030 §4d).
     pub fn probe_definitions(&self) -> Vec<ProbeDefinition> {
         self.probes.iter().map(probe::Probe::definition).collect()
+    }
+
+    /// Adds `connection`, the host's settings that decide where probes run and that a
+    /// project can set, to each probe's trust digest (ADR-0030 §4d): changing them needs
+    /// trust again.
+    pub fn pin_probe_connection(&mut self, connection: &BTreeMap<String, String>) {
+        for probe in &mut self.probes {
+            probe.pin(connection);
+        }
     }
 
     /// Marks the probes whose ids are in `trusted` as trusted for this project, and the

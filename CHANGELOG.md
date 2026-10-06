@@ -39,7 +39,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   finding `login_check: overridden`. A probe reads only the relation the build made: a
   node dbt resolves elsewhere under the probe target is *unknown*. A probe target equal
   to the build's is a configuration error, and the trust digest covers `[health.probes]`,
-  so pointing trusted probes at another target needs trust again. `ods health check`
+  and the dbt `program`, `project_dir`, `profiles_dir` and `profile` configuration
+  sets, so pointing trusted probes at another target or login needs trust again. A node
+  the manifest names no relation for (e.g. ephemeral) is never probed; sources can't be
+  probed yet, and a probe that selects nothing is reported (`ODS-W0705`) and fails
+  `--strict` at severity `error`. `ods health check`
   takes `--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars` and `--dbt-output`.
 - A `ProbeTarget` can name the relation it must be (`expecting`); `relation_probe`
   answers *unknown* for a node it finds elsewhere, and its conformance suite checks it

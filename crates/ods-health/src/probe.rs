@@ -152,6 +152,8 @@ pub(crate) struct Probe {
     pass_text: String,
     pass: Pass,
     statement: ProbeStatement,
+    /// What its digest is made from, before [`pin`](Self::pin).
+    digested: Vec<u8>,
     digest: String,
     /// Whether its SQL was checked as one read-only query (§4a).
     read_only: bool,
@@ -208,6 +210,16 @@ impl Probe {
                 "{at}.select: a probe names the nodes it runs on, e.g. select = {{ name = [\"orders\"] }}"
             ))
         })?;
+        // Health checks see models, seeds and snapshots; a source would never be probed.
+        if config
+            .select
+            .as_ref()
+            .is_some_and(|s| s.resource_type.iter().any(|t| t == "source"))
+        {
+            return Err(HealthConfigError(format!(
+                "{at}.select: probes read models, seeds and snapshots; sources can't be probed yet"
+            )));
+        }
         let sql = config.sql.as_deref().ok_or_else(|| {
             HealthConfigError(format!(
                 "{at}.sql: a probe needs one read-only query with {PLACEHOLDER}, e.g. \"select count(*) as n from {PLACEHOLDER}\""
@@ -243,10 +255,23 @@ impl Probe {
             pass_text: pass_text.to_owned(),
             pass,
             statement,
-            digest: format!("sha256:{}", hex::encode(Sha256::digest(bytes))),
+            digest: format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
+            digested: bytes,
             read_only: false,
             trusted: false,
         })
+    }
+
+    /// Adds `connection`, the host's settings that decide where it runs and which the
+    /// project can set (e.g. the profile and program it connects with), to its digest,
+    /// so changing them needs trust again (§4d). Nothing changes when there are none.
+    pub(crate) fn pin(&mut self, connection: &BTreeMap<String, String>) {
+        let mut bytes = self.digested.clone();
+        if !connection.is_empty() {
+            bytes.push(b'\n');
+            bytes.extend(serde_json::to_vec(connection).unwrap_or_default());
+        }
+        self.digest = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
     }
 
     /// Checks its SQL with `read_only`, the host's analyzer (§4a).
@@ -293,7 +318,7 @@ impl Probe {
         })
     }
 
-    fn applies(&self, node: &NodeFacts) -> bool {
+    pub(crate) fn applies(&self, node: &NodeFacts) -> bool {
         self.select.matches(node) && !self.exclude.as_ref().is_some_and(|s| s.matches(node))
     }
 
@@ -353,6 +378,37 @@ impl Probe {
         Some(self.finding(severity, Status::Unknown, reason, self.evidence()))
     }
 
+    /// `nodes` split into those the build made a relation for (all of them when the
+    /// host gave none) and an *unknown* finding for each of the others, which have
+    /// nothing to probe: whatever the connection finds under their name isn't the
+    /// build's (e.g. an ephemeral model's).
+    fn built<'n>(
+        &self,
+        severity: Severity,
+        nodes: &[&'n NodeFacts],
+        connection: &ProbeConnection,
+    ) -> (Vec<&'n NodeFacts>, BTreeMap<String, Finding>) {
+        let (built, unbuilt): (Vec<&NodeFacts>, Vec<&NodeFacts>) = nodes.iter().partition(|n| {
+            connection.relations.is_empty() || connection.relations.contains_key(&n.id)
+        });
+        let refused = unbuilt
+            .into_iter()
+            .map(|node| {
+                let finding = self.finding(
+                    severity,
+                    Status::Unknown,
+                    format!(
+                        "{}: the build made no relation for it (e.g. it is ephemeral), so there is nothing to probe",
+                        self.id
+                    ),
+                    self.evidence(),
+                );
+                (node.id.clone(), finding)
+            })
+            .collect();
+        (built, refused)
+    }
+
     /// Runs it on `nodes`, each of which passed [`held`](Self::held): checks the
     /// login on their relations (§4c), then sends the query for the ones it allows, and
     /// judges each row with `pass`. Its finding about each node, by id.
@@ -364,6 +420,10 @@ impl Probe {
         timeout: Duration,
         elevated: &mut Option<ElevatedLogin>,
     ) -> BTreeMap<String, Finding> {
+        let (nodes, mut out) = self.built(severity, nodes, connection);
+        if nodes.is_empty() {
+            return out;
+        }
         let targets: Vec<ProbeTarget> = nodes
             .iter()
             .map(|n| {
@@ -380,7 +440,6 @@ impl Probe {
             (None, Some(label)) => format!("the login of {label}"),
             (None, None) => "the probe login".to_owned(),
         };
-        let mut out = BTreeMap::new();
         // Each target to probe, how the login check went, and what it found if overridden.
         let mut allowed: Vec<(ProbeTarget, &'static str, Option<String>)> = Vec::new();
         for target in targets {
@@ -593,20 +652,25 @@ async fn login_check(
     (report.login, access)
 }
 
-/// Every enabled probe's findings about `nodes`, by node id, in probe order, and the
-/// probes that ran under a login the check didn't find read-only, if the run allowed it.
+/// Every enabled probe's findings about `nodes`, by node id, in probe order, the probes
+/// that ran under a login the check didn't find read-only, if the run allowed it, and
+/// the probes that selected nothing.
 pub(crate) async fn run_all(
     probes: &[Probe],
     nodes: &[NodeFacts],
     connection: Option<&ProbeConnection>,
     timeout: Duration,
-) -> (BTreeMap<String, Vec<Finding>>, Option<ElevatedLogin>) {
+) -> ProbeRun {
     let mut findings: BTreeMap<String, Vec<Finding>> = BTreeMap::new();
     let mut elevated = None;
+    let mut unmatched = Vec::new();
     for probe in probes {
         let Some(severity) = probe.severity else {
             continue;
         };
+        if !nodes.iter().any(|n| probe.applies(n)) {
+            unmatched.push(probe.id.clone());
+        }
         let mut found: BTreeMap<String, Finding> = BTreeMap::new();
         let mut ready: Vec<&NodeFacts> = Vec::new();
         for node in nodes {
@@ -630,5 +694,19 @@ pub(crate) async fn run_all(
             }
         }
     }
-    (findings, elevated)
+    ProbeRun {
+        findings,
+        elevated,
+        unmatched,
+    }
+}
+
+/// What [`run_all`] found.
+pub(crate) struct ProbeRun {
+    /// Each node's probe findings, by id, in probe order.
+    pub(crate) findings: BTreeMap<String, Vec<Finding>>,
+    /// Probes that ran under a login not shown to only read, as the run allowed.
+    pub(crate) elevated: Option<ElevatedLogin>,
+    /// Enabled probes that select no node in scope: they checked nothing.
+    pub(crate) unmatched: Vec<String>,
 }

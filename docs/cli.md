@@ -135,6 +135,7 @@ meanings get new numbers.
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
 | `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
+| `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
 ## Environment variables
 
@@ -1414,7 +1415,11 @@ relation the build made, as the manifest names it (`relation_name`): dbt resolve
 again under the probe target, and when that gives another relation (e.g. the target has
 another schema) the probe is *unknown* and nothing runs against it, so give the probe
 target the build's database and schema. An ephemeral model has no relation, so its probe
-is *unknown* too. A probe target that is the build's own (`--target`, `DBT_TARGET` or the
+is *unknown* too, and so is any node the manifest names no relation for. Sources can't
+be probed yet: a probe whose `select` names `resource_type = ["source"]` is a
+configuration error, and a probe that selects no model, seed or snapshot is reported
+(`unmatched_probes`, warning `ODS-W0705`) and, at severity `error`, fails `--strict`.
+A probe target that is the build's own (`--target`, `DBT_TARGET` or the
 configured one) is a configuration error (exit 4); dbt's default target can't be told
 apart, so name the build's target when you set one for probes. Running probes runs dbt,
 with the profile it finds (`--profiles-dir`, `DBT_PROFILES_DIR`, or dbt's own lookup,
@@ -1473,7 +1478,9 @@ ods health trust --revoke   # forget them: its probes won't run
   `config.toml` (`$XDG_CONFIG_HOME/ods/`, else `~/.config/ods/`, `%APPDATA%\ods\` on
   Windows), never in the repository. Each project has an entry, keyed by the directory
   its `ods.toml` is in, with a `sha256:` digest per check of what decides what runs and
-  where: its SQL, what it selects, and `[health.probes]`'s `target` and `profile`.
+  where: its SQL, what it selects, `[health.probes]`'s `target` and `profile`, and the
+  dbt settings configuration gives (`program`, `project_dir`, `profiles_dir`, `profile`;
+  flags and `DBT_*` variables are yours, so they aren't pinned).
   Changing any of them makes the probe untrusted again; changing its `pass` or
   `severity` doesn't. Probes in your own `config.toml` need trust too when a project
   file sets `[health.probes]`: a repository can't point them at another target.

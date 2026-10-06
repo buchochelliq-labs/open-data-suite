@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use super::relation_links::{LinkSettings, Links};
 use super::state_plan::{Sources, Workspace, block_on, common, store_error};
-use super::state_settings::StateSettings;
+use super::state_settings::{Origin, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
 use crate::present::{Diagnostic, Level, Present, Span, Tone, ViewNode};
@@ -54,7 +54,9 @@ impl Module for HealthCommand {
                 }
             }
             Some(("trust", args)) => {
-                let health = super::serve_dashboard::health_settings(ctx.config)?;
+                let mut health = super::serve_dashboard::health_settings(ctx.config)?;
+                let settings = StateSettings::resolve(args, ctx.config)?;
+                health.pin_probe_connection(&probe_pins(&settings));
                 let report = super::health_trust::TrustReport::build(args, ctx.config, &health)?;
                 ctx.emit(&report)
             }
@@ -102,6 +104,52 @@ fn check_command() -> Command {
             .action(ArgAction::SetTrue)
             .help("Don't keep the findings beside the state store for the dashboard"),
     )
+}
+
+/// Keeps `record` beside the state store at `state_db`; where.
+///
+/// # Errors
+/// It can't be written.
+fn write_record(
+    state_db: &std::path::Path,
+    record: &HealthRecord,
+    allow_elevated_login: bool,
+) -> Result<PathBuf, CliError> {
+    let dir = record::dir_for(state_db);
+    record::write(&dir, record).map_err(|e| {
+        CliError::new(
+            ExitStatus::Failure,
+            codes::HEALTH_RECORD,
+            format!(
+                "the health record can't be written in {}: {e}",
+                dir.display()
+            ),
+        )
+        .with_hint(if allow_elevated_login {
+            "the records already there are unchanged; `--no-record` checks without keeping one. Probes ran with `--allow-elevated-login`, possibly under a login that can do more than read"
+        } else {
+            "the records already there are unchanged; `--no-record` checks without keeping one"
+        })
+    })
+}
+
+/// The dbt settings that decide where probes connect and that configuration set (so a
+/// project can): the program, the project and profiles directories and the profile.
+/// They are pinned in each probe's trust digest. Flags and `DBT_*` variables are the
+/// user's own, so they aren't.
+fn probe_pins(settings: &StateSettings) -> BTreeMap<String, String> {
+    [
+        ("dbt.program", Some(&settings.program)),
+        ("dbt.project_dir", settings.project_dir.as_ref()),
+        ("dbt.profiles_dir", settings.profiles_dir.as_ref()),
+        ("dbt.profile", settings.profile.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(key, setting)| {
+        let setting = setting?;
+        matches!(setting.origin, Origin::Config(_)).then(|| (key.to_owned(), setting.value.clone()))
+    })
+    .collect()
 }
 
 /// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
@@ -193,6 +241,10 @@ pub(super) struct CheckReport {
     /// on each node's relation (empty when no probe needed it).
     #[serde(skip_serializing_if = "Option::is_none")]
     elevated_login: Option<ElevatedLogin>,
+    /// Enabled probe checks that select no node health checks see (models, seeds and
+    /// snapshots): they checked nothing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unmatched_probes: Vec<String>,
     /// Whether the verdict fails: exit 5.
     failed: bool,
 }
@@ -230,6 +282,9 @@ impl CheckReport {
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
+        // Where probes connect, as far as configuration decides it, is part of what is
+        // trusted (ADR-0030 §4d).
+        health.pin_probe_connection(&probe_pins(&settings));
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
         super::serve_dashboard::check_probe_sql(&mut health, ws.manifest.adapter_type.as_deref())?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
@@ -251,24 +306,11 @@ impl CheckReport {
         let recorded = if args.get_flag("no-record") || !ws.state_db.is_file() {
             None
         } else {
-            let dir = record::dir_for(&ws.state_db);
-            let written = record::write(&dir, &HealthRecord::new(&scope, checked_at, report.clone()))
-                .map_err(|e| {
-                    CliError::new(
-                        ExitStatus::Failure,
-                        codes::HEALTH_RECORD,
-                        format!(
-                            "the health record can't be written in {}: {e}",
-                            dir.display()
-                        ),
-                    )
-                    .with_hint(if allow_elevated_login {
-                        "the records already there are unchanged; `--no-record` checks without keeping one. Probes ran with `--allow-elevated-login`, possibly under a login that can do more than read"
-                    } else {
-                        "the records already there are unchanged; `--no-record` checks without keeping one"
-                    })
-                })?;
-            Some(written)
+            Some(write_record(
+                &ws.state_db,
+                &HealthRecord::new(&scope, checked_at, report.clone()),
+                allow_elevated_login,
+            )?)
         };
         let failed = report.fails(strict);
         let counts = ods_health::counts(report.badges.values());
@@ -282,6 +324,7 @@ impl CheckReport {
             checks: report.checks,
             coverage: report.coverage,
             elevated_login: allow_elevated_login.then(|| report.elevated_login.unwrap_or_default()),
+            unmatched_probes: report.unmatched_probes,
             counts,
             nodes: report
                 .badges
@@ -437,20 +480,9 @@ fn severity(severity: Severity) -> &'static str {
     }
 }
 
-impl Present for CheckReport {
-    const COMMAND: &'static str = "health.check";
-
-    fn diagnostics(&self) -> Vec<Diagnostic> {
-        self.elevated_login
-            .iter()
-            .map(|elevated| {
-                Diagnostic::warning(codes::HEALTH_ELEVATED_LOGIN, elevated_warning(elevated))
-            })
-            .collect()
-    }
-
-    fn view(&self) -> ViewNode {
-        let mut blocks = vec![ViewNode::Heading(format!("Health of {}", self.scope))];
+impl CheckReport {
+    /// How many nodes have each health, and where the findings were recorded.
+    fn counts_view(&self) -> ViewNode {
         let mut facts: Vec<(String, Vec<Span>)> = HEALTHS
             .iter()
             .map(|&health| {
@@ -475,7 +507,41 @@ impl Present for CheckReport {
                 None => Span::toned("no", Tone::Muted),
             }],
         ));
-        blocks.push(ViewNode::KeyValue(facts));
+        ViewNode::KeyValue(facts)
+    }
+}
+
+impl Present for CheckReport {
+    const COMMAND: &'static str = "health.check";
+
+    fn diagnostics(&self) -> Vec<Diagnostic> {
+        let mut out: Vec<Diagnostic> = self
+            .elevated_login
+            .iter()
+            .map(|elevated| {
+                Diagnostic::warning(codes::HEALTH_ELEVATED_LOGIN, elevated_warning(elevated))
+            })
+            .collect();
+        if !self.unmatched_probes.is_empty() {
+            out.push(Diagnostic::warning(
+                codes::HEALTH_UNMATCHED_PROBE,
+                unmatched_warning(&self.unmatched_probes),
+            ));
+        }
+        out
+    }
+
+    fn view(&self) -> ViewNode {
+        let mut blocks = vec![
+            ViewNode::Heading(format!("Health of {}", self.scope)),
+            self.counts_view(),
+        ];
+        if !self.unmatched_probes.is_empty() {
+            blocks.push(ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(unmatched_warning(&self.unmatched_probes))],
+            });
+        }
         if let Some(elevated) = &self.elevated_login {
             blocks.push(ViewNode::Notice {
                 level: Level::Warning,
@@ -581,4 +647,18 @@ fn elevated_warning(elevated: &ElevatedLogin) -> String {
     }
     text.push('.');
     text
+}
+
+/// What a run says about probe checks that selected nothing.
+fn unmatched_warning(ids: &[String]) -> String {
+    format!(
+        "probe check{} {} select{} no model, seed or snapshot, so {} checked nothing (sources can't be probed yet); with --strict, one at severity error fails",
+        if ids.len() == 1 { "" } else { "s" },
+        ids.iter()
+            .map(|id| format!("`{id}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if ids.len() == 1 { "s" } else { "" },
+        if ids.len() == 1 { "it" } else { "they" },
+    )
 }

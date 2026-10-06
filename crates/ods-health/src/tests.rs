@@ -951,6 +951,7 @@ fn a_missed_target_at_error_fails_the_gate_and_unknown_only_when_strict() {
             checks: Vec::new(),
             coverage: Vec::new(),
             elevated_login: None,
+            unmatched_probes: Vec::new(),
         }
         .with_coverage(s.coverage(&[measured("descriptions", covered, 4)]))
     };
@@ -965,6 +966,7 @@ fn a_missed_target_at_error_fails_the_gate_and_unknown_only_when_strict() {
         checks: Vec::new(),
         coverage: Vec::new(),
         elevated_login: None,
+        unmatched_probes: Vec::new(),
     }
     .with_coverage(warn.coverage(&[measured("descriptions", Some(0), 4)]));
     assert!(!report.fails(true));
@@ -1607,10 +1609,11 @@ mod running {
             orders.reason
         );
         assert_eq!(orders.evidence["connection"], "dbt target `health_ro`");
-        assert_eq!(
-            found["model.p.payments"].status,
-            Status::Fail,
-            "no expectation"
+        assert!(
+            found["model.p.payments"]
+                .reason
+                .contains("made no relation"),
+            "with the build's relations known, one it didn't make isn't probed"
         );
         assert_eq!(
             report.elevated_login.unwrap().connection.as_deref(),
@@ -1630,5 +1633,67 @@ mod running {
             "{}",
             found["model.p.orders"].reason
         );
+    }
+
+    #[tokio::test]
+    async fn a_node_the_build_made_no_relation_for_is_never_probed() {
+        let probe = warehouse("12");
+        let s = ready().with_probe_connection(
+            ProbeConnection::without_privileges(Arc::new(probe.clone()))
+                .allowing_elevated_login(true)
+                .expecting(BTreeMap::from([(
+                    "model.p.payments".to_owned(),
+                    "p.payments".to_owned(),
+                )])),
+        );
+        let (found, _) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(orders.status, Status::Unknown, "{orders:?}");
+        assert!(
+            orders.reason.contains("made no relation"),
+            "{}",
+            orders.reason
+        );
+        assert_eq!(probe.probed(), ["model.p.payments"]);
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_selects_nothing_is_reported_and_fails_strict_at_error() {
+        let s = settings(&ORDERS_HAS_ROWS.replace("\"orders\"]", "\"raw_orders\"]"));
+        let report = s
+            .run(&CheckScope::new(nodes(), Some(clean())), CHECK_TIMEOUT)
+            .await;
+        assert_eq!(report.unmatched_probes, ["orders.has_rows"]);
+        assert!(report.fails(true), "strict: it checked nothing");
+        assert!(!report.fails(false));
+        let error = HealthSettings::from_config(
+            &toml::from_str(&ORDERS_HAS_ROWS.replace(
+                r#"select = { name = ["orders"] }"#,
+                r#"select = { resource_type = ["source"] }"#,
+            ))
+            .unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("sources can't be probed yet"), "{error}");
+    }
+
+    #[test]
+    fn the_connection_a_project_sets_is_pinned_in_trust() {
+        let mut s = settings(ORDERS_HAS_ROWS);
+        let before = s.probe_definitions()[0].digest.clone();
+        s.pin_probe_connection(&BTreeMap::new());
+        assert_eq!(s.probe_definitions()[0].digest, before, "nothing to pin");
+        s.pin_probe_connection(&BTreeMap::from([(
+            "dbt.profile".to_owned(),
+            "jaffle".to_owned(),
+        )]));
+        let pinned = s.probe_definitions()[0].digest.clone();
+        assert_ne!(pinned, before);
+        s.pin_probe_connection(&BTreeMap::from([(
+            "dbt.profile".to_owned(),
+            "elsewhere".to_owned(),
+        )]));
+        assert_ne!(s.probe_definitions()[0].digest, pinned);
     }
 }
