@@ -1,7 +1,7 @@
 # ADR-0030: Configurable and pluggable health checks
 
-- **Status:** Accepted (2026-10-06). Phases 1 and 2 are built (#392): the `ods-health` crate and `[health]` for the built-in checks; the `health_check` contract 0.1 with its fake and conformance suite, `ods health check` and the health record (`<state db>.health/<time>-<n>.json`, the newest 20 kept). As built, a finding's evidence is a map of key to value, sorted by key, rather than the list sketched in §1. The dashboard reads the newest record for its scope: it works the built-ins out live and takes every other check's findings from the record, with its time (`health_recorded_at`). Declarative checks (`[[health.checks]]` with `require`, phase 3) are built: they run in-process like the built-ins, so the dashboard works them out live too, and the `health_check` contract is 0.2 (`NodeFacts` says whether a node is described, its tests' types and its constraints). Coverage targets (`[health.coverage.<measure>]`, phase 3) are built too: the engine judges the measures a host gives it, and the dashboard and `ods health check` give it Home's coverage, so a missed target shows on Home and, at `error`, fails the gate; it never changes a node's badge. The record format is 1.1 (a `declarative` source, and the report's `coverage` verdicts). Not built yet: probes and the trust store (4), scripts (5), plugins (6).
-- **Date:** 2026-10-06
+- **Status:** Accepted (2026-10-06). Phases 1 and 2 are built (#392): the `ods-health` crate and `[health]` for the built-in checks; the `health_check` contract 0.1 with its fake and conformance suite, `ods health check` and the health record (`<state db>.health/<time>-<n>.json`, the newest 20 kept). As built, a finding's evidence is a map of key to value, sorted by key, rather than the list sketched in §1. The dashboard reads the newest record for its scope: it works the built-ins out live and takes every other check's findings from the record, with its time (`health_recorded_at`). Declarative checks (`[[health.checks]]` with `require`, phase 3) are built: they run in-process like the built-ins, so the dashboard works them out live too, and the `health_check` contract is 0.2 (`NodeFacts` says whether a node is described, its tests' types and its constraints). Coverage targets (`[health.coverage.<measure>]`, phase 3) are built too: the engine judges the measures a host gives it, and the dashboard and `ods health check` give it Home's coverage, so a missed target shows on Home and, at `error`, fails the gate; it never changes a node's badge. The record format is 1.1 (a `declarative` source, and the report's `coverage` verdicts). Phase 4, first half: the trust store and `ods health trust` (§4b, §4d), and probe checks configured, checked as read-only SQL (§4a) and trusted, but not yet run. Not built yet: running probes under a read-only login (§4c) with `relation_probe` 0.2 (4), scripts (5), plugins (6).
+- **Date:** 2026-10-06 (amended 2026-10-06: least privilege for probes, §4c; the trust store and probe configuration as built, §4d)
 - **Issues:** #392 (this design), #354 (the first badges), #117 (scoring and trends), #387 (external providers), #9 (policy)
 - **Deciders:** @n1ckyb
 
@@ -209,6 +209,58 @@ every repository cloned afterwards. So trust is per project and per definition:
 - **`--allow-scripts`:** trusts the current definitions for one invocation, for CI, where the
   repository is the thing being checked. It is never persisted.
 - **Later:** #9 can replace the trust store with a policy.
+
+### 4c. Least privilege: a probe runs only under a read-only login (amendment, 2026-10-06)
+Parsing a probe's SQL (§4a) is one guard; the login it runs under is a second,
+independent one: a login that can't write can't be made to write, whatever the parser
+missed. So a probe runs only when its connection can do no more than read what it probes.
+- **Its own connection.** Probes run through `relation_probe`, which the dbt provider
+  answers with `dbt show` on a dbt target. A project's build target can write (dbt builds
+  tables), so probes name their own target: `[health.probes] target = "health_readonly"`,
+  or `profile` and `target`, for a read-only principal. Without one, probe checks are
+  *unknown*: they never run on the build target.
+- **Checked before every probe run.** The engine asks the provider what the connection's
+  principal can do on each probed relation, its schema and its catalog (or the warehouse's
+  equivalents). It refuses the probe, *unknown* with the reason, when the principal:
+  - holds any privilege beyond reading, e.g. `MODIFY`, `CREATE …`, `ALL PRIVILEGES`,
+    `MANAGE` or `APPLY TAG` (reading means `SELECT` and the `USE`/`BROWSE` privileges
+    needed to reach a relation);
+  - owns the relation, its schema or its catalog;
+  - is an administrator of the metastore or the account, where the warehouse says so.
+- **What can't be told is refused.** A provider that can't report privileges, or a report
+  that can't be read, is *unknown*, never a run (rule 3). Reporting privileges is a
+  capability (`relation_privileges`) a provider advertises, so the engine never names a
+  warehouse (rule 1). Unity Catalog reports them through `information_schema`
+  (`table_privileges`, `schema_privileges`, `catalog_privileges`, with inherited grants,
+  and the `*_owner` columns), queried through the same connection.
+- **Limits, stated.** The check covers what the probe reads and its containers, not
+  everything the principal can reach elsewhere: a dedicated read-only principal is the
+  real control, and this check proves it is read-only where it matters. Grants can change
+  between the check and the query; the check runs immediately before each probe.
+
+### 4d. The trust store and probe configuration, as built (amendment, 2026-10-06)
+- **Where:** `<user config dir>/ods/trust.json`, beside the user's `config.toml`
+  (ADR-0005), never in a repository. It is JSON with a `schema_version` (1.0), written
+  whole and renamed into place, and only by `ods health trust`.
+- **What:** one entry per project, keyed by the canonical path of the directory holding
+  the project's `ods.toml` (or `ods.local.toml`), with `trusted_at` and, per check id, a
+  `sha256:` digest of what decides what runs: its `kind`, `sql` (or, for scripts,
+  `command`), `select` and `exclude`. Severity and `pass` aren't in it: changing them
+  changes the verdict, not what runs or where.
+- **Which definitions need it:** checks whose `[[health.checks]]` comes from a project or
+  local file. The array is one setting (ADR-0005 layers replace it whole), so its source
+  says which file defined every check in it; checks from the user's own `config.toml` need
+  no entry.
+- **`ods health trust`** lists the definitions that aren't trusted yet, with their SQL or
+  command and what changed, and records the current ones; `--revoke` removes the project's
+  entry. `ods health check --allow-scripts` trusts the current definitions for that run
+  only.
+- **A probe check** is `kind = "probe"` with `sql` (one read-only query with `{relation}`
+  once), `pass` and a `select` (required: a probe never runs on every node by default); it
+  can't have `require`. `pass` is a comparison of a column the query returns with a literal
+  (`=`, `!=`, `<`, `<=`, `>`, `>=`; numbers, `'strings'`, `true`/`false`), combined with
+  `and`/`or` and parentheses. The columns it names are the ones the probe reads. A value
+  that isn't a number where the comparison needs one is *unknown*, never a pass.
 
 ### 5. The contract and crate
 - **The probe contract, widened:** `relation_probe` becomes 0.2. `probe` takes neutral

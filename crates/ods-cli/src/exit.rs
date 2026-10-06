@@ -99,6 +99,9 @@ pub mod codes {
     pub const HEALTH_FAILED: &str = "ODS-E0701";
     /// `ods health check` couldn't write its health record.
     pub const HEALTH_RECORD: &str = "ODS-E0702";
+    /// `ods health trust` couldn't read or write the trust store, or there is no user
+    /// configuration directory to keep it in.
+    pub const HEALTH_TRUST: &str = "ODS-E0703";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

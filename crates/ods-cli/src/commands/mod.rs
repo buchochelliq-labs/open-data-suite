@@ -7,6 +7,7 @@ mod doctor_checks;
 mod erd;
 mod failures;
 mod health;
+mod health_trust;
 mod lineage;
 mod mcp;
 mod mcp_data;

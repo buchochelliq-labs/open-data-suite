@@ -18,6 +18,7 @@ codes).
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
 | `ods health check` | available (preview): run the health checks `[health]` configures and gate CI on them, see [below](#ods-health-check) |
+| `ods health trust` | available (preview): review this project's probe checks and trust them to run, see [below](#ods-health-trust) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -132,6 +133,7 @@ meanings get new numbers.
 | `ODS-E0501` | `ods doctor` found checks that fail (exit status 5). Each finding has its own code: see [`ods doctor`](#ods-doctor). |
 | `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
+| `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
 
 ## Environment variables
 
@@ -1349,6 +1351,43 @@ JSON). An id that isn't valid, is a built-in's or is used twice, an empty `requi
 requirement not in the table, or a `kind` other than `declarative` is a configuration
 error (exit 4, `ODS-E0102`).
 
+#### Probe checks
+
+A probe check sends one read-only query to the warehouse for each node it selects, and
+passes when a condition over the row it returns holds
+([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §4a–§4d):
+
+```toml
+[[health.checks]]
+id = "orders.has_rows"
+kind = "probe"
+select = { name = ["orders"] }          # required: a probe names what it reads
+sql = "select count(*) as n from {relation}"
+pass = "n > 0"                          # =, !=, <, <=, >, >=; and, or, ( )
+severity = "error"
+```
+
+A probe runs only once three guards hold, and until then it is *unknown*, saying which
+guard stopped it, never a pass:
+- **Read-only SQL.** `sql` must be exactly one query (`SELECT`, `WITH … SELECT`, or a set
+  operation of them) with `{relation}` once, which the warehouse provider replaces with
+  the node's relation, quoted. Anything that could write, lock rows or change a session
+  (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `SELECT … INTO`, DDL, `SET`, `USE`, several
+  statements, a write hidden in a CTE) is a configuration error before anything connects
+  (exit 4, `ODS-E0102`), in `ods health check` and `ods serve` alike. It is checked with
+  the SQL analyzer lineage uses, in the project's dialect.
+- **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
+  you have trusted that exact definition for that project with
+  [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
+- **A read-only login.** Probes run under a connection that can do no more than read
+  what they probe (ADR-0030 §4c). This guard, and running probes at all, come in the next
+  step of #392: until then a trusted probe reads *unknown: probe checks don't run yet*.
+
+`pass` compares a column the query returns with a number, a `'string'` or `true`/`false`;
+only numbers can be ordered. A column that is missing, or isn't a number where one is
+needed, makes the probe *unknown*. Probes need the warehouse, so the dashboard never runs
+them: it shows what the last `ods health check` recorded, with when.
+
 #### Coverage targets
 
 `[health.coverage.<measure>]` sets the share of the project a coverage measure on Home
@@ -1378,6 +1417,29 @@ outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
 
 The trust store, warehouse probes, scripts and plugins come in later phases of #392.
 
+### ods health trust
+
+`ods health trust` lists the probe checks this project defines, with their SQL and
+whether each is new, changed or already trusted, then trusts them as they are now:
+
+```sh
+ods health trust            # review and trust this project's probes
+ods health trust --revoke   # forget them: its probes won't run
+```
+
+- **Where trust is kept:** `trust.json` in your own configuration directory, beside your
+  `config.toml` (`$XDG_CONFIG_HOME/ods/`, else `~/.config/ods/`, `%APPDATA%\ods\` on
+  Windows), never in the repository. Each project has an entry, keyed by the directory
+  its `ods.toml` is in, with a `sha256:` digest per check of what decides what runs and
+  where: its SQL and what it selects. Changing either makes the probe untrusted again;
+  changing its `pass` or `severity` doesn't.
+- **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
+  defined is no longer trusted. Cloning a repository never trusts anything.
+- **In CI**, where the repository is what is being checked, `ods health check
+  --allow-scripts` trusts the current definitions for that run only, and keeps nothing.
+- **A trust store that can't be read** trusts nothing, and `ods health trust` leaves it
+  as it is rather than overwrite it (exit 1, `ODS-E0703`).
+
 ### ods health check
 
 `ods health check` runs every enabled check on the project's nodes and prints their
@@ -1388,6 +1450,7 @@ health gate ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §
 ods health check                  # exit 5 when a check at severity error fails
 ods health check --strict --json  # also when one couldn't decide; one JSON document
 ods health check --no-record      # don't keep the findings
+ods health check --allow-scripts  # trust this project's probes as they are now, this run only
 ```
 
 It takes the options `ods state` commands take to find the project and the state store

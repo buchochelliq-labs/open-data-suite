@@ -21,6 +21,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 # The health record (ADR-0030 §6): JSON, written whole then renamed into place.
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
 

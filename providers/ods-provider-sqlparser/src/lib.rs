@@ -13,6 +13,7 @@
 
 mod analyze;
 mod dialect;
+mod read_only;
 
 use ods_core::{CapabilitySet, RelationName, SchemaVersion};
 use ods_sdk::contracts::sql_lineage::{
@@ -21,6 +22,7 @@ use ods_sdk::contracts::sql_lineage::{
 use ods_sdk::{Provider, ProviderError, ProviderFactory, ProviderInfo};
 
 pub use dialect::{IdentifierCase, SqlDialect};
+pub use read_only::read_only_query;
 
 /// The `kind` this provider is configured under.
 pub const KIND: &str = "sqlparser";

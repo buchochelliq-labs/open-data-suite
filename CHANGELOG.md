@@ -16,11 +16,20 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 - `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
   gains `test_types`, `described` and `constraints` (all default when absent). **What
   to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
-- The health record's format is 1.1, as a check's source can be `declarative` and a
-  report holds its coverage targets' verdicts. ODS 0.0.2
+- The health record's format is 1.1, as a check's source can be `declarative` or
+  `probe` and a report holds its coverage targets' verdicts. ODS 0.0.2
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- Probe checks and the trust store (#392, ADR-0030 §4a–§4d): `[[health.checks]]` with
+  `kind = "probe"`, `select`, `sql` (one read-only query with `{relation}`) and `pass`
+  (e.g. `n > 0`). A probe whose SQL could write, lock or change a session is a
+  configuration error before anything connects (exit 4). A probe a project defines runs
+  only once `ods health trust` has trusted that exact definition for that project; trust
+  is kept in `trust.json` in your own configuration directory, a changed query is
+  untrusted again, `ods health trust --revoke` forgets a project, and
+  `ods health check --allow-scripts` trusts for one run only. Until then a probe is
+  *unknown*, never a pass. Probes run under a read-only login in the next step of #392.
 - Declared health checks (#392, ADR-0030 §2–3): `[[health.checks]]` in `ods.toml` with an
   `id`, `select`/`exclude`, `require` (`description`, `tests`, `test:<type>`,
   `constraints`, `tag:<tag>`) and a `severity` (default `warn`). They run on the
