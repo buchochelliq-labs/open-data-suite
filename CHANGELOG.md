@@ -12,6 +12,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Changed
+- The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
+  of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
+  each other. `/roadmap/` redirects to `/ROADMAP/`.
+
 ## [0.0.2] - 2026-10-06
 
 The second release: dashboard screens backed by real signals, configurable health
