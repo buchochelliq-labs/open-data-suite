@@ -1,4 +1,6 @@
 /target
+# The examples are their own workspaces (ADR-0031).
+/examples/*/target
 **/*.rs.bk
 *.pending-snap
 .DS_Store

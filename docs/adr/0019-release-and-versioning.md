@@ -110,6 +110,7 @@ for at least one minor release before it is removed.**
 | `ods` binary (product) | `workspace.package.version`, tag `vX.Y.Z` | SemVer (§1) | Each release |
 | Plugin SDK | `SDK_VERSION` | ADR-0006 §6: before 1.0 exactly `0.p`; from 1.0, same major and provider minor ≤ host minor | When any contract changes |
 | Each SDK contract | `Contract.version` | as the SDK | When that contract changes |
+| `ods-cli`'s library API (`Ods`, `Plugins`, `WarehousePlugin`, ADR-0031) | the product version | Before 1.0, any release may break it, as with the SDK: a custom `ods` is rebuilt for each release | Per §1 |
 | JSON output envelope | `schema_version` in every `--output json` result | `SchemaVersion::can_read`: same major, the reader's minor ≥ the writer's. Consumers ignore fields they don't know | Minor: fields added. Major: fields removed, renamed or retyped |
 | Persisted documents (snapshots, exports) | their `schema_version` | `can_read`, and a newer reader loads every earlier minor of its major | Minor: only optional or defaulted fields added (`#[serde(default)]`, or `Option`), with a test loading a document written at the previous minor. A new required field, or a removed, renamed or retyped one, is a major, read through a migration (below) |
 | SQLite state store | migration version (ADR-0018) | A newer `ods` migrates older stores forward, keeping a copy. An older `ods` refuses a newer store | Each schema migration. It is recorded in the changelog and never happens in a patch |

@@ -33,6 +33,27 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
+  released CLI as a library: a crate of your own adds health checks
+  (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.
+  - **Warehouse plugins:** a `WarehousePlugin` serves one warehouse kind (dbt's
+    `adapter_type`). It gives `ods state` a source-version provider, and probe checks
+    a login check, over dbt's own connection. Databricks is now the built-in plugin,
+    and behaves as before.
+  - **Plugin checks:** they run with the others in `ods health check`.
+    `[health.plugins.<id>]` sets their `severity` (or `off`), `select` and `exclude`; an
+    id that names no plugin check is a configuration error.
+  - **Visibility:** `ods version` (`plugins` in `--json`) and `ods doctor`
+    (`capabilities.plugins`) list every plugin, saying which are built in.
+    `ods doctor --provider plugin` selects the checks about a custom build's warehouse
+    plugin.
+  - **SDK:** `PrivilegedProbe`, one object that probes and reports its login's
+    privileges, and `Provider` and `RelationProbe` for `Arc<T>`, so a plugin can wrap
+    the connection it is given.
+
+  `examples/custom-ods` is a complete custom `ods`, with a health check and a
+  source-version provider that pass their conformance suites. `docs/plugins.md` shows
+  how to write one.
 - Probe checks on Databricks check their login in Unity Catalog (#392, ADR-0030 §4e):
   `ods health check` reads `system.information_schema` through the probe target's own
   connection and runs a probe only on a managed table, view or materialized view whose

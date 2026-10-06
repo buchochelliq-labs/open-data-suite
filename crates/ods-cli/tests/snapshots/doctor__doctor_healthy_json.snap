@@ -18,7 +18,7 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
     "verdict": "healthy",
     "strict": false,
     "summary": {
-      "ok": 13,
+      "ok": 14,
       "warning": 0,
       "error": 0,
       "unknown": 0,
@@ -320,6 +320,23 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           {
             "key": "missing_capability",
             "value": "relation_versions"
+          }
+        ]
+      },
+      {
+        "id": "capabilities.plugins",
+        "category": "capabilities",
+        "status": "ok",
+        "required": false,
+        "message": "this `ods` has the built-in plugins only",
+        "evidence": [
+          {
+            "key": "change_provider.databricks",
+            "value": "change_provider 0.1 for databricks (ods-provider-databricks [ods-version], built in)"
+          },
+          {
+            "key": "relation_privileges.databricks",
+            "value": "relation_privileges 0.1 for databricks (ods-provider-databricks [ods-version], built in)"
           }
         ]
       },
