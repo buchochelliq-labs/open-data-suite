@@ -988,7 +988,7 @@ fn a_misconfigured_target_is_a_configuration_error() {
         unknown.contains("descriptions"),
         "lists the measures: {unknown}"
     );
-    for bad in ["1.5", "-0.1", "nan"] {
+    for bad in ["1.5", "-0.1", "nan", "0.8751"] {
         let error = error(&format!("[coverage.tests]\ntarget = {bad}\n"));
         assert!(
             error.contains("health.coverage.tests.target"),
@@ -1003,10 +1003,15 @@ fn a_share_keeps_thousandths_and_round_trips() {
     let s = settings("[coverage.tests]\ntarget = 0.875\n");
     let found = s.coverage(&[measured("tests", Some(7), 8)]);
     assert_eq!(found[0].status, Status::Pass, "7/8 is exactly 87.5%");
-    assert!(
-        found[0].reason.ends_with("the 87.5% target"),
-        "{}",
-        found[0].reason
+    assert_eq!(
+        found[0].reason, "7 of 8 models with tests (87.5%), meeting the 87.5% target",
+        "the share is said as precisely as the target"
+    );
+    let below =
+        settings("[coverage.tests]\ntarget = 0.9\n").coverage(&[measured("tests", Some(2), 3)]);
+    assert_eq!(
+        below[0].reason, "2 of 3 models with tests (66.6%), below the 90% target",
+        "to the thousandth below, never rounded up past a target"
     );
     let json = serde_json::to_value(&found[0]).unwrap();
     assert_eq!(json["target"], 0.875);

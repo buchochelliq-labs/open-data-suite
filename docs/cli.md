@@ -1369,8 +1369,12 @@ The measures are Home's: `tests`, `descriptions`, `constraints` (models with eac
 covered share reaches it, missed when it doesn't, and *unknown* when there is nothing to
 measure (e.g. no sources); unknown is never met. Home draws each target on its bar and
 says whether it is met, with why in the tooltip, and `/api/home` gives each coverage
-row's `target` verdict. A measure that doesn't exist, or a target outside 0 to 1, is a
-configuration error (exit 4, `ODS-E0102`).
+row's `target` verdict. `ods health check` measures as the dashboard does, reading source
+freshness results from `--sources` or `<target-dir>/sources.json`. Targets and shares
+are kept to the thousandth (`0.875` is 87.5%); a share is said to the thousandth below,
+so it never reads past a target it misses. A measure that doesn't exist, or a target
+outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
+`ODS-E0102`).
 
 The trust store, warehouse probes, scripts and plugins come in later phases of #392.
 

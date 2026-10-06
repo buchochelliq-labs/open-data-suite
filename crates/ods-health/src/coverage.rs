@@ -19,7 +19,7 @@ pub const COVERAGE_MEASURES: [(&str, &str); 4] = [
     ("source_freshness", "sources with freshness"),
 ];
 
-/// A share from 0 to 1, kept to the thousandth so that findings compare exactly.
+/// A share from 0 to 1, to the thousandth, so that findings compare exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Share(u16);
 
@@ -40,8 +40,20 @@ impl Share {
         reason = "checked to be from 0 to 1 first, so the thousandths fit a u16"
     )]
     fn of(value: f64) -> Option<Self> {
-        (value.is_finite() && (0.0..=1.0).contains(&value))
-            .then(|| Self((value * 1000.0).round() as u16))
+        if !(value.is_finite() && (0.0..=1.0).contains(&value)) {
+            return None;
+        }
+        // Kept to the thousandth, never rounded to it: a finer target is refused
+        // rather than quietly made easier or harder to meet.
+        let thousandths = (value * 1000.0).round();
+        ((value * 1000.0 - thousandths).abs() < 1e-6).then_some(Self(thousandths as u16))
+    }
+
+    /// `covered` of `total` as a share, to the thousandth below: a share that reaches a
+    /// target never reads below it, nor one that misses it at or above it.
+    fn floor(covered: usize, total: usize) -> Self {
+        let thousandths = covered.saturating_mul(1000) / total.max(1);
+        Self(u16::try_from(thousandths.min(1000)).unwrap_or(1000))
     }
 }
 
@@ -148,7 +160,7 @@ impl Target {
             .map(|(measure, label, own)| {
                 let target = Share::of(own.target).ok_or_else(|| {
                     HealthConfigError(format!(
-                        "health.coverage.{measure}.target: {} isn't a share between 0 and 1, e.g. 0.8",
+                        "health.coverage.{measure}.target: {} isn't a share between 0 and 1 to the thousandth, e.g. 0.8 or 0.875",
                         own.target
                     ))
                 })?;
@@ -193,12 +205,12 @@ impl Target {
                 ),
             ),
             Some(covered) => {
-                let share = covered * 100 / total;
+                let share = Share::floor(covered, total);
                 if self.share.reached_by(covered, total) {
                     (
                         Status::Pass,
                         format!(
-                            "{covered} of {total} {} ({share}%), meeting the {} target",
+                            "{covered} of {total} {} ({share}), meeting the {} target",
                             self.label, self.share
                         ),
                     )
@@ -206,7 +218,7 @@ impl Target {
                     (
                         Status::Fail,
                         format!(
-                            "{covered} of {total} {} ({share}%), below the {} target",
+                            "{covered} of {total} {} ({share}), below the {} target",
                             self.label, self.share
                         ),
                     )

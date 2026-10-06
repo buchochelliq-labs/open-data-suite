@@ -1022,3 +1022,67 @@ fn a_coverage_target_is_shown_on_home_and_gates_health_check() {
     assert_eq!(envelope["result"]["coverage"][0]["measure"], "tests");
     assert_eq!(envelope["result"]["coverage"][0]["status"], "fail");
 }
+
+/// #403 review: `ods health check` judges source freshness coverage on the same
+/// evidence as the dashboard, `sources.json` included, so the two agree.
+#[test]
+fn health_check_and_home_judge_freshness_coverage_on_the_same_evidence() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build").join("manifest.json"),
+        target.join("manifest.json"),
+    )
+    .unwrap();
+    // A source measured only by `sources.json`: no `loaded_at_field` of its own.
+    let path = target.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest["sources"]["source.jaffle_ods.landing.feed"] = serde_json::json!({
+        "unique_id": "source.jaffle_ods.landing.feed",
+        "resource_type": "source",
+        "name": "feed",
+        "source_name": "landing",
+        "relation_name": "\"landing\".\"feed\"",
+        "config": {"enabled": true}
+    });
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        target.join("sources.json"),
+        sources_json("2026-09-25T06:40:00Z", "2026-09-25T06:30:00+00:00").to_string(),
+    )
+    .unwrap();
+    let toml = "[health.coverage.source_freshness]\ntarget = 1.0\nseverity = \"error\"\n";
+
+    let server = serve_with(&target, &[], Some(toml));
+    let home = json(&server, "api/home");
+    let verdict = home["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "source_freshness")
+        .unwrap()["target"]["status"]
+        .clone();
+    drop(server);
+
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::write(home_dir.path().join("ods.toml"), toml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--json", "--target-dir"])
+        .arg(&target)
+        .current_dir(home_dir.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home_dir.path())
+        .output()
+        .unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    let checked = envelope["result"]["coverage"][0].clone();
+    assert_eq!(checked["measure"], "source_freshness", "{envelope:#}");
+    assert_eq!(
+        checked["status"], verdict,
+        "the dashboard says {verdict}: {checked:#}"
+    );
+    assert_eq!(verdict, "pass", "sources.json measures it");
+    assert_eq!(out.status.code(), Some(0), "{envelope:#}");
+}

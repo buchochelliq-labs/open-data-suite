@@ -110,7 +110,9 @@ impl CheckReport {
         let health = super::serve_dashboard::health_settings(config)?;
         let strict = args.get_flag("strict");
         let settings = StateSettings::resolve(args, config)?;
-        let ws = Workspace::load(args, &settings, Sources::Ignore)?;
+        // Source freshness results as the dashboard reads them (`--sources`, else
+        // `<target-dir>/sources.json`), so coverage is judged on the same evidence.
+        let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
         let scope = ws.scope.to_string();
         // Read only: no database is created or migrated to check health.
         let (latest, runs_index) = if ws.state_db.is_file() {
