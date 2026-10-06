@@ -1811,7 +1811,7 @@ impl Dashboard {
 
     /// The last run, only if it names this page's scope: the file is kept per state
     /// database, which several targets may share.
-    fn last_run(&self) -> Option<&LastRun> {
+    pub(crate) fn last_run(&self) -> Option<&LastRun> {
         self.history()
             .and_then(|h| h.last_run.as_ref())
             .filter(|l| l.scope.as_deref() == Some(self.scope.as_str()))

@@ -134,6 +134,7 @@ fn failed_run() -> LastRun {
         vec![],
         vec![],
     )))
+    .with_run(Some("shop/dev".into()), None)
 }
 
 fn json<T: serde::Serialize>(value: &T) -> serde_json::Value {
@@ -250,4 +251,19 @@ fn the_catalog_filters_by_health_and_explains_each_badge() {
         .map(|v| v["count"].as_u64().unwrap())
         .collect();
     assert_eq!(counts, [1, 1, 1, 1]);
+}
+
+#[test]
+fn another_scopes_failures_are_never_this_ones() {
+    // The same database, another target: its record says nothing about this scope.
+    let other = failed_run().with_run(Some("shop/prod".into()), None);
+    let home = json(&dashboard(Some(other)).home_at(true, at("2026-09-29T12:00:00Z")));
+    assert!(
+        row(&home["health"], "failing")["count"].is_null(),
+        "not measured"
+    );
+    // Nor does a record that doesn't say which scope it ran for.
+    let unscoped = failed_run().with_run(None, None);
+    let home = json(&dashboard(Some(unscoped)).home_at(true, at("2026-09-29T12:00:00Z")));
+    assert!(row(&home["health"], "failing")["count"].is_null());
 }

@@ -1065,9 +1065,11 @@ impl Dashboard {
         }
     }
 
-    /// What the last run's record says failed, when it says.
+    /// What the last run's record says failed, when it says, and only when it ran for
+    /// this scope: a record of another target's run, or one that doesn't say which, could
+    /// blame this target's nodes for another's failures.
     pub(crate) fn last_failures(&self) -> Option<crate::health::LastFailures> {
-        crate::health::LastFailures::of(self.history().and_then(|h| h.last_run.as_ref()))
+        crate::health::LastFailures::of(self.last_run())
     }
 
     /// Nodes by health (#354): each badge from the Catalog's nodes, linking to them.
