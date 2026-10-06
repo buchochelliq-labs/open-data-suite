@@ -44,10 +44,11 @@ migrates the state store and changes the dashboard's JSON APIs:** see **Breaking
   do:** nothing, unless you go back to an older `ods`, or the database is read-only: an
   older `ods` refuses the migrated database, so restore the copy (`ods state doctor`
   lists it); a read-only one must be migrated where it is writable first.
-- `SDK_VERSION` is now 0.7 (#210): the `state_store` contract is 0.3, with
+- `SDK_VERSION` is now 0.8 (0.0.1 shipped 0.6). The `state_store` contract is 0.3, with
   `record_run` and `runs` (the run ledger) behind the new capability `run_ledger`; both
-  default to `Unsupported`. **What to do:** rebuild out-of-process plugins against it; a
-  store that keeps no ledger needs no change.
+  default to `Unsupported` (#210). The `health_check` contract 0.1 is new (#392, under
+  **Added**). **What to do:** rebuild out-of-process plugins against SDK 0.8; a store
+  that keeps no ledger needs no other change.
 
 ### Added
 - `ods health check` runs the health checks `[health]` configures and gates CI on them:
