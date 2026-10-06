@@ -116,7 +116,16 @@ impl DashboardSource {
         // kept for `ods state retry`, which the Runs page shows (#311).
         let mut last_run = db.clone().into_os_string();
         last_run.push(".last-run.json");
-        vec![db, PathBuf::from(wal), sources, PathBuf::from(last_run)]
+        // `ods health check` adds a record to this directory, which changes its time
+        // (ADR-0030 §6).
+        let health = ods_health::record::dir_for(&db);
+        vec![
+            db,
+            PathBuf::from(wal),
+            sources,
+            PathBuf::from(last_run),
+            health,
+        ]
     }
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
@@ -202,6 +211,12 @@ impl DashboardSource {
         // The Freshness evidence screen (#350): the sources as the planner sees them.
         let freshness = super::serve_catalog::freshness(&ws);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
+        // The checks `ods health check` ran that the dashboard doesn't run itself
+        // (ADR-0030 §6), from the newest record for this scope.
+        let health_record = ods_health::record::latest(
+            &ods_health::record::dir_for(&ws.state_db),
+            &ws.scope.to_string(),
+        );
         let target = self
             .settings
             .target
@@ -217,6 +232,7 @@ impl DashboardSource {
             .with_catalog(catalog)
             .with_freshness(freshness)
             .with_health(self.health.clone())
+            .with_health_record(health_record.as_ref())
             // The live run view (#322): journals are read even before the store
             // exists, since a first run writes its journal before its first snapshot.
             .with_journals(ods_sdk::run_journal::Journals::beside(&ws.state_db))

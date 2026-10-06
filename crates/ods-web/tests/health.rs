@@ -291,3 +291,84 @@ fn another_check_at_error_is_counted_even_without_the_runs_record() {
         "at least: the last run's failures aren't measured"
     );
 }
+
+/// What `ods health check` records: the built-ins, and a registered check that finds
+/// `good` without an owner.
+async fn health_record() -> ods_health::record::HealthRecord {
+    use ods_health::{HealthSettings, LastFailures, Severity};
+    use ods_provider_fake::FakeHealthCheck;
+    let settings = HealthSettings::default()
+        .with_check(std::sync::Arc::new(
+            FakeHealthCheck::new("owner", Severity::Error).failing("model.shop.good"),
+        ))
+        .unwrap();
+    let catalog = CatalogInput::new(nodes()).with_last_builds(builds());
+    let failures = LastFailures::new(
+        at("2026-09-29T09:00:00Z"),
+        "ods state build",
+        ["model.shop.broken".to_owned()],
+        Vec::<String>::new(),
+    );
+    let scope = ods_web::health::check_scope(&catalog, Some(failures));
+    let report = settings.run(&scope, ods_health::CHECK_TIMEOUT).await;
+    ods_health::record::HealthRecord::new("shop/dev", at("2026-09-29T10:00:00Z"), report)
+}
+
+#[tokio::test]
+async fn a_recorded_checks_findings_count_with_their_time() {
+    let record = health_record().await;
+    let dashboard = dashboard(Some(failed_run())).with_health_record(Some(&record));
+    let now = at("2026-09-29T12:00:00Z");
+
+    let home = json(&dashboard.home_at(true, now));
+    assert_eq!(row(&home["health"], "failing")["count"], 2, "{home:#}");
+    assert_eq!(row(&home["health"], "healthy")["count"], 0);
+    assert_eq!(home["health_recorded_at"], "2026-09-29T10:00:00Z");
+    let how = home["health_how"].as_str().unwrap();
+    assert!(
+        how.contains("2026-09-29T10:00:00Z") && how.contains("`owner`"),
+        "{how}"
+    );
+
+    let query = CatalogQuery::from_pairs(&[("health".to_owned(), "failing".to_owned())]);
+    let view = json(&dashboard.catalog_at(&document(), &query, true, now));
+    assert_eq!(view["health_recorded_at"], "2026-09-29T10:00:00Z");
+    let good = view["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "model.shop.good")
+        .unwrap();
+    let owner: Vec<&serde_json::Value> = good["health"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["check"] == "owner")
+        .collect();
+    assert_eq!(owner.len(), 1, "{good:#}");
+    assert_eq!(owner[0]["source"], "plugin");
+    assert_eq!(owner[0]["status"], "fail");
+}
+
+#[tokio::test]
+async fn a_node_the_record_didnt_cover_is_unknown_for_its_checks() {
+    let mut record = health_record().await;
+    record.report.badges.remove("model.shop.good");
+    let dashboard = dashboard(Some(failed_run())).with_health_record(Some(&record));
+    let home = json(&dashboard.home_at(true, at("2026-09-29T12:00:00Z")));
+    // `good` would be healthy on the built-ins; the recorded check never vouched for it.
+    assert_eq!(row(&home["health"], "healthy")["count"], 0, "{home:#}");
+    assert_eq!(row(&home["health"], "unknown")["count"], 2);
+}
+
+#[test]
+fn without_a_record_nothing_is_said_about_one() {
+    let home = json(&dashboard(Some(failed_run())).home_at(true, at("2026-09-29T12:00:00Z")));
+    assert!(home.get("health_recorded_at").is_none(), "{home:#}");
+    assert!(
+        !home["health_how"]
+            .as_str()
+            .unwrap()
+            .contains("ods health check")
+    );
+}

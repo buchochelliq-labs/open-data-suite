@@ -486,7 +486,7 @@ impl HealthSettings {
             .nodes
             .iter()
             .map(|node| {
-                let builtin = self.evaluate(node, scope.last_run.as_ref()).findings;
+                let builtin = self.builtin_findings(node, scope.last_run.as_ref());
                 (node.id.clone(), builtin)
             })
             .collect();
@@ -581,8 +581,28 @@ impl HealthSettings {
 
     /// The node's health, from every enabled built-in check that applies to it.
     pub fn evaluate(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> HealthBadge {
-        let findings: Vec<Finding> = self
-            .checks
+        self.evaluate_with(node, failures, None)
+    }
+
+    /// The node's health, from every enabled built-in check that applies to it, worked
+    /// out now, and every other check's finding in `recorded`, the latest health record
+    /// (ADR-0030 §6).
+    pub fn evaluate_with(
+        &self,
+        node: &NodeFacts,
+        failures: Option<&LastFailures>,
+        recorded: Option<&record::Recorded>,
+    ) -> HealthBadge {
+        let mut findings = self.builtin_findings(node, failures);
+        if let Some(recorded) = recorded {
+            findings.extend(recorded.findings_for(&node.id));
+        }
+        badge(findings, self.unknown_counts_as)
+    }
+
+    /// Every enabled built-in check's finding about `node`.
+    fn builtin_findings(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> Vec<Finding> {
+        self.checks
             .iter()
             .filter_map(|c| {
                 let severity = c.severity?;
@@ -604,8 +624,7 @@ impl HealthSettings {
                     },
                 })
             })
-            .collect();
-        badge(findings, self.unknown_counts_as)
+            .collect()
     }
 
     /// How badges are worked out under these settings, for people.

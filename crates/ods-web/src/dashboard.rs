@@ -8,7 +8,7 @@
 //! everything the page shows.
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ods_core::state::{ExecutionPlan, PlanAction, ReasonCode, StateSnapshot, Timestamp};
@@ -64,6 +64,9 @@ pub struct Dashboard {
     pub freshness: crate::freshness::FreshnessInput,
     /// The health checks as `[health]` configures them (#392, ADR-0030).
     pub health: Arc<ods_health::HealthSettings>,
+    /// What the latest health record says about checks the dashboard doesn't run
+    /// itself (ADR-0030 §6); `None` when there is no record, or it holds only built-ins.
+    health_record: Option<Arc<ods_health::record::Recorded>>,
     /// The run journals beside the state database (#322), read for the live view even
     /// before the store exists: a first run writes its journal before its first
     /// snapshot.
@@ -90,6 +93,7 @@ impl Dashboard {
             erd: None,
             freshness: crate::freshness::FreshnessInput::default(),
             health: Arc::default(),
+            health_record: None,
             journals: journal::JournalSource::default(),
         }
     }
@@ -174,6 +178,57 @@ impl Dashboard {
     pub fn with_health(mut self, settings: ods_health::HealthSettings) -> Self {
         self.health = Arc::new(settings);
         self
+    }
+
+    /// Sets what the latest health record says (ADR-0030 §6): its checks that aren't
+    /// built in count in every badge, as of when they ran. A record of only built-ins
+    /// adds nothing, since the dashboard works those out live.
+    #[must_use]
+    pub fn with_health_record(mut self, record: Option<&ods_health::record::HealthRecord>) -> Self {
+        self.health_record = record
+            .map(ods_health::record::Recorded::of)
+            .filter(|r| !r.is_empty())
+            .map(Arc::new);
+        self
+    }
+
+    /// What the latest health record says about checks the dashboard doesn't run itself.
+    pub(crate) fn health_record(&self) -> Option<&ods_health::record::Recorded> {
+        self.health_record.as_deref()
+    }
+
+    /// The node's badge: the built-ins worked out now, and the recorded checks'
+    /// findings (ADR-0030 §6).
+    pub(crate) fn badge(
+        &self,
+        node: &crate::catalog::CatalogNode,
+        failures: Option<&ods_health::LastFailures>,
+    ) -> ods_health::HealthBadge {
+        self.health.evaluate_with(
+            &crate::health::facts(&self.catalog, node),
+            failures,
+            self.health_record(),
+        )
+    }
+
+    /// How badges are worked out, for people: the configuration, and the recorded
+    /// checks with when they ran, since their results age.
+    pub(crate) fn health_how(&self) -> String {
+        let mut how = self.health.how(self.last_failures().is_some());
+        if let Some(recorded) = self.health_record() {
+            let ids: Vec<String> = recorded
+                .checks
+                .iter()
+                .map(|c| format!("`{}`", c.id))
+                .collect();
+            let _ = write!(
+                how,
+                " Also the checks `ods health check` ran at {}, as they found then: {}.",
+                recorded.checked_at,
+                ids.join(", ")
+            );
+        }
+        how
     }
 
     /// Sets the project's sources, for the Freshness evidence screen (#350).
@@ -686,6 +741,10 @@ pub struct HomeView {
     pub health: Vec<CountRow>,
     /// How the health badges are worked out.
     pub health_how: String,
+    /// When the checks taken from the latest health record ran (ADR-0030 §6); absent
+    /// when none are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_recorded_at: Option<Timestamp>,
     /// Other signals: stale state, and runs with failures (#354).
     pub signals: Vec<CountRow>,
     /// Test, documentation, constraint and source-freshness coverage (#354).
@@ -1068,7 +1127,8 @@ impl Dashboard {
             attention_more,
             plan: self.plan_summary(details),
             health: self.health_rows(),
-            health_how: self.health.how(self.last_failures().is_some()),
+            health_how: self.health_how(),
+            health_recorded_at: self.health_record().map(|r| r.checked_at),
             signals: self.signals(details, now),
             coverage: crate::health::coverage(&self.catalog, &self.freshness),
             modules: self.modules.clone(),
@@ -1091,12 +1151,7 @@ impl Dashboard {
             .catalog
             .nodes
             .iter()
-            .map(|node| {
-                self.health.evaluate(
-                    &crate::health::facts(&self.catalog, node),
-                    failures.as_ref(),
-                )
-            })
+            .map(|node| self.badge(node, failures.as_ref()))
             .collect();
         let counts = ods_health::counts(&badges);
         let no_nodes = self.catalog.nodes.is_empty();

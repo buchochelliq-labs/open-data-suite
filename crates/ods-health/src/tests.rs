@@ -573,6 +573,76 @@ mod registered {
         assert!(twice.unwrap_err().to_string().contains("two health checks"));
     }
 
+    /// What `ods serve` does with a record: the built-ins live, and the registered
+    /// checks' findings from the record (ADR-0030 §6).
+    fn recorded(report: HealthReport) -> crate::record::Recorded {
+        let record = crate::record::HealthRecord::new("p/dev", at("2026-10-06T09:00:00Z"), report);
+        crate::record::Recorded::of(&record)
+    }
+
+    #[tokio::test]
+    async fn a_recorded_failure_reaches_the_badge_beside_the_live_builtins() {
+        let report = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error).failing("model.p.a"),
+        ))
+        .await;
+        let recorded = recorded(report);
+        assert_eq!(
+            recorded.checks.len(),
+            1,
+            "only the registered check is kept"
+        );
+        let settings = HealthSettings::default();
+        let node = &scope().nodes[0];
+        let badge = settings.evaluate_with(node, Some(&clean()), Some(&recorded));
+        assert_eq!(badge.health, Health::Failing);
+        let owner: Vec<&Finding> = badge
+            .findings
+            .iter()
+            .filter(|f| f.check == "owner")
+            .collect();
+        assert_eq!(owner.len(), 1);
+        assert_eq!(owner[0].source, CheckSource::Plugin);
+        // The built-ins are the live ones, once each, not the record's as well.
+        let built = badge.findings.iter().filter(|f| f.check == "built").count();
+        assert_eq!(built, 1);
+        // Without the record the same node is healthy: the record is what fails it.
+        assert_eq!(
+            settings.evaluate(node, Some(&clean())).health,
+            Health::Healthy
+        );
+    }
+
+    #[tokio::test]
+    async fn a_node_newer_than_the_record_is_unknown_for_its_checks_never_passed() {
+        let recorded = recorded(run(&with(FakeHealthCheck::new("owner", Severity::Warn))).await);
+        let mut newer = model("model.p.new", 1);
+        newer.build = Some(passed());
+        let badge =
+            HealthSettings::default().evaluate_with(&newer, Some(&clean()), Some(&recorded));
+        assert_eq!(badge.health, Health::Unknown);
+        let owner = badge.findings.iter().find(|f| f.check == "owner").unwrap();
+        assert_eq!(owner.status, Status::Unknown);
+        assert!(
+            owner.reason.contains("2026-10-06T09:00:00Z"),
+            "{}",
+            owner.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn a_record_of_only_builtins_adds_nothing() {
+        let report = HealthSettings::default().run(&scope(), CHECK_TIMEOUT).await;
+        let recorded = recorded(report);
+        assert!(recorded.is_empty());
+        let node = &scope().nodes[0];
+        let settings = HealthSettings::default();
+        assert_eq!(
+            settings.evaluate_with(node, Some(&clean()), Some(&recorded)),
+            settings.evaluate(node, Some(&clean()))
+        );
+    }
+
     #[tokio::test]
     async fn builtins_still_run_beside_registered_checks() {
         let mut scope = scope();

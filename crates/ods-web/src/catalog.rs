@@ -620,6 +620,10 @@ pub struct CatalogView {
     pub decisions: DecisionsBasis,
     /// How the health badges are worked out (#354).
     pub health_how: String,
+    /// When the checks taken from the latest health record ran (ADR-0030 §6); absent
+    /// when none are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_recorded_at: Option<Timestamp>,
     /// How layers are worked out: they are derived, never declared.
     pub layer_source: Option<String>,
     /// The facets, in order; counts are over every node.
@@ -859,8 +863,8 @@ pub(crate) struct Context<'a> {
     runs: Vec<&'a str>,
     /// What the last run's record says failed, when it says (#354).
     failures: Option<ods_health::LastFailures>,
-    /// The health checks as configured (#392).
-    health: &'a ods_health::HealthSettings,
+    /// The dashboard, for its health badges (#392).
+    dashboard: &'a Dashboard,
 }
 
 impl<'a> Context<'a> {
@@ -903,7 +907,7 @@ impl<'a> Context<'a> {
             children,
             runs,
             failures: dashboard.last_failures(),
-            health: &dashboard.health,
+            dashboard,
         }
     }
 
@@ -1090,10 +1094,7 @@ impl<'a> Context<'a> {
             tags: node.tags.clone(),
             lineage: self.confidence(&node.id),
             decision: self.decision(&node.id),
-            health: self.health.evaluate(
-                &crate::health::facts(self.input, node),
-                self.failures.as_ref(),
-            ),
+            health: self.dashboard.badge(node, self.failures.as_ref()),
             last_build: self.last_build(&node.id),
             href: node_href(&node.id),
         }
@@ -1333,7 +1334,7 @@ fn facets(cx: &Context<'_>, all: &[CatalogRow], query: &CatalogQuery) -> Vec<Fac
                     "decision" => Some(format!(
                         "From the plan against the latest snapshot, made offline. {REUSE_CAVEAT}"
                     )),
-                    "health" => Some(cx.health.how(cx.failures.is_some())),
+                    "health" => Some(cx.dashboard.health_how()),
                     _ => None,
                 },
                 values,
@@ -1372,7 +1373,8 @@ impl Dashboard {
             query: query.clone(),
             decisions: cx.basis.clone(),
             layer_source: cx.input.layer_source.clone(),
-            health_how: cx.health.how(cx.failures.is_some()),
+            health_how: self.health_how(),
+            health_recorded_at: self.health_record().map(|r| r.checked_at),
             facets,
             total: cx.input.nodes.len(),
             rows,
