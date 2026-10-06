@@ -388,3 +388,36 @@ async fn a_recorded_error_check_is_measured_without_the_runs_record() {
         "the run's failures still aren't measured: {failing:#}"
     );
 }
+
+/// ADR-0030 §3: `[health.coverage]` targets are judged on Home's coverage, each with
+/// its verdict, and drawn on its bar.
+#[test]
+fn coverage_targets_are_judged_on_home() {
+    let config: ods_config::HealthConfig = toml::from_str(
+        "[coverage.tests]\ntarget = 0.75\nseverity = \"error\"\n[coverage.descriptions]\ntarget = 0.25\n",
+    )
+    .unwrap();
+    let settings = ods_health::HealthSettings::from_config(&config).unwrap();
+    let dashboard = dashboard(None).with_health(settings);
+    let home = json(&dashboard.home_at(true, at("2026-09-29T12:00:00Z")));
+    // 2 of 4 models have tests; 1 of 4 a description.
+    let tests = &row(&home["coverage"], "tests")["target"];
+    assert_eq!(tests["status"], "fail", "{tests:#}");
+    assert_eq!(tests["severity"], "error");
+    assert_eq!(tests["target"], 0.75);
+    assert_eq!(
+        tests["reason"],
+        "2 of 4 models with tests (50%), below the 75% target"
+    );
+    assert_eq!(
+        row(&home["coverage"], "descriptions")["target"]["status"],
+        "pass"
+    );
+    assert!(
+        row(&home["coverage"], "constraints")
+            .get("target")
+            .is_none()
+    );
+    let how = home["health_how"].as_str().unwrap();
+    assert!(how.contains("tests ≥ 75% (error)"), "{how}");
+}

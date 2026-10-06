@@ -31,7 +31,9 @@ use crate::provider::{Contract, Provider};
 /// The `health_check` contract.
 pub const HEALTH_CHECK: Contract = Contract {
     name: "health_check",
-    version: SchemaVersion::new(0, 1),
+    // 0.2: `NodeFacts` says whether a node is described, its tests' types and its
+    // constraints (declarative checks, ADR-0030 §2).
+    version: SchemaVersion::new(0, 2),
 };
 
 /// What a host knows about a node: neutral facts from the project and the state store.
@@ -54,6 +56,16 @@ pub struct NodeFacts {
     /// How many tests (data and unit) read it.
     #[serde(default)]
     pub tests: usize,
+    /// Its tests' types, e.g. `unique`, `not_null`, `relationships`, or a custom
+    /// generic test's name.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub test_types: BTreeSet<String>,
+    /// Whether it has a description that isn't blank.
+    #[serde(default)]
+    pub described: bool,
+    /// How many constraints it declares, on itself or its columns.
+    #[serde(default)]
+    pub constraints: usize,
     /// Its last successful build, if ODS recorded one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildFacts>,

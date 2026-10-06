@@ -13,7 +13,7 @@
 //! modules (ADR-0001).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,8 +36,18 @@ use serde::{Deserialize, Serialize};
 pub enum CheckSource {
     /// One of ODS's own checks.
     Builtin,
+    /// A check the project declares in `[[health.checks]]`.
+    Declarative,
     /// A check registered through the `health_check` contract: a plugin.
     Plugin,
+}
+
+impl CheckSource {
+    /// Whether checks from it run in-process on facts any host has, so the dashboard
+    /// works them out itself rather than reading them from a health record.
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Builtin | Self::Declarative)
+    }
 }
 
 /// One check's conclusion about one node.
@@ -289,6 +299,8 @@ impl Configured {
 #[derive(Clone)]
 pub struct HealthSettings {
     checks: Vec<Configured>,
+    declared: Vec<declared::Declared>,
+    coverage: Vec<coverage::Target>,
     plugins: Vec<Plugin>,
     unknown_counts_as: Health,
 }
@@ -304,6 +316,8 @@ impl fmt::Debug for HealthSettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HealthSettings")
             .field("checks", &self.checks)
+            .field("declared", &self.declared)
+            .field("coverage", &self.coverage)
             .field(
                 "plugins",
                 &self
@@ -337,6 +351,9 @@ pub struct HealthReport {
     pub badges: BTreeMap<String, HealthBadge>,
     /// The checks that ran: id, source and severity, in order.
     pub checks: Vec<CheckRun>,
+    /// Each coverage target's verdict, about the project as a whole (ADR-0030 §3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coverage: Vec<CoverageFinding>,
 }
 
 /// A check that ran.
@@ -358,10 +375,22 @@ impl HealthReport {
     /// Whether a finding at severity error failed, or, when `strict`, couldn't decide:
     /// the verdict of `ods health check` (exit 5).
     pub fn fails(&self, strict: bool) -> bool {
-        self.badges.values().flat_map(|b| &b.findings).any(|f| {
-            f.severity == Severity::Error
-                && (f.status == Status::Fail || (strict && f.status == Status::Unknown))
-        })
+        let fails = |severity: Severity, status: Status| {
+            severity == Severity::Error
+                && (status == Status::Fail || (strict && status == Status::Unknown))
+        };
+        self.badges
+            .values()
+            .flat_map(|b| &b.findings)
+            .any(|f| fails(f.severity, f.status))
+            || self.coverage.iter().any(|c| fails(c.severity, c.status))
+    }
+
+    /// With each coverage target's verdict.
+    #[must_use]
+    pub fn with_coverage(mut self, coverage: Vec<CoverageFinding>) -> Self {
+        self.coverage = coverage;
+        self
     }
 }
 
@@ -421,6 +450,8 @@ impl HealthSettings {
             .collect::<Result<Vec<_>, HealthConfigError>>()?;
         Ok(Self {
             checks,
+            declared: declared::Declared::from_config(&config.checks)?,
+            coverage: coverage::Target::from_config(&config.coverage)?,
             plugins: Vec::new(),
             unknown_counts_as: match config.unknown_counts_as {
                 Some(UnknownCountsAs::Warning) => Health::Warning,
@@ -460,6 +491,7 @@ impl HealthSettings {
             )));
         }
         let taken = BUILTINS.iter().any(|b| b.id() == info.id)
+            || self.declared.iter().any(|d| d.id == info.id)
             || self
                 .plugins
                 .iter()
@@ -486,7 +518,7 @@ impl HealthSettings {
             .nodes
             .iter()
             .map(|node| {
-                let builtin = self.builtin_findings(node, scope.last_run.as_ref());
+                let builtin = self.live_findings(node, scope.last_run.as_ref());
                 (node.id.clone(), builtin)
             })
             .collect();
@@ -502,6 +534,7 @@ impl HealthSettings {
                 })
             })
             .collect();
+        checks.extend(self.declared.iter().filter_map(declared::Declared::run));
         for plugin in &self.plugins {
             let info = plugin.check.describe();
             checks.push(CheckRun {
@@ -576,6 +609,7 @@ impl HealthSettings {
                 .map(|(id, findings)| (id, badge(findings, self.unknown_counts_as)))
                 .collect(),
             checks,
+            coverage: Vec::new(),
         }
     }
 
@@ -593,16 +627,18 @@ impl HealthSettings {
         failures: Option<&LastFailures>,
         recorded: Option<&record::Recorded>,
     ) -> HealthBadge {
-        let mut findings = self.builtin_findings(node, failures);
+        let mut findings = self.live_findings(node, failures);
         if let Some(recorded) = recorded {
             findings.extend(recorded.findings_for(&node.id));
         }
         badge(findings, self.unknown_counts_as)
     }
 
-    /// Every enabled built-in check's finding about `node`.
-    fn builtin_findings(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> Vec<Finding> {
-        self.checks
+    /// Every enabled in-process check's finding about `node`: the built-ins, then the
+    /// declared checks.
+    fn live_findings(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> Vec<Finding> {
+        let mut findings: Vec<Finding> = self
+            .checks
             .iter()
             .filter_map(|c| {
                 let severity = c.severity?;
@@ -624,7 +660,29 @@ impl HealthSettings {
                     },
                 })
             })
+            .collect();
+        findings.extend(self.declared.iter().filter_map(|d| d.finding(node)));
+        findings
+    }
+
+    /// Each enabled coverage target's verdict on what a host `measured` (ADR-0030 §3).
+    pub fn coverage(&self, measured: &[Measured]) -> Vec<CoverageFinding> {
+        self.coverage
+            .iter()
+            .filter_map(|t| t.judge(measured))
             .collect()
+    }
+
+    /// Whether a check other than `last_run_failed`, built in or declared, is at
+    /// severity error: it can fail a node without the last run's record.
+    pub fn errs_without_run_failures(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|c| c.check != Builtin::LastRunFailed && c.severity == Some(Severity::Error))
+            || self
+                .declared
+                .iter()
+                .any(|d| d.severity == Some(Severity::Error))
     }
 
     /// How badges are worked out under these settings, for people.
@@ -640,6 +698,14 @@ impl HealthSettings {
                 None => "off",
             };
             parts.push(format!("{} ({severity}): {}", check.id(), check.about()));
+        }
+        for declared in &self.declared {
+            parts.push(format!(
+                "{} ({}, declared): {}",
+                declared.id,
+                declared.severity.map_or("off", severity_word),
+                declared.about()
+            ));
         }
         for plugin in &self.plugins {
             let info = plugin.check.describe();
@@ -661,6 +727,18 @@ impl HealthSettings {
         if !failures_known && self.enabled(Builtin::LastRunFailed) {
             how.push_str(
                 " The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
+            );
+        }
+        if !self.coverage.is_empty() {
+            let targets: Vec<String> = self
+                .coverage
+                .iter()
+                .map(coverage::Target::describe)
+                .collect();
+            let _ = write!(
+                how,
+                " Coverage targets, for the project as a whole: {}.",
+                targets.join(", ")
             );
         }
         how
@@ -856,7 +934,11 @@ pub fn counts<'a>(badges: impl IntoIterator<Item = &'a HealthBadge>) -> BTreeMap
     counts
 }
 
+mod coverage;
+mod declared;
 pub mod record;
+
+pub use coverage::{COVERAGE_MEASURES, CoverageFinding, Measured, Share};
 
 #[cfg(test)]
 mod tests;

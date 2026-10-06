@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 use crate::{CheckRun, CheckSource, Finding, HealthReport};
 
 /// The health record's format version.
-pub const HEALTH_RECORD_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+/// 1.1: a check's source can be `declarative`, and a report holds its coverage
+/// targets' verdicts.
+pub const HEALTH_RECORD_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// How many records are kept; older ones are removed after each write.
 pub const KEEP: usize = 20;
@@ -52,8 +54,8 @@ impl HealthRecord {
 }
 
 /// What a record says about the checks the dashboard doesn't run itself (ADR-0030 §6):
-/// it works the built-ins out live, and takes every other check's findings from the
-/// latest record, with that record's time.
+/// it works the built-in and declared checks out live, and takes every other check's
+/// findings from the latest record, with that record's time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Recorded {
@@ -68,7 +70,7 @@ pub struct Recorded {
 impl Recorded {
     /// What `record` says about checks that aren't built in.
     pub fn of(record: &HealthRecord) -> Self {
-        let recorded = |source: CheckSource| source != CheckSource::Builtin;
+        let recorded = |source: CheckSource| !source.is_live();
         Self {
             checked_at: record.checked_at,
             checks: record
@@ -233,6 +235,7 @@ mod tests {
             HealthReport {
                 badges: BTreeMap::new(),
                 checks: Vec::new(),
+                coverage: Vec::new(),
             },
         )
     }

@@ -12,7 +12,27 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Breaking
+- `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
+  gains `test_types`, `described` and `constraints` (all default when absent). **What
+  to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
+- The health record's format is 1.1, as a check's source can be `declarative` and a
+  report holds its coverage targets' verdicts. ODS 0.0.2
+  doesn't read 1.1 records: run `ods health check` again after going back to it.
+
 ### Added
+- Declared health checks (#392, ADR-0030 §2–3): `[[health.checks]]` in `ods.toml` with an
+  `id`, `select`/`exclude`, `require` (`description`, `tests`, `test:<type>`,
+  `constraints`, `tag:<tag>`) and a `severity` (default `warn`). They run on the
+  project's metadata in the dashboard's badges and in `ods health check`'s gate, and
+  name what each failing node is missing. A check that can't run as written is a
+  configuration error (exit 4).
+- Coverage targets (#392, ADR-0030 §3): `[health.coverage.<measure>]` with a `target`
+  share and a `severity` (default `warn`) for Home's measures (`tests`,
+  `descriptions`, `constraints`, `source_freshness`). Home draws each target on its bar
+  and says whether it is met (`target` on each `/api/home` coverage row), and
+  `ods health check` lists them (`coverage` in `--json`) and, for one missed at
+  `error`, exits 5. Nothing to measure is unknown, never met.
 - The dashboard counts the checks `ods health check` recorded (#392, ADR-0030 §6): it
   works the built-in checks out itself, and takes every other check's findings from the
   newest health record for its scope, in the badges and counts on Home and in the

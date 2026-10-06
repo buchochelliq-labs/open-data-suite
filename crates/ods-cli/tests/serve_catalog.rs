@@ -877,3 +877,212 @@ fn a_recorded_checks_findings_reach_the_badges_with_their_time() {
     let home = json(&server, "api/home");
     assert!(home.get("health_recorded_at").is_none(), "{home:#}");
 }
+
+/// ADR-0030 §2–3: a check declared in `[[health.checks]]` runs on the project's own
+/// metadata, in the dashboard's badges and in `ods health check`'s gate, with no build
+/// needed to decide it.
+#[test]
+fn a_declared_check_reaches_the_badges_and_gates_health_check() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let declared = "[[health.checks]]\nid = \"models.tested\"\nselect = { resource_type = [\"model\"] }\nrequire = [\"tests\"]\nseverity = \"error\"\n";
+    let server = serve_with(&target, &[], Some(declared));
+    let view = json(&server, "api/catalog");
+    let finding = |id: &str| -> Value {
+        let row = view["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("no {id}"));
+        row["health"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["check"] == "models.tested")
+            .unwrap_or_else(|| panic!("{row:#}"))
+            .clone()
+    };
+    // stg_customers has no tests in the demo project; stg_orders has.
+    let untested = finding("model.jaffle_ods.stg_customers");
+    assert_eq!(untested["status"], "fail", "{untested:#}");
+    assert_eq!(untested["source"], "declarative");
+    assert_eq!(untested["reason"], "models.tested: no tests");
+    assert_eq!(finding("model.jaffle_ods.stg_orders")["status"], "pass");
+    assert!(
+        view["health_how"]
+            .as_str()
+            .unwrap()
+            .contains("models.tested (error, declared): requires tests"),
+        "{}",
+        view["health_how"]
+    );
+    drop(server);
+
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("ods.toml"), declared).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--json", "--target-dir"])
+        .arg(&target)
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(out.status.code(), Some(5), "{envelope:#}");
+    assert_eq!(
+        envelope["diagnostics"][0]["code"], "ODS-E0701",
+        "{envelope:#}"
+    );
+    let checks: Vec<&Value> = envelope["result"]["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{envelope:#}"))
+        .iter()
+        .filter(|c| c["id"] == "models.tested")
+        .collect();
+    assert_eq!(checks.len(), 1, "{envelope:#}");
+    assert_eq!(checks[0]["source"], "declarative");
+}
+
+/// A declared check that can't run as written is a configuration error (exit 4).
+#[test]
+fn a_misdeclared_check_is_a_configuration_error() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("ods.toml"),
+        "[[health.checks]]\nid = \"documented\"\nrequire = [\"owner\"]\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["serve", "--target-dir"])
+        .arg(fixtures("jaffle-ods/artifacts/dbt-1.10"))
+        .args(["--port", "0", "--json", "--no-watch"])
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("health.checks[0].require"), "{message}");
+    assert!(
+        message.contains("`description`"),
+        "names what it can require: {message}"
+    );
+}
+
+/// ADR-0030 §3: a coverage target is judged on Home and gates `ods health check`
+/// when missed at severity error.
+#[test]
+fn a_coverage_target_is_shown_on_home_and_gates_health_check() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let toml = "[health.coverage.tests]\ntarget = 1.0\nseverity = \"error\"\n";
+    let server = serve_with(&target, &[], Some(toml));
+    let home = json(&server, "api/home");
+    let tests = home["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "tests")
+        .unwrap()["target"]
+        .clone();
+    assert_eq!(
+        tests["status"], "fail",
+        "not every demo model has tests: {tests:#}"
+    );
+    assert_eq!(tests["target"], 1.0);
+    let (_, page) = get(&server, "");
+    assert!(
+        page.contains(r#"<span class="cov-target" data-status="missed""#),
+        "{page}"
+    );
+    assert!(page.contains(r#"<span class="mark" style="left:100%"></span>"#));
+    drop(server);
+
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::write(home_dir.path().join("ods.toml"), toml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--json", "--target-dir"])
+        .arg(&target)
+        .current_dir(home_dir.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home_dir.path())
+        .output()
+        .unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(out.status.code(), Some(5), "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("the tests coverage target at severity error isn't met"),
+        "{message}"
+    );
+    assert_eq!(envelope["result"]["coverage"][0]["measure"], "tests");
+    assert_eq!(envelope["result"]["coverage"][0]["status"], "fail");
+}
+
+/// #403 review: `ods health check` judges source freshness coverage on the same
+/// evidence as the dashboard, `sources.json` included, so the two agree.
+#[test]
+fn health_check_and_home_judge_freshness_coverage_on_the_same_evidence() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build").join("manifest.json"),
+        target.join("manifest.json"),
+    )
+    .unwrap();
+    // A source measured only by `sources.json`: no `loaded_at_field` of its own.
+    let path = target.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest["sources"]["source.jaffle_ods.landing.feed"] = serde_json::json!({
+        "unique_id": "source.jaffle_ods.landing.feed",
+        "resource_type": "source",
+        "name": "feed",
+        "source_name": "landing",
+        "relation_name": "\"landing\".\"feed\"",
+        "config": {"enabled": true}
+    });
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        target.join("sources.json"),
+        sources_json("2026-09-25T06:40:00Z", "2026-09-25T06:30:00+00:00").to_string(),
+    )
+    .unwrap();
+    let toml = "[health.coverage.source_freshness]\ntarget = 1.0\nseverity = \"error\"\n";
+
+    let server = serve_with(&target, &[], Some(toml));
+    let home = json(&server, "api/home");
+    let verdict = home["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "source_freshness")
+        .unwrap()["target"]["status"]
+        .clone();
+    drop(server);
+
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::write(home_dir.path().join("ods.toml"), toml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--json", "--target-dir"])
+        .arg(&target)
+        .current_dir(home_dir.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home_dir.path())
+        .output()
+        .unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    let checked = envelope["result"]["coverage"][0].clone();
+    assert_eq!(checked["measure"], "source_freshness", "{envelope:#}");
+    assert_eq!(
+        checked["status"], verdict,
+        "the dashboard says {verdict}: {checked:#}"
+    );
+    assert_eq!(verdict, "pass", "sources.json measures it");
+    assert_eq!(out.status.code(), Some(0), "{envelope:#}");
+}

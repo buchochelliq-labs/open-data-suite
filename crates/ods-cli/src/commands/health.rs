@@ -9,7 +9,9 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_config::Loaded;
 use ods_core::state::Timestamp;
 use ods_health::record::{self, HealthRecord};
-use ods_health::{CheckRun, CheckSource, Finding, Health, HealthBadge, HealthReport, Severity};
+use ods_health::{
+    CheckRun, CheckSource, CoverageFinding, Finding, Health, HealthBadge, HealthReport, Severity,
+};
 use ods_health::{HEALTHS, LastFailures, Status};
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
@@ -96,6 +98,9 @@ pub(super) struct CheckReport {
     counts: BTreeMap<Health, usize>,
     /// Every node, by id.
     nodes: Vec<NodeHealth>,
+    /// Each coverage target's verdict on the project as a whole (`[health.coverage]`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    coverage: Vec<CoverageFinding>,
     /// Whether the verdict fails: exit 5.
     failed: bool,
 }
@@ -105,7 +110,9 @@ impl CheckReport {
         let health = super::serve_dashboard::health_settings(config)?;
         let strict = args.get_flag("strict");
         let settings = StateSettings::resolve(args, config)?;
-        let ws = Workspace::load(args, &settings, Sources::Ignore)?;
+        // Source freshness results as the dashboard reads them (`--sources`, else
+        // `<target-dir>/sources.json`), so coverage is judged on the same evidence.
+        let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
         let scope = ws.scope.to_string();
         // Read only: no database is created or migrated to check health.
         let (latest, runs_index) = if ws.state_db.is_file() {
@@ -135,7 +142,11 @@ impl CheckReport {
         let last_run_known = failures.is_some();
         let check_scope = ods_web::health::check_scope(&catalog, failures);
         let checked_at = Timestamp::now();
-        let report: HealthReport = block_on(health.run(&check_scope, ods_health::CHECK_TIMEOUT))?;
+        // Coverage is measured as the dashboard measures it (ADR-0030 §3).
+        let measured =
+            ods_web::health::project_coverage(&catalog, &super::serve_catalog::freshness(&ws));
+        let report: HealthReport = block_on(health.run(&check_scope, ods_health::CHECK_TIMEOUT))?
+            .with_coverage(health.coverage(&measured));
         let recorded = if args.get_flag("no-record") || !ws.state_db.is_file() {
             None
         } else {
@@ -164,6 +175,7 @@ impl CheckReport {
             recorded,
             last_run_known,
             checks: report.checks,
+            coverage: report.coverage,
             counts,
             nodes: report
                 .badges
@@ -195,19 +207,37 @@ impl CheckReport {
         let failing: Vec<&str> = self
             .nodes
             .iter()
-            .filter(|n| n.findings.iter().any(|f| self.fails(f)))
+            .filter(|n| n.findings.iter().any(|f| self.fails(f.severity, f.status)))
             .map(|n| n.id.as_str())
             .collect();
+        let missed: Vec<&str> = self
+            .coverage
+            .iter()
+            .filter(|c| self.fails(c.severity, c.status))
+            .map(|c| c.measure.as_str())
+            .collect();
+        let mut parts = Vec::new();
+        if !failing.is_empty() {
+            parts.push(format!(
+                "{} node{} fail{} a health check at severity error",
+                failing.len(),
+                if failing.len() == 1 { "" } else { "s" },
+                if failing.len() == 1 { "s" } else { "" },
+            ));
+        }
+        if !missed.is_empty() {
+            parts.push(format!(
+                "the {} coverage target{} at severity error {} met",
+                missed.join(", "),
+                if missed.len() == 1 { "" } else { "s" },
+                if missed.len() == 1 { "isn't" } else { "aren't" },
+            ));
+        }
         Some(
             CliError::new(
                 ExitStatus::CheckFailed,
                 codes::HEALTH_FAILED,
-                format!(
-                    "{} node{} fail{} a health check at severity error",
-                    failing.len(),
-                    if failing.len() == 1 { "" } else { "s" },
-                    if failing.len() == 1 { "s" } else { "" },
-                ),
+                parts.join("; "),
             )
             .with_hint(if self.strict {
                 "each node above says why; with --strict, a check at severity error that can't decide fails too"
@@ -217,11 +247,47 @@ impl CheckReport {
         )
     }
 
-    /// Whether `finding` makes the verdict fail.
-    fn fails(&self, finding: &Finding) -> bool {
-        finding.severity == Severity::Error
-            && (finding.status == Status::Fail
-                || (self.strict && finding.status == Status::Unknown))
+    /// The coverage targets and their verdicts, when any is set.
+    fn coverage_table(&self) -> Option<ViewNode> {
+        (!self.coverage.is_empty()).then(|| ViewNode::Table {
+            title: Some("Coverage targets".to_owned()),
+            columns: vec![
+                "measure".into(),
+                "target".into(),
+                "verdict".into(),
+                "why".into(),
+            ],
+            rows: self
+                .coverage
+                .iter()
+                .map(|c| {
+                    let (verdict, tone) = match c.status {
+                        Status::Pass => ("met", Tone::Success),
+                        Status::Fail if c.severity == Severity::Error => ("missed", Tone::Error),
+                        Status::Fail => ("missed", Tone::Warning),
+                        _ => ("unknown", Tone::Muted),
+                    };
+                    vec![
+                        vec![Span::toned(c.measure.as_str(), Tone::Code)],
+                        vec![Span::plain(format!(
+                            "{} ({})",
+                            c.target,
+                            severity(c.severity)
+                        ))],
+                        vec![Span::toned(verdict, tone)],
+                        vec![Span::plain(c.reason.as_str())],
+                    ]
+                })
+                .collect(),
+            breaks: Vec::new(),
+            footer: None,
+        })
+    }
+
+    /// Whether a finding or verdict at `severity` with `status` makes the verdict fail.
+    fn fails(&self, severity: Severity, status: Status) -> bool {
+        severity == Severity::Error
+            && (status == Status::Fail || (self.strict && status == Status::Unknown))
     }
 }
 
@@ -252,6 +318,7 @@ fn tone(health: Health) -> Tone {
 fn source(source: CheckSource) -> &'static str {
     match source {
         CheckSource::Builtin => "built-in",
+        CheckSource::Declarative => "declared",
         _ => "plugin",
     }
 }
@@ -325,6 +392,7 @@ impl Present for CheckReport {
             breaks: Vec::new(),
             footer: None,
         });
+        blocks.extend(self.coverage_table());
         let unhealthy: Vec<&NodeHealth> = self
             .nodes
             .iter()
