@@ -68,9 +68,9 @@ impl fmt::Display for Literal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(
     not(test),
-    expect(
+    allow(
         dead_code,
-        reason = "evaluated on a probe's row once probes run (#392)"
+        reason = "evaluated on a probe's row once probes run (#392); MSRV rustc reports only the outermost unused item, so `expect` wouldn't hold"
     )
 )]
 pub(crate) enum Verdict {
@@ -308,9 +308,9 @@ impl Pass {
     /// Its verdict on `row`, a column's value by lowercased name.
     #[cfg_attr(
         not(test),
-        expect(
+        allow(
             dead_code,
-            reason = "evaluated on a probe's row once probes run (#392)"
+            reason = "evaluated on a probe's row once probes run (#392); MSRV rustc reports only the outermost unused item, so `expect` wouldn't hold"
         )
     )]
     pub(crate) fn evaluate(&self, row: &BTreeMap<String, String>) -> Verdict {
@@ -333,9 +333,9 @@ impl Pass {
 impl Comparison {
     #[cfg_attr(
         not(test),
-        expect(
+        allow(
             dead_code,
-            reason = "evaluated on a probe's row once probes run (#392)"
+            reason = "evaluated on a probe's row once probes run (#392); MSRV rustc reports only the outermost unused item, so `expect` wouldn't hold"
         )
     )]
     fn evaluate(&self, row: &BTreeMap<String, String>) -> Verdict {
