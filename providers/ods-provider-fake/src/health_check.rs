@@ -105,6 +105,7 @@ impl HealthCheck for FakeHealthCheck {
             .map(|node| {
                 if self.failing.contains(&node.id) {
                     CheckFinding::new(&node.id, Status::Fail, "the fake check fails it")
+                        .with_evidence("told_to", "fail")
                 } else if self.unknown.contains(&node.id) {
                     CheckFinding::new(&node.id, Status::Unknown, "the fake check can't tell")
                 } else {

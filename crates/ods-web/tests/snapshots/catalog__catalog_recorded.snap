@@ -228,6 +228,10 @@ expression: pretty(view)
           },
           {
             "check": "last_run_failed",
+            "evidence": {
+              "last_run_command": "ods state build",
+              "last_run_started_at": "2026-09-28T08:59:00Z"
+            },
             "reason": "didn't fail in the last run",
             "severity": "error",
             "source": "builtin",
@@ -235,6 +239,10 @@ expression: pretty(view)
           },
           {
             "check": "last_run_skipped",
+            "evidence": {
+              "last_run_command": "ods state build",
+              "last_run_started_at": "2026-09-28T08:59:00Z"
+            },
             "reason": "wasn't skipped in the last run",
             "severity": "warn",
             "source": "builtin",
@@ -242,6 +250,9 @@ expression: pretty(view)
           },
           {
             "check": "tests_required",
+            "evidence": {
+              "tests": "0"
+            },
             "reason": "no tests: nothing checks its data",
             "severity": "warn",
             "source": "builtin",
@@ -249,6 +260,9 @@ expression: pretty(view)
           },
           {
             "check": "tests_passed",
+            "evidence": {
+              "tests": "0"
+            },
             "reason": "a model has no tests to run",
             "severity": "warn",
             "source": "builtin",
@@ -287,6 +301,10 @@ expression: pretty(view)
         "findings": [
           {
             "check": "built",
+            "evidence": {
+              "built_at": "2026-09-28T09:00:00Z",
+              "run_id": "9ea38bd5-0000-4000-8000-000000000002"
+            },
             "reason": "built in run 9ea38bd5 at 2026-09-28T09:00:00Z",
             "severity": "warn",
             "source": "builtin",
@@ -294,6 +312,11 @@ expression: pretty(view)
           },
           {
             "check": "last_run_failed",
+            "evidence": {
+              "built_at": "2026-09-28T09:00:00Z",
+              "last_run_command": "ods state build",
+              "last_run_started_at": "2026-09-28T08:59:00Z"
+            },
             "reason": "didn't fail in the last run",
             "severity": "error",
             "source": "builtin",
@@ -301,6 +324,11 @@ expression: pretty(view)
           },
           {
             "check": "last_run_skipped",
+            "evidence": {
+              "built_at": "2026-09-28T09:00:00Z",
+              "last_run_command": "ods state build",
+              "last_run_started_at": "2026-09-28T08:59:00Z"
+            },
             "reason": "wasn't skipped in the last run",
             "severity": "warn",
             "source": "builtin",
@@ -308,6 +336,9 @@ expression: pretty(view)
           },
           {
             "check": "tests_required",
+            "evidence": {
+              "tests": "3"
+            },
             "reason": "3 test(s) read it",
             "severity": "warn",
             "source": "builtin",
@@ -315,6 +346,13 @@ expression: pretty(view)
           },
           {
             "check": "tests_passed",
+            "evidence": {
+              "run_id": "9ea38bd5-0000-4000-8000-000000000002",
+              "tested_at": "2026-09-28T09:05:00Z",
+              "tested_run_id": "9ea38bd5-0000-4000-8000-000000000002",
+              "tests": "3",
+              "tests_current": "true"
+            },
             "reason": "its tests passed in run 9ea38bd5 at 2026-09-28T09:05:00Z",
             "severity": "warn",
             "source": "builtin",
@@ -361,6 +399,10 @@ expression: pretty(view)
         "findings": [
           {
             "check": "built",
+            "evidence": {
+              "built_at": "2026-09-27T09:00:00Z",
+              "run_id": "e6f54fe3-0000-4000-8000-000000000001"
+            },
             "reason": "built in run e6f54fe3 at 2026-09-27T09:00:00Z",
             "severity": "warn",
             "source": "builtin",
@@ -368,6 +410,11 @@ expression: pretty(view)
           },
           {
             "check": "last_run_failed",
+            "evidence": {
+              "built_at": "2026-09-27T09:00:00Z",
+              "last_run_command": "ods state build",
+              "last_run_started_at": "2026-09-28T08:59:00Z"
+            },
             "reason": "didn't fail in the last run",
             "severity": "error",
             "source": "builtin",
@@ -375,6 +422,11 @@ expression: pretty(view)
           },
           {
             "check": "last_run_skipped",
+            "evidence": {
+              "built_at": "2026-09-27T09:00:00Z",
+              "last_run_command": "ods state build",
+              "last_run_started_at": "2026-09-28T08:59:00Z"
+            },
             "reason": "wasn't skipped in the last run",
             "severity": "warn",
             "source": "builtin",
@@ -389,6 +441,10 @@ expression: pretty(view)
           },
           {
             "check": "tests_passed",
+            "evidence": {
+              "run_id": "e6f54fe3-0000-4000-8000-000000000001",
+              "tests": "0"
+            },
             "reason": "a seed has no tests to run",
             "severity": "warn",
             "source": "builtin",

@@ -501,9 +501,10 @@ mod registered {
     }
 
     #[tokio::test]
-    async fn answers_about_strangers_are_ignored() {
+    async fn an_answer_about_a_stranger_voids_the_whole_check() {
         let report = run(&with(
             FakeHealthCheck::new("owner", Severity::Error)
+                .failing("model.p.b")
                 .misbehaving(Misbehaviour::AnswersAStranger),
         ))
         .await;
@@ -511,7 +512,35 @@ mod registered {
             report.badges.keys().collect::<Vec<_>>(),
             ["model.p.a", "model.p.b"]
         );
-        assert!(!report.fails(true));
+        for node in ["model.p.a", "model.p.b"] {
+            let finding = plugin_finding(&report, node);
+            assert_eq!(finding.status, Status::Unknown, "{node}");
+            assert!(
+                finding.reason.contains("model.stranger"),
+                "{}",
+                finding.reason
+            );
+        }
+        assert!(!report.fails(false));
+        assert!(report.fails(true));
+    }
+
+    #[tokio::test]
+    async fn a_checks_evidence_is_kept() {
+        let report = run(&with(
+            FakeHealthCheck::new("owner", Severity::Warn).failing("model.p.a"),
+        ))
+        .await;
+        let finding = plugin_finding(&report, "model.p.a");
+        assert_eq!(finding.evidence["told_to"], "fail");
+        assert!(plugin_finding(&report, "model.p.b").evidence.is_empty());
+        let built = report.badges["model.p.a"]
+            .findings
+            .iter()
+            .find(|f| f.check == "built")
+            .unwrap();
+        assert_eq!(built.evidence["run_id"], "run-1");
+        assert_eq!(built.evidence["built_at"], "2026-09-28T09:00:00Z");
     }
 
     #[tokio::test(start_paused = true)]
