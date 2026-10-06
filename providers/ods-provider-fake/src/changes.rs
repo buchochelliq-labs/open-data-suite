@@ -8,7 +8,7 @@ use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion, VersionReport};
 use ods_sdk::contracts::probe::{
-    ProbeAnswer, ProbeReport, ProbeRequest, ProbeRow, ProbeTarget, RelationProbe,
+    ProbeAnswer, ProbeReport, ProbeRequest, ProbeRow, ProbeStatement, ProbeTarget, RelationProbe,
 };
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -141,6 +141,9 @@ struct FakeRelation {
     format: Option<String>,
     /// Its name in the warehouse, when set: a target expecting another is unknown.
     named: Option<String>,
+    /// Its database, schema and name, when set: a by-name statement can't run on one
+    /// with a quote, backslash or brace.
+    parts: Option<[String; 3]>,
     /// Statement template → its first row.
     rows: BTreeMap<String, ProbeRow>,
 }
@@ -177,6 +180,7 @@ impl FakeRelationProbe {
                 kind: kind.into(),
                 format: format.map(str::to_owned),
                 named: None,
+                parts: None,
                 rows: BTreeMap::new(),
             },
         );
@@ -218,6 +222,15 @@ impl FakeRelationProbe {
     pub fn named(self, source: &str, relation: impl Into<String>) -> Self {
         if let Some(found) = lock(&self.relations).get_mut(source) {
             found.named = Some(relation.into());
+        }
+        self
+    }
+
+    /// `source`'s relation is `name` in `schema` of `database`.
+    #[must_use]
+    pub fn with_parts(self, source: &str, database: &str, schema: &str, name: &str) -> Self {
+        if let Some(found) = lock(&self.relations).get_mut(source) {
+            found.parts = Some([database, schema, name].map(str::to_owned));
         }
         self
     }
@@ -321,6 +334,15 @@ impl RelationProbe for FakeRelationProbe {
                                 "it is `{named}` here, not `{}`",
                                 t.relation.as_deref().unwrap_or_default()
                             ))
+                        }
+                        Some(FakeRelation {
+                            parts: Some(parts), ..
+                        }) if request.statements().iter().any(ProbeStatement::is_by_name)
+                            && parts.iter().any(|p| p.contains(['\'', '\\', '{', '}'])) =>
+                        {
+                            ProbeAnswer::Unknown(
+                                "its name can't be put in a string literal".to_owned(),
+                            )
                         }
                         Some(relation) => Self::answer(relation, request),
                     };

@@ -26,6 +26,10 @@
 //!   relation the implementation finds for it is that one (compared ignoring case, as
 //!   warehouses differ on it); another (e.g. the node resolved under another target or
 //!   schema) is [`ProbeAnswer::Unknown`], saying which, and nothing runs against it.
+//! - A [by-name](ProbeStatement::by_name) statement gets the relation's database
+//!   (catalog), schema and name as string literals in place of [`NAME_PARTS`]. An
+//!   implementation that can't write a part as a literal safely (e.g. it has a quote)
+//!   answers [`ProbeAnswer::Unknown`] for that relation and runs nothing against it.
 //! - A target the implementation didn't recognise, or couldn't probe, is
 //!   [`ProbeAnswer::Unknown`] with a reason, never `Rows` or `Skipped`: `Skipped` is only
 //!   for a relation it recognised that doesn't match the filter.
@@ -53,7 +57,7 @@ use crate::provider::{Contract, Provider};
 /// The `relation_probe` contract.
 pub const RELATION_PROBE: Contract = Contract {
     name: "relation_probe",
-    version: SchemaVersion::new(0, 2),
+    version: SchemaVersion::new(0, 3),
 };
 
 /// The placeholder a statement template names its relation with. The implementation
@@ -89,7 +93,16 @@ fn identifier(what: &str, name: &str) -> Result<String, InvalidProbe> {
 pub struct ProbeStatement {
     template: String,
     columns: Vec<String>,
+    /// Whether it names the relation's parts as string literals ([`NAME_PARTS`])
+    /// rather than the relation itself ([`PLACEHOLDER`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    by_name: bool,
 }
+
+/// The placeholders a [by-name](ProbeStatement::by_name) statement names its
+/// relation's parts with: its database (catalog), schema and name. The implementation
+/// replaces each with that part as a string literal, e.g. `'shop'`.
+pub const NAME_PARTS: [&str; 3] = ["{database}", "{schema}", "{name}"];
 
 impl ProbeStatement {
     /// A statement from `template`, which names its relation once, as [`PLACEHOLDER`],
@@ -115,14 +128,52 @@ impl ProbeStatement {
                 "`{template}` has braces other than `{PLACEHOLDER}`"
             )));
         }
-        let columns = columns
-            .into_iter()
-            .map(|c| identifier("column", &c.into()))
-            .collect::<Result<Vec<_>, _>>()?;
-        if columns.is_empty() {
-            return Err(InvalidProbe(format!("`{template}` returns no columns")));
+        Ok(Self {
+            columns: columns_of(&template, columns)?,
+            template,
+            by_name: false,
+        })
+    }
+
+    /// A statement about the relation from its catalog's metadata, e.g. its grants:
+    /// `template` names the relation's parts as [`NAME_PARTS`] (each any number of
+    /// times, at least one of them), which the implementation replaces with string
+    /// literals, and never the relation itself.
+    ///
+    /// # Errors
+    /// Returns [`InvalidProbe`] if the template names no part, names [`PLACEHOLDER`],
+    /// has other braces, or a column isn't a plain identifier, or there are no columns.
+    pub fn by_name(
+        template: impl Into<String>,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<Self, InvalidProbe> {
+        let template = template.into();
+        if template.contains(PLACEHOLDER) || !NAME_PARTS.iter().any(|p| template.contains(p)) {
+            return Err(InvalidProbe(format!(
+                "`{template}` must name its relation by its parts ({}), not as `{PLACEHOLDER}`",
+                NAME_PARTS.join(", ")
+            )));
         }
-        Ok(Self { template, columns })
+        let rest = NAME_PARTS
+            .iter()
+            .fold(template.clone(), |rest, part| rest.replace(part, ""));
+        if rest.contains(['{', '}']) {
+            return Err(InvalidProbe(format!(
+                "`{template}` has braces other than {}",
+                NAME_PARTS.join(", ")
+            )));
+        }
+        Ok(Self {
+            columns: columns_of(&template, columns)?,
+            template,
+            by_name: true,
+        })
+    }
+
+    /// Whether it names the relation's parts ([`by_name`](Self::by_name)) rather than
+    /// the relation.
+    pub fn is_by_name(&self) -> bool {
+        self.by_name
     }
 
     /// The template, with [`PLACEHOLDER`] where the relation goes.
@@ -139,6 +190,21 @@ impl ProbeStatement {
     pub fn render(&self, relation: &str) -> String {
         self.template.replace(PLACEHOLDER, relation)
     }
+}
+
+/// `columns`, checked: plain identifiers, at least one.
+fn columns_of(
+    template: &str,
+    columns: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<Vec<String>, InvalidProbe> {
+    let columns = columns
+        .into_iter()
+        .map(|c| identifier("column", &c.into()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if columns.is_empty() {
+        return Err(InvalidProbe(format!("`{template}` returns no columns")));
+    }
+    Ok(columns)
 }
 
 /// A node whose relation to probe: a source, model, seed or snapshot.
@@ -345,6 +411,20 @@ mod tests {
         assert!(ProbeStatement::new("select * from {relation}", ["a b"]).is_err());
         assert!(ProbeStatement::new("select * from {relation}", ["1a"]).is_err());
         assert!(ProbeStatement::new("select * from {relation}", Vec::<String>::new()).is_err());
+        let by_name = ProbeStatement::by_name(
+            "select count(*) as n from t where c = {database} and s = {schema} and n = {name} or n = {name}",
+            ["n"],
+        )
+        .unwrap();
+        assert!(by_name.is_by_name());
+        assert!(!ok.is_by_name());
+        for bad in [
+            "select 1",
+            "select * from {relation} where n = {name}",
+            "select {other} where n = {name}",
+        ] {
+            assert!(ProbeStatement::by_name(bad, ["a"]).is_err(), "{bad}");
+        }
     }
 
     #[test]

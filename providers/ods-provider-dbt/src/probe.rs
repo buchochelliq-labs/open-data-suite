@@ -28,14 +28,16 @@
 
 use std::collections::BTreeMap;
 
-use ods_sdk::contracts::probe::{PLACEHOLDER, ProbeRequest, ProbeRow};
+use ods_sdk::contracts::probe::{PLACEHOLDER, ProbeRequest, ProbeRow, ProbeStatement};
 use percent_encoding::percent_decode_str;
 
 /// Marks the row as ODS's answer, not something else dbt printed.
 const MARKER: &str = "ods_relation_probe";
 
-/// The query, with `@IDS@`, `@EXPECT@`, `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill
-/// in. Relation
+/// The query, with `@IDS@`, `@EXPECT@`, `@KINDS@`, `@FORMAT@`, `@NAMED@` and
+/// `@STATEMENTS@` to fill in. A by-name statement gets the relation's parts as string
+/// literals, written only when no part has a quote, backslash or brace, so no
+/// adapter's escaping rules matter. Relation
 /// quoting is left to the adapter: `rel|string` renders the name by its own rules. `execute` is
 /// false while dbt parses it, when there is no connection to ask.
 const TEMPLATE: &str = "\
@@ -54,8 +56,14 @@ s.identifier if s.resource_type == 'source' else s.alias) -%}\
 {%- do out.update({k: {'moved': (rel|string)|urlencode}}) -%}\
 {%- elif rel.type not in @KINDS@ -%}{%- do out.update({k: {'kind': (rel.type or '')|string|urlencode}}) -%}\
 @FORMAT@\
+@NAMED@\
 {%- else -%}{%- set rows = [] -%}\
-{%- for q, cols in qs -%}{%- set r = run_query(q.replace('@PLACEHOLDER@', rel|string)) -%}{%- set row = {} -%}\
+{%- for q, cols, named in qs -%}\
+{%- set sql = q.replace('{database}', \"'\" ~ (rel.database or '') ~ \"'\")\
+.replace('{schema}', \"'\" ~ (rel.schema or '') ~ \"'\")\
+.replace('{name}', \"'\" ~ (rel.identifier or '') ~ \"'\") \
+if named else q.replace('@PLACEHOLDER@', rel|string) -%}\
+{%- set r = run_query(sql) -%}{%- set row = {} -%}\
 {%- if r.rows|length > 0 -%}\
 {%- for c in cols -%}{%- set hits = [] -%}\
 {%- for n in r.column_names if n|lower == c|lower -%}{%- do hits.append(n) -%}{%- endfor -%}\
@@ -94,11 +102,19 @@ pub(crate) fn query(request: &ProbeRequest, targets: &[(&str, Option<&str>)]) ->
     // plain identifiers, and templates have no braces but the placeholder (the SDK
     // checks both), so nothing here can close a Jinja block.
     let kinds = serde_json::to_string(request.filter().relation_kinds()).unwrap_or_default();
-    let statements: Vec<(&str, &[String])> = request
+    let statements: Vec<(&str, &[String], bool)> = request
         .statements()
         .iter()
-        .map(|s| (s.template(), s.columns()))
+        .map(|s| (s.template(), s.columns(), s.is_by_name()))
         .collect();
+    // A relation whose parts can't be string literals as they are is never probed by
+    // name: unknown, saying why.
+    let named = if request.statements().iter().any(ProbeStatement::is_by_name) {
+        "{%- elif ((rel.database or '') ~ (rel.schema or '') ~ (rel.identifier or ''))\
+         |select('in', \"'\\\\{}\")|list -%}{%- do out.update({k: {'unsafe': 1}}) -%}"
+    } else {
+        ""
+    };
     let statements = serde_json::to_string(&statements).unwrap_or_default();
     let sent: Vec<&(&str, Option<&str>)> = targets
         .iter()
@@ -123,6 +139,7 @@ pub(crate) fn query(request: &ProbeRequest, targets: &[(&str, Option<&str>)]) ->
         .replace("@EXPECT@", &expect)
         .replace("@KINDS@", &kinds)
         .replace("@FORMAT@", &format)
+        .replace("@NAMED@", named)
         .replace("@PLACEHOLDER@", PLACEHOLDER)
         .replace("@STATEMENTS@", &statements)
 }
@@ -134,6 +151,8 @@ pub(crate) enum Found {
     Missing,
     /// The adapter's relation for it isn't the one expected: this one.
     Moved(String),
+    /// A part of its name can't be a string literal as it is.
+    Unsafe,
     /// A relation of another kind, as the adapter names it.
     Kind(String),
     /// The adapter didn't confirm the filter's format.
@@ -161,6 +180,9 @@ fn decode(text: &str) -> Result<String, String> {
 fn found(answer: &serde_json::Value) -> Result<Found, String> {
     if answer.get("missing").is_some() {
         return Ok(Found::Missing);
+    }
+    if answer.get("unsafe").is_some() {
+        return Ok(Found::Unsafe);
     }
     if let Some(moved) = answer.get("moved") {
         return moved
@@ -240,7 +262,7 @@ pub(crate) fn parse(stdout: &str) -> Result<Probed, String> {
 
 #[cfg(test)]
 mod tests {
-    use ods_sdk::contracts::probe::{ProbeFilter, ProbeStatement};
+    use ods_sdk::contracts::probe::ProbeFilter;
 
     use super::*;
 
@@ -296,11 +318,11 @@ mod tests {
         assert!(query.contains("rel.is_columnar is sameas true"), "{query}");
         // Templates are JSON string literals, which Jinja reads the same way.
         assert!(
-            query.contains(r#"["DESCRIBE DETAIL {relation}",["id","format"]]"#),
+            query.contains(r#"["DESCRIBE DETAIL {relation}",["id","format"],false]"#),
             "{query}"
         );
         assert!(
-            query.contains(r#"["select \"v\" from {relation} where x = 'a\\b'",["v"]]"#),
+            query.contains(r#"["select \"v\" from {relation} where x = 'a\\b'",["v"],false]"#),
             "{query}"
         );
         assert!(
@@ -308,17 +330,44 @@ mod tests {
             "{query}"
         );
         assert!(!query.contains('@'), "every marker is filled: {query}");
-        // Command-line arguments are limited in size (less on Windows).
-        assert!(query.len() < 2048, "{}", query.len());
+        // Command-line arguments are limited in size (32 KiB in all on Windows): the
+        // query, with up to 8 KiB of ids, must stay well under it.
+        assert!(query.len() < 4096, "{}", query.len());
         assert!(plain_id("seed.p.my-seed_2"));
         assert!(!plain_id("source.p.raw.\"x\""));
         assert!(!plain_id(""));
     }
 
     #[test]
+    fn by_name_statements_get_the_parts_as_literals_or_nothing_runs() {
+        let request = ProbeRequest::new(
+            ProbeFilter::kinds(["table"]).unwrap(),
+            vec![
+                ProbeStatement::by_name(
+                    "select count(*) as n from t where c = {database} and n = {name}",
+                    ["n"],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let query = query(&request, &[("source.p.raw.a", None)]);
+        assert!(query.contains(",[\"n\"],true]"), "{query}");
+        assert!(query.contains("q.replace('{database}'"), "{query}");
+        assert!(
+            query.contains(
+                r#"|select('in', "'\\{}")|list -%}{%- do out.update({k: {'unsafe': 1}}) -%}"#
+            ),
+            "the guard is exactly a quote, a backslash and the braces: {query}"
+        );
+        assert!(!query.contains('@'), "every marker is filled: {query}");
+    }
+
+    #[test]
     fn without_a_format_nothing_is_confirmed() {
         let query = query(&request(None), &[]);
         assert!(query.contains("set expect = {}"), "{query}");
+        assert!(!query.contains("'unsafe'"), "no by-name statement: {query}");
         assert!(!query.contains("is sameas true"), "{query}");
         assert!(!query.contains("'format'"), "{query}");
     }
@@ -344,6 +393,7 @@ mod tests {
                 "source.p.raw.c": {"format": 0},
                 "source.p.raw.d": {"missing": 1},
                 "source.p.raw.e": {"moved": "%22db%22.%22x%22.%22e%22"},
+                "source.p.raw.f": {"unsafe": 1},
             },
         });
         let probed = parse(&format!("not json\n{}\n", shown(&answer))).unwrap();
@@ -360,6 +410,7 @@ mod tests {
         assert_eq!(probed.sources["source.p.raw.b"], Found::Kind("view".into()));
         assert_eq!(probed.sources["source.p.raw.c"], Found::Format);
         assert_eq!(probed.sources["source.p.raw.d"], Found::Missing);
+        assert_eq!(probed.sources["source.p.raw.f"], Found::Unsafe);
         assert_eq!(
             probed.sources["source.p.raw.e"],
             Found::Moved("\"db\".\"x\".\"e\"".to_owned())

@@ -1496,6 +1496,11 @@ fn probe_answer(found: crate::probe::Found, request: &ProbeRequest) -> ProbeAnsw
     use crate::probe::Found;
     match found {
         Found::Missing => ProbeAnswer::Unknown("dbt's adapter has no such relation".to_owned()),
+        Found::Unsafe => ProbeAnswer::Unknown(
+            "its database, schema or name has a quote, backslash or brace, which the probe \
+             doesn't put in a string literal"
+                .to_owned(),
+        ),
         Found::Moved(relation) => ProbeAnswer::Unknown(format!(
             "dbt resolves it to `{relation}` here, not the relation expected, so it wasn't probed"
         )),

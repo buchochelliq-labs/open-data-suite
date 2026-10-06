@@ -31,6 +31,13 @@ pub trait ProbeHarness: Send + Sync {
     fn elsewhere(&self) -> Option<ProbeTarget> {
         None
     }
+
+    /// A request with a [by-name](crate::contracts::probe::ProbeStatement::by_name)
+    /// statement, and a matching target whose database, schema or name has a quote,
+    /// backslash or brace, if the harness has one. `None` (the default) skips the case.
+    fn unsafe_name(&self) -> Option<(ProbeRequest, ProbeTarget)> {
+        None
+    }
 }
 
 fn ids(targets: &[ProbeTarget]) -> Vec<String> {
@@ -167,6 +174,26 @@ async fn a_target_found_elsewhere_is_never_probed(harness: &dyn ProbeHarness) ->
     true
 }
 
+async fn a_name_that_cant_be_a_literal_is_never_probed(harness: &dyn ProbeHarness) -> bool {
+    let case = "a_name_that_cant_be_a_literal_is_never_probed";
+    let Some((request, target)) = harness.unsafe_name() else {
+        return false;
+    };
+    let probe = harness.probe().await;
+    let report = run_probe(
+        case,
+        probe.as_ref(),
+        &request,
+        std::slice::from_ref(&target),
+    )
+    .await;
+    assert!(
+        matches!(answer(&report, &target.id), ProbeAnswer::Unknown(why) if !why.is_empty()),
+        "{case}: {report:?}"
+    );
+    true
+}
+
 /// Runs every case against `harness`.
 pub async fn run(harness: &dyn ProbeHarness) -> Report {
     let mut report = Report::default();
@@ -186,6 +213,16 @@ pub async fn run(harness: &dyn ProbeHarness) -> Report {
         report.skipped.push((
             "relations_the_filter_excludes_are_skipped",
             "the harness has no relation the filter excludes".to_owned(),
+        ));
+    }
+    if a_name_that_cant_be_a_literal_is_never_probed(harness).await {
+        report
+            .passed
+            .push("a_name_that_cant_be_a_literal_is_never_probed");
+    } else {
+        report.skipped.push((
+            "a_name_that_cant_be_a_literal_is_never_probed",
+            "the harness has no relation whose name can't be a literal".to_owned(),
         ));
     }
     if a_target_found_elsewhere_is_never_probed(harness).await {

@@ -43,7 +43,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_PROBE  JSON file standing in for the warehouse, for ODS's relation probe
                   (`show --inline` of an `ods_relation_probe` query): source name (e.g.
                   `raw.orders`) or model, seed or snapshot name (e.g. `orders`) ->
-                  {"type": "table", "relation": "<its name, when a test checks it>", "formats": ["delta"], "rows":
+                  {"type": "table", "relation": "<its name, when a test checks it>",
+                  "identifier": "<its name in the warehouse, when a test checks it>", "formats": ["delta"], "rows":
                   {"<statement template>": {"<column>": "<value>"}}}. A source not in it
                   has no relation; a statement with no row returns none. Read on each call,
                   so a test can change it between runs.
@@ -331,6 +332,7 @@ def probe(query, manifest, target):
     write(os.path.join(target, "manifest.json"), manifest)
     quote = lambda v: urllib.parse.quote(str(v), safe="/")
     out = {}
+    named = any(len(st) > 2 and st[2] for st in statements)
     probeable = {k: f"{s['source_name']}.{s['name']}" for k, s in manifest["sources"].items()}
     probeable.update({k: n["name"] for k, n in manifest["nodes"].items()
                       if n["resource_type"] in ("model", "seed", "snapshot")})
@@ -347,12 +349,14 @@ def probe(query, manifest, target):
             out[quote(source_id)] = {"kind": quote(rel.get("type") or "")}
         elif fmt and fmt.group(1) not in rel.get("formats", []):
             out[quote(source_id)] = {"format": 0}
+        elif named and any(c in rel.get("identifier", "") for c in "'\\{}"):
+            out[quote(source_id)] = {"unsafe": 1}
         else:
             if os.environ.get("FAKE_DBT_PROBED"):
                 with open(os.environ["FAKE_DBT_PROBED"], "a") as f:
                     f.write(source_id + "\n")
             rows = []
-            for template, columns in statements:
+            for template, columns, *_ in statements:
                 row = rel.get("rows", {}).get(template, {})
                 rows.append({c: quote(row[c]) for c in columns if row.get(c) is not None})
             out[quote(source_id)] = {"rows": rows}

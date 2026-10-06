@@ -16,7 +16,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 - `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
   gains `test_types`, `described` and `constraints` (all default when absent). **What
   to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
-- The `relation_probe` contract is 0.2 (#392, ADR-0030 §5): `RelationProbe::probe` takes
+- The `relation_probe` contract is 0.3 (#392, ADR-0030 §5, §4e). 0.3: a probe statement
+  can name the relation's parts as string literals (`ProbeStatement::by_name`,
+  `{database}`, `{schema}`, `{name}`); an implementation that can't write a part as a
+  literal safely answers unknown and runs nothing (conformance case
+  `a_name_that_cant_be_a_literal_is_never_probed`). 0.2: `RelationProbe::probe` takes
   `ProbeTarget`s (an id and a name, for any node with a relation, not only sources) in
   place of `RequestedSource`s, `ProbeReport::sources` is `targets`, a `ProbeRequest` can
   carry a timeout, and statements run only against the requested targets' relations.
@@ -29,6 +33,15 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- Probe checks on Databricks check their login in Unity Catalog (#392, ADR-0030 §4e):
+  `ods health check` reads `system.information_schema` through the probe target's own
+  connection and runs a probe only on a managed table, view or materialized view whose
+  login (or its groups) owns none of the relation, schema, catalog or metastore, holds
+  nothing on them or the metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and
+  `USE SCHEMA`, and isn't a workspace admin; anything it can't read, and any external
+  table, is *unknown*. Known limits (e.g. account admins aren't visible) and how they
+  will be fixed are listed in ADR-0030 §4e. The Databricks provider has `UnityCatalog`,
+  a `relation_probe` that also reports `relation_privileges`.
 - Probe checks run (#392, ADR-0030 §4c): on their own dbt target, `[health.probes]`
   `target` (and optional `profile`), never the build's; without one they don't run.
   dbt probes sources, models, seeds and snapshots, matching the query's columns whatever

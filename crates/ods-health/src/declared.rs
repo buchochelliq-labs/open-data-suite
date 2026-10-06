@@ -110,8 +110,8 @@ pub(crate) struct Configured {
 
 /// One declared check, of either kind.
 enum One {
-    Declared(Declared),
-    Probe(crate::probe::Probe),
+    Declared(Box<Declared>),
+    Probe(Box<crate::probe::Probe>),
 }
 
 impl Declared {
@@ -163,7 +163,7 @@ impl Declared {
                         return crate::probe::Probe::from_config(
                             config, &at, severity, select, exclude, probes,
                         )
-                            .map(One::Probe);
+                            .map(|p| One::Probe(Box::new(p)));
                     }
                     Some("script") => {
                         return Err(HealthConfigError(format!(
@@ -193,13 +193,13 @@ impl Declared {
                     .iter()
                     .map(|item| Requirement::parse(item, &at))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(One::Declared(Self {
+                Ok(One::Declared(Box::new(Self {
                     id: config.id.clone(),
                     severity,
                     select,
                     exclude,
                     require,
-                }))
+                })))
             })
             .collect::<Result<Vec<One>, HealthConfigError>>()?;
         let mut configured = Configured {
@@ -208,8 +208,8 @@ impl Declared {
         };
         for one in all {
             match one {
-                One::Declared(d) => configured.declared.push(d),
-                One::Probe(p) => configured.probes.push(p),
+                One::Declared(d) => configured.declared.push(*d),
+                One::Probe(p) => configured.probes.push(*p),
             }
         }
         Ok(configured)
