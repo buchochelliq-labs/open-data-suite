@@ -303,6 +303,7 @@ pub struct HealthSettings {
     checks: Vec<Configured>,
     declared: Vec<declared::Declared>,
     probes: Vec<probe::Probe>,
+    connection: Option<ProbeConnection>,
     coverage: Vec<coverage::Target>,
     plugins: Vec<Plugin>,
     unknown_counts_as: Health,
@@ -315,12 +316,91 @@ struct Plugin {
     severity: Severity,
 }
 
+/// Runs a registered check on `scope`, adding its finding to each node in `per_node`:
+/// *unknown* for every node when it errs, takes longer than `timeout` or answers about a
+/// node outside the scope, and for a node it leaves unanswered or answers twice.
+async fn run_plugin(
+    plugin: &Plugin,
+    scope: &CheckScope,
+    timeout: Duration,
+    per_node: &mut BTreeMap<String, Vec<Finding>>,
+) -> CheckRun {
+    let info = plugin.check.describe();
+    let run = CheckRun {
+        id: info.id.clone(),
+        source: CheckSource::Plugin,
+        severity: plugin.severity,
+        about: info.about.clone(),
+    };
+    let answered = match tokio::time::timeout(timeout, plugin.check.check(scope)).await {
+        Ok(Ok(findings)) => Ok(findings),
+        Ok(Err(e)) => Err(format!("the check couldn't run: {e}")),
+        Err(_) => Err(format!(
+            "the check didn't answer within {}s",
+            timeout.as_secs()
+        )),
+    };
+    // An answer about a node outside the scope breaks the contract: nothing the
+    // check said can be trusted, so all of it is unknown (AGENTS rule 3).
+    let answered = answered.and_then(|findings| {
+            let ids: BTreeSet<&str> = scope.nodes.iter().map(|n| n.id.as_str()).collect();
+            match findings.iter().find(|f| !ids.contains(f.node.as_str())) {
+                Some(stranger) => Err(format!(
+                    "the check answered about `{}`, which it wasn't asked about, so none of its answers count",
+                    stranger.node
+                )),
+                None => Ok(findings),
+            }
+        });
+    let mut answers: BTreeMap<&str, Vec<&CheckFinding>> = BTreeMap::new();
+    if let Ok(findings) = &answered {
+        for finding in findings {
+            answers
+                .entry(finding.node.as_str())
+                .or_default()
+                .push(finding);
+        }
+    }
+    for node in &scope.nodes {
+        let (status, reason, evidence) = match (&answered, answers.get(node.id.as_str())) {
+            (Err(why), _) => (Status::Unknown, why.clone(), BTreeMap::new()),
+            (Ok(_), None) => (
+                Status::Unknown,
+                "the check didn't answer about this node".to_owned(),
+                BTreeMap::new(),
+            ),
+            (Ok(_), Some(many)) if many.len() > 1 => (
+                Status::Unknown,
+                "the check answered about this node more than once".to_owned(),
+                BTreeMap::new(),
+            ),
+            (Ok(_), Some(one)) => (
+                one[0].status,
+                one[0].reason.clone(),
+                one[0].evidence.clone(),
+            ),
+        };
+        if let Some(findings) = per_node.get_mut(&node.id) {
+            findings.push(Finding {
+                check: info.id.clone(),
+                source: CheckSource::Plugin,
+                status,
+                severity: plugin.severity,
+                reason,
+                evidence,
+            });
+        }
+    }
+    run
+}
+
 impl fmt::Debug for HealthSettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HealthSettings")
             .field("checks", &self.checks)
             .field("declared", &self.declared)
             .field("probes", &self.probes)
+            .field("connection", &self.connection)
             .field("coverage", &self.coverage)
             .field(
                 "plugins",
@@ -358,6 +438,10 @@ pub struct HealthReport {
     /// Each coverage target's verdict, about the project as a whole (ADR-0030 §3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub coverage: Vec<CoverageFinding>,
+    /// Probes that ran under a login the check didn't find read-only, because the run
+    /// allowed it (`--allow-elevated-login`, ADR-0030 §4c): kept, so it is never hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevated_login: Option<ElevatedLogin>,
 }
 
 /// A check that ran.
@@ -457,6 +541,7 @@ impl HealthSettings {
             checks,
             declared: configured.declared,
             probes: configured.probes,
+            connection: None,
             coverage: coverage::Target::from_config(&config.coverage)?,
             plugins: Vec::new(),
             unknown_counts_as: match config.unknown_counts_as {
@@ -521,14 +606,21 @@ impl HealthSettings {
     /// twice gives *unknown* for those nodes, never a pass (AGENTS rule 3); answers
     /// about nodes outside the scope are ignored.
     pub async fn run(&self, scope: &CheckScope, timeout: Duration) -> HealthReport {
+        // In-process checks, then probes, which need the warehouse.
+        let (mut probed, elevated_login) = probe::run_all(
+            &self.probes,
+            &scope.nodes,
+            self.connection.as_ref(),
+            timeout,
+        )
+        .await;
         let mut per_node: BTreeMap<String, Vec<Finding>> = scope
             .nodes
             .iter()
             .map(|node| {
-                // In-process checks, then probes, which need the warehouse.
-                let mut builtin = self.live_findings(node, scope.last_run.as_ref());
-                builtin.extend(self.probes.iter().filter_map(|p| p.finding(node)));
-                (node.id.clone(), builtin)
+                let mut findings = self.live_findings(node, scope.last_run.as_ref());
+                findings.extend(probed.remove(&node.id).unwrap_or_default());
+                (node.id.clone(), findings)
             })
             .collect();
         let mut checks: Vec<CheckRun> = self
@@ -546,72 +638,7 @@ impl HealthSettings {
         checks.extend(self.declared.iter().filter_map(declared::Declared::run));
         checks.extend(self.probes.iter().filter_map(probe::Probe::run));
         for plugin in &self.plugins {
-            let info = plugin.check.describe();
-            checks.push(CheckRun {
-                id: info.id.clone(),
-                source: CheckSource::Plugin,
-                severity: plugin.severity,
-                about: info.about.clone(),
-            });
-            let answered = match tokio::time::timeout(timeout, plugin.check.check(scope)).await {
-                Ok(Ok(findings)) => Ok(findings),
-                Ok(Err(e)) => Err(format!("the check couldn't run: {e}")),
-                Err(_) => Err(format!(
-                    "the check didn't answer within {}s",
-                    timeout.as_secs()
-                )),
-            };
-            // An answer about a node outside the scope breaks the contract: nothing the
-            // check said can be trusted, so all of it is unknown (AGENTS rule 3).
-            let answered = answered.and_then(|findings| {
-                let ids: BTreeSet<&str> = scope.nodes.iter().map(|n| n.id.as_str()).collect();
-                match findings.iter().find(|f| !ids.contains(f.node.as_str())) {
-                    Some(stranger) => Err(format!(
-                        "the check answered about `{}`, which it wasn't asked about, so none of its answers count",
-                        stranger.node
-                    )),
-                    None => Ok(findings),
-                }
-            });
-            let mut answers: BTreeMap<&str, Vec<&CheckFinding>> = BTreeMap::new();
-            if let Ok(findings) = &answered {
-                for finding in findings {
-                    answers
-                        .entry(finding.node.as_str())
-                        .or_default()
-                        .push(finding);
-                }
-            }
-            for node in &scope.nodes {
-                let (status, reason, evidence) = match (&answered, answers.get(node.id.as_str())) {
-                    (Err(why), _) => (Status::Unknown, why.clone(), BTreeMap::new()),
-                    (Ok(_), None) => (
-                        Status::Unknown,
-                        "the check didn't answer about this node".to_owned(),
-                        BTreeMap::new(),
-                    ),
-                    (Ok(_), Some(many)) if many.len() > 1 => (
-                        Status::Unknown,
-                        "the check answered about this node more than once".to_owned(),
-                        BTreeMap::new(),
-                    ),
-                    (Ok(_), Some(one)) => (
-                        one[0].status,
-                        one[0].reason.clone(),
-                        one[0].evidence.clone(),
-                    ),
-                };
-                if let Some(findings) = per_node.get_mut(&node.id) {
-                    findings.push(Finding {
-                        check: info.id.clone(),
-                        source: CheckSource::Plugin,
-                        status,
-                        severity: plugin.severity,
-                        reason,
-                        evidence,
-                    });
-                }
-            }
+            checks.push(run_plugin(plugin, scope, timeout, &mut per_node).await);
         }
         HealthReport {
             badges: per_node
@@ -620,6 +647,7 @@ impl HealthSettings {
                 .collect(),
             checks,
             coverage: Vec::new(),
+            elevated_login,
         }
     }
 
@@ -701,6 +729,16 @@ impl HealthSettings {
         for probe in &mut self.probes {
             probe.set_trusted(trusted.contains(&probe.id));
         }
+    }
+
+    /// Probe checks run through `connection` (ADR-0030 §4c, §5). Without one, a probe
+    /// that passes the other guards is *unknown*: there is nothing to run it through.
+    /// Probes run one after another, each with its login check and its query limited to
+    /// [`run`](Self::run)'s timeout apiece.
+    #[must_use]
+    pub fn with_probe_connection(mut self, connection: ProbeConnection) -> Self {
+        self.connection = Some(connection);
+        self
     }
 
     /// Each enabled coverage target's verdict on what a host `measured` (ADR-0030 §3).
@@ -988,7 +1026,7 @@ pub mod record;
 pub mod trust;
 
 pub use coverage::{COVERAGE_MEASURES, CoverageFinding, Measured, Share};
-pub use probe::ProbeDefinition;
+pub use probe::{ElevatedLogin, ProbeConnection, ProbeDefinition};
 
 #[cfg(test)]
 mod tests;

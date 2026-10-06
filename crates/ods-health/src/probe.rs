@@ -6,20 +6,102 @@
 //! - its definition is trusted for this project (§4b, §4d);
 //! - its connection can do no more than read what it probes (§4c).
 //!
-//! Probes need a warehouse, so they run only in `ods health check`, never in the
-//! dashboard, which reads their findings from the health record (§6).
+//! Probes need a warehouse, so they run only in `ods health check`, through a
+//! [`ProbeConnection`] the host wires in, never in the dashboard, which reads their
+//! findings from the health record (§6).
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
 
 use ods_config::DeclaredCheckConfig;
-use ods_sdk::contracts::probe::{PLACEHOLDER, ProbeStatement};
-use serde::Serialize;
+use ods_sdk::contracts::privileges::{Access, RelationPrivileges};
+use ods_sdk::contracts::probe::{
+    PLACEHOLDER, ProbeAnswer, ProbeFilter, ProbeRequest, ProbeStatement, ProbeTarget, RelationProbe,
+};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::pass::Pass;
+use crate::pass::{Pass, Verdict};
 use crate::{
     CheckRun, CheckSource, Finding, HealthConfigError, NodeFacts, Selector, Severity, Status,
 };
+
+/// The relation kinds a probe reads: a node's table or view. Anything else (e.g. an
+/// ephemeral model, which has no relation) is skipped or unknown, never probed.
+const KINDS: [&str; 3] = ["table", "view", "materialized_view"];
+
+/// What probe checks run through (ADR-0030 §4c, §5): the warehouse connection the
+/// host wires in, and what it can say about its login.
+#[derive(Clone)]
+pub struct ProbeConnection {
+    probe: Arc<dyn RelationProbe>,
+    privileges: Option<Arc<dyn RelationPrivileges>>,
+    allow_elevated_login: bool,
+}
+
+impl ProbeConnection {
+    /// Probes run through `connection`, whose login it also asks about before each
+    /// probe (§4c). One object answers both, so the login checked is the login the
+    /// query runs under: a check through another connection would prove nothing.
+    pub fn new<C>(connection: Arc<C>) -> Self
+    where
+        C: RelationProbe + RelationPrivileges + 'static,
+    {
+        Self {
+            probe: connection.clone(),
+            privileges: Some(connection),
+            allow_elevated_login: false,
+        }
+    }
+
+    /// Probes run through `probe`, which can't say what its login may do: every probe
+    /// is refused unless the run allows an elevated login (§4c).
+    pub fn without_privileges(probe: Arc<dyn RelationProbe>) -> Self {
+        Self {
+            probe,
+            privileges: None,
+            allow_elevated_login: false,
+        }
+    }
+
+    /// Runs probes even when the login check finds more than read access, or can't
+    /// tell: `--allow-elevated-login`, for one run, at the user's own risk (§4c). The
+    /// SQL and trust guards still hold.
+    #[must_use]
+    pub fn allowing_elevated_login(mut self, allow: bool) -> Self {
+        self.allow_elevated_login = allow;
+        self
+    }
+}
+
+impl fmt::Debug for ProbeConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProbeConnection")
+            .field("probe", &self.probe.info().kind)
+            .field(
+                "privileges",
+                &self.privileges.as_ref().map(|p| p.info().kind),
+            )
+            .field("allow_elevated_login", &self.allow_elevated_login)
+            .finish()
+    }
+}
+
+/// Probes that ran under a login the check found could do more than read, or couldn't
+/// tell about, because the run allowed it (`--allow-elevated-login`, §4c).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ElevatedLogin {
+    /// The login, as the warehouse names it, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    /// What the check found, by node id: what the login holds beyond reading, or why
+    /// it couldn't tell.
+    pub found: BTreeMap<String, String>,
+}
 
 /// What a probe's `{relation}` reads as when its SQL is checked as read-only: a plain
 /// identifier, so the query parses before any relation is known.
@@ -37,10 +119,6 @@ pub(crate) struct Probe {
     exclude: Option<Selector>,
     sql: String,
     pass_text: String,
-    #[expect(
-        dead_code,
-        reason = "evaluated on the probe's row once probes run (#392)"
-    )]
     pass: Pass,
     statement: ProbeStatement,
     digest: String,
@@ -178,50 +256,325 @@ impl Probe {
         self.select.matches(node) && !self.exclude.as_ref().is_some_and(|s| s.matches(node))
     }
 
-    /// Its finding about `node`; `None` when it is off. A probe that a guard stops is
-    /// *unknown*, saying which guard, and never runs.
-    pub(crate) fn finding(&self, node: &NodeFacts) -> Option<Finding> {
-        let severity = self.severity?;
-        let (status, reason) = if !self.applies(node) {
-            (Status::Skipped, "not selected for this check".to_owned())
-        } else if !self.read_only {
-            (
-                Status::Unknown,
-                format!("{}: its SQL wasn't checked as one read-only query", self.id),
-            )
-        } else if !self.trusted {
-            (
-                Status::Unknown,
-                format!(
-                    "{}: not trusted for this project; review it and run `ods health trust`",
-                    self.id
-                ),
-            )
-        } else {
-            (
-                Status::Unknown,
-                format!(
-                    "{}: probe checks don't run yet; they come with the read-only connection check (#392)",
-                    self.id
-                ),
-            )
-        };
-        let evidence = if status == Status::Skipped {
-            BTreeMap::new()
-        } else {
-            BTreeMap::from([
-                ("read_only_checked".to_owned(), self.read_only.to_string()),
-                ("trusted".to_owned(), self.trusted.to_string()),
-                ("sql".to_owned(), self.sql.clone()),
-            ])
-        };
-        Some(Finding {
+    /// What every finding of it carries: the guards it passed, and its query.
+    fn evidence(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("read_only_checked".to_owned(), self.read_only.to_string()),
+            ("trusted".to_owned(), self.trusted.to_string()),
+            ("sql".to_owned(), self.sql.clone()),
+        ])
+    }
+
+    fn finding(
+        &self,
+        severity: Severity,
+        status: Status,
+        reason: String,
+        evidence: BTreeMap<String, String>,
+    ) -> Finding {
+        Finding {
             check: self.id.clone(),
             source: CheckSource::Probe,
             status,
             severity,
             reason,
             evidence,
-        })
+        }
     }
+
+    /// Its finding about `node` when it doesn't run there: not selected, or stopped by
+    /// a guard that needs no warehouse (§4a, §4b), or with nothing to run through.
+    /// `None` when it can run on `node`. A guard that stops it makes it *unknown*,
+    /// saying which guard, never a pass.
+    fn held(&self, severity: Severity, node: &NodeFacts, connected: bool) -> Option<Finding> {
+        let reason = if !self.applies(node) {
+            return Some(self.finding(
+                severity,
+                Status::Skipped,
+                "not selected for this check".to_owned(),
+                BTreeMap::new(),
+            ));
+        } else if !self.read_only {
+            format!("{}: its SQL wasn't checked as one read-only query", self.id)
+        } else if !self.trusted {
+            format!(
+                "{}: not trusted for this project; review it and run `ods health trust`",
+                self.id
+            )
+        } else if !connected {
+            format!(
+                "{}: there is no warehouse connection to run probes through here",
+                self.id
+            )
+        } else {
+            return None;
+        };
+        Some(self.finding(severity, Status::Unknown, reason, self.evidence()))
+    }
+
+    /// Runs it on `nodes`, each of which passed [`held`](Self::held): checks the
+    /// login on their relations (§4c), then sends the query for the ones it allows, and
+    /// judges each row with `pass`. Its finding about each node, by id.
+    async fn run_on(
+        &self,
+        severity: Severity,
+        nodes: &[&NodeFacts],
+        connection: &ProbeConnection,
+        timeout: Duration,
+        elevated: &mut Option<ElevatedLogin>,
+    ) -> BTreeMap<String, Finding> {
+        let targets: Vec<ProbeTarget> = nodes
+            .iter()
+            .map(|n| ProbeTarget::new(n.id.clone(), n.name.clone()))
+            .collect();
+        let (login, access) = login_check(connection, &targets, timeout).await;
+        let mut out = BTreeMap::new();
+        // Each target to probe, how the login check went, and what it found if overridden.
+        let mut allowed: Vec<(ProbeTarget, &'static str, Option<String>)> = Vec::new();
+        for target in targets {
+            let access = access
+                .get(&target.id)
+                .cloned()
+                .unwrap_or_else(|| Access::Unknown("the check didn't report on it".to_owned()));
+            let found = match access {
+                Access::ReadOnly => {
+                    allowed.push((target, "read_only", None));
+                    continue;
+                }
+                Access::Elevated(what) => format!("can do more than read: {}", what.join(", ")),
+                Access::Unknown(why) => format!("couldn't be shown to only read: {why}"),
+                _ => "couldn't be shown to only read".to_owned(),
+            };
+            if connection.allow_elevated_login {
+                let entry = elevated.get_or_insert_with(|| ElevatedLogin {
+                    login: None,
+                    found: BTreeMap::new(),
+                });
+                if entry.login.is_none() {
+                    entry.login.clone_from(&login);
+                }
+                entry.found.insert(target.id.clone(), found.clone());
+                allowed.push((target, "overridden", Some(found)));
+                continue;
+            }
+            let mut evidence = self.evidence();
+            evidence.insert("login_check".to_owned(), "refused".to_owned());
+            if let Some(login) = &login {
+                evidence.insert("login".to_owned(), login.clone());
+            }
+            let reason = format!(
+                "{}: refused: probes run only under a read-only login, and on this relation {} {found}. Use a read-only login for probes, or `--allow-elevated-login` at your own risk",
+                self.id,
+                login.as_deref().map_or_else(
+                    || "the probe login".to_owned(),
+                    |l| format!("the login `{l}`")
+                ),
+            );
+            out.insert(
+                target.id,
+                self.finding(severity, Status::Unknown, reason, evidence),
+            );
+        }
+        if allowed.is_empty() {
+            return out;
+        }
+        let asked: Vec<ProbeTarget> = allowed.iter().map(|(t, _, _)| t.clone()).collect();
+        let answered = self.send(&asked, connection, timeout).await;
+        for (target, check, found) in allowed {
+            let mut evidence = self.evidence();
+            evidence.insert("login_check".to_owned(), check.to_owned());
+            if let Some(found) = found {
+                evidence.insert("login_found".to_owned(), found);
+            }
+            if let Some(login) = &login {
+                evidence.insert("login".to_owned(), login.clone());
+            }
+            let (status, reason) = match &answered {
+                Err(why) => (Status::Unknown, format!("{}: {why}", self.id)),
+                Ok(answers) => self.judge(answers.get(&target.id), &mut evidence),
+            };
+            out.insert(target.id, self.finding(severity, status, reason, evidence));
+        }
+        out
+    }
+
+    /// Its verdict on one target's answer (`None` inside for one answered twice), with
+    /// the row it judged added to `evidence`.
+    fn judge(
+        &self,
+        answer: Option<&Option<ProbeAnswer>>,
+        evidence: &mut BTreeMap<String, String>,
+    ) -> (Status, String) {
+        match answer {
+            Some(Some(ProbeAnswer::Rows(rows))) => {
+                let row = rows.first().cloned().unwrap_or_default();
+                for (column, value) in &row {
+                    evidence.insert(format!("row.{column}"), value.clone());
+                }
+                match self.pass.evaluate(&row) {
+                    Verdict::Pass => (
+                        Status::Pass,
+                        format!("{}: {} holds", self.id, self.pass_text),
+                    ),
+                    Verdict::Fail(why) => (Status::Fail, format!("{}: {why}", self.id)),
+                    Verdict::Unknown(why) => (Status::Unknown, format!("{}: {why}", self.id)),
+                }
+            }
+            Some(Some(ProbeAnswer::Skipped(why))) => {
+                (Status::Skipped, format!("{}: not probed: {why}", self.id))
+            }
+            Some(Some(ProbeAnswer::Unknown(why))) => {
+                (Status::Unknown, format!("{}: {why}", self.id))
+            }
+            Some(None) => (
+                Status::Unknown,
+                format!("{}: the probe answered about it twice", self.id),
+            ),
+            Some(Some(_)) | None => (
+                Status::Unknown,
+                format!("{}: the probe didn't report on it", self.id),
+            ),
+        }
+    }
+
+    /// Sends its query for `targets`: each target's answer, or `None` for one answered
+    /// twice; `Err` when nothing was read.
+    async fn send(
+        &self,
+        targets: &[ProbeTarget],
+        connection: &ProbeConnection,
+        timeout: Duration,
+    ) -> Result<BTreeMap<String, Option<ProbeAnswer>>, String> {
+        let request = ProbeFilter::kinds(KINDS)
+            .and_then(|filter| ProbeRequest::new(filter, vec![self.statement.clone()]))
+            .map_err(|e| e.to_string())?
+            .with_timeout(timeout);
+        // The provider stops on its own time out; this one is for one that doesn't.
+        let report = tokio::time::timeout(timeout, connection.probe.probe(&request, targets))
+            .await
+            .map_err(|_| format!("the probe didn't answer within {}", seconds(timeout)))?
+            .map_err(|e| format!("the probe couldn't run: {e}"))?;
+        // An answer about a relation it wasn't asked about means it ran where it
+        // shouldn't have: none of its answers can be trusted.
+        if let Some((stranger, _)) = report
+            .targets
+            .iter()
+            .find(|(id, _)| !targets.iter().any(|t| t.id == *id))
+        {
+            return Err(format!(
+                "the probe answered about `{stranger}`, which it wasn't asked about, so none of its answers count"
+            ));
+        }
+        let mut answers: BTreeMap<String, Option<ProbeAnswer>> = BTreeMap::new();
+        for (id, answer) in report.targets {
+            answers
+                .entry(id)
+                .and_modify(|seen| *seen = None)
+                .or_insert(Some(answer));
+        }
+        Ok(answers)
+    }
+}
+
+/// `duration` for people: `30s`, `0.5s`.
+fn seconds(duration: Duration) -> String {
+    format!("{}s", duration.as_secs_f64())
+}
+
+/// What the connection's login may do on each of `targets`, read just before a probe
+/// runs on them (§4c), and the login's name. A target it can't tell about is unknown:
+/// a connection that can't report privileges, a report that can't be read, or one that
+/// leaves a target out or answers it twice.
+async fn login_check(
+    connection: &ProbeConnection,
+    targets: &[ProbeTarget],
+    timeout: Duration,
+) -> (Option<String>, BTreeMap<String, Access>) {
+    let all = |why: String| {
+        targets
+            .iter()
+            .map(|t| (t.id.clone(), Access::Unknown(why.clone())))
+            .collect()
+    };
+    let Some(privileges) = &connection.privileges else {
+        return (
+            None,
+            all("the probe connection can't report what its login may do".to_owned()),
+        );
+    };
+    let report = match tokio::time::timeout(timeout, privileges.privileges(targets)).await {
+        Ok(Ok(report)) => report,
+        Ok(Err(e)) => return (None, all(format!("its privileges couldn't be read: {e}"))),
+        Err(_) => {
+            return (
+                None,
+                all(format!(
+                    "reading its privileges took longer than {}",
+                    seconds(timeout)
+                )),
+            );
+        }
+    };
+    // An answer about a relation it wasn't asked about breaks the contract: none of its
+    // answers can be trusted.
+    if let Some((stranger, _)) = report
+        .targets
+        .iter()
+        .find(|(id, _)| !targets.iter().any(|t| t.id == *id))
+    {
+        return (
+            None,
+            all(format!(
+                "the check answered about `{stranger}`, which it wasn't asked about"
+            )),
+        );
+    }
+    let mut access: BTreeMap<String, Access> = BTreeMap::new();
+    for (id, found) in report.targets {
+        access
+            .entry(id)
+            .and_modify(|seen| *seen = Access::Unknown("the check answered twice".to_owned()))
+            .or_insert(found);
+    }
+    (report.login, access)
+}
+
+/// Every enabled probe's findings about `nodes`, by node id, in probe order, and the
+/// probes that ran under a login the check didn't find read-only, if the run allowed it.
+pub(crate) async fn run_all(
+    probes: &[Probe],
+    nodes: &[NodeFacts],
+    connection: Option<&ProbeConnection>,
+    timeout: Duration,
+) -> (BTreeMap<String, Vec<Finding>>, Option<ElevatedLogin>) {
+    let mut findings: BTreeMap<String, Vec<Finding>> = BTreeMap::new();
+    let mut elevated = None;
+    for probe in probes {
+        let Some(severity) = probe.severity else {
+            continue;
+        };
+        let mut found: BTreeMap<String, Finding> = BTreeMap::new();
+        let mut ready: Vec<&NodeFacts> = Vec::new();
+        for node in nodes {
+            match probe.held(severity, node, connection.is_some()) {
+                Some(finding) => {
+                    found.insert(node.id.clone(), finding);
+                }
+                None => ready.push(node),
+            }
+        }
+        if let (Some(connection), false) = (connection, ready.is_empty()) {
+            found.extend(
+                probe
+                    .run_on(severity, &ready, connection, timeout, &mut elevated)
+                    .await,
+            );
+        }
+        for node in nodes {
+            if let Some(finding) = found.remove(&node.id) {
+                findings.entry(node.id.clone()).or_default().push(finding);
+            }
+        }
+    }
+    (findings, elevated)
 }

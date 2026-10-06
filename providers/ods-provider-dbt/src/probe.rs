@@ -2,9 +2,10 @@
 //!
 //! One `dbt show --inline` call runs the query [`query`] renders. dbt renders it with the
 //! user's own profile, so ODS never handles a credential (AGENTS.md rule 9). As in the
-//! relation check (ADR-0016), the query names no source: it iterates `graph.sources`
-//! itself, so its size doesn't grow with the project, and only the request travels on
-//! the command line. For each source it:
+//! relation check (ADR-0016), the query names no relation: it iterates `graph.sources`
+//! itself, and only the request and the requested ids travel on the command line (the
+//! executor splits a long list of ids over several calls). For each requested source
+//! it, and nothing else:
 //! - asks the adapter for the relation (`adapter.get_relation`); none means unknown;
 //! - checks the relation's kind against the filter's kinds, and, when the filter names
 //!   a format `f`, that the adapter's relation says `is_<f>` is true. An adapter that
@@ -30,15 +31,17 @@ use percent_encoding::percent_decode_str;
 /// Marks the row as ODS's answer, not something else dbt printed.
 const MARKER: &str = "ods_relation_probe";
 
-/// The query, with `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill in. Relation
+/// The query, with `@IDS@`, `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill in. Relation
 /// quoting is left to the adapter: `rel|string` renders the name by its own rules. `execute` is
 /// false while dbt parses it, when there is no connection to ask.
 const TEMPLATE: &str = "\
 {%- set out = {} -%}{%- set ns = namespace(probed=0) -%}\
 {%- set qs = @STATEMENTS@ -%}\
+{%- set ids = @IDS@ -%}\
 {%- if execute -%}\
 {%- for s in graph.sources.values() -%}\
-{%- set ns.probed = ns.probed + 1 -%}{%- set k = s.unique_id|urlencode -%}\
+{%- set ns.probed = ns.probed + 1 -%}\
+{%- if s.unique_id in ids -%}{%- set k = s.unique_id|urlencode -%}\
 {%- set rel = adapter.get_relation(s.database, s.schema, s.identifier) -%}\
 {%- if rel is none -%}{%- do out.update({k: {'missing': 1}}) -%}\
 {%- elif rel.type not in @KINDS@ -%}{%- do out.update({k: {'kind': (rel.type or '')|string|urlencode}}) -%}\
@@ -51,13 +54,24 @@ const TEMPLATE: &str = "\
 {%- endfor -%}{%- endif -%}{%- do rows.append(row) -%}\
 {%- endfor -%}{%- do out.update({k: {'rows': rows}}) -%}\
 {%- endif -%}\
+{%- endif -%}\
 {%- endfor -%}\
 {%- endif -%}\
 select '{{ tojson({\"ods_relation_probe\": 1, \"probed\": ns.probed, \"sources\": out}) }}' \
 as ods_probe";
 
-/// The inline query for `request`.
-pub(crate) fn query(request: &ProbeRequest) -> String {
+/// Whether `id` can travel in the query as it is: dbt ids are made of letters, digits,
+/// `_`, `.` and `-`. Another id is never sent, so nothing in it can reach Jinja.
+pub(crate) fn plain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+/// The inline query for `request`, probing the sources in `ids` (each a
+/// [`plain_id`]) and nothing else.
+pub(crate) fn query(request: &ProbeRequest, ids: &[&str]) -> String {
     // JSON arrays of strings are Jinja list literals. Kinds, formats and columns are
     // plain identifiers, and templates have no braces but the placeholder (the SDK
     // checks both), so nothing here can close a Jinja block.
@@ -68,6 +82,8 @@ pub(crate) fn query(request: &ProbeRequest) -> String {
         .map(|s| (s.template(), s.columns()))
         .collect();
     let statements = serde_json::to_string(&statements).unwrap_or_default();
+    let ids: Vec<&str> = ids.iter().copied().filter(|id| plain_id(id)).collect();
+    let ids = serde_json::to_string(&ids).unwrap_or_default();
     let format = request.filter().format().map_or_else(String::new, |f| {
         format!(
             "{{%- elif not (rel.is_{f} is sameas true) -%}}{{%- do out.update({{k: {{'format': 0}}}}) -%}}"
@@ -75,6 +91,7 @@ pub(crate) fn query(request: &ProbeRequest) -> String {
     });
     // The statements go in last, so nothing in them is taken for a marker.
     TEMPLATE
+        .replace("@IDS@", &ids)
         .replace("@KINDS@", &kinds)
         .replace("@FORMAT@", &format)
         .replace("@PLACEHOLDER@", PLACEHOLDER)
@@ -208,8 +225,16 @@ mod tests {
 
     #[test]
     fn the_query_carries_the_request_and_names_no_source() {
-        let query = query(&request(Some("columnar")));
+        let query = query(
+            &request(Some("columnar")),
+            &["source.p.raw.a", "source.p.raw.b", "source.p.raw.{{ x }}"],
+        );
         assert!(query.contains(MARKER));
+        assert!(
+            query.contains(r#"set ids = ["source.p.raw.a","source.p.raw.b"]"#),
+            "only plain ids are sent: {query}"
+        );
+        assert!(query.contains("if s.unique_id in ids"), "{query}");
         assert!(query.contains("graph.sources.values()"));
         assert!(
             query.contains(r#"rel.type not in ["table","view"]"#),
@@ -232,11 +257,14 @@ mod tests {
         assert!(!query.contains('@'), "every marker is filled: {query}");
         // Command-line arguments are limited in size (less on Windows).
         assert!(query.len() < 2048, "{}", query.len());
+        assert!(plain_id("seed.p.my-seed_2"));
+        assert!(!plain_id("source.p.raw.\"x\""));
+        assert!(!plain_id(""));
     }
 
     #[test]
     fn without_a_format_nothing_is_confirmed() {
-        let query = query(&request(None));
+        let query = query(&request(None), &[]);
         assert!(!query.contains("is sameas true"), "{query}");
         assert!(!query.contains("'format'"), "{query}");
     }

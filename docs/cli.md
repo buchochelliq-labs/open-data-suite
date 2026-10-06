@@ -1380,13 +1380,20 @@ guard stopped it, never a pass:
   you have trusted that exact definition for that project with
   [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
 - **A read-only login.** Probes run under a connection that can do no more than read
-  what they probe (ADR-0030 §4c). This guard, and running probes at all, come in the next
-  step of #392: until then a trusted probe reads *unknown: probe checks don't run yet*.
+  what they probe (ADR-0030 §4c): just before each probe, ODS asks the connection what
+  its login may do on each relation, and refuses the probe, *unknown* with the login and
+  what it found, when the login can do more than read or that can't be told. The engine
+  for this is built; `ods health check` gets a probe connection, and
+  `--allow-elevated-login`, in the next step of #392. Until then a trusted probe reads
+  *unknown: there is no warehouse connection to run probes through here*.
 
 `pass` compares a column the query returns with a number, a `'string'` or `true`/`false`;
 only numbers can be ordered. A column that is missing, or isn't a number where one is
 needed, makes the probe *unknown*. Probes need the warehouse, so the dashboard never runs
 them: it shows what the last `ods health check` recorded, with when.
+The columns `pass` names are kept in each finding's evidence (`row.<column>`), so they
+are written to the health record and shown on the dashboard: don't select a column you
+wouldn't want kept there.
 
 #### Coverage targets
 

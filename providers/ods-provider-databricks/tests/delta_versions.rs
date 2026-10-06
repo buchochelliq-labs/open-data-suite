@@ -97,7 +97,7 @@ async fn versions_are_exact_and_everything_else_is_unknown_with_why() {
     };
     assert!(why(1).starts_with("not a Delta table"), "{}", why(1));
     assert!(why(2).starts_with("not a Delta table"), "{}", why(2));
-    assert_eq!(why(3), "unknown source");
+    assert_eq!(why(3), "no such relation");
 
     // Dropped and created again: a new id, and versions start again.
     let probe = workspace();

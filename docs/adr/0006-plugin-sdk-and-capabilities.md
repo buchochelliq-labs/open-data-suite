@@ -89,8 +89,9 @@ then have to break.
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry`,
     `fencing_tokens`, `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md))
     `error_explain` ([ADR-0025](0025-error-explanations.md)), `relation_link` (§7),
-    `run_ledger` ([ADR-0029](0029-build-timings-and-the-run-ledger.md)) and
-    `health_check` ([ADR-0030](0030-configurable-and-pluggable-health-checks.md)).
+    `run_ledger` ([ADR-0029](0029-build-timings-and-the-run-ledger.md)),
+    `health_check` ([ADR-0030](0030-configurable-and-pluggable-health-checks.md)) and
+    `relation_privileges` (ADR-0030 §4c).
   - Third parties extend the vocabulary with `x-<namespace>.<name>`, a validated
     `CustomCapability` that can only be built by parsing, so it can never spell a
     well-known name.
