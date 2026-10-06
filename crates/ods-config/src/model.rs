@@ -211,6 +211,36 @@ pub struct HealthConfig {
     /// The built-in checks, by id, e.g. `[health.builtin.tests_required]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub builtin: BTreeMap<String, HealthCheckConfig>,
+    /// Checks the project declares, e.g. `[[health.checks]]` requiring a description
+    /// and a `unique` test of every mart (ADR-0030 §3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<DeclaredCheckConfig>,
+}
+
+/// A check declared in `[[health.checks]]` (ADR-0030 §3).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct DeclaredCheckConfig {
+    /// Its id, unique among the checks: lowercase letters, digits, `_`, `-` and `.`,
+    /// starting with a letter, e.g. `marts.documented`.
+    pub id: String,
+    /// What kind of check it is. Only `declarative`, the default, is supported yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// What every selected node must have: `description`, `tests`, `test:<type>` (e.g.
+    /// `test:unique`), `constraints` or `tag:<tag>`.
+    #[serde(default)]
+    pub require: Vec<String>,
+    /// How severe its failure is (default `warn`), or `off` to not run it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<HealthSeverity>,
+    /// The nodes it checks; every node when not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<HealthSelector>,
+    /// Nodes it never checks, even when selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<HealthSelector>,
 }
 
 /// What a check that couldn't decide makes a node's badge.

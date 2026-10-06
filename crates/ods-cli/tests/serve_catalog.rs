@@ -877,3 +877,98 @@ fn a_recorded_checks_findings_reach_the_badges_with_their_time() {
     let home = json(&server, "api/home");
     assert!(home.get("health_recorded_at").is_none(), "{home:#}");
 }
+
+/// ADR-0030 §2–3: a check declared in `[[health.checks]]` runs on the project's own
+/// metadata, in the dashboard's badges and in `ods health check`'s gate, with no build
+/// needed to decide it.
+#[test]
+fn a_declared_check_reaches_the_badges_and_gates_health_check() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let declared = "[[health.checks]]\nid = \"models.tested\"\nselect = { resource_type = [\"model\"] }\nrequire = [\"tests\"]\nseverity = \"error\"\n";
+    let server = serve_with(&target, &[], Some(declared));
+    let view = json(&server, "api/catalog");
+    let finding = |id: &str| -> Value {
+        let row = view["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("no {id}"));
+        row["health"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["check"] == "models.tested")
+            .unwrap_or_else(|| panic!("{row:#}"))
+            .clone()
+    };
+    // stg_customers has no tests in the demo project; stg_orders has.
+    let untested = finding("model.jaffle_ods.stg_customers");
+    assert_eq!(untested["status"], "fail", "{untested:#}");
+    assert_eq!(untested["source"], "declarative");
+    assert_eq!(untested["reason"], "models.tested: no tests");
+    assert_eq!(finding("model.jaffle_ods.stg_orders")["status"], "pass");
+    assert!(
+        view["health_how"]
+            .as_str()
+            .unwrap()
+            .contains("models.tested (error, declared): requires tests"),
+        "{}",
+        view["health_how"]
+    );
+    drop(server);
+
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("ods.toml"), declared).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--json", "--target-dir"])
+        .arg(&target)
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(out.status.code(), Some(5), "{envelope:#}");
+    assert_eq!(
+        envelope["diagnostics"][0]["code"], "ODS-E0701",
+        "{envelope:#}"
+    );
+    let checks: Vec<&Value> = envelope["result"]["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{envelope:#}"))
+        .iter()
+        .filter(|c| c["id"] == "models.tested")
+        .collect();
+    assert_eq!(checks.len(), 1, "{envelope:#}");
+    assert_eq!(checks[0]["source"], "declarative");
+}
+
+/// A declared check that can't run as written is a configuration error (exit 4).
+#[test]
+fn a_misdeclared_check_is_a_configuration_error() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("ods.toml"),
+        "[[health.checks]]\nid = \"documented\"\nrequire = [\"owner\"]\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["serve", "--target-dir"])
+        .arg(fixtures("jaffle-ods/artifacts/dbt-1.10"))
+        .args(["--port", "0", "--json", "--no-watch"])
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("health.checks[0].require"), "{message}");
+    assert!(
+        message.contains("`description`"),
+        "names what it can require: {message}"
+    );
+}

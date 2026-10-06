@@ -1310,9 +1310,44 @@ severity = "off"
 - **Home's Failing count** counts nodes a check at severity `error` failed on. When the
   last run's failures aren't known but another check is at `error`, it reads *at least*.
 - **Errors:** a check that doesn't exist, or a glob that isn't valid, is a configuration
-  error when `ods serve` starts (exit 4, `ODS-E0102`).
+  error when `ods serve` starts (exit 4, `ODS-E0102`). So is a declared check that can't
+  run as written (below).
 - **Explanations:** each badge's tooltip and its `findings` in `/api/catalog` say which
   check concluded what. The Catalog's legend lists the checks as configured.
+
+#### Declared checks
+
+A project can declare its own checks over what its metadata says, under
+`[[health.checks]]`. They need no build or warehouse: the project says what each node
+has, so they pass or fail, and are never *unknown*.
+
+```toml
+[[health.checks]]
+id = "marts.documented"                  # unique; not a built-in's
+select = { path = ["models/marts/**"] }  # every node when not set
+exclude = { tags = ["experimental"] }
+require = ["description", "test:unique"]
+severity = "warn"                        # the default; error | warn | info | off
+```
+
+`require` lists what every selected node must have:
+
+| Requirement | Met when the node has |
+|---|---|
+| `description` | a description that isn't blank |
+| `tests` | at least one test |
+| `test:<type>` | a test of that type, e.g. `test:unique`, `test:not_null`, or a custom generic test's name |
+| `constraints` | at least one column constraint |
+| `tag:<tag>` | that tag |
+
+A node lacking any of them fails, and the finding names what is missing (e.g.
+``marts.documented: no description; no `unique` test``); its `evidence` lists `require`
+and `missing`. A node the check doesn't select is skipped. The dashboard and
+`ods health check` both run declared checks on the project as it is now; they are listed
+as `declared` in the legend and in `ods health check`'s output (`source: declarative` in
+JSON). An id that isn't valid, is a built-in's or is used twice, an empty `require`, a
+requirement not in the table, or a `kind` other than `declarative` is a configuration
+error (exit 4, `ODS-E0102`).
 
 The trust store, warehouse probes, scripts and plugins come in later phases of #392.
 
@@ -1356,7 +1391,7 @@ to `error` in `[health]` to gate on it too.
   text names them and when they ran, and `/api/home` and `/api/catalog` give that time
   as `health_recorded_at`. A node the record doesn't cover (added since) is *unknown*
   for those checks, never healthy. A new record reloads the page.
-- **Registered checks:** checks registered through the `health_check` contract (SDK 0.8)
+- **Registered checks:** checks registered through the `health_check` contract (SDK 0.9)
   run beside the built-ins, each under a 60-second timeout. One that errs, times out,
   leaves a node unanswered or answers it twice is *unknown* for those nodes, never a
   pass; one that answers about a node it wasn't asked about is *unknown* for every
