@@ -28,8 +28,9 @@
 //! - `Err` means nothing was read: callers treat every requested target as unknown.
 //!   An implementation that can't isolate one relation's failure (e.g. one query for
 //!   all of them) fails the whole call.
-//! - With a [timeout](ProbeRequest::with_timeout), a call that takes longer stops what
-//!   it started and fails.
+//! - With a [timeout](ProbeRequest::with_timeout), a call that takes longer fails, and
+//!   stops what it started on ODS's side (e.g. the process it ran); a statement the
+//!   warehouse already accepted may run on there until the warehouse ends it.
 //! - Implementations answer in as few batches as they can, and may look at more
 //!   relations than were requested to do so (e.g. to list them), but run nothing
 //!   against those.

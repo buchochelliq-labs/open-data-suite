@@ -1391,6 +1391,9 @@ guard stopped it, never a pass:
 only numbers can be ordered. A column that is missing, or isn't a number where one is
 needed, makes the probe *unknown*. Probes need the warehouse, so the dashboard never runs
 them: it shows what the last `ods health check` recorded, with when.
+The columns `pass` names are kept in each finding's evidence (`row.<column>`), so they
+are written to the health record and shown on the dashboard: don't select a column you
+wouldn't want kept there.
 
 #### Coverage targets
 

@@ -1639,7 +1639,7 @@ impl RelationProbe for DbtExecutor {
             Some(limit) => tokio::time::timeout(limit, calls).await.map_err(|_| {
                 ProviderError::Other(format!(
                     "the relation probe (`dbt show`) took longer than {}s and was stopped",
-                    limit.as_secs()
+                    limit.as_secs_f64()
                 ))
             })??,
             None => calls.await?,

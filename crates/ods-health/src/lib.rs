@@ -733,6 +733,8 @@ impl HealthSettings {
 
     /// Probe checks run through `connection` (ADR-0030 §4c, §5). Without one, a probe
     /// that passes the other guards is *unknown*: there is nothing to run it through.
+    /// Probes run one after another, each with its login check and its query limited to
+    /// [`run`](Self::run)'s timeout apiece.
     #[must_use]
     pub fn with_probe_connection(mut self, connection: ProbeConnection) -> Self {
         self.connection = Some(connection);

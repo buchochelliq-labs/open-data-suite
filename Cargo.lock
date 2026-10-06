@@ -1337,6 +1337,7 @@ dependencies = [
 name = "ods-health"
 version = "0.0.2"
 dependencies = [
+ "async-trait",
  "globset",
  "hex",
  "ods-config",

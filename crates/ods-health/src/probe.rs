@@ -42,21 +42,28 @@ pub struct ProbeConnection {
 }
 
 impl ProbeConnection {
-    /// Probes run through `probe`. Without [`with_privileges`](Self::with_privileges)
-    /// the login can't be checked, so no probe runs (§4c).
-    pub fn new(probe: Arc<dyn RelationProbe>) -> Self {
+    /// Probes run through `connection`, whose login it also asks about before each
+    /// probe (§4c). One object answers both, so the login checked is the login the
+    /// query runs under: a check through another connection would prove nothing.
+    pub fn new<C>(connection: Arc<C>) -> Self
+    where
+        C: RelationProbe + RelationPrivileges + 'static,
+    {
+        Self {
+            probe: connection.clone(),
+            privileges: Some(connection),
+            allow_elevated_login: false,
+        }
+    }
+
+    /// Probes run through `probe`, which can't say what its login may do: every probe
+    /// is refused unless the run allows an elevated login (§4c).
+    pub fn without_privileges(probe: Arc<dyn RelationProbe>) -> Self {
         Self {
             probe,
             privileges: None,
             allow_elevated_login: false,
         }
-    }
-
-    /// `privileges` says what the probe connection's login may do.
-    #[must_use]
-    pub fn with_privileges(mut self, privileges: Arc<dyn RelationPrivileges>) -> Self {
-        self.privileges = Some(privileges);
-        self
     }
 
     /// Runs probes even when the login check finds more than read access, or can't
@@ -322,7 +329,8 @@ impl Probe {
             .collect();
         let (login, access) = login_check(connection, &targets, timeout).await;
         let mut out = BTreeMap::new();
-        let mut allowed: Vec<(ProbeTarget, &'static str)> = Vec::new();
+        // Each target to probe, how the login check went, and what it found if overridden.
+        let mut allowed: Vec<(ProbeTarget, &'static str, Option<String>)> = Vec::new();
         for target in targets {
             let access = access
                 .get(&target.id)
@@ -330,7 +338,7 @@ impl Probe {
                 .unwrap_or_else(|| Access::Unknown("the check didn't report on it".to_owned()));
             let found = match access {
                 Access::ReadOnly => {
-                    allowed.push((target, "read_only"));
+                    allowed.push((target, "read_only", None));
                     continue;
                 }
                 Access::Elevated(what) => format!("can do more than read: {}", what.join(", ")),
@@ -345,8 +353,8 @@ impl Probe {
                 if entry.login.is_none() {
                     entry.login.clone_from(&login);
                 }
-                entry.found.insert(target.id.clone(), found);
-                allowed.push((target, "overridden"));
+                entry.found.insert(target.id.clone(), found.clone());
+                allowed.push((target, "overridden", Some(found)));
                 continue;
             }
             let mut evidence = self.evidence();
@@ -370,11 +378,14 @@ impl Probe {
         if allowed.is_empty() {
             return out;
         }
-        let asked: Vec<ProbeTarget> = allowed.iter().map(|(t, _)| t.clone()).collect();
+        let asked: Vec<ProbeTarget> = allowed.iter().map(|(t, _, _)| t.clone()).collect();
         let answered = self.send(&asked, connection, timeout).await;
-        for (target, check) in allowed {
+        for (target, check, found) in allowed {
             let mut evidence = self.evidence();
             evidence.insert("login_check".to_owned(), check.to_owned());
+            if let Some(found) = found {
+                evidence.insert("login_found".to_owned(), found);
+            }
             if let Some(login) = &login {
                 evidence.insert("login".to_owned(), login.clone());
             }
@@ -441,7 +452,7 @@ impl Probe {
         // The provider stops on its own time out; this one is for one that doesn't.
         let report = tokio::time::timeout(timeout, connection.probe.probe(&request, targets))
             .await
-            .map_err(|_| format!("the probe didn't answer within {}s", timeout.as_secs()))?
+            .map_err(|_| format!("the probe didn't answer within {}", seconds(timeout)))?
             .map_err(|e| format!("the probe couldn't run: {e}"))?;
         let mut answers: BTreeMap<String, Option<ProbeAnswer>> = BTreeMap::new();
         for (id, answer) in report.targets {
@@ -452,6 +463,11 @@ impl Probe {
         }
         Ok(answers)
     }
+}
+
+/// `duration` for people: `30s`, `0.5s`.
+fn seconds(duration: Duration) -> String {
+    format!("{}s", duration.as_secs_f64())
 }
 
 /// What the connection's login may do on each of `targets`, read just before a probe
@@ -482,12 +498,26 @@ async fn login_check(
             return (
                 None,
                 all(format!(
-                    "reading its privileges took longer than {}s",
-                    timeout.as_secs()
+                    "reading its privileges took longer than {}",
+                    seconds(timeout)
                 )),
             );
         }
     };
+    // An answer about a relation it wasn't asked about breaks the contract: none of its
+    // answers can be trusted.
+    if let Some((stranger, _)) = report
+        .targets
+        .iter()
+        .find(|(id, _)| !targets.iter().any(|t| t.id == *id))
+    {
+        return (
+            None,
+            all(format!(
+                "the check answered about `{stranger}`, which it wasn't asked about"
+            )),
+        );
+    }
     let mut access: BTreeMap<String, Access> = BTreeMap::new();
     for (id, found) in report.targets {
         access

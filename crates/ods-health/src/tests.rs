@@ -1242,6 +1242,50 @@ mod running {
 
     const SQL: &str = "select count(*) as n from {relation}";
 
+    /// One warehouse connection: it probes, and says what its login may do.
+    struct Both {
+        probe: FakeRelationProbe,
+        privileges: FakeRelationPrivileges,
+    }
+
+    impl ods_sdk::Provider for Both {
+        fn info(&self) -> ods_sdk::ProviderInfo {
+            self.probe.info()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ods_sdk::contracts::probe::RelationProbe for Both {
+        async fn probe(
+            &self,
+            request: &ods_sdk::contracts::probe::ProbeRequest,
+            targets: &[ods_sdk::contracts::probe::ProbeTarget],
+        ) -> Result<ods_sdk::contracts::probe::ProbeReport, ods_sdk::ProviderError> {
+            self.probe.probe(request, targets).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ods_sdk::contracts::privileges::RelationPrivileges for Both {
+        async fn privileges(
+            &self,
+            targets: &[ods_sdk::contracts::probe::ProbeTarget],
+        ) -> Result<ods_sdk::contracts::privileges::PrivilegeReport, ods_sdk::ProviderError>
+        {
+            self.privileges.privileges(targets).await
+        }
+    }
+
+    fn connect(
+        probe: FakeRelationProbe,
+        privileges: Arc<FakeRelationPrivileges>,
+    ) -> ProbeConnection {
+        ProbeConnection::new(Arc::new(Both {
+            probe,
+            privileges: Arc::unwrap_or_clone(privileges),
+        }))
+    }
+
     /// `ORDERS_HAS_ROWS`, checked and trusted, selecting `orders` and `payments`.
     fn ready() -> HealthSettings {
         let mut s = settings(&ORDERS_HAS_ROWS.replace(
@@ -1291,14 +1335,15 @@ mod running {
     #[tokio::test]
     async fn under_a_read_only_login_a_probe_runs_and_judges_each_row() {
         let probe = warehouse("12");
-        let s = ready().with_probe_connection(
-            ProbeConnection::new(Arc::new(probe.clone())).with_privileges(Arc::new(
+        let s = ready().with_probe_connection(connect(
+            probe.clone(),
+            Arc::new(
                 FakeRelationPrivileges::new()
                     .with_login("health_reader")
                     .read_only("model.p.orders")
                     .read_only("model.p.payments"),
-            )),
-        );
+            ),
+        ));
         let (found, report) = findings(&s).await;
         let orders = &found["model.p.orders"];
         assert_eq!(orders.status, Status::Pass, "{orders:?}");
@@ -1324,8 +1369,9 @@ mod running {
     #[tokio::test]
     async fn a_login_that_can_do_more_than_read_is_refused_and_nothing_runs() {
         let probe = warehouse("12");
-        let s = ready().with_probe_connection(
-            ProbeConnection::new(Arc::new(probe.clone())).with_privileges(Arc::new(
+        let s = ready().with_probe_connection(connect(
+            probe.clone(),
+            Arc::new(
                 FakeRelationPrivileges::new()
                     .with_login("builder")
                     .elevated(
@@ -1333,8 +1379,8 @@ mod running {
                         ["MODIFY on schema p", "owner of table orders"],
                     )
                     .unknown("model.p.payments", "no grants visible"),
-            )),
-        );
+            ),
+        ));
         let (found, report) = findings(&s).await;
         let orders = &found["model.p.orders"];
         assert_eq!(orders.status, Status::Unknown, "never a pass: {orders:?}");
@@ -1363,9 +1409,11 @@ mod running {
     #[tokio::test]
     async fn without_a_privileges_report_or_with_a_failing_one_nothing_runs() {
         for connection in [
-            ProbeConnection::new(Arc::new(warehouse("12"))),
-            ProbeConnection::new(Arc::new(warehouse("12")))
-                .with_privileges(Arc::new(FakeRelationPrivileges::new().failing())),
+            ProbeConnection::without_privileges(Arc::new(warehouse("12"))),
+            connect(
+                warehouse("12"),
+                Arc::new(FakeRelationPrivileges::new().failing()),
+            ),
         ] {
             let s = ready().with_probe_connection(connection);
             let (found, _) = findings(&s).await;
@@ -1379,19 +1427,25 @@ mod running {
     async fn allowing_an_elevated_login_runs_and_says_so_everywhere() {
         let probe = warehouse("12");
         let s = ready().with_probe_connection(
-            ProbeConnection::new(Arc::new(probe.clone()))
-                .with_privileges(Arc::new(
+            connect(
+                probe.clone(),
+                Arc::new(
                     FakeRelationPrivileges::new()
                         .with_login("builder")
                         .elevated("model.p.orders", ["MODIFY on schema p"])
                         .read_only("model.p.payments"),
-                ))
-                .allowing_elevated_login(true),
+                ),
+            )
+            .allowing_elevated_login(true),
         );
         let (found, report) = findings(&s).await;
         let orders = &found["model.p.orders"];
         assert_eq!(orders.status, Status::Pass, "{orders:?}");
         assert_eq!(orders.evidence["login_check"], "overridden");
+        assert_eq!(
+            orders.evidence["login_found"],
+            "can do more than read: MODIFY on schema p"
+        );
         assert_eq!(
             found["model.p.payments"].evidence["login_check"],
             "read_only"
@@ -1418,7 +1472,8 @@ mod running {
     #[tokio::test]
     async fn the_override_never_skips_the_sql_or_trust_guards() {
         let mut s = settings(ORDERS_HAS_ROWS).with_probe_connection(
-            ProbeConnection::new(Arc::new(warehouse("12"))).allowing_elevated_login(true),
+            ProbeConnection::without_privileges(Arc::new(warehouse("12")))
+                .allowing_elevated_login(true),
         );
         s.check_probe_sql(&|_| Ok(())).unwrap();
         let (found, _) = findings(&s).await;
@@ -1439,28 +1494,20 @@ mod running {
             )
         };
         // Not a number where `n > 0` needs one.
-        let s = ready().with_probe_connection(
-            ProbeConnection::new(Arc::new(warehouse("many"))).with_privileges(privileges()),
-        );
+        let s = ready().with_probe_connection(connect(warehouse("many"), privileges()));
         let (found, _) = findings(&s).await;
         assert_eq!(found["model.p.orders"].status, Status::Unknown);
         // The warehouse can't be reached.
-        let s = ready().with_probe_connection(
-            ProbeConnection::new(Arc::new(warehouse("12").failing())).with_privileges(privileges()),
-        );
+        let s = ready().with_probe_connection(connect(warehouse("12").failing(), privileges()));
         let (found, _) = findings(&s).await;
         let orders = &found["model.p.orders"];
         assert_eq!(orders.status, Status::Unknown);
         assert!(orders.reason.contains("couldn't run"), "{}", orders.reason);
         // A relation of a kind a probe doesn't read is skipped; none is unknown.
-        let s = ready().with_probe_connection(
-            ProbeConnection::new(Arc::new(FakeRelationProbe::new().with_relation(
-                "model.p.orders",
-                "cte",
-                None,
-            )))
-            .with_privileges(privileges()),
-        );
+        let s = ready().with_probe_connection(connect(
+            FakeRelationProbe::new().with_relation("model.p.orders", "cte", None),
+            privileges(),
+        ));
         let (found, _) = findings(&s).await;
         assert_eq!(found["model.p.orders"].status, Status::Skipped);
         assert_eq!(found["model.p.payments"].status, Status::Unknown);
