@@ -188,7 +188,10 @@ One-time setup, by a repository and PyPI admin:
   existing release by hand (**Actions → Chocolatey → Run workflow**, `publish` on), the
   environment must also allow the branch the workflow runs from. Each push goes through
   Chocolatey's automated checks, and the package's first version through human
-  moderation, before it is listed.
+  moderation, before it is listed. While a version is still in moderation, Chocolatey
+  refuses newer ones with **403 Forbidden**, so the release's `chocolatey / push` job
+  fails until the earlier version is approved. Then push the newer release by hand as
+  above (v0.0.2 waited this way for v0.0.1).
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,
