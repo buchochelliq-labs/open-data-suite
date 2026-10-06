@@ -1,4 +1,5 @@
 use super::*;
+use ods_core::state::Timestamp;
 
 use proptest::prelude::*;
 
@@ -371,7 +372,7 @@ proptest! {
             .filter(|(_, s)| **s != "off")
             .map(|(b, _)| b.id())
             .collect();
-        let checks: Vec<&str> = badge.findings.iter().map(|f| f.check).collect();
+        let checks: Vec<&str> = badge.findings.iter().map(|f| f.check.as_str()).collect();
         prop_assert_eq!(checks, enabled);
         for reason in &badge.reasons {
             prop_assert!(
@@ -381,4 +382,195 @@ proptest! {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------- registered checks
+
+mod registered {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use ods_provider_fake::{FakeHealthCheck, Misbehaviour};
+
+    use super::*;
+
+    fn scope() -> CheckScope {
+        let mut a = model("model.p.a", 1);
+        a.build = Some(passed());
+        let mut b = model("model.p.b", 1);
+        b.build = Some(passed());
+        CheckScope::new(vec![a, b], Some(clean()))
+    }
+
+    fn with(check: FakeHealthCheck) -> HealthSettings {
+        HealthSettings::default()
+            .with_check(Arc::new(check))
+            .unwrap()
+    }
+
+    async fn run(settings: &HealthSettings) -> HealthReport {
+        settings.run(&scope(), CHECK_TIMEOUT).await
+    }
+
+    fn plugin_finding<'a>(report: &'a HealthReport, node: &str) -> &'a Finding {
+        report.badges[node]
+            .findings
+            .iter()
+            .find(|f| f.source == CheckSource::Plugin)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_passing_check_keeps_nodes_healthy() {
+        let report = run(&with(FakeHealthCheck::new("owner", Severity::Error))).await;
+        assert_eq!(report.badges["model.p.a"].health, Health::Healthy);
+        assert_eq!(plugin_finding(&report, "model.p.a").status, Status::Pass);
+        assert_eq!(report.checks.last().unwrap().id, "owner");
+        assert_eq!(report.checks.last().unwrap().source, CheckSource::Plugin);
+        assert!(!report.fails(true));
+    }
+
+    #[tokio::test]
+    async fn a_failure_counts_at_the_checks_severity() {
+        let error = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error).failing("model.p.a"),
+        ))
+        .await;
+        assert_eq!(error.badges["model.p.a"].health, Health::Failing);
+        assert_eq!(error.badges["model.p.b"].health, Health::Healthy);
+        assert!(error.fails(false));
+
+        let warn = run(&with(
+            FakeHealthCheck::new("owner", Severity::Warn).failing("model.p.a"),
+        ))
+        .await;
+        assert_eq!(warn.badges["model.p.a"].health, Health::Warning);
+        assert!(!warn.fails(true));
+
+        let info = run(&with(
+            FakeHealthCheck::new("owner", Severity::Info).failing("model.p.a"),
+        ))
+        .await;
+        assert_eq!(info.badges["model.p.a"].health, Health::Healthy);
+    }
+
+    #[tokio::test]
+    async fn an_undecided_node_is_unknown_and_fails_only_when_strict() {
+        let report = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error).unknown("model.p.a"),
+        ))
+        .await;
+        assert_eq!(report.badges["model.p.a"].health, Health::Unknown);
+        assert!(!report.fails(false));
+        assert!(report.fails(true));
+    }
+
+    #[tokio::test]
+    async fn a_check_that_errs_decides_nothing() {
+        let report = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error).misbehaving(Misbehaviour::Fails),
+        ))
+        .await;
+        for node in ["model.p.a", "model.p.b"] {
+            let finding = plugin_finding(&report, node);
+            assert_eq!(finding.status, Status::Unknown);
+            assert!(finding.reason.starts_with("the check couldn't run"));
+            assert_eq!(report.badges[node].health, Health::Unknown);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_skipped_or_repeated_answer_is_unknown() {
+        let skipped = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error).misbehaving(Misbehaviour::SkipsANode),
+        ))
+        .await;
+        assert_eq!(
+            plugin_finding(&skipped, "model.p.a").status,
+            Status::Unknown
+        );
+        assert_eq!(plugin_finding(&skipped, "model.p.b").status, Status::Pass);
+
+        let twice = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error).misbehaving(Misbehaviour::AnswersTwice),
+        ))
+        .await;
+        let finding = plugin_finding(&twice, "model.p.a");
+        assert_eq!(finding.status, Status::Unknown);
+        assert!(finding.reason.contains("more than once"));
+    }
+
+    #[tokio::test]
+    async fn answers_about_strangers_are_ignored() {
+        let report = run(&with(
+            FakeHealthCheck::new("owner", Severity::Error)
+                .misbehaving(Misbehaviour::AnswersAStranger),
+        ))
+        .await;
+        assert_eq!(
+            report.badges.keys().collect::<Vec<_>>(),
+            ["model.p.a", "model.p.b"]
+        );
+        assert!(!report.fails(true));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_check_that_hangs_times_out_as_unknown() {
+        let settings =
+            with(FakeHealthCheck::new("owner", Severity::Error).misbehaving(Misbehaviour::Hangs));
+        let report = settings.run(&scope(), Duration::from_secs(5)).await;
+        let finding = plugin_finding(&report, "model.p.a");
+        assert_eq!(finding.status, Status::Unknown);
+        assert!(finding.reason.contains("within 5s"));
+    }
+
+    #[test]
+    fn ids_must_be_valid_and_unique() {
+        let bad = HealthSettings::default()
+            .with_check(Arc::new(FakeHealthCheck::new("Owner!", Severity::Warn)));
+        assert!(bad.unwrap_err().to_string().contains("isn't valid"));
+
+        let builtin = HealthSettings::default()
+            .with_check(Arc::new(FakeHealthCheck::new("built", Severity::Warn)));
+        assert!(
+            builtin
+                .unwrap_err()
+                .to_string()
+                .contains("two health checks")
+        );
+
+        let twice = with(FakeHealthCheck::new("owner", Severity::Warn))
+            .with_check(Arc::new(FakeHealthCheck::new("owner", Severity::Warn)));
+        assert!(twice.unwrap_err().to_string().contains("two health checks"));
+    }
+
+    #[tokio::test]
+    async fn builtins_still_run_beside_registered_checks() {
+        let mut scope = scope();
+        scope.nodes[0].build = None;
+        let report = with(FakeHealthCheck::new("owner", Severity::Warn))
+            .run(&scope, CHECK_TIMEOUT)
+            .await;
+        assert_eq!(report.badges["model.p.a"].health, Health::Unknown);
+        assert!(
+            report
+                .checks
+                .iter()
+                .any(|c| c.id == "built" && c.source == CheckSource::Builtin)
+        );
+    }
+}
+
+/// Times are kept to the second: a build in the same second as the failed run's record
+/// isn't taken as a later one, so the failure stands.
+#[test]
+fn a_build_in_the_same_second_as_the_failure_does_not_clear_it() {
+    let mut node = model("model.p.a", 1);
+    node.build = Some(BuildFacts::new("run-0", at("2026-09-29T09:00:00Z")));
+    let badge = HealthSettings::default().evaluate(&node, Some(&failures(&["model.p.a"], &[])));
+    assert_eq!(badge.health, Health::Failing);
+
+    node.build = Some(BuildFacts::new("run-2", at("2026-09-29T09:00:01Z")));
+    let badge = HealthSettings::default().evaluate(&node, Some(&failures(&["model.p.a"], &[])));
+    assert_ne!(badge.health, Health::Failing);
 }

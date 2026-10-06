@@ -4,7 +4,7 @@
 //!
 //! Nothing here is a score or a trend: those are #117's.
 
-use ods_health::{BuildFacts, LastFailures, NodeFacts};
+use ods_health::{BuildFacts, CheckScope, LastFailures, NodeFacts};
 pub use ods_health::{HEALTHS, Health, HealthBadge};
 use serde::Serialize;
 
@@ -27,6 +27,15 @@ pub(crate) fn facts(input: &CatalogInput, node: &CatalogNode) -> NodeFacts {
         }
     });
     facts
+}
+
+/// What `ods health check` runs the engine on: every node of the Catalog, as the
+/// dashboard badges them, and `last_run`'s failures, if its record says.
+pub fn check_scope(input: &CatalogInput, last_run: Option<LastFailures>) -> CheckScope {
+    CheckScope::new(
+        input.nodes.iter().map(|node| facts(input, node)).collect(),
+        last_run,
+    )
 }
 
 /// What the last run's record says failed; `None` when it doesn't say.

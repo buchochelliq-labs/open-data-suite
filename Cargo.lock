@@ -1340,11 +1340,16 @@ dependencies = [
  "globset",
  "ods-config",
  "ods-core",
+ "ods-provider-fake",
+ "ods-sdk",
  "proptest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
+ "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]

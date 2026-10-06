@@ -17,6 +17,7 @@
 pub mod changes;
 pub mod error_catalogue;
 pub mod executor;
+pub mod health_check;
 pub mod lock;
 pub mod observed_lineage;
 pub mod probe;

@@ -8,164 +8,47 @@
 //! Nothing here guesses (AGENTS rule 3): a check that can't decide says *unknown*, and
 //! unknown never counts as healthy. Every finding names its check and why (rule 4).
 //!
-//! A module crate: it depends on `ods-core` and `ods-config` only, never on providers or
-//! other modules (ADR-0001).
+//! A module crate: it depends on `ods-core`, `ods-config` and `ods-sdk` (whose
+//! `health_check` contract every check answers through), never on providers or other
+//! modules (ADR-0001).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ods_config::{
     HealthCheckConfig, HealthConfig, HealthSelector, HealthSeverity, UnknownCountsAs,
 };
-use ods_core::state::Timestamp;
-use serde::Serialize;
-
-// ---------------------------------------------------------------------------- facts
-
-/// What the engine knows about a node: neutral facts from the project and the state
-/// store, filled in by the caller.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct NodeFacts {
-    /// Its id, e.g. `model.shop.orders`.
-    pub id: String,
-    /// Its name.
-    pub name: String,
-    /// Its resource type, e.g. `model`, `seed`, `snapshot`.
-    pub resource_type: String,
-    /// Its file, relative to the project, if known.
-    pub path: Option<String>,
-    /// Its tags.
-    pub tags: Vec<String>,
-    /// How many tests (data and unit) read it.
-    pub tests: usize,
-    /// Its last successful build, if ODS recorded one.
-    pub build: Option<BuildFacts>,
-}
-
-impl NodeFacts {
-    /// A node with nothing known about it but its id, name and type.
-    pub fn new(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        resource_type: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            resource_type: resource_type.into(),
-            ..Self::default()
-        }
-    }
-}
-
-/// A node's last successful build.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct BuildFacts {
-    /// The run that built it.
-    pub run_id: String,
-    /// When the build finished.
-    pub built_at: Timestamp,
-    /// The run whose tests all passed on this build, and when, if recorded.
-    pub tested: Option<(String, Timestamp)>,
-    /// Whether the tests that passed are the node's tests now.
-    pub checks_current: bool,
-}
-
-impl BuildFacts {
-    /// A build by `run_id` at `built_at`, its tests not recorded.
-    pub fn new(run_id: impl Into<String>, built_at: Timestamp) -> Self {
-        Self {
-            run_id: run_id.into(),
-            built_at,
-            tested: None,
-            checks_current: false,
-        }
-    }
-
-    /// Records that its tests passed in `run_id` at `at`, and whether they are the
-    /// node's tests now.
-    #[must_use]
-    pub fn tested(mut self, run_id: impl Into<String>, at: Timestamp, current: bool) -> Self {
-        self.tested = Some((run_id.into(), at));
-        self.checks_current = current;
-        self
-    }
-}
-
-/// What the last run's record says failed. Only from a record of this scope: another
-/// target's run says nothing about these nodes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct LastFailures {
-    /// When the run started.
-    pub started_at: Timestamp,
-    /// Its command, e.g. `ods state build`.
-    pub command: String,
-    /// Nodes that failed, or whose tests failed.
-    pub failed: BTreeSet<String>,
-    /// Nodes skipped because something upstream failed.
-    pub skipped: BTreeSet<String>,
-}
-
-impl LastFailures {
-    /// A run started at `started_at` by `command`.
-    pub fn new(
-        started_at: Timestamp,
-        command: impl Into<String>,
-        failed: impl IntoIterator<Item = String>,
-        skipped: impl IntoIterator<Item = String>,
-    ) -> Self {
-        Self {
-            started_at,
-            command: command.into(),
-            failed: failed.into_iter().collect(),
-            skipped: skipped.into_iter().collect(),
-        }
-    }
-}
+pub use ods_sdk::contracts::health_check::{
+    BuildFacts, CheckFinding, CheckInfo, CheckScope, HealthCheck, LastFailures, NodeFacts,
+    Severity, Status,
+};
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------- findings
 
-/// How severe a check's failure is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+/// Where a check comes from (ADR-0030 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
-pub enum Severity {
-    /// The node is failing.
-    Error,
-    /// The node is a warning.
-    Warn,
-    /// Shown, and changes nothing.
-    Info,
-}
-
-/// What a check concluded about a node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Status {
-    /// It passed.
-    Pass,
-    /// It failed.
-    Fail,
-    /// The check couldn't decide.
-    Unknown,
-    /// The check doesn't apply to the node, or had nothing to look at.
-    Skipped,
+pub enum CheckSource {
+    /// One of ODS's own checks.
+    Builtin,
+    /// A check registered through the `health_check` contract: a plugin.
+    Plugin,
 }
 
 /// One check's conclusion about one node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct Finding {
     /// The check's id, e.g. `tests_required`.
-    pub check: &'static str,
-    /// Where the check comes from: `builtin` for now (ADR-0030 §2).
-    pub source: &'static str,
+    pub check: String,
+    /// Where the check comes from (ADR-0030 §2).
+    pub source: CheckSource,
     /// What it concluded.
     pub status: Status,
     /// How severe a failure is.
@@ -175,7 +58,7 @@ pub struct Finding {
 }
 
 /// A node's health.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Health {
@@ -238,7 +121,7 @@ impl Health {
 }
 
 /// A node's health, and why.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct HealthBadge {
@@ -399,10 +282,83 @@ impl Configured {
 
 /// The health checks as `[health]` sets them up: which run, how severe a failure is,
 /// and on which nodes. [`HealthSettings::default`] is every built-in at its defaults.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HealthSettings {
     checks: Vec<Configured>,
+    plugins: Vec<Plugin>,
     unknown_counts_as: Health,
+}
+
+/// A check registered through the `health_check` contract.
+#[derive(Clone)]
+struct Plugin {
+    check: Arc<dyn HealthCheck>,
+    severity: Severity,
+}
+
+impl fmt::Debug for HealthSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HealthSettings")
+            .field("checks", &self.checks)
+            .field(
+                "plugins",
+                &self
+                    .plugins
+                    .iter()
+                    .map(|p| p.check.describe().id)
+                    .collect::<Vec<_>>(),
+            )
+            .field("unknown_counts_as", &self.unknown_counts_as)
+            .finish()
+    }
+}
+
+fn severity_word(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "error",
+        Severity::Warn => "warn",
+        _ => "info",
+    }
+}
+
+/// How long a registered check may take before its findings are unknown.
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Every node's health after a run of every check: built-in and registered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct HealthReport {
+    /// Each node's badge, by id.
+    pub badges: BTreeMap<String, HealthBadge>,
+    /// The checks that ran: id, source and severity, in order.
+    pub checks: Vec<CheckRun>,
+}
+
+/// A check that ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CheckRun {
+    /// Its id.
+    pub id: String,
+    /// Where it comes from.
+    pub source: CheckSource,
+    /// How severe its failure is.
+    pub severity: Severity,
+    /// What it checks.
+    pub about: String,
+}
+
+impl HealthReport {
+    /// Whether a finding at severity error failed, or, when `strict`, couldn't decide:
+    /// the verdict of `ods health check` (exit 5).
+    pub fn fails(&self, strict: bool) -> bool {
+        self.badges.values().flat_map(|b| &b.findings).any(|f| {
+            f.severity == Severity::Error
+                && (f.status == Status::Fail || (strict && f.status == Status::Unknown))
+        })
+    }
 }
 
 impl Default for HealthSettings {
@@ -461,6 +417,7 @@ impl HealthSettings {
             .collect::<Result<Vec<_>, HealthConfigError>>()?;
         Ok(Self {
             checks,
+            plugins: Vec::new(),
             unknown_counts_as: match config.unknown_counts_as {
                 Some(UnknownCountsAs::Warning) => Health::Warning,
                 _ => Health::Unknown,
@@ -485,7 +442,121 @@ impl HealthSettings {
         self.unknown_counts_as
     }
 
-    /// The node's health, from every enabled check that applies to it.
+    /// Adds a check registered through the `health_check` contract, at its own default
+    /// severity. Its id must be well formed, and no other check's.
+    ///
+    /// # Errors
+    /// A malformed id, or one another check already has.
+    pub fn with_check(mut self, check: Arc<dyn HealthCheck>) -> Result<Self, HealthConfigError> {
+        let info = check.describe();
+        if !CheckInfo::valid_id(&info.id) {
+            return Err(HealthConfigError(format!(
+                "a health check's id `{}` isn't valid: lowercase letters, digits, `_`, `-` and `.`, starting with a letter",
+                info.id
+            )));
+        }
+        let taken = BUILTINS.iter().any(|b| b.id() == info.id)
+            || self
+                .plugins
+                .iter()
+                .any(|p| p.check.describe().id == info.id);
+        if taken {
+            return Err(HealthConfigError(format!(
+                "two health checks are called `{}`",
+                info.id
+            )));
+        }
+        self.plugins.push(Plugin {
+            severity: info.default_severity,
+            check,
+        });
+        Ok(self)
+    }
+
+    /// Runs every check, built-in and registered, on `scope`'s nodes. A registered check
+    /// that errs, takes longer than `timeout`, leaves a node unanswered or answers it
+    /// twice gives *unknown* for those nodes, never a pass (AGENTS rule 3); answers
+    /// about nodes outside the scope are ignored.
+    pub async fn run(&self, scope: &CheckScope, timeout: Duration) -> HealthReport {
+        let mut per_node: BTreeMap<String, Vec<Finding>> = scope
+            .nodes
+            .iter()
+            .map(|node| {
+                let builtin = self.evaluate(node, scope.last_run.as_ref()).findings;
+                (node.id.clone(), builtin)
+            })
+            .collect();
+        let mut checks: Vec<CheckRun> = self
+            .checks
+            .iter()
+            .filter_map(|c| {
+                Some(CheckRun {
+                    id: c.check.id().to_owned(),
+                    source: CheckSource::Builtin,
+                    severity: c.severity?,
+                    about: c.check.about().to_owned(),
+                })
+            })
+            .collect();
+        for plugin in &self.plugins {
+            let info = plugin.check.describe();
+            checks.push(CheckRun {
+                id: info.id.clone(),
+                source: CheckSource::Plugin,
+                severity: plugin.severity,
+                about: info.about.clone(),
+            });
+            let answered = match tokio::time::timeout(timeout, plugin.check.check(scope)).await {
+                Ok(Ok(findings)) => Ok(findings),
+                Ok(Err(e)) => Err(format!("the check couldn't run: {e}")),
+                Err(_) => Err(format!(
+                    "the check didn't answer within {}s",
+                    timeout.as_secs()
+                )),
+            };
+            let mut answers: BTreeMap<&str, Vec<&CheckFinding>> = BTreeMap::new();
+            if let Ok(findings) = &answered {
+                for finding in findings {
+                    answers
+                        .entry(finding.node.as_str())
+                        .or_default()
+                        .push(finding);
+                }
+            }
+            for node in &scope.nodes {
+                let (status, reason) = match (&answered, answers.get(node.id.as_str())) {
+                    (Err(why), _) => (Status::Unknown, why.clone()),
+                    (Ok(_), None) => (
+                        Status::Unknown,
+                        "the check didn't answer about this node".to_owned(),
+                    ),
+                    (Ok(_), Some(many)) if many.len() > 1 => (
+                        Status::Unknown,
+                        "the check answered about this node more than once".to_owned(),
+                    ),
+                    (Ok(_), Some(one)) => (one[0].status, one[0].reason.clone()),
+                };
+                if let Some(findings) = per_node.get_mut(&node.id) {
+                    findings.push(Finding {
+                        check: info.id.clone(),
+                        source: CheckSource::Plugin,
+                        status,
+                        severity: plugin.severity,
+                        reason,
+                    });
+                }
+            }
+        }
+        HealthReport {
+            badges: per_node
+                .into_iter()
+                .map(|(id, findings)| (id, badge(findings, self.unknown_counts_as)))
+                .collect(),
+            checks,
+        }
+    }
+
+    /// The node's health, from every enabled built-in check that applies to it.
     pub fn evaluate(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> HealthBadge {
         let findings: Vec<Finding> = self
             .checks
@@ -498,8 +569,8 @@ impl HealthSettings {
                     (Status::Skipped, "not selected for this check".to_owned())
                 };
                 Some(Finding {
-                    check: c.check.id(),
-                    source: "builtin",
+                    check: c.check.id().to_owned(),
+                    source: CheckSource::Builtin,
                     status,
                     severity,
                     reason,
@@ -518,10 +589,19 @@ impl HealthSettings {
                 Some(_) if check == Builtin::Built => "on",
                 Some(Severity::Error) => "error",
                 Some(Severity::Warn) => "warn",
-                Some(Severity::Info) => "info",
+                Some(_) => "info",
                 None => "off",
             };
             parts.push(format!("{} ({severity}): {}", check.id(), check.about()));
+        }
+        for plugin in &self.plugins {
+            let info = plugin.check.describe();
+            parts.push(format!(
+                "{} ({}, plugin): {}",
+                info.id,
+                severity_word(plugin.severity),
+                info.about
+            ));
         }
         let mut how = format!(
             "A node is failing when a check at severity error fails, then {} when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): {}",
@@ -548,7 +628,9 @@ fn short(run: &str) -> String {
 fn run(check: Builtin, node: &NodeFacts, failures: Option<&LastFailures>) -> (Status, String) {
     let build = node.build.as_ref();
     // A failure counts until a later build replaces it (e.g. recorded elsewhere).
-    let since = |f: &LastFailures| build.is_none_or(|b| b.built_at < f.started_at);
+    // Times are kept to the second, so a build in the same second as the record isn't
+    // taken as later: the failure stands (AGENTS rule 3).
+    let since = |f: &LastFailures| build.is_none_or(|b| b.built_at <= f.started_at);
     match check {
         Builtin::Built => match build {
             Some(b) => (
@@ -651,7 +733,7 @@ fn badge(findings: Vec<Finding>, unknown_counts_as: Health) -> HealthBadge {
     } else if findings.iter().any(|f| f.status == Status::Pass) {
         // Healthy, and why: the build, and its tests (or that it has none).
         let why = reasons(&|f| {
-            matches!(f.check, "built" | "tests_passed")
+            matches!(f.check.as_str(), "built" | "tests_passed")
                 && matches!(f.status, Status::Pass | Status::Skipped)
                 && !f.reason.starts_with("not selected")
         });
@@ -683,6 +765,8 @@ pub fn counts<'a>(badges: impl IntoIterator<Item = &'a HealthBadge>) -> BTreeMap
     }
     counts
 }
+
+pub mod record;
 
 #[cfg(test)]
 mod tests;

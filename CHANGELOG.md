@@ -32,6 +32,15 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- `ods health check` runs the health checks `[health]` configures and gates CI on them:
+  exit 5 when a check at severity `error` fails, and with `--strict` also when one
+  couldn't decide; `--json` for one document. Each run is kept beside the state store as
+  a versioned health record (`<state db>.health/`, the newest 20), unless `--no-record`
+  ([docs](docs/cli.md#ods-health-check)) (#392)
+- The `health_check` SDK contract 0.1 (capability `health_check`), with a fake and a
+  conformance suite: checks registered through it run beside the built-ins, under a
+  timeout, and one that errs, times out or skips a node is *unknown*, never a pass.
+  `SDK_VERSION` is now 0.8 (#392)
 - `[health]` in `ods.toml` tunes the dashboard's health checks
   ([ADR-0030](docs/adr/0030-configurable-and-pluggable-health-checks.md)): turn each
   built-in check (`built`, `last_run_failed`, `last_run_skipped`, `tests_required`,

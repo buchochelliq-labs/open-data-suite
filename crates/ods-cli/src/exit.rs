@@ -94,6 +94,11 @@ pub mod codes {
     /// `[health]` names a check that doesn't exist or a path glob that isn't valid: a
     /// configuration schema violation, as the configuration's own (`ODS-E0102`).
     pub const HEALTH_CONFIG: &str = "ODS-E0102";
+    /// `ods health check` found a check at severity `error` that fails (or, with
+    /// `--strict`, can't decide).
+    pub const HEALTH_FAILED: &str = "ODS-E0701";
+    /// `ods health check` couldn't write its health record.
+    pub const HEALTH_RECORD: &str = "ODS-E0702";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active
