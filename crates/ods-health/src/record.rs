@@ -236,6 +236,7 @@ mod tests {
                 badges: BTreeMap::new(),
                 checks: Vec::new(),
                 coverage: Vec::new(),
+                elevated_login: None,
             },
         )
     }

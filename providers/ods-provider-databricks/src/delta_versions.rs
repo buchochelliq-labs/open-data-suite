@@ -18,7 +18,8 @@ use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion, VersionReport};
 use ods_sdk::contracts::probe::{
-    InvalidProbe, ProbeAnswer, ProbeFilter, ProbeRequest, ProbeRow, ProbeStatement, RelationProbe,
+    InvalidProbe, ProbeAnswer, ProbeFilter, ProbeRequest, ProbeRow, ProbeStatement, ProbeTarget,
+    RelationProbe,
 };
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -123,9 +124,10 @@ impl<P: RelationProbe> ChangeProvider for DeltaVersions<P> {
     async fn versions(&self, sources: &[RequestedSource]) -> Result<VersionReport, ProviderError> {
         let request =
             request().map_err(|e| ProviderError::Other(format!("the Delta version probe: {e}")))?;
-        let report = self.probe.probe(&request, sources).await?;
+        let targets: Vec<ProbeTarget> = sources.iter().map(ProbeTarget::from).collect();
+        let report = self.probe.probe(&request, &targets).await?;
         let mut answers: BTreeMap<String, Option<ProbeAnswer>> = BTreeMap::new();
-        for (id, answer) in report.sources {
+        for (id, answer) in report.targets {
             // A source answered twice: trust neither answer, as the CLI does.
             answers
                 .entry(id)
@@ -226,11 +228,11 @@ mod tests {
         async fn probe(
             &self,
             _: &ProbeRequest,
-            sources: &[RequestedSource],
+            targets: &[ProbeTarget],
         ) -> Result<ods_sdk::contracts::probe::ProbeReport, ProviderError> {
             let good = rows(&[("id", "a"), ("format", "delta")], &[("version", "1")]);
             Ok(ods_sdk::contracts::probe::ProbeReport::new(
-                sources
+                targets
                     .iter()
                     .flat_map(|s| [(s.id.clone(), good.clone()), (s.id.clone(), good.clone())])
                     .collect(),

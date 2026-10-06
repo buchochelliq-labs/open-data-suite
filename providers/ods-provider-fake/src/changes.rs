@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion, VersionReport};
-use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, ProbeRow, RelationProbe};
+use ods_sdk::contracts::probe::{
+    ProbeAnswer, ProbeReport, ProbeRequest, ProbeRow, ProbeTarget, RelationProbe,
+};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
 use crate::KIND;
@@ -141,13 +143,15 @@ struct FakeRelation {
     rows: BTreeMap<String, ProbeRow>,
 }
 
-/// A relation probe over sources' relations with a kind, an optional format, and the
+/// A relation probe over nodes' relations with a kind, an optional format, and the
 /// first row each statement template returns. A statement it has no row for returns
-/// no rows. It confirms a format only when the relation has one.
+/// no rows. It confirms a format only when the relation has one. It remembers which
+/// relations it ran statements against, in order.
 #[derive(Debug, Clone, Default)]
 pub struct FakeRelationProbe {
     fails: bool,
     relations: Arc<Mutex<BTreeMap<String, FakeRelation>>>,
+    probed: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeRelationProbe {
@@ -156,7 +160,8 @@ impl FakeRelationProbe {
         Self::default()
     }
 
-    /// `source`'s relation is a `kind` (e.g. `table`), stored in `format` if known.
+    /// The relation of `source` (any node id) is a `kind` (e.g. `table`), stored in
+    /// `format` if known.
     #[must_use]
     pub fn with_relation(
         self,
@@ -211,6 +216,12 @@ impl FakeRelationProbe {
     pub fn failing(mut self) -> Self {
         self.fails = true;
         self
+    }
+
+    /// The ids of the relations statements ran against, in order (shared between
+    /// clones).
+    pub fn probed(&self) -> Vec<String> {
+        lock(&self.probed).clone()
     }
 
     fn answer(relation: &FakeRelation, request: &ProbeRequest) -> ProbeAnswer {
@@ -272,7 +283,7 @@ impl RelationProbe for FakeRelationProbe {
     async fn probe(
         &self,
         request: &ProbeRequest,
-        sources: &[RequestedSource],
+        targets: &[ProbeTarget],
     ) -> Result<ProbeReport, ProviderError> {
         if self.fails {
             return Err(ProviderError::Other(
@@ -280,15 +291,19 @@ impl RelationProbe for FakeRelationProbe {
             ));
         }
         let relations = lock(&self.relations);
+        let mut probed = lock(&self.probed);
         Ok(ProbeReport::new(
-            sources
+            targets
                 .iter()
-                .map(|s| {
-                    let answer = relations.get(&s.id).map_or_else(
-                        || ProbeAnswer::Unknown("unknown source".to_owned()),
+                .map(|t| {
+                    let answer = relations.get(&t.id).map_or_else(
+                        || ProbeAnswer::Unknown("no such relation".to_owned()),
                         |relation| Self::answer(relation, request),
                     );
-                    (s.id.clone(), answer)
+                    if matches!(answer, ProbeAnswer::Rows(_)) {
+                        probed.push(t.id.clone());
+                    }
+                    (t.id.clone(), answer)
                 })
                 .collect(),
         ))

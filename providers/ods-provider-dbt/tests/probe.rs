@@ -10,9 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use ods_provider_dbt::executor::{DbtExecutor, DbtOutput};
 use ods_sdk::conformance::probe::{ProbeHarness, run};
-use ods_sdk::contracts::changes::RequestedSource;
 use ods_sdk::contracts::probe::{
-    ProbeAnswer, ProbeFilter, ProbeRequest, ProbeRow, ProbeStatement, RelationProbe,
+    ProbeAnswer, ProbeFilter, ProbeRequest, ProbeRow, ProbeStatement, ProbeTarget, RelationProbe,
 };
 
 const DETAIL: &str = "DESCRIBE DETAIL {relation}";
@@ -79,8 +78,8 @@ fn request() -> ProbeRequest {
     .unwrap()
 }
 
-fn source(table: &str) -> RequestedSource {
-    RequestedSource::new(
+fn source(table: &str) -> ProbeTarget {
+    ProbeTarget::new(
         format!("source.jaffle_ods.raw.{table}"),
         format!("raw.{table}"),
     )
@@ -100,11 +99,11 @@ impl ProbeHarness for Harness {
         request()
     }
 
-    fn matching(&self) -> Vec<RequestedSource> {
+    fn matching(&self) -> Vec<ProbeTarget> {
         vec![source("orders"), source("payments")]
     }
 
-    fn excluded(&self) -> Option<RequestedSource> {
+    fn excluded(&self) -> Option<ProbeTarget> {
         Some(source("customers"))
     }
 }
@@ -129,20 +128,28 @@ async fn one_dbt_call_answers_only_what_was_asked_and_failures_are_errors() {
     warehouse(&dir, "7");
     // The plan's manifest, which the probe must leave alone.
     std::fs::write(dir.join("target/manifest.json"), "{\"plan\": 1}").unwrap();
-    let asked = [source("payments"), source("customers"), source("gone")];
+    let asked = [
+        source("payments"),
+        source("customers"),
+        source("gone"),
+        ProbeTarget::new("model.jaffle_ods.orders", "orders"),
+        ProbeTarget::new("source.jaffle_ods.raw.{{ x }}", "odd"),
+    ];
     let report = probe(&dir).probe(&request(), &asked).await.unwrap();
-    let ids: Vec<&str> = report.sources.iter().map(|(id, _)| id.as_str()).collect();
+    let ids: Vec<&str> = report.targets.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(
         ids,
         [
             "source.jaffle_ods.raw.payments",
             "source.jaffle_ods.raw.customers",
-            "source.jaffle_ods.raw.gone"
+            "source.jaffle_ods.raw.gone",
+            "model.jaffle_ods.orders",
+            "source.jaffle_ods.raw.{{ x }}",
         ],
-        "only the requested sources, in order; `orders` is ignored"
+        "only the requested targets, in order; `orders` is ignored"
     );
     assert_eq!(
-        report.sources[0].1,
+        report.targets[0].1,
         ProbeAnswer::Rows(vec![
             // Quotes and backslashes survive the SQL string that carries them.
             row(&[("id", "it's \\ \"odd\""), ("format", "delta")]),
@@ -150,11 +157,19 @@ async fn one_dbt_call_answers_only_what_was_asked_and_failures_are_errors() {
         ])
     );
     assert!(
-        matches!(&report.sources[1].1, ProbeAnswer::Skipped(why) if why.contains("a view, not a table")),
+        matches!(&report.targets[1].1, ProbeAnswer::Skipped(why) if why.contains("a view, not a table")),
         "{report:?}"
     );
     assert!(
-        matches!(&report.sources[2].1, ProbeAnswer::Unknown(why) if why.contains("not a source")),
+        matches!(&report.targets[2].1, ProbeAnswer::Unknown(why) if why.contains("not a source")),
+        "{report:?}"
+    );
+    assert!(
+        matches!(&report.targets[3].1, ProbeAnswer::Unknown(why) if why.contains("not a source")),
+        "{report:?}"
+    );
+    assert!(
+        matches!(&report.targets[4].1, ProbeAnswer::Unknown(why) if why.contains("characters")),
         "{report:?}"
     );
     assert_eq!(
@@ -191,7 +206,7 @@ async fn a_relation_the_adapter_cant_confirm_the_format_of_is_skipped() {
         .probe(&request(), &[source("orders"), source("payments")])
         .await
         .unwrap();
-    for (_, answer) in &report.sources {
+    for (_, answer) in &report.targets {
         assert!(
             matches!(answer, ProbeAnswer::Skipped(why) if why.contains("doesn't confirm it is stored as delta")),
             "{report:?}"
@@ -253,17 +268,17 @@ async fn real_dbt_runs_the_query() {
     )
     .unwrap();
     let asked = ["raw_orders", "gone", "a_view"]
-        .map(|t| RequestedSource::new(format!("source.jaffle_ods.raw.{t}"), t));
+        .map(|t| ProbeTarget::new(format!("source.jaffle_ods.raw.{t}"), t));
     let report = executor.probe(&request, &asked).await.unwrap();
     assert_eq!(
-        report.sources[0].1,
+        report.targets[0].1,
         ProbeAnswer::Rows(vec![
             row(&[("n", "6"), ("odd", "it's \\ \"q\"")]),
             ProbeRow::new()
         ])
     );
-    assert!(matches!(report.sources[1].1, ProbeAnswer::Unknown(_)));
-    assert!(matches!(report.sources[2].1, ProbeAnswer::Skipped(_)));
+    assert!(matches!(report.targets[1].1, ProbeAnswer::Unknown(_)));
+    assert!(matches!(report.targets[2].1, ProbeAnswer::Skipped(_)));
     let formatted = ProbeRequest::new(
         ProbeFilter::kinds(["table"])
             .unwrap()
@@ -274,7 +289,7 @@ async fn real_dbt_runs_the_query() {
     .unwrap();
     let report = executor.probe(&formatted, &asked[..1]).await.unwrap();
     assert!(
-        matches!(report.sources[0].1, ProbeAnswer::Skipped(_)),
+        matches!(report.targets[0].1, ProbeAnswer::Skipped(_)),
         "{report:?}"
     );
 }
@@ -290,4 +305,42 @@ fn copy_dir(from: &Path, to: &Path) {
             std::fs::copy(entry.path(), &target).unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn statements_run_only_against_the_requested_relations() {
+    let dir = scratch("only-asked");
+    warehouse(&dir, "7");
+    let probed = dir.join("probed");
+    let report = probe(&dir)
+        .env("FAKE_DBT_PROBED", probed.display().to_string())
+        .probe(&request(), &[source("payments")])
+        .await
+        .unwrap();
+    assert!(
+        matches!(report.targets[..], [(_, ProbeAnswer::Rows(_))]),
+        "{report:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&probed).unwrap(),
+        "source.jaffle_ods.raw.payments\n",
+        "`orders` matches the filter too, but wasn't asked about"
+    );
+}
+
+#[tokio::test]
+async fn a_probe_that_takes_too_long_is_stopped_and_fails() {
+    let dir = scratch("timeout");
+    warehouse(&dir, "7");
+    let started = std::time::Instant::now();
+    let err = probe(&dir)
+        .env("FAKE_DBT_PROBE_DELAY", "30")
+        .probe(
+            &request().with_timeout(std::time::Duration::from_secs(1)),
+            &[source("orders")],
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("took longer than 1s"), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }

@@ -47,6 +47,9 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
                   has no relation; a statement with no row returns none. Read on each call,
                   so a test can change it between runs.
   FAKE_DBT_PROBE_FAIL  the relation probe fails, as when a statement is refused
+  FAKE_DBT_PROBE_DELAY  seconds the relation probe takes before answering
+  FAKE_DBT_PROBED  file to append the id of each source the relation probe ran
+                  statements against to, one per line
   FAKE_DBT_ROWS  comma-separated `name=rows`: the rows the adapter reports for those
                  nodes (`adapter_response.rows_affected`); other nodes report none, as
                  many adapters don't for views [default: none]
@@ -314,9 +317,11 @@ def probe(query, manifest, target):
     if os.environ.get("FAKE_DBT_PROBE_FAIL"):
         print(json.dumps({"data": {"exc": "DESCRIBE HISTORY refused"}, "info": {"name": "MainEncounteredError"}}))
         return 2
+    time.sleep(float(os.environ.get("FAKE_DBT_PROBE_DELAY") or 0))
     kinds = json.loads(re.search(r"rel\.type not in (\[[^\]]*\])", query).group(1))
     fmt = re.search(r"rel\.is_(\w+) is sameas true", query)
     statements = json.loads(re.search(r"set qs = (.*?) -%}", query).group(1))
+    ids = set(json.loads(re.search(r"set ids = (\[[^\]]*\]) -%}", query).group(1)))
     warehouse = {}
     if os.environ.get("FAKE_DBT_PROBE"):
         with open(os.environ["FAKE_DBT_PROBE"]) as f:
@@ -325,6 +330,8 @@ def probe(query, manifest, target):
     quote = lambda v: urllib.parse.quote(str(v), safe="/")
     out = {}
     for source_id, s in manifest["sources"].items():
+        if source_id not in ids:
+            continue
         rel = warehouse.get(f"{s['source_name']}.{s['name']}")
         if rel is None:
             out[quote(source_id)] = {"missing": 1}
@@ -333,6 +340,9 @@ def probe(query, manifest, target):
         elif fmt and fmt.group(1) not in rel.get("formats", []):
             out[quote(source_id)] = {"format": 0}
         else:
+            if os.environ.get("FAKE_DBT_PROBED"):
+                with open(os.environ["FAKE_DBT_PROBED"], "a") as f:
+                    f.write(source_id + "\n")
             rows = []
             for template, columns in statements:
                 row = rel.get("rows", {}).get(template, {})

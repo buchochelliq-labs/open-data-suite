@@ -950,6 +950,7 @@ fn a_missed_target_at_error_fails_the_gate_and_unknown_only_when_strict() {
             badges: BTreeMap::new(),
             checks: Vec::new(),
             coverage: Vec::new(),
+            elevated_login: None,
         }
         .with_coverage(s.coverage(&[measured("descriptions", covered, 4)]))
     };
@@ -963,6 +964,7 @@ fn a_missed_target_at_error_fails_the_gate_and_unknown_only_when_strict() {
         badges: BTreeMap::new(),
         checks: Vec::new(),
         coverage: Vec::new(),
+        elevated_login: None,
     }
     .with_coverage(warn.coverage(&[measured("descriptions", Some(0), 4)]));
     assert!(!report.fails(true));
@@ -1078,7 +1080,12 @@ fn a_probe_runs_only_once_every_guard_holds_and_never_passes_before() {
 
     s.trust_probes(&BTreeSet::from(["orders.has_rows".to_owned()]));
     let trusted = probe_finding(&s, &orders());
-    assert_eq!(trusted.status, Status::Unknown, "probes don't run yet");
+    assert_eq!(trusted.status, Status::Unknown, "nothing to run it through");
+    assert!(
+        trusted.reason.contains("no warehouse connection"),
+        "{}",
+        trusted.reason
+    );
     assert_eq!(trusted.severity, Severity::Error);
 
     // A node it doesn't select is skipped; the dashboard never runs a probe.
@@ -1222,4 +1229,240 @@ async fn probe_findings_are_recorded_for_the_dashboard_to_read() {
         1,
         "probes aren't live: the dashboard reads them back"
     );
+}
+
+// ------------------------------------------------- running probes (ADR-0030 §4c)
+
+mod running {
+    use std::sync::Arc;
+
+    use ods_provider_fake::{FakeRelationPrivileges, FakeRelationProbe};
+
+    use super::*;
+
+    const SQL: &str = "select count(*) as n from {relation}";
+
+    /// `ORDERS_HAS_ROWS`, checked and trusted, selecting `orders` and `payments`.
+    fn ready() -> HealthSettings {
+        let mut s = settings(&ORDERS_HAS_ROWS.replace(
+            r#"select = { name = ["orders"] }"#,
+            r#"select = { name = ["orders", "payments"] }"#,
+        ));
+        s.check_probe_sql(&|_| Ok(())).unwrap();
+        s.trust_probes(&BTreeSet::from(["orders.has_rows".to_owned()]));
+        s
+    }
+
+    /// A warehouse where `orders` has `n` rows and `payments` none.
+    fn warehouse(n: &str) -> FakeRelationProbe {
+        FakeRelationProbe::new()
+            .with_relation("model.p.orders", "table", None)
+            .with_row("model.p.orders", SQL, [("n", n)])
+            .with_relation("model.p.payments", "view", None)
+            .with_row("model.p.payments", SQL, [("n", "0")])
+    }
+
+    fn nodes() -> Vec<NodeFacts> {
+        vec![
+            orders(),
+            model("model.p.payments", 1),
+            model("model.p.customers", 1),
+        ]
+    }
+
+    async fn findings(s: &HealthSettings) -> (BTreeMap<String, Finding>, HealthReport) {
+        let report = s
+            .run(&CheckScope::new(nodes(), Some(clean())), CHECK_TIMEOUT)
+            .await;
+        let found = report
+            .badges
+            .iter()
+            .filter_map(|(id, badge)| {
+                badge
+                    .findings
+                    .iter()
+                    .find(|f| f.check == "orders.has_rows")
+                    .map(|f| (id.clone(), f.clone()))
+            })
+            .collect();
+        (found, report)
+    }
+
+    #[tokio::test]
+    async fn under_a_read_only_login_a_probe_runs_and_judges_each_row() {
+        let probe = warehouse("12");
+        let s = ready().with_probe_connection(
+            ProbeConnection::new(Arc::new(probe.clone())).with_privileges(Arc::new(
+                FakeRelationPrivileges::new()
+                    .with_login("health_reader")
+                    .read_only("model.p.orders")
+                    .read_only("model.p.payments"),
+            )),
+        );
+        let (found, report) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(orders.status, Status::Pass, "{orders:?}");
+        assert_eq!(orders.evidence["login_check"], "read_only");
+        assert_eq!(orders.evidence["login"], "health_reader");
+        assert_eq!(orders.evidence["row.n"], "12");
+        let payments = &found["model.p.payments"];
+        assert_eq!(payments.status, Status::Fail, "{payments:?}");
+        assert!(
+            payments.reason.contains("`n` is 0, not > 0"),
+            "{payments:?}"
+        );
+        assert_eq!(found["model.p.customers"].status, Status::Skipped);
+        assert_eq!(
+            probe.probed(),
+            ["model.p.orders", "model.p.payments"],
+            "only the selected nodes' relations"
+        );
+        assert_eq!(report.elevated_login, None);
+        assert_eq!(report.badges["model.p.payments"].health, Health::Failing);
+    }
+
+    #[tokio::test]
+    async fn a_login_that_can_do_more_than_read_is_refused_and_nothing_runs() {
+        let probe = warehouse("12");
+        let s = ready().with_probe_connection(
+            ProbeConnection::new(Arc::new(probe.clone())).with_privileges(Arc::new(
+                FakeRelationPrivileges::new()
+                    .with_login("builder")
+                    .elevated(
+                        "model.p.orders",
+                        ["MODIFY on schema p", "owner of table orders"],
+                    )
+                    .unknown("model.p.payments", "no grants visible"),
+            )),
+        );
+        let (found, report) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(orders.status, Status::Unknown, "never a pass: {orders:?}");
+        for part in [
+            "refused",
+            "read-only login",
+            "the login `builder` can do more than read: MODIFY on schema p, owner of table orders",
+            "--allow-elevated-login",
+        ] {
+            assert!(orders.reason.contains(part), "{part}: {}", orders.reason);
+        }
+        assert_eq!(orders.evidence["login_check"], "refused");
+        let payments = &found["model.p.payments"];
+        assert_eq!(payments.status, Status::Unknown);
+        assert!(
+            payments
+                .reason
+                .contains("the login `builder` couldn't be shown to only read: no grants visible"),
+            "{}",
+            payments.reason
+        );
+        assert!(probe.probed().is_empty(), "no query was sent");
+        assert_eq!(report.elevated_login, None);
+    }
+
+    #[tokio::test]
+    async fn without_a_privileges_report_or_with_a_failing_one_nothing_runs() {
+        for connection in [
+            ProbeConnection::new(Arc::new(warehouse("12"))),
+            ProbeConnection::new(Arc::new(warehouse("12")))
+                .with_privileges(Arc::new(FakeRelationPrivileges::new().failing())),
+        ] {
+            let s = ready().with_probe_connection(connection);
+            let (found, _) = findings(&s).await;
+            let orders = &found["model.p.orders"];
+            assert_eq!(orders.status, Status::Unknown, "{orders:?}");
+            assert!(orders.reason.contains("refused"), "{}", orders.reason);
+        }
+    }
+
+    #[tokio::test]
+    async fn allowing_an_elevated_login_runs_and_says_so_everywhere() {
+        let probe = warehouse("12");
+        let s = ready().with_probe_connection(
+            ProbeConnection::new(Arc::new(probe.clone()))
+                .with_privileges(Arc::new(
+                    FakeRelationPrivileges::new()
+                        .with_login("builder")
+                        .elevated("model.p.orders", ["MODIFY on schema p"])
+                        .read_only("model.p.payments"),
+                ))
+                .allowing_elevated_login(true),
+        );
+        let (found, report) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(orders.status, Status::Pass, "{orders:?}");
+        assert_eq!(orders.evidence["login_check"], "overridden");
+        assert_eq!(
+            found["model.p.payments"].evidence["login_check"],
+            "read_only"
+        );
+        let elevated = report.elevated_login.clone().expect("the override is kept");
+        assert_eq!(elevated.login.as_deref(), Some("builder"));
+        assert_eq!(
+            elevated.found,
+            BTreeMap::from([(
+                "model.p.orders".to_owned(),
+                "can do more than read: MODIFY on schema p".to_owned()
+            )])
+        );
+        // The record keeps it, so it is never hidden afterwards.
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["elevated_login"]["login"], "builder");
+        assert_eq!(
+            serde_json::from_value::<HealthReport>(json).unwrap(),
+            report
+        );
+        assert_eq!(probe.probed(), ["model.p.orders", "model.p.payments"]);
+    }
+
+    #[tokio::test]
+    async fn the_override_never_skips_the_sql_or_trust_guards() {
+        let mut s = settings(ORDERS_HAS_ROWS).with_probe_connection(
+            ProbeConnection::new(Arc::new(warehouse("12"))).allowing_elevated_login(true),
+        );
+        s.check_probe_sql(&|_| Ok(())).unwrap();
+        let (found, _) = findings(&s).await;
+        assert!(
+            found["model.p.orders"].reason.contains("not trusted"),
+            "{:?}",
+            found["model.p.orders"]
+        );
+    }
+
+    #[tokio::test]
+    async fn what_a_probe_cant_tell_is_unknown_never_a_pass() {
+        let privileges = || {
+            Arc::new(
+                FakeRelationPrivileges::new()
+                    .read_only("model.p.orders")
+                    .read_only("model.p.payments"),
+            )
+        };
+        // Not a number where `n > 0` needs one.
+        let s = ready().with_probe_connection(
+            ProbeConnection::new(Arc::new(warehouse("many"))).with_privileges(privileges()),
+        );
+        let (found, _) = findings(&s).await;
+        assert_eq!(found["model.p.orders"].status, Status::Unknown);
+        // The warehouse can't be reached.
+        let s = ready().with_probe_connection(
+            ProbeConnection::new(Arc::new(warehouse("12").failing())).with_privileges(privileges()),
+        );
+        let (found, _) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(orders.status, Status::Unknown);
+        assert!(orders.reason.contains("couldn't run"), "{}", orders.reason);
+        // A relation of a kind a probe doesn't read is skipped; none is unknown.
+        let s = ready().with_probe_connection(
+            ProbeConnection::new(Arc::new(FakeRelationProbe::new().with_relation(
+                "model.p.orders",
+                "cte",
+                None,
+            )))
+            .with_privileges(privileges()),
+        );
+        let (found, _) = findings(&s).await;
+        assert_eq!(found["model.p.orders"].status, Status::Skipped);
+        assert_eq!(found["model.p.payments"].status, Status::Unknown);
+    }
 }

@@ -16,11 +16,28 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 - `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
   gains `test_types`, `described` and `constraints` (all default when absent). **What
   to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
+- The `relation_probe` contract is 0.2 (#392, ADR-0030 §5): `RelationProbe::probe` takes
+  `ProbeTarget`s (an id and a name, for any node with a relation, not only sources) in
+  place of `RequestedSource`s, `ProbeReport::sources` is `targets`, a `ProbeRequest` can
+  carry a timeout, and statements run only against the requested targets' relations.
+  The dbt provider now passes the requested ids to `dbt show` (several calls for a long
+  list) instead of running the statements against every source. **What to do:** a
+  provider implementing `RelationProbe` takes `&[ProbeTarget]`, runs nothing against a
+  relation it wasn't asked about, and honours `ProbeRequest::timeout`.
 - The health record's format is 1.1, as a check's source can be `declarative` or
   `probe` and a report holds its coverage targets' verdicts. ODS 0.0.2
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- The `relation_privileges` contract and capability (#392, ADR-0030 §4c), with a fake
+  (`FakeRelationPrivileges`) and a conformance suite: a provider reports whether its
+  login can only read each relation, or what it holds beyond reading. The health engine
+  asks it just before every probe, refuses a probe whose login can do more than read or
+  can't be shown to only read (*unknown*, naming the login and what it found), and judges
+  `pass` on the row a probe returns. A run that allows an elevated login marks each such
+  finding `login_check: overridden` and keeps the login and what was found in the report
+  and health record (`elevated_login`). `ods health check` wires a probe connection in
+  the next step of #392.
 - Probe checks and the trust store (#392, ADR-0030 §4a–§4d): `[[health.checks]]` with
   `kind = "probe"`, `select`, `sql` (one read-only query with `{relation}`) and `pass`
   (e.g. `n > 0`). A probe whose SQL could write, lock or change a session is a

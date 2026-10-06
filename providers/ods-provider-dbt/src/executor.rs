@@ -13,8 +13,9 @@
 //!
 //! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
 //!   asks the adapter which relations exist (#230).
-//! - [`probe`](RelationProbe::probe) runs one `dbt show --inline` query that runs a few
-//!   statements against each source's relation (ADR-0022).
+//! - [`probe`](RelationProbe::probe) runs one `dbt show --inline` query (more for a
+//!   long list of targets) that runs a few statements against each requested source's
+//!   relation, and no other (ADR-0022, ADR-0030 §5).
 //!
 //! dbt's own output goes to ODS's stderr (or is captured), never to stdout, which
 //! carries ODS's report.
@@ -27,12 +28,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ods_core::state::Timestamp;
 use ods_core::{Capability, CapabilitySet};
-use ods_sdk::contracts::changes::RequestedSource;
 use ods_sdk::contracts::executor::{
     ExecutionMode, ExecutionReport, ExecutionRequest, ExecutionStatus, Executor, NodeExecution,
     PrepareReport, PrepareRequest, RequestedNode,
 };
-use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, RelationProbe};
+use ods_sdk::contracts::probe::{
+    ProbeAnswer, ProbeReport, ProbeRequest, ProbeTarget, RelationProbe,
+};
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence, RelationReport};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
@@ -94,8 +96,8 @@ pub enum DbtStep {
     },
     /// `dbt show`: statements run against the relations of `sources` sources.
     RelationProbe {
-        /// How many sources were asked about.
-        sources: usize,
+        /// How many relations were asked about.
+        relations: usize,
     },
 }
 
@@ -1526,20 +1528,41 @@ fn probe_answer(found: crate::probe::Found, request: &ProbeRequest) -> ProbeAnsw
     }
 }
 
-#[async_trait]
-impl RelationProbe for DbtExecutor {
-    async fn probe(
+/// How many bytes of ids one relation probe call carries at most: command lines are
+/// limited (32 KiB in all on Windows), so a long list is split over several calls.
+const PROBE_IDS_PER_CALL: usize = 8 * 1024;
+
+/// `ids` in groups of at most [`PROBE_IDS_PER_CALL`] bytes, in order.
+fn probe_batches<'a>(ids: &[&'a str]) -> Vec<Vec<&'a str>> {
+    let mut batches: Vec<Vec<&str>> = Vec::new();
+    let mut size = 0;
+    for id in ids {
+        let cost = id.len() + 3;
+        if batches.is_empty() || size + cost > PROBE_IDS_PER_CALL {
+            batches.push(Vec::new());
+            size = 0;
+        }
+        size += cost;
+        if let Some(batch) = batches.last_mut() {
+            batch.push(id);
+        }
+    }
+    batches
+}
+
+impl DbtExecutor {
+    /// One relation probe call, for the sources in `ids`.
+    async fn probe_batch(
         &self,
         request: &ProbeRequest,
-        sources: &[RequestedSource],
-    ) -> Result<ProbeReport, ProviderError> {
-        self.refuse_env()?;
-        let target = self.aside(RELATION_PROBE_DIR, "relation probe")?;
+        ids: &[&str],
+        target: &Path,
+    ) -> Result<(crate::probe::Probed, BTreeSet<String>), ProviderError> {
         let mut args = vec![
             "show".to_owned(),
             "--quiet".to_owned(),
             "--inline".to_owned(),
-            crate::probe::query(request),
+            crate::probe::query(request, ids),
             "--output".to_owned(),
             "json".to_owned(),
             "--limit".to_owned(),
@@ -1547,10 +1570,7 @@ impl RelationProbe for DbtExecutor {
             "--log-format".to_owned(),
             "json".to_owned(),
         ];
-        args.extend(self.common_args_in("show", &target));
-        self.step(DbtStep::RelationProbe {
-            sources: sources.len(),
-        });
+        args.extend(self.common_args_in("show", target));
         let (ok, tail, stdout) = self.invoke_with(&args, true).await?;
         if !ok {
             return Err(Self::failure(
@@ -1561,18 +1581,17 @@ impl RelationProbe for DbtExecutor {
         let probed = crate::probe::parse(&stdout).map_err(|why| {
             ProviderError::Other(format!("the relation probe (`dbt show`) failed: {why}"))
         })?;
-        // Which sources dbt probed: those of the project as it parsed it. A source it
-        // didn't probe is unknown.
+        // Which sources dbt looked at: those of the project as it parsed it.
         let manifest = crate::Manifest::read(&target.join("manifest.json")).map_err(|e| {
             ProviderError::Other(format!(
                 "the relation probe (`dbt show`) wrote no readable manifest: {e}"
             ))
         })?;
-        let known: BTreeSet<&str> = manifest
+        let known: BTreeSet<String> = manifest
             .nodes
             .iter()
             .filter(|n| n.resource_type == crate::ResourceType::Source)
-            .map(|n| n.unique_id.as_str())
+            .map(|n| n.unique_id.clone())
             .collect();
         if probed.probed != known.len() {
             return Err(ProviderError::Other(format!(
@@ -1581,21 +1600,68 @@ impl RelationProbe for DbtExecutor {
                 known.len()
             )));
         }
-        // Only the requested sources are answered; the others are ignored.
-        let sources = sources
+        Ok((probed, known))
+    }
+}
+
+#[async_trait]
+impl RelationProbe for DbtExecutor {
+    async fn probe(
+        &self,
+        request: &ProbeRequest,
+        targets: &[ProbeTarget],
+    ) -> Result<ProbeReport, ProviderError> {
+        self.refuse_env()?;
+        let target = self.aside(RELATION_PROBE_DIR, "relation probe")?;
+        // Only ids that can travel in the query are sent; the others are unknown.
+        let mut ids: Vec<&str> = targets
             .iter()
-            .map(|s| {
-                let answer = match probed.sources.get(&s.id).cloned() {
-                    _ if !known.contains(s.id.as_str()) => ProbeAnswer::Unknown(
+            .map(|t| t.id.as_str())
+            .filter(|id| crate::probe::plain_id(id))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        self.step(DbtStep::RelationProbe {
+            relations: targets.len(),
+        });
+        let calls = async {
+            let mut found = BTreeMap::new();
+            let mut known = BTreeSet::new();
+            for batch in probe_batches(&ids) {
+                let (probed, sources) = self.probe_batch(request, &batch, &target).await?;
+                found.extend(probed.sources);
+                known.extend(sources);
+            }
+            Ok::<_, ProviderError>((found, known))
+        };
+        // Dropping the call on time out stops dbt (`kill_on_drop`).
+        let (found, known) = match request.timeout() {
+            Some(limit) => tokio::time::timeout(limit, calls).await.map_err(|_| {
+                ProviderError::Other(format!(
+                    "the relation probe (`dbt show`) took longer than {}s and was stopped",
+                    limit.as_secs()
+                ))
+            })??,
+            None => calls.await?,
+        };
+        // Only the requested targets are answered, in order.
+        let answers = targets
+            .iter()
+            .map(|t| {
+                let answer = match found.get(&t.id).cloned() {
+                    _ if !crate::probe::plain_id(&t.id) => ProbeAnswer::Unknown(
+                        "dbt wasn't asked: its id has characters the probe doesn't send".to_owned(),
+                    ),
+                    _ if !known.contains(t.id.as_str()) => ProbeAnswer::Unknown(
                         "dbt didn't probe it: not a source of the project it parsed".to_owned(),
                     ),
                     Some(found) => probe_answer(found, request),
                     None => ProbeAnswer::Unknown("dbt didn't report on it".to_owned()),
                 };
-                (s.id.clone(), answer)
+                (t.id.clone(), answer)
             })
             .collect();
-        Ok(ProbeReport::new(sources))
+        Ok(ProbeReport::new(answers))
     }
 }
 
