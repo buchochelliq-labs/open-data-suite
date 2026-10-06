@@ -39,7 +39,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   ([docs](docs/cli.md#ods-health-check)) (#392)
 - The `health_check` SDK contract 0.1 (capability `health_check`), with a fake and a
   conformance suite: checks registered through it run beside the built-ins, under a
-  timeout, and one that errs, times out or skips a node is *unknown*, never a pass.
+  timeout, and one that errs, times out, skips a node or answers about one it wasn't
+  asked about is *unknown*, never a pass. Findings carry machine-readable `evidence`
+  (sorted keys and values) beside their reason, in the dashboard's `findings` too.
   `SDK_VERSION` is now 0.8 (#392)
 - `[health]` in `ods.toml` tunes the dashboard's health checks
   ([ADR-0030](docs/adr/0030-configurable-and-pluggable-health-checks.md)): turn each

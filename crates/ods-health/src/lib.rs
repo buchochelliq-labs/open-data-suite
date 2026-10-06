@@ -55,6 +55,10 @@ pub struct Finding {
     pub severity: Severity,
     /// Why.
     pub reason: String,
+    /// What it was concluded from, for machines (AGENTS rule 4), sorted by key: e.g. a
+    /// build's `run_id` and `built_at`, or the last run's `last_run_command`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub evidence: BTreeMap<String, String>,
 }
 
 /// A node's health.
@@ -514,6 +518,18 @@ impl HealthSettings {
                     timeout.as_secs()
                 )),
             };
+            // An answer about a node outside the scope breaks the contract: nothing the
+            // check said can be trusted, so all of it is unknown (AGENTS rule 3).
+            let answered = answered.and_then(|findings| {
+                let ids: BTreeSet<&str> = scope.nodes.iter().map(|n| n.id.as_str()).collect();
+                match findings.iter().find(|f| !ids.contains(f.node.as_str())) {
+                    Some(stranger) => Err(format!(
+                        "the check answered about `{}`, which it wasn't asked about, so none of its answers count",
+                        stranger.node
+                    )),
+                    None => Ok(findings),
+                }
+            });
             let mut answers: BTreeMap<&str, Vec<&CheckFinding>> = BTreeMap::new();
             if let Ok(findings) = &answered {
                 for finding in findings {
@@ -524,17 +540,23 @@ impl HealthSettings {
                 }
             }
             for node in &scope.nodes {
-                let (status, reason) = match (&answered, answers.get(node.id.as_str())) {
-                    (Err(why), _) => (Status::Unknown, why.clone()),
+                let (status, reason, evidence) = match (&answered, answers.get(node.id.as_str())) {
+                    (Err(why), _) => (Status::Unknown, why.clone(), BTreeMap::new()),
                     (Ok(_), None) => (
                         Status::Unknown,
                         "the check didn't answer about this node".to_owned(),
+                        BTreeMap::new(),
                     ),
                     (Ok(_), Some(many)) if many.len() > 1 => (
                         Status::Unknown,
                         "the check answered about this node more than once".to_owned(),
+                        BTreeMap::new(),
                     ),
-                    (Ok(_), Some(one)) => (one[0].status, one[0].reason.clone()),
+                    (Ok(_), Some(one)) => (
+                        one[0].status,
+                        one[0].reason.clone(),
+                        one[0].evidence.clone(),
+                    ),
                 };
                 if let Some(findings) = per_node.get_mut(&node.id) {
                     findings.push(Finding {
@@ -543,6 +565,7 @@ impl HealthSettings {
                         status,
                         severity: plugin.severity,
                         reason,
+                        evidence,
                     });
                 }
             }
@@ -574,6 +597,11 @@ impl HealthSettings {
                     status,
                     severity,
                     reason,
+                    evidence: if c.applies(node) {
+                        evidence(c.check, node, failures)
+                    } else {
+                        BTreeMap::new()
+                    },
                 })
             })
             .collect();
@@ -622,6 +650,49 @@ impl HealthSettings {
 
 fn short(run: &str) -> String {
     run.chars().take(8).collect()
+}
+
+/// What a built-in check on `node` is concluded from, for machines (AGENTS rule 4).
+fn evidence(
+    check: Builtin,
+    node: &NodeFacts,
+    failures: Option<&LastFailures>,
+) -> BTreeMap<String, String> {
+    let mut evidence = BTreeMap::new();
+    let mut put = |key: &str, value: String| {
+        evidence.insert(key.to_owned(), value);
+    };
+    let build = node.build.as_ref();
+    match check {
+        Builtin::Built => {
+            if let Some(b) = build {
+                put("run_id", b.run_id.clone());
+                put("built_at", b.built_at.to_string());
+            }
+        }
+        Builtin::LastRunFailed | Builtin::LastRunSkipped => {
+            if let Some(f) = failures {
+                put("last_run_command", f.command.clone());
+                put("last_run_started_at", f.started_at.to_string());
+            }
+            if let Some(b) = build {
+                put("built_at", b.built_at.to_string());
+            }
+        }
+        Builtin::TestsRequired => put("tests", node.tests.to_string()),
+        Builtin::TestsPassed => {
+            put("tests", node.tests.to_string());
+            if let Some(b) = build {
+                put("run_id", b.run_id.clone());
+                if let Some((run, at)) = &b.tested {
+                    put("tested_run_id", run.clone());
+                    put("tested_at", at.to_string());
+                    put("tests_current", b.checks_current.to_string());
+                }
+            }
+        }
+    }
+    evidence
 }
 
 /// One built-in check on one node.
