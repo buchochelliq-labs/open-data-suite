@@ -241,13 +241,21 @@ pub struct DeclaredCheckConfig {
     /// Its id, unique among the checks: lowercase letters, digits, `_`, `-` and `.`,
     /// starting with a letter, e.g. `marts.documented`.
     pub id: String,
-    /// What kind of check it is. Only `declarative`, the default, is supported yet.
+    /// What kind of check it is: `declarative` (the default) or `probe`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// What every selected node must have: `description`, `tests`, `test:<type>` (e.g.
-    /// `test:unique`), `constraints` or `tag:<tag>`.
-    #[serde(default)]
+    /// `test:unique`), `constraints` or `tag:<tag>`. Declarative checks only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub require: Vec<String>,
+    /// A probe's one read-only query, with `{relation}` once, e.g.
+    /// `select count(*) as n from {relation}` (ADR-0030 §4a). Probes only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql: Option<String>,
+    /// A probe's pass condition over the columns its query returns, e.g. `n > 0`.
+    /// Probes only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass: Option<String>,
     /// How severe its failure is (default `warn`), or `off` to not run it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub severity: Option<HealthSeverity>,

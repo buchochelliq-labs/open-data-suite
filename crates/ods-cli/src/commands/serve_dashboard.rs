@@ -66,13 +66,38 @@ pub(super) fn state_args(command: Command) -> Command {
 pub(super) fn health_settings(
     config: &ods_config::Loaded,
 ) -> Result<ods_health::HealthSettings, CliError> {
-    ods_health::HealthSettings::from_config(&config.config.health).map_err(|e| {
-        CliError::new(
-            crate::exit::ExitStatus::Config,
-            crate::exit::codes::HEALTH_CONFIG,
-            e.to_string(),
-        )
-    })
+    let mut health = ods_health::HealthSettings::from_config(&config.config.health)
+        .map_err(|e| config_error(&e))?;
+    // Before any project is read, probes are checked in the generic dialect, so a probe
+    // that can write is an error however ODS is started.
+    check_probe_sql(&mut health, None)?;
+    Ok(health)
+}
+
+/// Checks every probe's SQL is one read-only query in the dialect of `adapter` (the
+/// project's warehouse type, if known), with the SQL analyzer lineage uses (ADR-0030
+/// §4a).
+///
+/// # Errors
+/// A probe that isn't one read-only query (exit 4).
+pub(super) fn check_probe_sql(
+    health: &mut ods_health::HealthSettings,
+    adapter: Option<&str>,
+) -> Result<(), CliError> {
+    let dialect = adapter
+        .and_then(ods_provider_sqlparser::SqlDialect::from_name)
+        .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic);
+    health
+        .check_probe_sql(&|sql| ods_provider_sqlparser::read_only_query(dialect, sql))
+        .map_err(|e| config_error(&e))
+}
+
+fn config_error(e: &ods_health::HealthConfigError) -> CliError {
+    CliError::new(
+        crate::exit::ExitStatus::Config,
+        crate::exit::codes::HEALTH_CONFIG,
+        e.to_string(),
+    )
 }
 
 /// Reads the dashboard's facts; built once, then asked again on every reload.

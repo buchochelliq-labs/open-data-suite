@@ -101,14 +101,27 @@ pub(crate) struct Declared {
     require: Vec<Requirement>,
 }
 
+/// The checks `[[health.checks]]` declares: rules over the project's metadata, and
+/// probes (ADR-0030 §4a, §4d).
+pub(crate) struct Configured {
+    pub(crate) declared: Vec<Declared>,
+    pub(crate) probes: Vec<crate::probe::Probe>,
+}
+
+/// One declared check, of either kind.
+enum One {
+    Declared(Declared),
+    Probe(crate::probe::Probe),
+}
+
 impl Declared {
     /// The checks `checks` declares. Ids must be valid, and no built-in's or other
     /// declared check's.
     pub(crate) fn from_config(
         checks: &[DeclaredCheckConfig],
-    ) -> Result<Vec<Self>, HealthConfigError> {
+    ) -> Result<Configured, HealthConfigError> {
         let mut ids = BTreeSet::new();
-        checks
+        let all = checks
             .iter()
             .enumerate()
             .map(|(i, config)| {
@@ -131,16 +144,39 @@ impl Declared {
                         config.id
                     )));
                 }
+                let severity = match config.severity {
+                    None | Some(HealthSeverity::Warn) => Some(Severity::Warn),
+                    Some(HealthSeverity::Error) => Some(Severity::Error),
+                    Some(HealthSeverity::Info) => Some(Severity::Info),
+                    Some(HealthSeverity::Off) => None,
+                };
+                let selector = |which: &str, s: Option<&ods_config::HealthSelector>| {
+                    s.map(|s| Selector::new(s, &format!("{at}.{which}")))
+                        .transpose()
+                };
+                let select = selector("select", config.select.as_ref())?;
+                let exclude = selector("exclude", config.exclude.as_ref())?;
                 match config.kind.as_deref() {
                     None | Some("declarative") => {}
-                    Some(kind @ ("probe" | "script")) => {
+                    Some("probe") => {
+                        return crate::probe::Probe::from_config(config, &at, severity, select, exclude)
+                            .map(One::Probe);
+                    }
+                    Some("script") => {
                         return Err(HealthConfigError(format!(
-                            "{at}.kind: `{kind}` checks aren't supported yet (#392); only `declarative` is"
+                            "{at}.kind: `script` checks aren't supported yet (#392); `declarative` and `probe` are"
                         )));
                     }
                     Some(kind) => {
                         return Err(HealthConfigError(format!(
-                            "{at}.kind: `{kind}` isn't a kind of check; only `declarative` is supported"
+                            "{at}.kind: `{kind}` isn't a kind of check; the kinds are `declarative` and `probe`"
+                        )));
+                    }
+                }
+                for (field, set) in [("sql", config.sql.is_some()), ("pass", config.pass.is_some())] {
+                    if set {
+                        return Err(HealthConfigError(format!(
+                            "{at}.{field}: only a `kind = \"probe\"` check has `{field}`"
                         )));
                     }
                 }
@@ -154,24 +190,26 @@ impl Declared {
                     .iter()
                     .map(|item| Requirement::parse(item, &at))
                     .collect::<Result<Vec<_>, _>>()?;
-                let selector = |which: &str, s: Option<&ods_config::HealthSelector>| {
-                    s.map(|s| Selector::new(s, &format!("{at}.{which}")))
-                        .transpose()
-                };
-                Ok(Self {
+                Ok(One::Declared(Self {
                     id: config.id.clone(),
-                    severity: match config.severity {
-                        None | Some(HealthSeverity::Warn) => Some(Severity::Warn),
-                        Some(HealthSeverity::Error) => Some(Severity::Error),
-                        Some(HealthSeverity::Info) => Some(Severity::Info),
-                        Some(HealthSeverity::Off) => None,
-                    },
-                    select: selector("select", config.select.as_ref())?,
-                    exclude: selector("exclude", config.exclude.as_ref())?,
+                    severity,
+                    select,
+                    exclude,
                     require,
-                })
+                }))
             })
-            .collect()
+            .collect::<Result<Vec<One>, HealthConfigError>>()?;
+        let mut configured = Configured {
+            declared: Vec::new(),
+            probes: Vec::new(),
+        };
+        for one in all {
+            match one {
+                One::Declared(d) => configured.declared.push(d),
+                One::Probe(p) => configured.probes.push(p),
+            }
+        }
+        Ok(configured)
     }
 
     /// What it checks, for people.

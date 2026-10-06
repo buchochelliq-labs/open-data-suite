@@ -825,7 +825,7 @@ fn a_misdeclared_check_is_a_configuration_error() {
             "two checks in [[health.checks]] are called `a`",
         ),
         (
-            one("id = \"a\"\nkind = \"probe\"\nrequire = [\"tests\"]"),
+            one("id = \"a\"\nkind = \"script\"\nrequire = [\"tests\"]"),
             "aren't supported yet",
         ),
         (
@@ -1017,4 +1017,209 @@ fn a_share_keeps_thousandths_and_round_trips() {
     assert_eq!(json["target"], 0.875);
     let back: CoverageFinding = serde_json::from_value(json).unwrap();
     assert_eq!(back, found[0]);
+}
+
+// ---------------------------------------------------------------- probe checks
+
+const ORDERS_HAS_ROWS: &str = r#"
+[[checks]]
+id = "orders.has_rows"
+kind = "probe"
+select = { name = ["orders"] }
+sql = "select count(*) as n from {relation}"
+pass = "n > 0"
+severity = "error"
+"#;
+
+fn orders() -> NodeFacts {
+    let mut node = model("model.p.orders", 1);
+    node.build = Some(passed());
+    node
+}
+
+fn probe_finding(s: &HealthSettings, node: &NodeFacts) -> Finding {
+    let scope = CheckScope::new(vec![node.clone()], Some(clean()));
+    let report = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(s.run(&scope, CHECK_TIMEOUT));
+    report.badges[&node.id]
+        .findings
+        .iter()
+        .find(|f| f.source == CheckSource::Probe)
+        .unwrap_or_else(|| panic!("no probe finding: {report:?}"))
+        .clone()
+}
+
+#[test]
+fn a_probe_runs_only_once_every_guard_holds_and_never_passes_before() {
+    let mut s = settings(ORDERS_HAS_ROWS);
+    let unchecked = probe_finding(&s, &orders());
+    assert_eq!(unchecked.status, Status::Unknown);
+    assert!(
+        unchecked
+            .reason
+            .contains("wasn't checked as one read-only query"),
+        "{}",
+        unchecked.reason
+    );
+
+    s.check_probe_sql(&|_| Ok(())).unwrap();
+    let untrusted = probe_finding(&s, &orders());
+    assert_eq!(untrusted.status, Status::Unknown);
+    assert!(
+        untrusted.reason.contains("not trusted for this project"),
+        "{}",
+        untrusted.reason
+    );
+    assert!(untrusted.reason.contains("ods health trust"));
+    assert_eq!(untrusted.evidence["trusted"], "false");
+
+    s.trust_probes(&BTreeSet::from(["orders.has_rows".to_owned()]));
+    let trusted = probe_finding(&s, &orders());
+    assert_eq!(trusted.status, Status::Unknown, "probes don't run yet");
+    assert_eq!(trusted.severity, Severity::Error);
+
+    // A node it doesn't select is skipped; the dashboard never runs a probe.
+    let other = model("model.p.customers", 1);
+    assert_eq!(probe_finding(&s, &other).status, Status::Skipped);
+    assert!(
+        s.evaluate(&orders(), Some(&clean()))
+            .findings
+            .iter()
+            .all(|f| f.source != CheckSource::Probe)
+    );
+    assert!(
+        s.how(true).contains("orders.has_rows (error, probe)"),
+        "{}",
+        s.how(true)
+    );
+}
+
+#[test]
+fn a_probe_that_isnt_read_only_is_a_configuration_error_naming_why() {
+    let mut s = settings(ORDERS_HAS_ROWS);
+    let seen = std::cell::RefCell::new(String::new());
+    let error = s
+        .check_probe_sql(&|sql| {
+            seen.replace(sql.to_owned());
+            Err("it contains a DELETE statement".to_owned())
+        })
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "health.checks[0].sql: probe `orders.has_rows` must be one read-only query, but it contains a DELETE statement"
+    );
+    assert_eq!(
+        *seen.borrow(),
+        "select count(*) as n from ods_probe_relation",
+        "{{relation}} reads as a plain name when checked"
+    );
+}
+
+#[test]
+fn a_misconfigured_probe_is_a_configuration_error() {
+    let error = |fields: &str| {
+        let config: HealthConfig =
+            toml::from_str(&["[[checks]]\nid = \"p\"\nkind = \"probe\"\n", fields].concat())
+                .unwrap();
+        HealthSettings::from_config(&config)
+            .unwrap_err()
+            .to_string()
+    };
+    let select = "select = { name = [\"orders\"] }\n";
+    let sql = "sql = \"select count(*) as n from {relation}\"\n";
+    let pass = "pass = \"n > 0\"\n";
+    for (fields, expected) in [
+        (
+            [sql, pass].concat(),
+            "health.checks[0].select: a probe names the nodes",
+        ),
+        (
+            [select, pass].concat(),
+            "health.checks[0].sql: a probe needs one read-only query",
+        ),
+        (
+            [select, sql].concat(),
+            "health.checks[0].pass: a probe needs a condition",
+        ),
+        (
+            [select, sql, "pass = \"n >\"\n"].concat(),
+            "health.checks[0].pass: `n >`",
+        ),
+        (
+            [select, sql, pass, "require = [\"tests\"]\n"].concat(),
+            "not `require`",
+        ),
+        (
+            [select, "sql = \"select count(*) as n from orders\"\n", pass].concat(),
+            "health.checks[0].sql",
+        ),
+    ] {
+        let error = error(&fields);
+        assert!(error.contains(expected), "{fields}\n=> {error}");
+    }
+    let declarative = "[[checks]]\nid = \"d\"\nrequire = [\"tests\"]\nsql = \"select 1\"\n";
+    let config: HealthConfig = toml::from_str(declarative).unwrap();
+    let error = HealthSettings::from_config(&config)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("only a `kind = \"probe\"` check has `sql`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_probes_digest_pins_what_runs_and_where_not_its_verdict() {
+    let digest = |toml: &str| settings(toml).probe_definitions()[0].digest.clone();
+    let base = digest(ORDERS_HAS_ROWS);
+    assert!(base.starts_with("sha256:"), "{base}");
+    assert_eq!(base, digest(ORDERS_HAS_ROWS), "stable");
+    assert_ne!(
+        base,
+        digest(&ORDERS_HAS_ROWS.replace("count(*)", "count(1)")),
+        "the SQL"
+    );
+    assert_ne!(
+        base,
+        digest(&ORDERS_HAS_ROWS.replace("\"orders\"]", "\"orders\", \"payments\"]")),
+        "what it reads"
+    );
+    assert_eq!(
+        base,
+        digest(&ORDERS_HAS_ROWS.replace("n > 0", "n > 10")),
+        "not the condition"
+    );
+    assert_eq!(
+        base,
+        digest(&ORDERS_HAS_ROWS.replace("\"error\"", "\"warn\"")),
+        "not the severity"
+    );
+}
+
+#[tokio::test]
+async fn probe_findings_are_recorded_for_the_dashboard_to_read() {
+    let s = settings(ORDERS_HAS_ROWS);
+    let report = s
+        .run(
+            &CheckScope::new(vec![orders()], Some(clean())),
+            CHECK_TIMEOUT,
+        )
+        .await;
+    let run = report
+        .checks
+        .iter()
+        .find(|c| c.id == "orders.has_rows")
+        .unwrap();
+    assert_eq!(run.source, CheckSource::Probe);
+    let record = crate::record::HealthRecord::new("p/dev", at("2026-10-06T09:00:00Z"), report);
+    let recorded = crate::record::Recorded::of(&record);
+    assert_eq!(
+        recorded.checks.len(),
+        1,
+        "probes aren't live: the dashboard reads them back"
+    );
 }

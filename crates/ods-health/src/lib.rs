@@ -38,6 +38,8 @@ pub enum CheckSource {
     Builtin,
     /// A check the project declares in `[[health.checks]]`.
     Declarative,
+    /// A probe declared in `[[health.checks]]`: a read-only query on the warehouse.
+    Probe,
     /// A check registered through the `health_check` contract: a plugin.
     Plugin,
 }
@@ -300,6 +302,7 @@ impl Configured {
 pub struct HealthSettings {
     checks: Vec<Configured>,
     declared: Vec<declared::Declared>,
+    probes: Vec<probe::Probe>,
     coverage: Vec<coverage::Target>,
     plugins: Vec<Plugin>,
     unknown_counts_as: Health,
@@ -317,6 +320,7 @@ impl fmt::Debug for HealthSettings {
         f.debug_struct("HealthSettings")
             .field("checks", &self.checks)
             .field("declared", &self.declared)
+            .field("probes", &self.probes)
             .field("coverage", &self.coverage)
             .field(
                 "plugins",
@@ -407,6 +411,7 @@ impl HealthSettings {
     /// # Errors
     /// A check id that isn't a built-in's, or a path pattern that isn't a valid glob.
     pub fn from_config(config: &HealthConfig) -> Result<Self, HealthConfigError> {
+        let configured = declared::Declared::from_config(&config.checks)?;
         if let Some(unknown) = config
             .builtin
             .keys()
@@ -450,7 +455,8 @@ impl HealthSettings {
             .collect::<Result<Vec<_>, HealthConfigError>>()?;
         Ok(Self {
             checks,
-            declared: declared::Declared::from_config(&config.checks)?,
+            declared: configured.declared,
+            probes: configured.probes,
             coverage: coverage::Target::from_config(&config.coverage)?,
             plugins: Vec::new(),
             unknown_counts_as: match config.unknown_counts_as {
@@ -492,6 +498,7 @@ impl HealthSettings {
         }
         let taken = BUILTINS.iter().any(|b| b.id() == info.id)
             || self.declared.iter().any(|d| d.id == info.id)
+            || self.probes.iter().any(|p| p.id == info.id)
             || self
                 .plugins
                 .iter()
@@ -518,7 +525,9 @@ impl HealthSettings {
             .nodes
             .iter()
             .map(|node| {
-                let builtin = self.live_findings(node, scope.last_run.as_ref());
+                // In-process checks, then probes, which need the warehouse.
+                let mut builtin = self.live_findings(node, scope.last_run.as_ref());
+                builtin.extend(self.probes.iter().filter_map(|p| p.finding(node)));
                 (node.id.clone(), builtin)
             })
             .collect();
@@ -535,6 +544,7 @@ impl HealthSettings {
             })
             .collect();
         checks.extend(self.declared.iter().filter_map(declared::Declared::run));
+        checks.extend(self.probes.iter().filter_map(probe::Probe::run));
         for plugin in &self.plugins {
             let info = plugin.check.describe();
             checks.push(CheckRun {
@@ -665,6 +675,34 @@ impl HealthSettings {
         findings
     }
 
+    /// Checks every probe's SQL with `read_only`, the host's SQL analyzer: a probe runs
+    /// only once its query is known to be one read-only query (ADR-0030 §4a).
+    ///
+    /// # Errors
+    /// A probe whose SQL isn't one read-only query: a configuration error, before
+    /// anything connects.
+    pub fn check_probe_sql(
+        &mut self,
+        read_only: &dyn Fn(&str) -> Result<(), String>,
+    ) -> Result<(), HealthConfigError> {
+        self.probes
+            .iter_mut()
+            .try_for_each(|p| p.check_read_only(read_only))
+    }
+
+    /// What a trust entry pins for each probe (ADR-0030 §4d).
+    pub fn probe_definitions(&self) -> Vec<ProbeDefinition> {
+        self.probes.iter().map(probe::Probe::definition).collect()
+    }
+
+    /// Marks the probes whose ids are in `trusted` as trusted for this project, and the
+    /// rest as not (ADR-0030 §4b).
+    pub fn trust_probes(&mut self, trusted: &BTreeSet<String>) {
+        for probe in &mut self.probes {
+            probe.set_trusted(trusted.contains(&probe.id));
+        }
+    }
+
     /// Each enabled coverage target's verdict on what a host `measured` (ADR-0030 §3).
     pub fn coverage(&self, measured: &[Measured]) -> Vec<CoverageFinding> {
         self.coverage
@@ -705,6 +743,14 @@ impl HealthSettings {
                 declared.id,
                 declared.severity.map_or("off", severity_word),
                 declared.about()
+            ));
+        }
+        for probe in &self.probes {
+            parts.push(format!(
+                "{} ({}, probe): {}",
+                probe.id,
+                probe.severity.map_or("off", severity_word),
+                probe.about()
             ));
         }
         for plugin in &self.plugins {
@@ -936,9 +982,13 @@ pub fn counts<'a>(badges: impl IntoIterator<Item = &'a HealthBadge>) -> BTreeMap
 
 mod coverage;
 mod declared;
+mod pass;
+mod probe;
 pub mod record;
+pub mod trust;
 
 pub use coverage::{COVERAGE_MEASURES, CoverageFinding, Measured, Share};
+pub use probe::ProbeDefinition;
 
 #[cfg(test)]
 mod tests;

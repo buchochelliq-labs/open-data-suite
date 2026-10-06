@@ -34,6 +34,7 @@ impl Module for HealthCommand {
             .subcommand_required(true)
             .arg_required_else_help(true)
             .subcommand(check_command())
+            .subcommand(super::health_trust::command())
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
@@ -44,6 +45,11 @@ impl Module for HealthCommand {
                     Some(error) => ctx.emit_failed(&report, error),
                     None => ctx.emit(&report),
                 }
+            }
+            Some(("trust", args)) => {
+                let health = super::serve_dashboard::health_settings(ctx.config)?;
+                let report = super::health_trust::TrustReport::build(args, ctx.config, &health)?;
+                ctx.emit(&report)
             }
             _ => unreachable!("clap requires a known subcommand"),
         }
@@ -60,6 +66,12 @@ fn check_command() -> Command {
             .long("strict")
             .action(ArgAction::SetTrue)
             .help("Also fail when a check at severity error can't decide (unknown)"),
+    )
+    .arg(
+        Arg::new("allow-scripts")
+            .long("allow-scripts")
+            .action(ArgAction::SetTrue)
+            .help("Trust this project's probe checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
     )
     .arg(
         Arg::new("no-record")
@@ -107,7 +119,7 @@ pub(super) struct CheckReport {
 
 impl CheckReport {
     pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
-        let health = super::serve_dashboard::health_settings(config)?;
+        let mut health = super::serve_dashboard::health_settings(config)?;
         let strict = args.get_flag("strict");
         let settings = StateSettings::resolve(args, config)?;
         // Source freshness results as the dashboard reads them (`--sources`, else
@@ -138,6 +150,9 @@ impl CheckReport {
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
+        // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
+        super::serve_dashboard::check_probe_sql(&mut health, ws.manifest.adapter_type.as_deref())?;
+        super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
         let failures = last_failures(&ws, &scope);
         let last_run_known = failures.is_some();
         let check_scope = ods_web::health::check_scope(&catalog, failures);

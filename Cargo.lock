@@ -1338,6 +1338,7 @@ name = "ods-health"
 version = "0.0.2"
 dependencies = [
  "globset",
+ "hex",
  "ods-config",
  "ods-core",
  "ods-provider-fake",
@@ -1345,6 +1346,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
