@@ -36,8 +36,18 @@ use serde::{Deserialize, Serialize};
 pub enum CheckSource {
     /// One of ODS's own checks.
     Builtin,
+    /// A check the project declares in `[[health.checks]]`.
+    Declarative,
     /// A check registered through the `health_check` contract: a plugin.
     Plugin,
+}
+
+impl CheckSource {
+    /// Whether checks from it run in-process on facts any host has, so the dashboard
+    /// works them out itself rather than reading them from a health record.
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Builtin | Self::Declarative)
+    }
 }
 
 /// One check's conclusion about one node.
@@ -289,6 +299,7 @@ impl Configured {
 #[derive(Clone)]
 pub struct HealthSettings {
     checks: Vec<Configured>,
+    declared: Vec<declared::Declared>,
     plugins: Vec<Plugin>,
     unknown_counts_as: Health,
 }
@@ -304,6 +315,7 @@ impl fmt::Debug for HealthSettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HealthSettings")
             .field("checks", &self.checks)
+            .field("declared", &self.declared)
             .field(
                 "plugins",
                 &self
@@ -421,6 +433,7 @@ impl HealthSettings {
             .collect::<Result<Vec<_>, HealthConfigError>>()?;
         Ok(Self {
             checks,
+            declared: declared::Declared::from_config(&config.checks)?,
             plugins: Vec::new(),
             unknown_counts_as: match config.unknown_counts_as {
                 Some(UnknownCountsAs::Warning) => Health::Warning,
@@ -460,6 +473,7 @@ impl HealthSettings {
             )));
         }
         let taken = BUILTINS.iter().any(|b| b.id() == info.id)
+            || self.declared.iter().any(|d| d.id == info.id)
             || self
                 .plugins
                 .iter()
@@ -486,7 +500,7 @@ impl HealthSettings {
             .nodes
             .iter()
             .map(|node| {
-                let builtin = self.builtin_findings(node, scope.last_run.as_ref());
+                let builtin = self.live_findings(node, scope.last_run.as_ref());
                 (node.id.clone(), builtin)
             })
             .collect();
@@ -502,6 +516,7 @@ impl HealthSettings {
                 })
             })
             .collect();
+        checks.extend(self.declared.iter().filter_map(declared::Declared::run));
         for plugin in &self.plugins {
             let info = plugin.check.describe();
             checks.push(CheckRun {
@@ -593,16 +608,18 @@ impl HealthSettings {
         failures: Option<&LastFailures>,
         recorded: Option<&record::Recorded>,
     ) -> HealthBadge {
-        let mut findings = self.builtin_findings(node, failures);
+        let mut findings = self.live_findings(node, failures);
         if let Some(recorded) = recorded {
             findings.extend(recorded.findings_for(&node.id));
         }
         badge(findings, self.unknown_counts_as)
     }
 
-    /// Every enabled built-in check's finding about `node`.
-    fn builtin_findings(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> Vec<Finding> {
-        self.checks
+    /// Every enabled in-process check's finding about `node`: the built-ins, then the
+    /// declared checks.
+    fn live_findings(&self, node: &NodeFacts, failures: Option<&LastFailures>) -> Vec<Finding> {
+        let mut findings: Vec<Finding> = self
+            .checks
             .iter()
             .filter_map(|c| {
                 let severity = c.severity?;
@@ -624,7 +641,21 @@ impl HealthSettings {
                     },
                 })
             })
-            .collect()
+            .collect();
+        findings.extend(self.declared.iter().filter_map(|d| d.finding(node)));
+        findings
+    }
+
+    /// Whether a check other than `last_run_failed`, built in or declared, is at
+    /// severity error: it can fail a node without the last run's record.
+    pub fn errs_without_run_failures(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|c| c.check != Builtin::LastRunFailed && c.severity == Some(Severity::Error))
+            || self
+                .declared
+                .iter()
+                .any(|d| d.severity == Some(Severity::Error))
     }
 
     /// How badges are worked out under these settings, for people.
@@ -640,6 +671,14 @@ impl HealthSettings {
                 None => "off",
             };
             parts.push(format!("{} ({severity}): {}", check.id(), check.about()));
+        }
+        for declared in &self.declared {
+            parts.push(format!(
+                "{} ({}, declared): {}",
+                declared.id,
+                declared.severity.map_or("off", severity_word),
+                declared.about()
+            ));
         }
         for plugin in &self.plugins {
             let info = plugin.check.describe();
@@ -856,6 +895,7 @@ pub fn counts<'a>(badges: impl IntoIterator<Item = &'a HealthBadge>) -> BTreeMap
     counts
 }
 
+mod declared;
 pub mod record;
 
 #[cfg(test)]

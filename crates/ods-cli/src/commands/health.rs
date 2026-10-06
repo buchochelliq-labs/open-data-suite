@@ -252,6 +252,7 @@ fn tone(health: Health) -> Tone {
 fn source(source: CheckSource) -> &'static str {
     match source {
         CheckSource::Builtin => "built-in",
+        CheckSource::Declarative => "declared",
         _ => "plugin",
     }
 }

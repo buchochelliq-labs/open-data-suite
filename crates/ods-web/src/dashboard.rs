@@ -1162,13 +1162,12 @@ impl Dashboard {
         let run_failures_known = run_failures_on && failures.is_some();
         // A check the health record holds counts too: it can fail nodes at severity
         // error without the run's record (#401 review).
-        let other_errors = self.health.checks().iter().any(|(check, severity)| {
-            *check != Builtin::LastRunFailed && *severity == Some(ods_health::Severity::Error)
-        }) || self.health_record().is_some_and(|r| {
-            r.checks
-                .iter()
-                .any(|c| c.severity == ods_health::Severity::Error)
-        });
+        let other_errors = self.health.errs_without_run_failures()
+            || self.health_record().is_some_and(|r| {
+                r.checks
+                    .iter()
+                    .any(|c| c.severity == ods_health::Severity::Error)
+            });
         HEALTHS
             .iter()
             .map(|&health| {

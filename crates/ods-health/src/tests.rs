@@ -673,3 +673,217 @@ fn a_build_in_the_same_second_as_the_failure_does_not_clear_it() {
     let badge = HealthSettings::default().evaluate(&node, Some(&failures(&["model.p.a"], &[])));
     assert_ne!(badge.health, Health::Failing);
 }
+
+// ---------------------------------------------------------------- declared checks
+
+/// A mart, built and tested, with `facts` applied.
+fn mart(id: &str, facts: impl FnOnce(&mut NodeFacts)) -> NodeFacts {
+    let mut node = model(id, 1);
+    node.path = Some(format!("models/marts/{}.sql", node.name));
+    node.build = Some(passed());
+    facts(&mut node);
+    node
+}
+
+const MARTS_DOCUMENTED: &str = r#"
+[[checks]]
+id = "marts.documented"
+select = { path = ["models/marts/**"] }
+require = ["description", "test:unique"]
+"#;
+
+fn declared_finding(badge: &HealthBadge, id: &str) -> Finding {
+    badge
+        .findings
+        .iter()
+        .find(|f| f.check == id)
+        .unwrap_or_else(|| panic!("no {id}: {badge:?}"))
+        .clone()
+}
+
+#[test]
+fn a_declared_check_passes_a_node_with_everything_it_requires() {
+    let s = settings(MARTS_DOCUMENTED);
+    let node = mart("model.p.orders", |n| {
+        n.described = true;
+        n.test_types = ["unique".to_owned(), "not_null".to_owned()].into();
+    });
+    let badge = s.evaluate(&node, Some(&clean()));
+    assert_eq!(badge.health, Health::Healthy, "{badge:?}");
+    let finding = declared_finding(&badge, "marts.documented");
+    assert_eq!(finding.status, Status::Pass);
+    assert_eq!(finding.source, CheckSource::Declarative);
+    assert_eq!(finding.severity, Severity::Warn, "warn unless configured");
+    assert_eq!(finding.evidence["require"], "description, test:unique");
+}
+
+#[test]
+fn a_declared_check_names_what_is_missing() {
+    let s = settings(MARTS_DOCUMENTED);
+    let node = mart("model.p.orders", |n| {
+        n.test_types = ["not_null".to_owned()].into();
+    });
+    let badge = s.evaluate(&node, Some(&clean()));
+    assert_eq!(badge.health, Health::Warning);
+    let finding = declared_finding(&badge, "marts.documented");
+    assert_eq!(finding.status, Status::Fail);
+    assert_eq!(
+        finding.reason,
+        "marts.documented: no description; no `unique` test"
+    );
+    assert_eq!(finding.evidence["missing"], "description, test:unique");
+    assert!(badge.reasons.contains(&finding.reason), "{badge:?}");
+}
+
+#[test]
+fn a_declared_check_at_error_fails_the_node_and_counts_without_the_runs_record() {
+    let s = settings(
+        r#"
+[[checks]]
+id = "owned"
+require = ["tag:owned", "tests", "constraints"]
+severity = "error"
+"#,
+    );
+    assert!(s.errs_without_run_failures());
+    let node = mart("model.p.orders", |n| n.tags = vec!["owned".into()]);
+    let badge = s.evaluate(&node, Some(&clean()));
+    assert_eq!(badge.health, Health::Failing, "{badge:?}");
+    assert_eq!(
+        declared_finding(&badge, "owned").reason,
+        "owned: no constraints"
+    );
+    assert!(!settings("").errs_without_run_failures(), "the defaults");
+}
+
+#[test]
+fn a_declared_check_skips_what_it_doesnt_select_or_excludes() {
+    let s = settings(
+        r#"
+[[checks]]
+id = "marts.documented"
+select = { path = ["models/marts/**"] }
+exclude = { tags = ["experimental"] }
+require = ["description"]
+"#,
+    );
+    let mut staging = model("model.p.stg_orders", 1);
+    staging.path = Some("models/staging/stg_orders.sql".into());
+    staging.build = Some(passed());
+    let finding = declared_finding(&s.evaluate(&staging, Some(&clean())), "marts.documented");
+    assert_eq!(finding.status, Status::Skipped);
+    assert!(finding.evidence.is_empty());
+
+    let excluded = mart("model.p.orders", |n| n.tags = vec!["experimental".into()]);
+    let badge = s.evaluate(&excluded, Some(&clean()));
+    assert_eq!(
+        declared_finding(&badge, "marts.documented").status,
+        Status::Skipped
+    );
+    assert_eq!(badge.health, Health::Healthy, "skipped never fails");
+}
+
+#[test]
+fn a_declared_check_turned_off_says_nothing() {
+    let s = settings(
+        r#"
+[[checks]]
+id = "marts.documented"
+require = ["description"]
+severity = "off"
+"#,
+    );
+    let badge = s.evaluate(&mart("model.p.orders", |_| {}), Some(&clean()));
+    assert!(badge.findings.iter().all(|f| f.check != "marts.documented"));
+    assert!(s.how(true).contains("marts.documented (off, declared)"));
+}
+
+#[test]
+fn a_misdeclared_check_is_a_configuration_error() {
+    let error = |toml: &str| {
+        let config: HealthConfig = toml::from_str(toml).unwrap();
+        HealthSettings::from_config(&config)
+            .unwrap_err()
+            .to_string()
+    };
+    let one = |fields: &str| ["[[checks]]\n", fields, "\n"].concat();
+    let cases = [
+        (
+            one("id = \"Bad Id\"\nrequire = [\"tests\"]"),
+            "health.checks[0].id",
+        ),
+        (
+            one("id = \"built\"\nrequire = [\"tests\"]"),
+            "[health.builtin.built]",
+        ),
+        (
+            [
+                one("id = \"a\"\nrequire = [\"tests\"]"),
+                one("id = \"a\"\nrequire = [\"tests\"]"),
+            ]
+            .concat(),
+            "two checks in [[health.checks]] are called `a`",
+        ),
+        (
+            one("id = \"a\"\nkind = \"probe\"\nrequire = [\"tests\"]"),
+            "aren't supported yet",
+        ),
+        (
+            one("id = \"a\"\nkind = \"magic\"\nrequire = [\"tests\"]"),
+            "isn't a kind of check",
+        ),
+        (one("id = \"a\""), "health.checks[0].require: say what"),
+        (
+            one("id = \"a\"\nrequire = [\"owner\"]"),
+            "`owner` isn't something",
+        ),
+        (
+            one("id = \"a\"\nrequire = [\"test:\"]"),
+            "`test:` isn't something",
+        ),
+        (
+            one("id = \"a\"\nrequire = [\"tests\"]\nselect = { path = [\"models/[\"] }"),
+            "health.checks[0].select.path",
+        ),
+    ];
+    for (toml, expected) in cases {
+        let error = error(&toml);
+        assert!(error.contains(expected), "{toml}\n=> {error}");
+    }
+    // Unknown keys are refused by the configuration itself (ADR-0005).
+    assert!(toml::from_str::<HealthConfig>("[[checks]]\nid = \"a\"\nrequires = []").is_err());
+}
+
+#[tokio::test]
+async fn declared_checks_run_live_and_are_never_read_back_from_a_record() {
+    let s = settings(MARTS_DOCUMENTED);
+    let node = mart("model.p.orders", |_| {});
+    let report = s
+        .run(
+            &CheckScope::new(vec![node.clone()], Some(clean())),
+            CHECK_TIMEOUT,
+        )
+        .await;
+    let run = report
+        .checks
+        .iter()
+        .find(|c| c.id == "marts.documented")
+        .unwrap();
+    assert_eq!(run.source, CheckSource::Declarative);
+    assert_eq!(run.about, "requires description, test:unique");
+    assert_eq!(
+        declared_finding(&report.badges["model.p.orders"], "marts.documented").status,
+        Status::Fail
+    );
+    // The dashboard works them out itself: a record of them adds nothing to read back.
+    let record = crate::record::HealthRecord::new("p/dev", at("2026-10-06T09:00:00Z"), report);
+    assert!(crate::record::Recorded::of(&record).is_empty());
+}
+
+#[test]
+fn a_plugin_cant_take_a_declared_checks_id() {
+    let clash = settings(MARTS_DOCUMENTED).with_check(std::sync::Arc::new(
+        ods_provider_fake::FakeHealthCheck::new("marts.documented", Severity::Warn),
+    ));
+    assert!(clash.is_err());
+}

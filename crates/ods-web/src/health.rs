@@ -19,6 +19,12 @@ pub(crate) fn facts(input: &CatalogInput, node: &CatalogNode) -> NodeFacts {
     facts.path.clone_from(&node.file);
     facts.tags.clone_from(&node.tags);
     facts.tests = node.tests.len();
+    facts.test_types = node.tests.iter().map(|t| t.name.clone()).collect();
+    facts.described = node
+        .description
+        .as_deref()
+        .is_some_and(|d| !d.trim().is_empty());
+    facts.constraints = node.columns.iter().map(|c| c.constraints.len()).sum();
     facts.build = input.last_builds.get(&node.id).map(|b| {
         let build = BuildFacts::new(&b.run_id, b.built_at);
         match &b.tested {
