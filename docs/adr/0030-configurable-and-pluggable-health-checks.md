@@ -237,6 +237,18 @@ missed. So a probe runs only when its connection can do no more than read what i
   everything the principal can reach elsewhere: a dedicated read-only principal is the
   real control, and this check proves it is read-only where it matters. Grants can change
   between the check and the query; the check runs immediately before each probe.
+- **An explicit override, for one run.** `ods health check --allow-elevated-login` runs
+  probes even when the check finds more than read access, or can't tell. It is the user's
+  decision, at their own risk:
+  - It is a command-line flag only, never a configuration key, so a repository can't
+    turn it on for whoever runs it.
+  - It skips this check only: the SQL must still be one read-only query (§4a) and the
+    definition still trusted (§4b).
+  - Every run that uses it warns, naming the login and the privileges found, that ODS
+    can't prevent a query from writing under that login, and that running it is at the
+    user's own risk, with no warranty (the project's licence).
+  - Every probe that ran so carries `login_check: overridden` in its evidence, in
+    `--json`, the health record and the dashboard: it is never hidden afterwards.
 
 ### 4d. The trust store and probe configuration, as built (amendment, 2026-10-06)
 - **Where:** `<user config dir>/ods/trust.json`, beside the user's `config.toml`
