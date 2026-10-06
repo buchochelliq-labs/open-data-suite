@@ -9,6 +9,7 @@ icies`, `doctor`, `retry`, `explain`, `explain-failure`, `diff`, `graph`, `expor
 0.1)]
   erd          Generate and inspect entity-relationship models [planned: M3 ERD & Usage (v0.3.0)] (`ods erd generate` is
  available)
+  health       Check the project's health: built, tested, and whatever `[health]` adds
   usage        Inspect real downstream usage of assets and columns [planned: M3 ERD & Usage (v0.3.0)]
   ci           Change-impact analysis and selective CI [planned: M4 ODS CI (v0.4.0)]
   lsp          Run the ODS language server [planned: M5 LSP & VS Code (v0.5.0)]
@@ -36,5 +37,4 @@ Options:
   -h, --help               Print help (see more with '--help')
   -V, --version            Print version
 ❯
-
 
