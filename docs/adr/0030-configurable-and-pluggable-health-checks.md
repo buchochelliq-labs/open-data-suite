@@ -1,6 +1,6 @@
 # ADR-0030: Configurable and pluggable health checks
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-06). Phase 1 is built: the `ods-health` crate and `[health]` for the built-in checks (#392). Not built yet: the `health_check` contract, `ods health check` and the health record (phase 2), declarative checks and coverage targets (3), probes and the trust store (4), scripts (5), plugins (6).
 - **Date:** 2026-10-06
 - **Issues:** #392 (this design), #354 (the first badges), #117 (scoring and trends), #387 (external providers), #9 (policy)
 - **Deciders:** @n1ckyb

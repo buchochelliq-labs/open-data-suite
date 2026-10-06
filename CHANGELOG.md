@@ -32,6 +32,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- `[health]` in `ods.toml` tunes the dashboard's health checks
+  ([ADR-0030](docs/adr/0030-configurable-and-pluggable-health-checks.md)): turn each
+  built-in check (`built`, `last_run_failed`, `last_run_skipped`, `tests_required`,
+  `tests_passed`) off or set its severity (`error`, `warn` or `info`), scope it with
+  `select`/`exclude` by resource type, tag, path glob or name, and choose whether a check
+  that couldn't decide counts as unknown or a warning. Each badge now lists its
+  `findings`, one per check ([docs](docs/cli.md#health-settings-in-odstoml)) (#394, #392)
 - Health and coverage on the dashboard from real signals, replacing the `[n]`
   placeholders. Each node in the Catalog has a health badge (*failing*, *warning*,
   *healthy* or *unknown*), with its reasons and a `health` filter. Home counts nodes by

@@ -1,207 +1,44 @@
-//! Health badges and coverage (#354): each from a signal ODS really has, with how it
-//! was worked out, or said to be not measured (AGENTS rules 3 and 4).
-//!
-//! - A node's badge comes from the last run's record (what failed or was skipped), its
-//!   last successful build, and whether its tests passed on that build, as they are now.
-//! - Coverage counts what the project declares: tests, descriptions, column constraints,
-//!   and sources whose new data can be measured.
+//! Health badges and coverage (#354) on the dashboard. Badges come from the health
+//! engine (`ods-health`, ADR-0030) as `[health]` configures it; this module turns the
+//! Catalog's facts into the engine's and computes coverage.
 //!
 //! Nothing here is a score or a trend: those are #117's.
 
-use std::collections::BTreeSet;
-
-use ods_core::state::Timestamp;
+use ods_health::{BuildFacts, LastFailures, NodeFacts};
+pub use ods_health::{HEALTHS, Health, HealthBadge};
 use serde::Serialize;
 
 use crate::catalog::{CatalogInput, CatalogNode, NodeLink, node_href};
 use crate::dashboard::state::LastRun;
 use crate::freshness::FreshnessInput;
 
-/// A node's health.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Health {
-    /// Built, and its tests passed on that build as they are now.
-    Healthy,
-    /// Built, but something isn't vouched for: no tests, tests not passed on this build
-    /// or changed since, or skipped in the last run.
-    Warning,
-    /// It failed in the last run, and hasn't been built since.
-    Failing,
-    /// ODS has nothing to judge it on: it was never built.
-    Unknown,
-}
-
-/// Every health, in the order Home and the facet list them.
-pub const HEALTHS: [Health; 4] = [
-    Health::Healthy,
-    Health::Warning,
-    Health::Failing,
-    Health::Unknown,
-];
-
-impl Health {
-    /// Its key, also its query value.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Healthy => "healthy",
-            Self::Warning => "warning",
-            Self::Failing => "failing",
-            Self::Unknown => "unknown",
+/// The engine's facts about `node`: the project's, and its last build from the state
+/// store.
+pub(crate) fn facts(input: &CatalogInput, node: &CatalogNode) -> NodeFacts {
+    let mut facts = NodeFacts::new(&node.id, &node.name, &node.resource_type);
+    facts.path.clone_from(&node.file);
+    facts.tags.clone_from(&node.tags);
+    facts.tests = node.tests.len();
+    facts.build = input.last_builds.get(&node.id).map(|b| {
+        let build = BuildFacts::new(&b.run_id, b.built_at);
+        match &b.tested {
+            Some((run, at)) => build.tested(run, *at, b.checks_current),
+            None => build,
         }
-    }
-
-    /// Its label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Healthy => "Healthy",
-            Self::Warning => "Warning",
-            Self::Failing => "Failing",
-            Self::Unknown => "Unknown",
-        }
-    }
-    /// What it means, for people.
-    pub fn how(self) -> &'static str {
-        match self {
-            Self::Healthy => {
-                "Built, and its tests passed on that build as they are now (a seed needs none)."
-            }
-            Self::Warning => {
-                "Built, but without tests (models and snapshots), with tests not recorded \
-                 passing on this build or changed since, or skipped in the last run."
-            }
-            Self::Failing => "Failed in the last run, and not built since.",
-            Self::Unknown => "Never built by ODS: nothing to judge it on.",
-        }
-    }
+    });
+    facts
 }
 
-/// A node's health, and why.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub struct HealthBadge {
-    /// The health.
-    pub health: Health,
-    /// Why, most important first.
-    pub reasons: Vec<String>,
-}
-
-/// What the last run says failed, when its outcome is known.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LastFailures {
-    started_at: Timestamp,
-    command: String,
-    failed: BTreeSet<String>,
-    skipped: BTreeSet<String>,
-}
-
-impl LastFailures {
-    /// From the last run's record; `None` when it doesn't say what failed.
-    pub(crate) fn of(last: Option<&LastRun>) -> Option<Self> {
-        let last = last?;
-        let outcome = last.outcome.as_ref()?;
-        Some(Self {
-            started_at: last.started_at,
-            command: last.command_name.clone(),
-            failed: outcome.failed.iter().cloned().collect(),
-            skipped: outcome.skipped.iter().cloned().collect(),
-        })
-    }
-}
-
-/// Kinds of node that are expected to have tests.
-fn tests_expected(node: &CatalogNode) -> bool {
-    matches!(node.resource_type.as_str(), "model" | "snapshot")
-}
-
-fn short(run: &str) -> String {
-    run.chars().take(8).collect()
-}
-
-/// A node's health, from the last run's failures (when known), its last build, and its
-/// tests.
-pub(crate) fn node_health(
-    input: &CatalogInput,
-    failures: Option<&LastFailures>,
-    node: &CatalogNode,
-) -> HealthBadge {
-    let build = input.last_builds.get(&node.id);
-    // A failure counts until a later build replaces it (e.g. recorded elsewhere).
-    let since = |f: &LastFailures| build.is_none_or(|b| b.built_at < f.started_at);
-    if let Some(f) = failures.filter(|f| f.failed.contains(&node.id) && since(f)) {
-        return HealthBadge {
-            health: Health::Failing,
-            reasons: vec![format!(
-                "failed in the last run ({}, started {}), and hasn't been built since",
-                f.command, f.started_at
-            )],
-        };
-    }
-    let Some(build) = build else {
-        return HealthBadge {
-            health: Health::Unknown,
-            reasons: vec!["never built by ODS: nothing to judge it on".to_owned()],
-        };
-    };
-    let mut warnings = Vec::new();
-    if let Some(f) = failures.filter(|f| f.skipped.contains(&node.id) && since(f)) {
-        warnings.push(format!(
-            "skipped in the last run ({}) because something upstream failed",
-            f.command
-        ));
-    }
-    if node.tests.is_empty() {
-        if tests_expected(node) {
-            warnings.push("no tests: nothing checks its data".to_owned());
-        }
-    } else {
-        match (&build.tested, build.checks_current) {
-            (None, _) => warnings
-                .push("its tests haven't been recorded passing on its current build".to_owned()),
-            (Some((run, _)), false) => warnings.push(format!(
-                "its tests changed since they passed in run {}: the new ones haven't run",
-                short(run)
-            )),
-            (Some(_), true) => {}
-        }
-    }
-    if !warnings.is_empty() {
-        return HealthBadge {
-            health: Health::Warning,
-            reasons: warnings,
-        };
-    }
-    let mut reasons = vec![format!(
-        "built in run {} at {}",
-        short(&build.run_id),
-        build.built_at
-    )];
-    if let Some((run, at)) = &build.tested {
-        reasons.push(format!("its tests passed in run {} at {at}", short(run)));
-    } else {
-        reasons.push(format!("a {} has no tests to run", node.resource_type));
-    }
-    HealthBadge {
-        health: Health::Healthy,
-        reasons,
-    }
-}
-
-/// How the badges are worked out, for people.
-pub(crate) fn badges_how(failures_known: bool) -> String {
-    let mut how = "Failing: failed in the last run and not built since. Warning: built, but \
-        without tests (models and snapshots), with tests not recorded passing on this build \
-        or changed since, or skipped in the last run. Healthy: built, and its tests passed \
-        on this build as they are now. Unknown: never built by ODS."
-        .to_owned();
-    if !failures_known {
-        how.push_str(
-            " The last run's record doesn't say what failed, so failures aren't measured.",
-        );
-    }
-    how
+/// What the last run's record says failed; `None` when it doesn't say.
+pub(crate) fn failures_of(last: Option<&LastRun>) -> Option<LastFailures> {
+    let last = last?;
+    let outcome = last.outcome.as_ref()?;
+    Some(LastFailures::new(
+        last.started_at,
+        &last.command_name,
+        outcome.failed.iter().cloned(),
+        outcome.skipped.iter().cloned(),
+    ))
 }
 
 /// A coverage measure.
@@ -329,6 +166,7 @@ mod tests {
     use crate::catalog::{CatalogColumn, CatalogTest, LastBuild, TestKind};
     use crate::dashboard::state::LastOutcome;
     use crate::freshness::SourceInput;
+    use ods_core::state::Timestamp;
     use std::collections::BTreeMap;
 
     fn at(t: &str) -> Timestamp {
@@ -352,95 +190,24 @@ mod tests {
         )
     }
 
-    fn built() -> LastBuild {
-        LastBuild::new(Some(1), "run-1", at("2026-09-28T09:00:00Z"))
-    }
-
-    fn failures(failed: &[&str], skipped: &[&str]) -> LastFailures {
-        LastFailures {
-            started_at: at("2026-09-29T09:00:00Z"),
-            command: "ods state build".into(),
-            failed: failed.iter().map(|s| (*s).to_owned()).collect(),
-            skipped: skipped.iter().map(|s| (*s).to_owned()).collect(),
-        }
-    }
-
     #[test]
-    fn a_tested_build_is_healthy_and_says_why() {
-        let node = model("model.a", true);
-        let build = built().with_tested("run-1", at("2026-09-28T09:05:00Z"), None, true);
-        let input = input(vec![node.clone()], vec![("model.a", build)]);
-        let badge = node_health(&input, None, &node);
-        assert_eq!(badge.health, Health::Healthy);
-        assert!(badge.reasons[1].starts_with("its tests passed in run run-1"));
-    }
-
-    #[test]
-    fn never_built_is_unknown_never_healthy() {
-        let node = model("model.a", true);
-        let badge = node_health(&input(vec![node.clone()], vec![]), None, &node);
-        assert_eq!(badge.health, Health::Unknown);
-    }
-
-    #[test]
-    fn untested_unpassed_or_changed_tests_warn() {
-        let untested = model("model.a", false);
-        let input_a = input(vec![untested.clone()], vec![("model.a", built())]);
-        assert_eq!(
-            node_health(&input_a, None, &untested).health,
-            Health::Warning
-        );
-
-        let tested = model("model.b", true);
-        let input_b = input(vec![tested.clone()], vec![("model.b", built())]);
-        let badge = node_health(&input_b, None, &tested);
-        assert_eq!(badge.health, Health::Warning);
-        assert!(badge.reasons[0].contains("haven't been recorded passing"));
-
-        let changed = built().with_tested("run-1", at("2026-09-28T09:05:00Z"), None, false);
-        let input_c = input(vec![tested.clone()], vec![("model.b", changed)]);
-        assert!(node_health(&input_c, None, &tested).reasons[0].contains("changed since"));
-    }
-
-    #[test]
-    fn a_seed_without_tests_is_healthy_once_built() {
-        let seed = CatalogNode::new("seed.s", "s", "seed");
-        let input = input(vec![seed.clone()], vec![("seed.s", built())]);
-        assert_eq!(node_health(&input, None, &seed).health, Health::Healthy);
-    }
-
-    #[test]
-    fn a_failure_counts_until_a_later_build_replaces_it() {
-        let node = model("model.a", true);
-        let tested = built().with_tested("run-1", at("2026-09-28T09:05:00Z"), None, true);
-        let older = input(vec![node.clone()], vec![("model.a", tested)]);
-        let f = failures(&["model.a"], &[]);
-        assert_eq!(node_health(&older, Some(&f), &node).health, Health::Failing);
-        // Never built and failed: failing, not unknown.
-        let unbuilt = input(vec![node.clone()], vec![]);
-        assert_eq!(
-            node_health(&unbuilt, Some(&f), &node).health,
-            Health::Failing
-        );
-        // Built after the failed run started: that build stands.
-        let later = LastBuild::new(Some(2), "run-2", at("2026-09-29T10:00:00Z")).with_tested(
-            "run-2",
-            at("2026-09-29T10:05:00Z"),
+    fn the_engine_sees_the_catalogs_facts() {
+        let mut node = model("model.a", true);
+        node.file = Some("models/marts/a.sql".into());
+        node.tags = vec!["core".into()];
+        let build = LastBuild::new(Some(1), "run-1", at("2026-09-28T09:00:00Z")).with_tested(
+            "run-1",
+            at("2026-09-28T09:05:00Z"),
             None,
             true,
         );
-        let rebuilt = input(vec![node.clone()], vec![("model.a", later)]);
-        assert_eq!(
-            node_health(&rebuilt, Some(&f), &node).health,
-            Health::Healthy
-        );
-        // Skipped: a warning.
-        let tested = built().with_tested("run-1", at("2026-09-28T09:05:00Z"), None, true);
-        let skipped = input(vec![node.clone()], vec![("model.a", tested)]);
-        let s = failures(&[], &["model.a"]);
-        let badge = node_health(&skipped, Some(&s), &node);
-        assert_eq!(badge.health, Health::Warning);
-        assert!(badge.reasons[0].starts_with("skipped in the last run"));
+        let facts = facts(&input(vec![node.clone()], vec![("model.a", build)]), &node);
+        assert_eq!(facts.path.as_deref(), Some("models/marts/a.sql"));
+        assert_eq!(facts.tags, ["core"]);
+        assert_eq!(facts.tests, 1);
+        let build = facts.build.unwrap();
+        assert_eq!(build.tested.unwrap().0, "run-1");
+        assert!(build.checks_current);
     }
 
     #[test]
@@ -451,19 +218,13 @@ mod tests {
             at("2026-09-29T09:00:00Z"),
             crate::dashboard::StoreLocation::from(".ods/last_run.json"),
         );
-        assert_eq!(LastFailures::of(Some(&last)), None);
+        assert_eq!(failures_of(Some(&last)), None);
         let with = last.with_outcome(Some(LastOutcome::new(
             vec!["model.a".into()],
             vec![],
             vec![],
         )));
-        assert!(
-            LastFailures::of(Some(&with))
-                .unwrap()
-                .failed
-                .contains("model.a")
-        );
-        assert!(badges_how(false).contains("aren't measured"));
+        assert!(failures_of(Some(&with)).unwrap().failed.contains("model.a"));
     }
 
     #[test]

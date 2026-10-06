@@ -59,6 +59,22 @@ pub(super) fn state_args(command: Command) -> Command {
         ))
 }
 
+/// The health checks `[health]` sets up (ADR-0030).
+///
+/// # Errors
+/// A check id that isn't a built-in's, or a path glob that isn't valid (exit 4).
+pub(super) fn health_settings(
+    config: &ods_config::Loaded,
+) -> Result<ods_health::HealthSettings, CliError> {
+    ods_health::HealthSettings::from_config(&config.config.health).map_err(|e| {
+        CliError::new(
+            crate::exit::ExitStatus::Config,
+            crate::exit::codes::HEALTH_CONFIG,
+            e.to_string(),
+        )
+    })
+}
+
 /// Reads the dashboard's facts; built once, then asked again on every reload.
 pub(super) struct DashboardSource {
     args: ArgMatches,
@@ -67,6 +83,9 @@ pub(super) struct DashboardSource {
     links: LinkSettings,
     /// What an hour of build time costs (`[state.cost]`), for the savings panel.
     cost: Option<ods_config::CostConfig>,
+    /// The health checks as `[health]` configures them (#392); a mistake there is a
+    /// configuration error when the server starts, not a badge.
+    health: ods_health::HealthSettings,
 }
 
 impl DashboardSource {
@@ -76,6 +95,7 @@ impl DashboardSource {
             settings: StateSettings::resolve(args, config)?,
             links: LinkSettings::read(config),
             cost: config.config.state.cost.clone(),
+            health: health_settings(config)?,
         })
     }
 
@@ -196,6 +216,7 @@ impl DashboardSource {
             .with_modules(modules(recorded))
             .with_catalog(catalog)
             .with_freshness(freshness)
+            .with_health(self.health.clone())
             // The live run view (#322): journals are read even before the store
             // exists, since a first run writes its journal before its first snapshot.
             .with_journals(ods_sdk::run_journal::Journals::beside(&ws.state_db))

@@ -115,7 +115,7 @@ meanings get new numbers.
 | `ODS-E0003` | The command is planned but not implemented yet. |
 | `ODS-E0004` | `ODS_LOG` holds an unknown log level. |
 | `ODS-E0101` | A configuration file can't be read or isn't valid TOML. |
-| `ODS-E0102` | Configuration schema violation: unknown key, wrong type or value out of range. |
+| `ODS-E0102` | Configuration schema violation: unknown key, wrong type or value out of range, or a `[health]` check id or path glob that doesn't exist or isn't valid. |
 | `ODS-E0103` | A credential is written as plaintext instead of a secret reference. |
 | `ODS-E0104` | The selected profile is not defined. |
 | `ODS-E0201` | dbt artifacts are missing, unreadable or an unsupported version, or lineage output can't be written. |
@@ -213,6 +213,8 @@ format = "json"
     `never`) and `output.width` (at least 20)
   - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
   - `state.db` and `state.environment`: see [State settings](#state-settings-in-odstoml)
+  - `health.unknown_counts_as` and `health.builtin.<check>.severity`, `.select` and
+    `.exclude`: see [Health settings](#health-settings-in-odstoml)
   - `providers.<name>.kind` and `providers.<name>.settings`. For `kind = "dbt"` the
     settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
     `target_dir`, all strings; any other key is an error
@@ -1257,6 +1259,57 @@ it handles the flag (#227):
 
 The report says which settings were in effect and where each came from, e.g.
 `dbt: target prod (DBT_TARGET), target_dir target (default)`; `-v` logs it too.
+
+### Health settings in `ods.toml`
+
+The dashboard's health badges (#354) come from checks that `[health]` tunes
+([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md), #392). Each node gets a
+finding from every enabled check that applies to it, and its badge is worked out from
+them:
+- **Failing:** a check at severity `error` failed.
+- **Unknown:** a check couldn't decide, e.g. the node was never built. With
+  `unknown_counts_as = "warning"`, this is a warning instead. It is never healthy.
+- **Warning:** a check at severity `warn` failed.
+- **Healthy:** every enabled check that applies passed. A check at severity `info` is
+  shown but changes nothing.
+
+If no enabled check applies to a node, it is unknown.
+
+The built-in checks, and their defaults:
+
+| Check | Default | Fails when |
+|---|---|---|
+| `built` | on | never fails; a node ODS never built is *unknown*. Turned off, nodes are judged on the other checks alone |
+| `last_run_failed` | `error` | it failed in the last run (from the run's record, for this scope) and hasn't been built since. Without a record of this scope's last run (`ods state build`/`run` keep one beside the store), it can't decide: *unknown* |
+| `last_run_skipped` | `warn` | it was skipped in the last run because something upstream failed; *unknown* without the record, as above |
+| `tests_required` | `warn`, models and snapshots | no test reads it |
+| `tests_passed` | `warn` | it has tests, and they weren't recorded passing on its current build, or changed since |
+
+```toml
+[health]
+unknown_counts_as = "unknown"            # or "warning"
+
+[health.builtin.tests_required]
+severity = "error"                       # error | warn | info | off
+select = { path = ["models/marts/**"] }  # replaces the check's default scope
+exclude = { tags = ["experimental"] }
+
+[health.builtin.last_run_skipped]
+severity = "off"
+```
+
+- **Selectors:** `select` and `exclude` take `resource_type`, `tags`, `path` (globs
+  over the node's file) and `name`. A node matches when it matches every field that is
+  set, and any value within a field. A node whose file isn't known never matches a
+  `path`.
+- **Home's Failing count** counts nodes a check at severity `error` failed on. When the
+  last run's failures aren't known but another check is at `error`, it reads *at least*.
+- **Errors:** a check that doesn't exist, or a glob that isn't valid, is a configuration
+  error when `ods serve` starts (exit 4, `ODS-E0102`).
+- **Explanations:** each badge's tooltip and its `findings` in `/api/catalog` say which
+  check concluded what. The Catalog's legend lists the checks as configured.
+
+The trust store, warehouse probes, scripts and plugins come in later phases of #392.
 
 ### State settings in `ods.toml`
 

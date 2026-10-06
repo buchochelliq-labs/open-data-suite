@@ -122,7 +122,7 @@ expression: pretty(view.clone())
     {
       "key": "health",
       "label": "Health",
-      "note": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
+      "note": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
       "values": [
         {
           "count": 0,
@@ -194,7 +194,7 @@ expression: pretty(view.clone())
       ]
     }
   ],
-  "health_how": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
+  "health_how": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
   "layer_source": "the folder under the model paths",
   "query": {
     "descending": false,
@@ -210,9 +210,48 @@ expression: pretty(view.clone())
         "summary": "no state store yet: nothing was ever recorded, so it builds next run"
       },
       "health": {
+        "findings": [
+          {
+            "check": "built",
+            "reason": "never built by ODS: nothing to judge it on",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "last_run_failed",
+            "reason": "the last run's record doesn't say what failed: failures aren't measured",
+            "severity": "error",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "last_run_skipped",
+            "reason": "the last run's record doesn't say what was skipped",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "tests_required",
+            "reason": "no tests: nothing checks its data",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "fail"
+          },
+          {
+            "check": "tests_passed",
+            "reason": "a model has no tests to run",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "skipped"
+          }
+        ],
         "health": "unknown",
         "reasons": [
-          "never built by ODS: nothing to judge it on"
+          "never built by ODS: nothing to judge it on",
+          "the last run's record doesn't say what failed: failures aren't measured",
+          "the last run's record doesn't say what was skipped"
         ]
       },
       "href": "catalog/model.shop.customers",
@@ -233,9 +272,48 @@ expression: pretty(view.clone())
         "summary": "no state store yet: nothing was ever recorded, so it builds next run"
       },
       "health": {
+        "findings": [
+          {
+            "check": "built",
+            "reason": "never built by ODS: nothing to judge it on",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "last_run_failed",
+            "reason": "the last run's record doesn't say what failed: failures aren't measured",
+            "severity": "error",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "last_run_skipped",
+            "reason": "the last run's record doesn't say what was skipped",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "tests_required",
+            "reason": "3 test(s) read it",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "pass"
+          },
+          {
+            "check": "tests_passed",
+            "reason": "never built: its tests can't have passed on a build",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "skipped"
+          }
+        ],
         "health": "unknown",
         "reasons": [
-          "never built by ODS: nothing to judge it on"
+          "never built by ODS: nothing to judge it on",
+          "the last run's record doesn't say what failed: failures aren't measured",
+          "the last run's record doesn't say what was skipped"
         ]
       },
       "href": "catalog/model.shop.orders",
@@ -258,9 +336,48 @@ expression: pretty(view.clone())
         "summary": "no state store yet: nothing was ever recorded, so it builds next run"
       },
       "health": {
+        "findings": [
+          {
+            "check": "built",
+            "reason": "never built by ODS: nothing to judge it on",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "last_run_failed",
+            "reason": "the last run's record doesn't say what failed: failures aren't measured",
+            "severity": "error",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "last_run_skipped",
+            "reason": "the last run's record doesn't say what was skipped",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "unknown"
+          },
+          {
+            "check": "tests_required",
+            "reason": "not selected for this check",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "skipped"
+          },
+          {
+            "check": "tests_passed",
+            "reason": "a seed has no tests to run",
+            "severity": "warn",
+            "source": "builtin",
+            "status": "skipped"
+          }
+        ],
         "health": "unknown",
         "reasons": [
-          "never built by ODS: nothing to judge it on"
+          "never built by ODS: nothing to judge it on",
+          "the last run's record doesn't say what failed: failures aren't measured",
+          "the last run's record doesn't say what was skipped"
         ]
       },
       "href": "catalog/seed.shop.raw_orders",

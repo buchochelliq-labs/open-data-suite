@@ -18,6 +18,7 @@ use ods_web::catalog::{
     CatalogColumn, CatalogInput, CatalogNode, CatalogQuery, CatalogTest, ColumnSource, LastBuild,
     TestKind, TypeSource,
 };
+use ods_web::dashboard::state::{History, LastOutcome, LastRun};
 use ods_web::dashboard::{Recorded, RunRecord, StateInput};
 use ods_web::{Dashboard, ServeOptions, Snapshot, router};
 
@@ -244,12 +245,22 @@ fn recorded() -> Dashboard {
         ),
     ];
     Dashboard::new("shop", "dev")
-        .with_state(StateInput::Recorded(Box::new(Recorded::new(
-            ".ods/state.db",
-            runs,
-            2,
-            Ok(plan()),
-        ))))
+        .with_state(StateInput::Recorded(Box::new(
+            Recorded::new(".ods/state.db", runs, 2, Ok(plan())).with_history(
+                // The last run's record, for this scope: nothing failed (#392), so the
+                // health badges can decide.
+                History::new(Vec::new()).with_last_run(Some(
+                    LastRun::new(
+                        "ods state build",
+                        "ods state build",
+                        at("2026-09-28T08:59:00Z"),
+                        ".ods/state.db.last-run.json",
+                    )
+                    .with_outcome(Some(LastOutcome::default()))
+                    .with_run(Some("shop/dev".into()), Some(RUN_2.into())),
+                )),
+            ),
+        )))
         .with_catalog(catalog_input())
 }
 

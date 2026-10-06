@@ -741,6 +741,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "globset"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1257,6 +1269,7 @@ dependencies = [
  "ods-config",
  "ods-core",
  "ods-erd",
+ "ods-health",
  "ods-lineage",
  "ods-mcp",
  "ods-provider-databricks",
@@ -1318,6 +1331,20 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ods-health"
+version = "0.0.1"
+dependencies = [
+ "globset",
+ "ods-config",
+ "ods-core",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]
@@ -1460,8 +1487,10 @@ dependencies = [
  "html-escape",
  "insta",
  "libc",
+ "ods-config",
  "ods-core",
  "ods-erd",
+ "ods-health",
  "ods-lineage",
  "ods-provider-fake",
  "ods-sdk",
@@ -1472,6 +1501,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "toml",
  "tracing",
 ]
 

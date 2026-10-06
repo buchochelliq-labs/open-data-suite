@@ -16,6 +16,8 @@ path = "src/main.rs"
 clap.workspace = true
 clap_complete.workspace = true
 ods-config.workspace = true
+# `[health]` settings for the dashboard's badges (#392).
+ods-health.workspace = true
 ods-core.workspace = true
 ods-erd.workspace = true
 ods-lineage.workspace = true

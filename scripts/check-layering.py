@@ -31,7 +31,7 @@ EXACT = {
     "ods-mcp": EDGE,
     "ods-cli": BINARY,
 }
-MODULES = {"ods-lineage", "ods-state", "ods-erd", "ods-usage", "ods-ci", "ods-lsp", "ods-agent", "ods-mesh", "ods-synthetic"}
+MODULES = {"ods-lineage", "ods-state", "ods-erd", "ods-health", "ods-usage", "ods-ci", "ods-lsp", "ods-agent", "ods-mesh", "ods-synthetic"}
 PROVIDER_PREFIXES = ("ods-provider-", "ods-store-")
 
 # Module -> module edges approved by an ADR, e.g. ("ods-ci", "ods-state").
