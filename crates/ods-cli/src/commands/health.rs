@@ -3,7 +3,10 @@
 //! exits 5 when a check at severity `error` fails, so CI can gate on it.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_config::Loaded;
@@ -12,17 +15,17 @@ use ods_health::record::{self, HealthRecord};
 use ods_health::{
     CheckRun, CheckSource, CoverageFinding, Finding, Health, HealthBadge, HealthReport, Severity,
 };
-use ods_health::{HEALTHS, LastFailures, Status};
+use ods_health::{ElevatedLogin, HEALTHS, LastFailures, ProbeConnection, Status};
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
 use super::relation_links::{LinkSettings, Links};
 use super::state_plan::{Sources, Workspace, block_on, common, store_error};
-use super::state_settings::StateSettings;
+use super::state_settings::{Origin, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
-use crate::present::{Level, Present, Span, Tone, ViewNode};
+use crate::present::{Diagnostic, Level, Present, Span, Tone, ViewNode};
 
 /// `ods health`.
 pub struct HealthCommand;
@@ -40,6 +43,10 @@ impl Module for HealthCommand {
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         match matches.subcommand() {
             Some(("check", args)) => {
+                if args.get_flag("allow-elevated-login") {
+                    // Before anything runs, whatever the output mode or what happens next.
+                    let _ = writeln!(std::io::stderr(), "warning: {ELEVATED_WARNING}");
+                }
                 let report = CheckReport::build(args, ctx.config)?;
                 match report.failure() {
                     Some(error) => ctx.emit_failed(&report, error),
@@ -47,7 +54,9 @@ impl Module for HealthCommand {
                 }
             }
             Some(("trust", args)) => {
-                let health = super::serve_dashboard::health_settings(ctx.config)?;
+                let mut health = super::serve_dashboard::health_settings(ctx.config)?;
+                let settings = StateSettings::resolve(args, ctx.config)?;
+                health.pin_probe_connection(&probe_pins(&settings));
                 let report = super::health_trust::TrustReport::build(args, ctx.config, &health)?;
                 ctx.emit(&report)
             }
@@ -57,10 +66,10 @@ impl Module for HealthCommand {
 }
 
 fn check_command() -> Command {
-    common(
+    super::state_run::dbt_invocation_options(common(
         Command::new("check")
             .about("Run every enabled health check; exit 5 when one at severity error fails"),
-    )
+    ))
     .arg(
         Arg::new("strict")
             .long("strict")
@@ -74,11 +83,125 @@ fn check_command() -> Command {
             .help("Trust this project's probe checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
     )
     .arg(
+        Arg::new("allow-elevated-login")
+            .long("allow-elevated-login")
+            .action(ArgAction::SetTrue)
+            .help("Run probe checks even when their login can do more than read, or that can't be told: at your own risk, for this run only")
+            .long_help(
+                "Run probe checks even when the login of `[health.probes]`'s target can do \
+                 more than read what they probe, or when that can't be told (ADR-0030 §4c). \
+                 Each probe must still be one read-only query and trusted. ODS can't stop \
+                 a query from writing under a login that may write: you use this at your \
+                 own risk. ODS comes with no warranty (see its licence), and its authors \
+                 aren't responsible for any consequence, including changed or destroyed \
+                 data. It is a flag only, never a setting, and every run that uses it \
+                 says so, with the login and what it can do.",
+            ),
+    )
+    .arg(
         Arg::new("no-record")
             .long("no-record")
             .action(ArgAction::SetTrue)
             .help("Don't keep the findings beside the state store for the dashboard"),
     )
+}
+
+/// Keeps `record` beside the state store at `state_db`; where.
+///
+/// # Errors
+/// It can't be written.
+fn write_record(
+    state_db: &std::path::Path,
+    record: &HealthRecord,
+    allow_elevated_login: bool,
+) -> Result<PathBuf, CliError> {
+    let dir = record::dir_for(state_db);
+    record::write(&dir, record).map_err(|e| {
+        CliError::new(
+            ExitStatus::Failure,
+            codes::HEALTH_RECORD,
+            format!(
+                "the health record can't be written in {}: {e}",
+                dir.display()
+            ),
+        )
+        .with_hint(if allow_elevated_login {
+            "the records already there are unchanged; `--no-record` checks without keeping one. Probes ran with `--allow-elevated-login`, possibly under a login that can do more than read"
+        } else {
+            "the records already there are unchanged; `--no-record` checks without keeping one"
+        })
+    })
+}
+
+/// The dbt settings that decide where probes connect and that configuration set (so a
+/// project can): the program, the project and profiles directories and the profile.
+/// They are pinned in each probe's trust digest. Flags and `DBT_*` variables are the
+/// user's own, so they aren't.
+fn probe_pins(settings: &StateSettings) -> BTreeMap<String, String> {
+    [
+        ("dbt.program", Some(&settings.program)),
+        ("dbt.project_dir", settings.project_dir.as_ref()),
+        ("dbt.profiles_dir", settings.profiles_dir.as_ref()),
+        ("dbt.profile", settings.profile.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(key, setting)| {
+        let setting = setting?;
+        matches!(setting.origin, Origin::Config(_)).then(|| (key.to_owned(), setting.value.clone()))
+    })
+    .collect()
+}
+
+/// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
+/// `None` when no probe is configured, or no target is: probes never borrow the build's
+/// own target, which can write. dbt can't say what its login may do, so every probe it
+/// runs needs `--allow-elevated-login` until a provider reports privileges. Each node
+/// is probed only on the relation its build made, as the manifest names it.
+///
+/// # Errors
+/// The probe target is the build's.
+fn probe_connection(
+    args: &ArgMatches,
+    config: &Loaded,
+    settings: &StateSettings,
+    health: &ods_health::HealthSettings,
+    manifest: &ods_provider_dbt::Manifest,
+) -> Result<Option<ProbeConnection>, CliError> {
+    if health.probe_definitions().is_empty() {
+        return Ok(None);
+    }
+    let Some(probes) = config.config.health.probes.as_ref() else {
+        return Ok(None);
+    };
+    let Some(target) = probes.target.as_deref() else {
+        return Ok(None);
+    };
+    if settings.target.as_ref().is_some_and(|t| t.value == target) {
+        return Err(CliError::new(
+            ExitStatus::Config,
+            codes::HEALTH_CONFIG,
+            format!(
+                "health.probes.target: `{target}` is the target the project builds with; probes never run on it"
+            ),
+        )
+        .with_hint("name a target in profiles.yml whose login can only read what the probes select"));
+    }
+    let mut executor = super::state_run::executor(args, settings).target(target);
+    let mut label = format!("dbt target `{target}`");
+    if let Some(profile) = &probes.profile {
+        executor = executor.profile(profile);
+        let _ = write!(label, " (profile `{profile}`)");
+    }
+    let relations = manifest
+        .nodes
+        .iter()
+        .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
+        .collect();
+    Ok(Some(
+        ProbeConnection::without_privileges(Arc::new(executor))
+            .labelled(label)
+            .expecting(relations),
+    ))
 }
 
 /// One node that isn't healthy, or every node in JSON.
@@ -113,6 +236,15 @@ pub(super) struct CheckReport {
     /// Each coverage target's verdict on the project as a whole (`[health.coverage]`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     coverage: Vec<CoverageFinding>,
+    /// With `--allow-elevated-login` only: the probes that ran under a login that can do
+    /// more than read, or couldn't be shown to only read: the login, and what was found
+    /// on each node's relation (empty when no probe needed it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elevated_login: Option<ElevatedLogin>,
+    /// Enabled probe checks that select no node health checks see (models, seeds and
+    /// snapshots): they checked nothing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unmatched_probes: Vec<String>,
     /// Whether the verdict fails: exit 5.
     failed: bool,
 }
@@ -150,9 +282,18 @@ impl CheckReport {
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
+        // Where probes connect, as far as configuration decides it, is part of what is
+        // trusted (ADR-0030 §4d).
+        health.pin_probe_connection(&probe_pins(&settings));
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
         super::serve_dashboard::check_probe_sql(&mut health, ws.manifest.adapter_type.as_deref())?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
+        let allow_elevated_login = args.get_flag("allow-elevated-login");
+        if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
+        {
+            health = health
+                .with_probe_connection(connection.allowing_elevated_login(allow_elevated_login));
+        }
         let failures = last_failures(&ws, &scope);
         let last_run_known = failures.is_some();
         let check_scope = ods_web::health::check_scope(&catalog, failures);
@@ -165,20 +306,11 @@ impl CheckReport {
         let recorded = if args.get_flag("no-record") || !ws.state_db.is_file() {
             None
         } else {
-            let dir = record::dir_for(&ws.state_db);
-            let written = record::write(&dir, &HealthRecord::new(&scope, checked_at, report.clone()))
-                .map_err(|e| {
-                    CliError::new(
-                        ExitStatus::Failure,
-                        codes::HEALTH_RECORD,
-                        format!(
-                            "the health record can't be written in {}: {e}",
-                            dir.display()
-                        ),
-                    )
-                    .with_hint("the records already there are unchanged; `--no-record` checks without keeping one")
-                })?;
-            Some(written)
+            Some(write_record(
+                &ws.state_db,
+                &HealthRecord::new(&scope, checked_at, report.clone()),
+                allow_elevated_login,
+            )?)
         };
         let failed = report.fails(strict);
         let counts = ods_health::counts(report.badges.values());
@@ -191,6 +323,8 @@ impl CheckReport {
             last_run_known,
             checks: report.checks,
             coverage: report.coverage,
+            elevated_login: allow_elevated_login.then(|| report.elevated_login.unwrap_or_default()),
+            unmatched_probes: report.unmatched_probes,
             counts,
             nodes: report
                 .badges
@@ -346,11 +480,9 @@ fn severity(severity: Severity) -> &'static str {
     }
 }
 
-impl Present for CheckReport {
-    const COMMAND: &'static str = "health.check";
-
-    fn view(&self) -> ViewNode {
-        let mut blocks = vec![ViewNode::Heading(format!("Health of {}", self.scope))];
+impl CheckReport {
+    /// How many nodes have each health, and where the findings were recorded.
+    fn counts_view(&self) -> ViewNode {
         let mut facts: Vec<(String, Vec<Span>)> = HEALTHS
             .iter()
             .map(|&health| {
@@ -375,7 +507,47 @@ impl Present for CheckReport {
                 None => Span::toned("no", Tone::Muted),
             }],
         ));
-        blocks.push(ViewNode::KeyValue(facts));
+        ViewNode::KeyValue(facts)
+    }
+}
+
+impl Present for CheckReport {
+    const COMMAND: &'static str = "health.check";
+
+    fn diagnostics(&self) -> Vec<Diagnostic> {
+        let mut out: Vec<Diagnostic> = self
+            .elevated_login
+            .iter()
+            .map(|elevated| {
+                Diagnostic::warning(codes::HEALTH_ELEVATED_LOGIN, elevated_warning(elevated))
+            })
+            .collect();
+        if !self.unmatched_probes.is_empty() {
+            out.push(Diagnostic::warning(
+                codes::HEALTH_UNMATCHED_PROBE,
+                unmatched_warning(&self.unmatched_probes),
+            ));
+        }
+        out
+    }
+
+    fn view(&self) -> ViewNode {
+        let mut blocks = vec![
+            ViewNode::Heading(format!("Health of {}", self.scope)),
+            self.counts_view(),
+        ];
+        if !self.unmatched_probes.is_empty() {
+            blocks.push(ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(unmatched_warning(&self.unmatched_probes))],
+            });
+        }
+        if let Some(elevated) = &self.elevated_login {
+            blocks.push(ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(elevated_warning(elevated))],
+            });
+        }
         if !self.last_run_known {
             blocks.push(ViewNode::Notice {
                 level: Level::Info,
@@ -444,4 +616,49 @@ impl Present for CheckReport {
         }
         ViewNode::Group(blocks)
     }
+}
+
+/// What every run with `--allow-elevated-login` says (ADR-0030 §4c): that ODS can't stop
+/// a probe from writing under a login that may, and that it is at the user's own risk.
+const ELEVATED_WARNING: &str = "--allow-elevated-login: probe checks may run under a login that \
+    can do more than read. ODS checks each probe is one read-only query, but it can't stop a query \
+    from writing under a login that may write. You run them at your own risk: ODS comes with no \
+    warranty (see its licence), and its authors aren't responsible for any consequence, including \
+    changed or destroyed data.";
+
+/// [`ELEVATED_WARNING`], and, when probes ran so, the connection, its login and what it
+/// can do on each node's relation.
+fn elevated_warning(elevated: &ElevatedLogin) -> String {
+    let mut text = ELEVATED_WARNING.to_owned();
+    if elevated.found.is_empty() {
+        text.push_str(" This run, no probe needed it.");
+        return text;
+    }
+    let who = match (&elevated.login, &elevated.connection) {
+        (Some(login), Some(via)) => format!("the login `{login}` of {via}"),
+        (Some(login), None) => format!("the login `{login}`"),
+        (None, Some(via)) => format!("the login of {via}"),
+        (None, None) => "the probe login".to_owned(),
+    };
+    let _ = write!(text, " This run, probes ran under {who}, which, on");
+    for (i, (node, found)) in elevated.found.iter().enumerate() {
+        let sep = if i == 0 { " " } else { "; on " };
+        let _ = write!(text, "{sep}`{node}`, {found}");
+    }
+    text.push('.');
+    text
+}
+
+/// What a run says about probe checks that selected nothing.
+fn unmatched_warning(ids: &[String]) -> String {
+    format!(
+        "probe check{} {} select{} no model, seed or snapshot, so {} checked nothing (sources can't be probed yet); with --strict, one at severity error fails",
+        if ids.len() == 1 { "" } else { "s" },
+        ids.iter()
+            .map(|id| format!("`{id}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if ids.len() == 1 { "s" } else { "" },
+        if ids.len() == 1 { "it" } else { "they" },
+    )
 }

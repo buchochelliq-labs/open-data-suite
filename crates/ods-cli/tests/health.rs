@@ -48,12 +48,20 @@ impl Project {
 
     /// `ods` with `args`, `--json`: exit code and envelope.
     fn ods(&self, args: &[&str]) -> (i32, Value) {
+        self.ods_with(args, &[])
+    }
+
+    /// `ods` with `args`, `--json` and the environment variables `env`.
+    fn ods_with(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, Value) {
         let out = Command::new(env!("CARGO_BIN_EXE_ods"))
             .args(args)
             .arg("--json")
             .current_dir(self.dir.path())
             .env_clear()
             .env("XDG_CONFIG_HOME", self.home.path())
+            // The fake dbt is `#!/usr/bin/env python3`.
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .envs(env.iter().copied())
             .output()
             .unwrap();
         let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
@@ -141,7 +149,7 @@ fn a_projects_probe_runs_only_once_trusted_and_a_change_untrusts_it() {
         "nothing is written in the repository"
     );
 
-    // Trusted: past that guard (probes themselves don't run yet).
+    // Trusted: past that guard (with no `[health.probes]` target, nothing to run on).
     let (_, envelope) = project.check(&[]);
     let reason = probe(&envelope)["reason"].as_str().unwrap().to_owned();
     assert!(!reason.contains("not trusted"), "{reason}");
@@ -249,5 +257,296 @@ fn an_unreadable_trust_store_trusts_nothing_and_is_never_overwritten() {
         std::fs::read_to_string(project.trust_store()).unwrap(),
         "{ not json",
         "left as it was"
+    );
+}
+
+// ------------------------------------------- running probes through dbt (ADR-0030 §4c)
+
+/// A project whose probe runs through the fake dbt on `[health.probes]`'s target, with
+/// its own copy of the artifacts (the probe writes beside them), and the fake warehouse:
+/// `orders` has `rows` rows.
+#[cfg(unix)]
+struct Probing {
+    project: Project,
+    target: PathBuf,
+    warehouse: PathBuf,
+    probed: PathBuf,
+    seen: PathBuf,
+}
+
+#[cfg(unix)]
+impl Probing {
+    fn new(health_probes: &str, rows: &str) -> Self {
+        let project = Project::new(&format!("{PROBE}{health_probes}"));
+        let target = project.dir.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        for file in ["manifest.json", "catalog.json", "run_results.json"] {
+            std::fs::copy(fixture().join(file), target.join(file)).unwrap();
+        }
+        let warehouse = project.home.path().join("warehouse.json");
+        let doc = serde_json::json!({
+            "orders": {"type": "table", "rows": {"select count(*) as n from {relation}": {"n": rows}}},
+        });
+        std::fs::write(&warehouse, doc.to_string()).unwrap();
+        Self {
+            probed: project.home.path().join("probed"),
+            seen: project.home.path().join("seen"),
+            project,
+            target,
+            warehouse,
+        }
+    }
+
+    fn check(&self, extra: &[&str]) -> (i32, Value) {
+        let dbt = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/fake-dbt/dbt");
+        let mut args = vec![
+            "health",
+            "check",
+            "--no-record",
+            "--allow-scripts",
+            "--dbt-output",
+            "capture",
+            "--target-dir",
+            self.target.to_str().unwrap(),
+            "--dbt",
+            dbt.to_str().unwrap(),
+        ];
+        args.extend(extra);
+        self.project.ods_with(
+            &args,
+            &[
+                ("FAKE_DBT_BASE", fixture().to_str().unwrap()),
+                ("FAKE_DBT_PROBE", self.warehouse.to_str().unwrap()),
+                ("FAKE_DBT_PROBED", self.probed.to_str().unwrap()),
+                ("FAKE_DBT_SEEN", self.seen.to_str().unwrap()),
+            ],
+        )
+    }
+}
+
+const READ_ONLY_TARGET: &str = "\n[health.probes]\ntarget = \"health_ro\"\n";
+
+#[cfg(unix)]
+#[test]
+fn without_a_probe_target_probes_never_run_and_say_how_to_set_one() {
+    let probing = Probing::new("", "5");
+    let (_, envelope) = probing.check(&["--allow-elevated-login"]);
+    let finding = probe(&envelope);
+    assert_eq!(finding["status"], "unknown", "{finding:#}");
+    assert!(
+        finding["reason"]
+            .as_str()
+            .unwrap()
+            .contains("[health.probes] target"),
+        "{finding:#}"
+    );
+    assert!(
+        !probing.seen.exists(),
+        "dbt never ran: no build target is borrowed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_login_that_cant_be_shown_to_only_read_is_refused_and_nothing_runs() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let (_, envelope) = probing.check(&[]);
+    let finding = probe(&envelope);
+    assert_eq!(finding["status"], "unknown", "{finding:#}");
+    let reason = finding["reason"].as_str().unwrap();
+    for part in [
+        "refused",
+        "can't report what its login may do",
+        "--allow-elevated-login",
+    ] {
+        assert!(reason.contains(part), "{part}: {reason}");
+    }
+    assert_eq!(finding["evidence"]["login_check"], "refused");
+    assert!(!probing.seen.exists(), "dbt never ran");
+    assert!(envelope["result"].get("elevated_login").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn allow_elevated_login_runs_the_probe_on_its_own_target_and_says_so() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let (code, envelope) = probing.check(&["--allow-elevated-login"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    let finding = probe(&envelope);
+    assert_eq!(finding["status"], "pass", "{finding:#}");
+    assert_eq!(finding["evidence"]["login_check"], "overridden");
+    assert_eq!(finding["evidence"]["row.n"], "5");
+    let result = &envelope["result"];
+    assert!(
+        result["elevated_login"]["found"]["model.jaffle_ods.orders"]
+            .as_str()
+            .unwrap()
+            .contains("couldn't be shown to only read")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&probing.probed).unwrap(),
+        "model.jaffle_ods.orders\n",
+        "only the node the probe selects"
+    );
+    let warning = &envelope["diagnostics"][0];
+    assert_eq!(warning["level"], "warning", "{envelope:#}");
+    assert_eq!(warning["code"], "ODS-W0704");
+    for part in ["own risk", "no warranty", "dbt target `health_ro`"] {
+        assert!(
+            warning["message"].as_str().unwrap().contains(part),
+            "{part}: {warning:#}"
+        );
+    }
+    assert_eq!(
+        finding["evidence"]["connection"], "dbt target `health_ro`",
+        "{finding:#}"
+    );
+    let seen = std::fs::read_to_string(&probing.seen).unwrap();
+    assert!(
+        seen.contains(r#""--target", "health_ro""#),
+        "the probe target, not the build's: {seen}"
+    );
+
+    // A failing row fails the gate at severity error.
+    let probing = Probing::new(READ_ONLY_TARGET, "0");
+    let (code, envelope) = probing.check(&["--allow-elevated-login"]);
+    assert_eq!(code, 5, "{envelope:#}");
+    assert_eq!(probe(&envelope)["status"], "fail");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_override_warns_in_text_too() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let dbt = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dbt/fake-dbt/dbt");
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--allow-scripts"])
+        .args(["--allow-elevated-login", "--dbt-output", "capture"])
+        .arg("--target-dir")
+        .arg(&probing.target)
+        .arg("--dbt")
+        .arg(&dbt)
+        .args(["--output", "plain"])
+        .current_dir(probing.project.dir.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", probing.project.home.path())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", fixture())
+        .env("FAKE_DBT_PROBE", &probing.warehouse)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: --allow-elevated-login"),
+        "warned before anything ran: {stderr}"
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    for part in [
+        "--allow-elevated-login",
+        "own risk",
+        "no warranty",
+        "changed or destroyed data",
+        "`model.jaffle_ods.orders`",
+    ] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn probes_never_run_on_the_build_target() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let (code, envelope) = probing.check(&["--allow-elevated-login", "--target", "health_ro"]);
+    assert_eq!(code, 4, "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("the target the project builds with"),
+        "{message}"
+    );
+    assert!(!probing.seen.exists(), "dbt never ran");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_node_resolved_elsewhere_on_the_probe_target_is_unknown() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let doc = serde_json::json!({
+        "orders": {
+            "type": "table",
+            "relation": "\"jaffle_ods\".\"readonly\".\"orders\"",
+            "rows": {"select count(*) as n from {relation}": {"n": "5"}},
+        },
+    });
+    std::fs::write(&probing.warehouse, doc.to_string()).unwrap();
+    let (_, envelope) = probing.check(&["--allow-elevated-login"]);
+    let finding = probe(&envelope);
+    assert_eq!(
+        finding["status"], "unknown",
+        "never other data: {finding:#}"
+    );
+    assert!(
+        finding["reason"]
+            .as_str()
+            .unwrap()
+            .contains("\"jaffle_ods\".\"readonly\".\"orders\""),
+        "{finding:#}"
+    );
+    assert!(!probing.probed.exists(), "nothing ran against it");
+}
+
+#[test]
+fn a_project_that_points_the_users_probes_at_a_target_needs_trust() {
+    let project = Project::new(READ_ONLY_TARGET);
+    std::fs::create_dir_all(project.home.path().join("ods")).unwrap();
+    std::fs::write(project.home.path().join("ods/config.toml"), PROBE).unwrap();
+    let (_, envelope) = project.check(&[]);
+    let reason = probe(&envelope)["reason"].as_str().unwrap().to_owned();
+    assert!(reason.contains("not trusted"), "{reason}");
+}
+
+#[test]
+fn a_probe_that_selects_nothing_says_so_and_fails_strict() {
+    let project = Project::new(&PROBE.replace("[\"orders\"]", "[\"no_such_model\"]"));
+    let (code, envelope) = project.check(&["--allow-scripts"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    assert_eq!(envelope["result"]["unmatched_probes"][0], "orders.has_rows");
+    let warning = &envelope["diagnostics"][0];
+    assert_eq!(warning["code"], "ODS-W0705", "{envelope:#}");
+    assert!(
+        warning["message"]
+            .as_str()
+            .unwrap()
+            .contains("checked nothing"),
+        "{warning:#}"
+    );
+    let (code, _) = project.check(&["--allow-scripts", "--strict"]);
+    assert_eq!(
+        code, 5,
+        "an error-severity probe that checked nothing fails --strict"
+    );
+}
+
+#[test]
+fn changing_the_dbt_profile_a_project_configures_needs_trust_again() {
+    let dbt =
+        "\n[providers.dbt]\nkind = \"dbt\"\n\n[providers.dbt.settings]\nprofile = \"jaffle\"\n";
+    let project = Project::new(&format!("{PROBE}{dbt}"));
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    let (_, envelope) = project.check(&[]);
+    assert!(
+        !probe(&envelope)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not trusted")
+    );
+    project.write(&format!("{PROBE}{}", dbt.replace("jaffle", "elsewhere")));
+    let (_, envelope) = project.check(&[]);
+    assert!(
+        probe(&envelope)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not trusted"),
+        "{envelope:#}"
     );
 }

@@ -102,6 +102,12 @@ pub mod codes {
     /// `ods health trust` couldn't read or write the trust store, or there is no user
     /// configuration directory to keep it in.
     pub const HEALTH_TRUST: &str = "ODS-E0703";
+    /// A warning: `ods health check --allow-elevated-login` let probes run under a login
+    /// that wasn't shown to only read.
+    pub const HEALTH_ELEVATED_LOGIN: &str = "ODS-W0704";
+    /// A warning: a probe check selected no node health checks see, so it checked
+    /// nothing.
+    pub const HEALTH_UNMATCHED_PROBE: &str = "ODS-W0705";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

@@ -42,7 +42,8 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_VERSION  the version `--version` reports [default: 1.10.23]
   FAKE_DBT_PROBE  JSON file standing in for the warehouse, for ODS's relation probe
                   (`show --inline` of an `ods_relation_probe` query): source name (e.g.
-                  `raw.orders`) -> {"type": "table", "formats": ["delta"], "rows":
+                  `raw.orders`) or model, seed or snapshot name (e.g. `orders`) ->
+                  {"type": "table", "relation": "<its name, when a test checks it>", "formats": ["delta"], "rows":
                   {"<statement template>": {"<column>": "<value>"}}}. A source not in it
                   has no relation; a statement with no row returns none. Read on each call,
                   so a test can change it between runs.
@@ -322,6 +323,7 @@ def probe(query, manifest, target):
     fmt = re.search(r"rel\.is_(\w+) is sameas true", query)
     statements = json.loads(re.search(r"set qs = (.*?) -%}", query).group(1))
     ids = set(json.loads(re.search(r"set ids = (\[[^\]]*\]) -%}", query).group(1)))
+    expect = json.loads(re.search(r"set expect = (\{.*?\}) -%}", query).group(1))
     warehouse = {}
     if os.environ.get("FAKE_DBT_PROBE"):
         with open(os.environ["FAKE_DBT_PROBE"]) as f:
@@ -329,12 +331,18 @@ def probe(query, manifest, target):
     write(os.path.join(target, "manifest.json"), manifest)
     quote = lambda v: urllib.parse.quote(str(v), safe="/")
     out = {}
-    for source_id, s in manifest["sources"].items():
+    probeable = {k: f"{s['source_name']}.{s['name']}" for k, s in manifest["sources"].items()}
+    probeable.update({k: n["name"] for k, n in manifest["nodes"].items()
+                      if n["resource_type"] in ("model", "seed", "snapshot")})
+    for source_id, name in probeable.items():
         if source_id not in ids:
             continue
-        rel = warehouse.get(f"{s['source_name']}.{s['name']}")
+        rel = warehouse.get(name)
         if rel is None:
             out[quote(source_id)] = {"missing": 1}
+        elif source_id in expect and rel.get("relation") \
+                and rel["relation"].lower() != expect[source_id].lower():
+            out[quote(source_id)] = {"moved": quote(rel["relation"])}
         elif rel.get("type") not in kinds:
             out[quote(source_id)] = {"kind": quote(rel.get("type") or "")}
         elif fmt and fmt.group(1) not in rel.get("formats", []):
@@ -348,10 +356,10 @@ def probe(query, manifest, target):
                 row = rel.get("rows", {}).get(template, {})
                 rows.append({c: quote(row[c]) for c in columns if row.get(c) is not None})
             out[quote(source_id)] = {"rows": rows}
-    shown("ods_probe", {"ods_relation_probe": 1, "probed": len(manifest["sources"]), "sources": out})
+    shown("ods_probe", {"ods_relation_probe": 1, "probed": len(probeable), "sources": out})
     # A real probe takes seconds: what runs next starts in a later second than ODS's
     # reading, which it compares to the second.
-    if manifest["sources"]:
+    if probeable:
         next_second()
     return 0
 

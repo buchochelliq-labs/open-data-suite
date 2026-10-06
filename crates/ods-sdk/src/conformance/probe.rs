@@ -25,6 +25,12 @@ pub trait ProbeHarness: Send + Sync {
     /// the filter asks for tables), if the harness has one. `None` skips the case that
     /// needs it.
     fn excluded(&self) -> Option<ProbeTarget>;
+
+    /// A matching target that names a relation other than the one the implementation
+    /// finds for it, if the harness has one. `None` (the default) skips the case.
+    fn elsewhere(&self) -> Option<ProbeTarget> {
+        None
+    }
 }
 
 fn ids(targets: &[ProbeTarget]) -> Vec<String> {
@@ -141,6 +147,26 @@ async fn relations_the_filter_excludes_are_skipped(harness: &dyn ProbeHarness) -
     true
 }
 
+async fn a_target_found_elsewhere_is_never_probed(harness: &dyn ProbeHarness) -> bool {
+    let case = "a_target_found_elsewhere_is_never_probed";
+    let Some(elsewhere) = harness.elsewhere() else {
+        return false;
+    };
+    let probe = harness.probe().await;
+    let report = run_probe(
+        case,
+        probe.as_ref(),
+        &harness.request(),
+        std::slice::from_ref(&elsewhere),
+    )
+    .await;
+    assert!(
+        matches!(answer(&report, &elsewhere.id), ProbeAnswer::Unknown(why) if !why.is_empty()),
+        "{case}: {report:?}"
+    );
+    true
+}
+
 /// Runs every case against `harness`.
 pub async fn run(harness: &dyn ProbeHarness) -> Report {
     let mut report = Report::default();
@@ -160,6 +186,16 @@ pub async fn run(harness: &dyn ProbeHarness) -> Report {
         report.skipped.push((
             "relations_the_filter_excludes_are_skipped",
             "the harness has no relation the filter excludes".to_owned(),
+        ));
+    }
+    if a_target_found_elsewhere_is_never_probed(harness).await {
+        report
+            .passed
+            .push("a_target_found_elsewhere_is_never_probed");
+    } else {
+        report.skipped.push((
+            "a_target_found_elsewhere_is_never_probed",
+            "the harness has no target found under another relation".to_owned(),
         ));
     }
     report

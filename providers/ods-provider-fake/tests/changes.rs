@@ -95,7 +95,8 @@ impl ProbeHarness for Probe {
                     [("id", "a1"), ("format", "columnar"), ("extra", "x")],
                 )
                 .with_relation("source.suite.raw.b", "table", Some("columnar"))
-                .with_relation("source.suite.raw.view", "view", None),
+                .with_relation("source.suite.raw.view", "view", None)
+                .named("source.suite.raw.a", "suite.raw.a"),
         )
     }
 
@@ -113,13 +114,17 @@ impl ProbeHarness for Probe {
     fn excluded(&self) -> Option<ProbeTarget> {
         Some(ProbeTarget::new("source.suite.raw.view", "raw.view"))
     }
+
+    fn elsewhere(&self) -> Option<ProbeTarget> {
+        Some(ProbeTarget::new("source.suite.raw.a", "raw.a").expecting("other.raw.a"))
+    }
 }
 
 #[tokio::test]
 async fn the_relation_probe_conforms() {
     let report = run_probe(&Probe).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 4, "{report:?}");
+    assert_eq!(report.passed.len(), 5, "{report:?}");
 }
 
 #[tokio::test]

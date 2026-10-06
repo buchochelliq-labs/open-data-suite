@@ -237,6 +237,7 @@ mod tests {
                 checks: Vec::new(),
                 coverage: Vec::new(),
                 elevated_login: None,
+                unmatched_probes: Vec::new(),
             },
         )
     }

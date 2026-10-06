@@ -14,8 +14,8 @@
 //! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
 //!   asks the adapter which relations exist (#230).
 //! - [`probe`](RelationProbe::probe) runs one `dbt show --inline` query (more for a
-//!   long list of targets) that runs a few statements against each requested source's
-//!   relation, and no other (ADR-0022, ADR-0030 §5).
+//!   long list of targets) that runs a few statements against each requested node's
+//!   relation (a source, model, seed or snapshot), and no other (ADR-0022, ADR-0030 §5).
 //!
 //! dbt's own output goes to ODS's stderr (or is captured), never to stdout, which
 //! carries ODS's report.
@@ -1496,6 +1496,9 @@ fn probe_answer(found: crate::probe::Found, request: &ProbeRequest) -> ProbeAnsw
     use crate::probe::Found;
     match found {
         Found::Missing => ProbeAnswer::Unknown("dbt's adapter has no such relation".to_owned()),
+        Found::Moved(relation) => ProbeAnswer::Unknown(format!(
+            "dbt resolves it to `{relation}` here, not the relation expected, so it wasn't probed"
+        )),
         Found::Kind(kind) => ProbeAnswer::Skipped(format!(
             "a {}, not a {}",
             if kind.is_empty() {
@@ -1532,30 +1535,42 @@ fn probe_answer(found: crate::probe::Found, request: &ProbeRequest) -> ProbeAnsw
 /// limited (32 KiB in all on Windows), so a long list is split over several calls.
 const PROBE_IDS_PER_CALL: usize = 8 * 1024;
 
-/// `ids` in groups of at most [`PROBE_IDS_PER_CALL`] bytes, in order.
-fn probe_batches<'a>(ids: &[&'a str]) -> Vec<Vec<&'a str>> {
-    let mut batches: Vec<Vec<&str>> = Vec::new();
+/// `targets` (an id, and the relation it must be) in groups of at most
+/// [`PROBE_IDS_PER_CALL`] bytes, in order.
+fn probe_batches<'a>(
+    targets: &[(&'a str, Option<&'a str>)],
+) -> Vec<Vec<(&'a str, Option<&'a str>)>> {
+    let mut batches: Vec<Vec<(&str, Option<&str>)>> = Vec::new();
     let mut size = 0;
-    for id in ids {
-        let cost = id.len() + 3;
+    for target in targets {
+        let cost = target.0.len() + target.1.map_or(0, |r| r.len() + target.0.len() + 6) + 3;
         if batches.is_empty() || size + cost > PROBE_IDS_PER_CALL {
             batches.push(Vec::new());
             size = 0;
         }
         size += cost;
         if let Some(batch) = batches.last_mut() {
-            batch.push(id);
+            batch.push(*target);
         }
     }
     batches
 }
 
+/// Whether a node's id, and the relation it must be, can travel in the query.
+fn sendable(id: &str, relations: &BTreeSet<Option<&str>>) -> bool {
+    crate::probe::plain_id(id)
+        && relations
+            .iter()
+            .all(|r| r.is_none_or(crate::probe::plain_relation))
+}
+
 impl DbtExecutor {
-    /// One relation probe call, for the sources in `ids`.
+    /// One relation probe call, for the nodes in `ids`, each with the relation it must
+    /// be, if any.
     async fn probe_batch(
         &self,
         request: &ProbeRequest,
-        ids: &[&str],
+        ids: &[(&str, Option<&str>)],
         target: &Path,
     ) -> Result<(crate::probe::Probed, BTreeSet<String>), ProviderError> {
         let mut args = vec![
@@ -1581,7 +1596,7 @@ impl DbtExecutor {
         let probed = crate::probe::parse(&stdout).map_err(|why| {
             ProviderError::Other(format!("the relation probe (`dbt show`) failed: {why}"))
         })?;
-        // Which sources dbt looked at: those of the project as it parsed it.
+        // Which nodes dbt looked at: those of the project as it parsed it.
         let manifest = crate::Manifest::read(&target.join("manifest.json")).map_err(|e| {
             ProviderError::Other(format!(
                 "the relation probe (`dbt show`) wrote no readable manifest: {e}"
@@ -1590,12 +1605,20 @@ impl DbtExecutor {
         let known: BTreeSet<String> = manifest
             .nodes
             .iter()
-            .filter(|n| n.resource_type == crate::ResourceType::Source)
+            .filter(|n| {
+                matches!(
+                    n.resource_type,
+                    crate::ResourceType::Source
+                        | crate::ResourceType::Model
+                        | crate::ResourceType::Seed
+                        | crate::ResourceType::Snapshot
+                )
+            })
             .map(|n| n.unique_id.clone())
             .collect();
         if probed.probed != known.len() {
             return Err(ProviderError::Other(format!(
-                "the relation probe saw {} sources, its manifest has {}",
+                "the relation probe saw {} sources, models, seeds and snapshots, its manifest has {}",
                 probed.probed,
                 known.len()
             )));
@@ -1613,14 +1636,20 @@ impl RelationProbe for DbtExecutor {
     ) -> Result<ProbeReport, ProviderError> {
         self.refuse_env()?;
         let target = self.aside(RELATION_PROBE_DIR, "relation probe")?;
-        // Only ids that can travel in the query are sent; the others are unknown.
-        let mut ids: Vec<&str> = targets
+        // Only what can travel in the query is sent; the others are unknown. A node asked
+        // about twice, expecting two relations, isn't sent either.
+        let mut expected: BTreeMap<&str, BTreeSet<Option<&str>>> = BTreeMap::new();
+        for t in targets {
+            expected
+                .entry(t.id.as_str())
+                .or_default()
+                .insert(t.relation.as_deref());
+        }
+        let ids: Vec<(&str, Option<&str>)> = expected
             .iter()
-            .map(|t| t.id.as_str())
-            .filter(|id| crate::probe::plain_id(id))
+            .filter(|(id, relations)| relations.len() == 1 && sendable(id, relations))
+            .filter_map(|(id, relations)| relations.first().map(|r| (*id, *r)))
             .collect();
-        ids.sort_unstable();
-        ids.dedup();
         self.step(DbtStep::RelationProbe {
             relations: targets.len(),
         });
@@ -1652,8 +1681,20 @@ impl RelationProbe for DbtExecutor {
                     _ if !crate::probe::plain_id(&t.id) => ProbeAnswer::Unknown(
                         "dbt wasn't asked: its id has characters the probe doesn't send".to_owned(),
                     ),
+                    _ if !t.relation.as_deref().is_none_or(crate::probe::plain_relation) => {
+                        ProbeAnswer::Unknown(
+                            "dbt wasn't asked: its relation has characters the probe doesn't send"
+                                .to_owned(),
+                        )
+                    }
+                    _ if expected.get(t.id.as_str()).is_some_and(|r| r.len() > 1) => {
+                        ProbeAnswer::Unknown(
+                            "dbt wasn't asked: it was asked about as two relations".to_owned(),
+                        )
+                    }
                     _ if !known.contains(t.id.as_str()) => ProbeAnswer::Unknown(
-                        "dbt didn't probe it: not a source of the project it parsed".to_owned(),
+                        "dbt didn't probe it: not a source, model, seed or snapshot of the project it parsed"
+                            .to_owned(),
                     ),
                     Some(found) => probe_answer(found, request),
                     None => ProbeAnswer::Unknown("dbt didn't report on it".to_owned()),

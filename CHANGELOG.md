@@ -29,6 +29,25 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- Probe checks run (#392, ADR-0030 §4c): on their own dbt target, `[health.probes]`
+  `target` (and optional `profile`), never the build's; without one they don't run.
+  dbt probes sources, models, seeds and snapshots, matching the query's columns whatever
+  their case. Every probe is refused (*unknown*) unless its login is shown to only read,
+  which no provider reports yet; `ods health check --allow-elevated-login` runs them
+  anyway, at the user's own risk, warning on every run with the login and what was
+  found (in `--json`, a `warning` diagnostic `ODS-W0704`), and marking each such
+  finding `login_check: overridden`. A probe reads only the relation the build made: a
+  node dbt resolves elsewhere under the probe target is *unknown*. A probe target equal
+  to the build's is a configuration error, and the trust digest covers `[health.probes]`,
+  and the dbt `program`, `project_dir`, `profiles_dir` and `profile` configuration
+  sets, so pointing trusted probes at another target or login needs trust again. A node
+  the manifest names no relation for (e.g. ephemeral) is never probed; sources can't be
+  probed yet, and a probe that selects nothing is reported (`ODS-W0705`) and fails
+  `--strict` at severity `error`. `ods health check`
+  takes `--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars` and `--dbt-output`.
+- A `ProbeTarget` can name the relation it must be (`expecting`); `relation_probe`
+  answers *unknown* for a node it finds elsewhere, and its conformance suite checks it
+  when a harness has such a target (`ProbeHarness::elsewhere`).
 - The `relation_privileges` contract and capability (#392, ADR-0030 §4c), with a fake
   (`FakeRelationPrivileges`) and a conformance suite: a provider reports whether its
   login can only read each relation, or what it holds beyond reading. The health engine

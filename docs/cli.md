@@ -134,6 +134,8 @@ meanings get new numbers.
 | `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
+| `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
+| `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
 ## Environment variables
 
@@ -1379,13 +1381,51 @@ guard stopped it, never a pass:
 - **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
   you have trusted that exact definition for that project with
   [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
-- **A read-only login.** Probes run under a connection that can do no more than read
-  what they probe (ADR-0030 §4c): just before each probe, ODS asks the connection what
-  its login may do on each relation, and refuses the probe, *unknown* with the login and
-  what it found, when the login can do more than read or that can't be told. The engine
-  for this is built; `ods health check` gets a probe connection, and
-  `--allow-elevated-login`, in the next step of #392. Until then a trusted probe reads
-  *unknown: there is no warehouse connection to run probes through here*.
+- **A read-only login.** Probes run under their own dbt target, `[health.probes]`, never
+  the build's (which can write), and only when that target's login can do no more than
+  read what they probe (ADR-0030 §4c). Just before each probe, ODS asks the connection
+  what its login may do on each relation, and refuses the probe, *unknown* with the login
+  and what it found, when the login can do more than read or that can't be told. Without
+  a `[health.probes]` target, probes don't run at all.
+
+```toml
+[health.probes]
+target = "health_readonly"   # a target in profiles.yml whose login can only read
+profile = "jaffle"           # optional: when not the project's (or --dbt-profile's)
+```
+
+Reporting what a login may do is a provider capability (`relation_privileges`), and no
+provider has it yet (Unity Catalog's comes in the next step of #392), so for now every
+probe is refused unless you run `ods health check --allow-elevated-login`:
+- it runs probes even when their login can do more than read, or that can't be told,
+  **at your own risk**: ODS checks each probe is one read-only query, but it can't stop a
+  query from writing under a login that may write. ODS comes with no warranty (see its
+  licence), and its authors aren't responsible for any consequence, including changed or
+  destroyed data;
+- it is a command-line flag only, never a setting, so a repository can't turn it on for
+  you, and it skips only this guard: the SQL must still be read-only and trusted;
+- every run that uses it warns on stderr before anything runs, and again with the
+  report, naming the connection, its login if known, and what it found for each node
+  (in `--json`, a `warning` diagnostic, `ODS-W0704`); every probe that ran so carries
+  `login_check: overridden` and `login_found` in its evidence, and `--json` and the
+  health record keep them in `elevated_login`.
+
+Probes read sources, models, seeds and snapshots, through dbt (`dbt show`), and only the
+relation the build made, as the manifest names it (`relation_name`): dbt resolves a node
+again under the probe target, and when that gives another relation (e.g. the target has
+another schema) the probe is *unknown* and nothing runs against it, so give the probe
+target the build's database and schema. An ephemeral model has no relation, so its probe
+is *unknown* too, and so is any node the manifest names no relation for. Sources can't
+be probed yet: a probe whose `select` names `resource_type = ["source"]` is a
+configuration error, and a probe that selects no model, seed or snapshot is reported
+(`unmatched_probes`, warning `ODS-W0705`) and, at severity `error`, fails `--strict`.
+A probe target that is the build's own (`--target`, `DBT_TARGET` or the
+configured one) is a configuration error (exit 4); dbt's default target can't be told
+apart, so name the build's target when you set one for probes. Running probes runs dbt,
+with the profile it finds (`--profiles-dir`, `DBT_PROFILES_DIR`, or dbt's own lookup,
+which starts in the project), as `ods state` does.
+dbt prints its output as for `ods state` (`--dbt-output`), and each probe is limited to
+60 seconds, after which dbt is stopped and the probe is *unknown*.
 
 `pass` compares a column the query returns with a number, a `'string'` or `true`/`false`;
 only numbers can be ordered. A column that is missing, or isn't a number where one is
@@ -1422,7 +1462,7 @@ so it never reads past a target it misses. A measure that doesn't exist, or a ta
 outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
 `ODS-E0102`).
 
-The trust store, warehouse probes, scripts and plugins come in later phases of #392.
+Scripts and plugins come in later phases of #392.
 
 ### ods health trust
 
@@ -1438,8 +1478,12 @@ ods health trust --revoke   # forget them: its probes won't run
   `config.toml` (`$XDG_CONFIG_HOME/ods/`, else `~/.config/ods/`, `%APPDATA%\ods\` on
   Windows), never in the repository. Each project has an entry, keyed by the directory
   its `ods.toml` is in, with a `sha256:` digest per check of what decides what runs and
-  where: its SQL and what it selects. Changing either makes the probe untrusted again;
-  changing its `pass` or `severity` doesn't.
+  where: its SQL, what it selects, `[health.probes]`'s `target` and `profile`, and the
+  dbt settings configuration gives (`program`, `project_dir`, `profiles_dir`, `profile`;
+  flags and `DBT_*` variables are yours, so they aren't pinned).
+  Changing any of them makes the probe untrusted again; changing its `pass` or
+  `severity` doesn't. Probes in your own `config.toml` need trust too when a project
+  file sets `[health.probes]`: a repository can't point them at another target.
 - **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
   defined is no longer trusted. Cloning a repository never trusts anything.
 - **In CI**, where the repository is what is being checked, `ods health check
@@ -1458,11 +1502,14 @@ ods health check                  # exit 5 when a check at severity error fails
 ods health check --strict --json  # also when one couldn't decide; one JSON document
 ods health check --no-record      # don't keep the findings
 ods health check --allow-scripts  # trust this project's probes as they are now, this run only
+ods health check --allow-elevated-login  # run probes whose login can do more than read: your risk
 ```
 
 It takes the options `ods state` commands take to find the project and the state store
-(`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …), and reads them
-only: no database is created or migrated, and dbt isn't run.
+(`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …) and to call dbt
+(`--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars`, `--dbt-output`), and reads them
+only: no database is created or migrated, and dbt runs only for
+[probe checks](#probe-checks), on `[health.probes]`'s target.
 
 | Outcome | Exit |
 |---|---|
