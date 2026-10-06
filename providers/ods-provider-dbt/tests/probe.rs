@@ -42,8 +42,10 @@ fn warehouse(dir: &Path, version: &str) {
             },
         })
     };
+    let mut orders = table("0f1e-orders");
+    orders["relation"] = serde_json::json!("\"jaffle\".\"raw\".\"orders\"");
     let doc = serde_json::json!({
-        "raw.orders": table("0f1e-orders"),
+        "raw.orders": orders,
         "raw.payments": table("it's \\ \"odd\""),
         "raw.customers": {"type": "view"},
     });
@@ -106,13 +108,17 @@ impl ProbeHarness for Harness {
     fn excluded(&self) -> Option<ProbeTarget> {
         Some(source("customers"))
     }
+
+    fn elsewhere(&self) -> Option<ProbeTarget> {
+        Some(source("orders").expecting("\"nowhere\".\"raw\".\"orders\""))
+    }
 }
 
 #[tokio::test]
 async fn conforms() {
     let report = run(&Harness).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 4, "{report:?}");
+    assert_eq!(report.passed.len(), 5, "{report:?}");
 }
 
 fn row(pairs: &[(&str, &str)]) -> ProbeRow {
@@ -380,5 +386,47 @@ async fn models_seeds_and_snapshots_are_probed_by_their_alias() {
                 ProbeAnswer::Rows(vec![row(&[("id", "s1")])])
             ),
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_node_dbt_resolves_elsewhere_is_never_probed() {
+    let dir = scratch("moved");
+    warehouse(&dir, "7");
+    let probed = dir.join("probed");
+    let report = probe(&dir)
+        .env("FAKE_DBT_PROBED", probed.display().to_string())
+        .probe(
+            &request(),
+            &[
+                source("orders").expecting("\"JAFFLE\".\"RAW\".\"ORDERS\""),
+                source("payments").expecting("{{ x }}"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(&report.targets[0].1, ProbeAnswer::Rows(_)),
+        "the same relation, whatever its case: {report:?}"
+    );
+    assert!(
+        matches!(&report.targets[1].1, ProbeAnswer::Unknown(why) if why.contains("relation has characters")),
+        "{report:?}"
+    );
+    let report = probe(&dir)
+        .probe(
+            &request(),
+            &[source("orders").expecting("\"jaffle\".\"other\".\"orders\"")],
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(&report.targets[0].1, ProbeAnswer::Unknown(why) if why.contains("resolves it to `\"jaffle\".\"raw\".\"orders\"`")),
+        "{report:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&probed).unwrap(),
+        "source.jaffle_ods.raw.orders\n",
+        "only the first call ran anything"
     );
 }

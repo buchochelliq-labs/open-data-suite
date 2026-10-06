@@ -35,8 +35,15 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   their case. Every probe is refused (*unknown*) unless its login is shown to only read,
   which no provider reports yet; `ods health check --allow-elevated-login` runs them
   anyway, at the user's own risk, warning on every run with the login and what was
-  found, and marking each such finding `login_check: overridden`. `ods health check`
+  found (in `--json`, a `warning` diagnostic `ODS-W0704`), and marking each such
+  finding `login_check: overridden`. A probe reads only the relation the build made: a
+  node dbt resolves elsewhere under the probe target is *unknown*. A probe target equal
+  to the build's is a configuration error, and the trust digest covers `[health.probes]`,
+  so pointing trusted probes at another target needs trust again. `ods health check`
   takes `--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars` and `--dbt-output`.
+- A `ProbeTarget` can name the relation it must be (`expecting`); `relation_probe`
+  answers *unknown* for a node it finds elsewhere, and its conformance suite checks it
+  when a harness has such a target (`ProbeHarness::elsewhere`).
 - The `relation_privileges` contract and capability (#392, ADR-0030 §4c), with a fake
   (`FakeRelationPrivileges`) and a conformance suite: a provider reports whether its
   login can only read each relation, or what it holds beyond reading. The health engine

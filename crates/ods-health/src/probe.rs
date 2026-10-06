@@ -39,6 +39,10 @@ pub struct ProbeConnection {
     probe: Arc<dyn RelationProbe>,
     privileges: Option<Arc<dyn RelationPrivileges>>,
     allow_elevated_login: bool,
+    /// What the connection is, for people, when its login isn't known.
+    label: Option<String>,
+    /// The relation each node's build made, by node id: a probe reads that one only.
+    relations: BTreeMap<String, String>,
 }
 
 impl ProbeConnection {
@@ -53,6 +57,8 @@ impl ProbeConnection {
             probe: connection.clone(),
             privileges: Some(connection),
             allow_elevated_login: false,
+            label: None,
+            relations: BTreeMap::new(),
         }
     }
 
@@ -63,7 +69,26 @@ impl ProbeConnection {
             probe,
             privileges: None,
             allow_elevated_login: false,
+            label: None,
+            relations: BTreeMap::new(),
         }
+    }
+
+    /// Names the connection for people (e.g. "dbt target `health_ro`"), where its
+    /// login isn't reported.
+    #[must_use]
+    pub fn labelled(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// The relation each node's build made, by node id: a probe reads that relation
+    /// only, and a node the connection resolves elsewhere (e.g. under another schema)
+    /// is *unknown*, never judged on other data.
+    #[must_use]
+    pub fn expecting(mut self, relations: BTreeMap<String, String>) -> Self {
+        self.relations = relations;
+        self
     }
 
     /// Runs probes even when the login check finds more than read access, or can't
@@ -85,6 +110,8 @@ impl fmt::Debug for ProbeConnection {
                 &self.privileges.as_ref().map(|p| p.info().kind),
             )
             .field("allow_elevated_login", &self.allow_elevated_login)
+            .field("label", &self.label)
+            .field("relations", &self.relations)
             .finish()
     }
 }
@@ -98,6 +125,10 @@ pub struct ElevatedLogin {
     /// The login, as the warehouse names it, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<String>,
+    /// The connection, as the host names it (e.g. "dbt target `health_ro`"), when it
+    /// gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
     /// What the check found, by node id: what the login holds beyond reading, or why
     /// it couldn't tell.
     pub found: BTreeMap<String, String>,
@@ -148,6 +179,13 @@ struct Digested<'a> {
     sql: &'a str,
     select: Option<&'a ods_config::HealthSelector>,
     exclude: Option<&'a ods_config::HealthSelector>,
+    /// The connection it runs through, `[health.probes]`: a repository that points
+    /// trusted probes at another target or profile has them untrusted again. Left out
+    /// when not set, so a digest without one is as it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<&'a str>,
 }
 
 impl Probe {
@@ -157,6 +195,7 @@ impl Probe {
         severity: Option<Severity>,
         select: Option<Selector>,
         exclude: Option<Selector>,
+        connection: Option<&ods_config::HealthProbesConfig>,
     ) -> Result<Self, HealthConfigError> {
         if !config.require.is_empty() {
             return Err(HealthConfigError(format!(
@@ -189,6 +228,8 @@ impl Probe {
             sql,
             select: config.select.as_ref(),
             exclude: config.exclude.as_ref(),
+            target: connection.and_then(|c| c.target.as_deref()),
+            profile: connection.and_then(|c| c.profile.as_deref()),
         };
         let bytes =
             serde_json::to_vec(&digested).map_err(|e| HealthConfigError(format!("{at}: {e}")))?;
@@ -303,7 +344,7 @@ impl Probe {
             )
         } else if !connected {
             format!(
-                "{}: no connection to run probes through; set `[health.probes] target` to a dbt target whose login can only read (ADR-0030 §4c)",
+                "{}: no connection to run probes through; set `[health.probes] target` to a target whose login can only read (ADR-0030 §4c)",
                 self.id
             )
         } else {
@@ -325,9 +366,20 @@ impl Probe {
     ) -> BTreeMap<String, Finding> {
         let targets: Vec<ProbeTarget> = nodes
             .iter()
-            .map(|n| ProbeTarget::new(n.id.clone(), n.name.clone()))
+            .map(|n| {
+                let target = ProbeTarget::new(n.id.clone(), n.name.clone());
+                match connection.relations.get(&n.id) {
+                    Some(relation) => target.expecting(relation.clone()),
+                    None => target,
+                }
+            })
             .collect();
         let (login, access) = login_check(connection, &targets, timeout).await;
+        let who = match (&login, &connection.label) {
+            (Some(login), _) => format!("the login `{login}`"),
+            (None, Some(label)) => format!("the login of {label}"),
+            (None, None) => "the probe login".to_owned(),
+        };
         let mut out = BTreeMap::new();
         // Each target to probe, how the login check went, and what it found if overridden.
         let mut allowed: Vec<(ProbeTarget, &'static str, Option<String>)> = Vec::new();
@@ -346,12 +398,12 @@ impl Probe {
                 _ => "couldn't be shown to only read".to_owned(),
             };
             if connection.allow_elevated_login {
-                let entry = elevated.get_or_insert_with(|| ElevatedLogin {
-                    login: None,
-                    found: BTreeMap::new(),
-                });
+                let entry = elevated.get_or_insert_with(ElevatedLogin::default);
                 if entry.login.is_none() {
                     entry.login.clone_from(&login);
+                }
+                if entry.connection.is_none() {
+                    entry.connection.clone_from(&connection.label);
                 }
                 entry.found.insert(target.id.clone(), found.clone());
                 allowed.push((target, "overridden", Some(found)));
@@ -362,13 +414,12 @@ impl Probe {
             if let Some(login) = &login {
                 evidence.insert("login".to_owned(), login.clone());
             }
+            if let Some(label) = &connection.label {
+                evidence.insert("connection".to_owned(), label.clone());
+            }
             let reason = format!(
                 "{}: refused: probes run only under a read-only login, and on this relation {} {found}. Use a read-only login for probes, or `--allow-elevated-login` at your own risk",
-                self.id,
-                login.as_deref().map_or_else(
-                    || "the probe login".to_owned(),
-                    |l| format!("the login `{l}`")
-                ),
+                self.id, who,
             );
             out.insert(
                 target.id,
@@ -388,6 +439,9 @@ impl Probe {
             }
             if let Some(login) = &login {
                 evidence.insert("login".to_owned(), login.clone());
+            }
+            if let Some(label) = &connection.label {
+                evidence.insert("connection".to_owned(), label.clone());
             }
             let (status, reason) = match &answered {
                 Err(why) => (Status::Unknown, format!("{}: {why}", self.id)),

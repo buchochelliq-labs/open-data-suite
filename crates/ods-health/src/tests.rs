@@ -1207,6 +1207,17 @@ fn a_probes_digest_pins_what_runs_and_where_not_its_verdict() {
         digest(&ORDERS_HAS_ROWS.replace("\"error\"", "\"warn\"")),
         "not the severity"
     );
+    // Where it runs: moving it to another target or profile needs trust again.
+    let on = |probes: &str| digest(&format!("[probes]\n{probes}\n{ORDERS_HAS_ROWS}"));
+    let readonly = on("target = \"health_ro\"");
+    assert_ne!(base, readonly, "the target");
+    assert_ne!(readonly, on("target = \"prod\""), "another target");
+    assert_ne!(
+        readonly,
+        on("target = \"health_ro\"\nprofile = \"other\""),
+        "the profile"
+    );
+    assert_eq!(base, on(""), "an empty `[health.probes]` is no change");
 }
 
 #[tokio::test]
@@ -1568,6 +1579,56 @@ mod running {
             orders.reason.contains("which it wasn't asked about"),
             "{}",
             orders.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn a_node_the_connection_resolves_elsewhere_is_unknown_and_the_label_names_it() {
+        let probe = warehouse("12").named("model.p.orders", "ro_schema.orders");
+        let s = ready().with_probe_connection(
+            ProbeConnection::without_privileges(Arc::new(probe.clone()))
+                .allowing_elevated_login(true)
+                .labelled("dbt target `health_ro`")
+                .expecting(BTreeMap::from([(
+                    "model.p.orders".to_owned(),
+                    "analytics.orders".to_owned(),
+                )])),
+        );
+        let (found, report) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(
+            orders.status,
+            Status::Unknown,
+            "never other data: {orders:?}"
+        );
+        assert!(
+            orders.reason.contains("ro_schema.orders"),
+            "{}",
+            orders.reason
+        );
+        assert_eq!(orders.evidence["connection"], "dbt target `health_ro`");
+        assert_eq!(
+            found["model.p.payments"].status,
+            Status::Fail,
+            "no expectation"
+        );
+        assert_eq!(
+            report.elevated_login.unwrap().connection.as_deref(),
+            Some("dbt target `health_ro`")
+        );
+
+        // Refused, the reason names the connection.
+        let s = ready().with_probe_connection(
+            ProbeConnection::without_privileges(Arc::new(warehouse("12")))
+                .labelled("dbt target `health_ro`"),
+        );
+        let (found, _) = findings(&s).await;
+        assert!(
+            found["model.p.orders"]
+                .reason
+                .contains("the login of dbt target `health_ro`"),
+            "{}",
+            found["model.p.orders"].reason
         );
     }
 }

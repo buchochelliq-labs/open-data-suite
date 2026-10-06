@@ -43,7 +43,7 @@ the way dbt would, and ODS's relation check (`show --inline`). Environment:
   FAKE_DBT_PROBE  JSON file standing in for the warehouse, for ODS's relation probe
                   (`show --inline` of an `ods_relation_probe` query): source name (e.g.
                   `raw.orders`) or model, seed or snapshot name (e.g. `orders`) ->
-                  {"type": "table", "formats": ["delta"], "rows":
+                  {"type": "table", "relation": "<its name, when a test checks it>", "formats": ["delta"], "rows":
                   {"<statement template>": {"<column>": "<value>"}}}. A source not in it
                   has no relation; a statement with no row returns none. Read on each call,
                   so a test can change it between runs.
@@ -323,6 +323,7 @@ def probe(query, manifest, target):
     fmt = re.search(r"rel\.is_(\w+) is sameas true", query)
     statements = json.loads(re.search(r"set qs = (.*?) -%}", query).group(1))
     ids = set(json.loads(re.search(r"set ids = (\[[^\]]*\]) -%}", query).group(1)))
+    expect = json.loads(re.search(r"set expect = (\{.*?\}) -%}", query).group(1))
     warehouse = {}
     if os.environ.get("FAKE_DBT_PROBE"):
         with open(os.environ["FAKE_DBT_PROBE"]) as f:
@@ -339,6 +340,9 @@ def probe(query, manifest, target):
         rel = warehouse.get(name)
         if rel is None:
             out[quote(source_id)] = {"missing": 1}
+        elif source_id in expect and rel.get("relation") \
+                and rel["relation"].lower() != expect[source_id].lower():
+            out[quote(source_id)] = {"moved": quote(rel["relation"])}
         elif rel.get("type") not in kinds:
             out[quote(source_id)] = {"kind": quote(rel.get("type") or "")}
         elif fmt and fmt.group(1) not in rel.get("formats", []):
@@ -355,7 +359,7 @@ def probe(query, manifest, target):
     shown("ods_probe", {"ods_relation_probe": 1, "probed": len(probeable), "sources": out})
     # A real probe takes seconds: what runs next starts in a later second than ODS's
     # reading, which it compares to the second.
-    if manifest["sources"]:
+    if probeable:
         next_second()
     return 0
 

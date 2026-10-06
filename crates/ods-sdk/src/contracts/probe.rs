@@ -22,6 +22,10 @@
 //!   from its first result row, as strings; a column the statement didn't return, or
 //!   returned as null, is absent, and a statement that returned no rows gives an empty
 //!   row.
+//! - A target that names its [relation](ProbeTarget::relation) is probed only when the
+//!   relation the implementation finds for it is that one (compared ignoring case, as
+//!   warehouses differ on it); another (e.g. the node resolved under another target or
+//!   schema) is [`ProbeAnswer::Unknown`], saying which, and nothing runs against it.
 //! - A target the implementation didn't recognise, or couldn't probe, is
 //!   [`ProbeAnswer::Unknown`] with a reason, never `Rows` or `Skipped`: `Skipped` is only
 //!   for a relation it recognised that doesn't match the filter.
@@ -146,6 +150,10 @@ pub struct ProbeTarget {
     pub id: String,
     /// Its name as the project gives it, for messages, e.g. `raw.orders` or `orders`.
     pub name: String,
+    /// The relation the caller expects, as the project's artifacts name it (e.g.
+    /// `"db"."main"."orders"`), if it knows: the implementation probes nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
 }
 
 impl ProbeTarget {
@@ -154,7 +162,16 @@ impl ProbeTarget {
         Self {
             id: id.into(),
             name: name.into(),
+            relation: None,
         }
+    }
+
+    /// The same target, which must be the relation `relation` (see
+    /// [`relation`](Self::relation)).
+    #[must_use]
+    pub fn expecting(mut self, relation: impl Into<String>) -> Self {
+        self.relation = Some(relation.into());
+        self
     }
 }
 

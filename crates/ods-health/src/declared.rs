@@ -119,6 +119,7 @@ impl Declared {
     /// declared check's.
     pub(crate) fn from_config(
         checks: &[DeclaredCheckConfig],
+        probes: Option<&ods_config::HealthProbesConfig>,
     ) -> Result<Configured, HealthConfigError> {
         let mut ids = BTreeSet::new();
         let all = checks
@@ -159,7 +160,9 @@ impl Declared {
                 match config.kind.as_deref() {
                     None | Some("declarative") => {}
                     Some("probe") => {
-                        return crate::probe::Probe::from_config(config, &at, severity, select, exclude)
+                        return crate::probe::Probe::from_config(
+                            config, &at, severity, select, exclude, probes,
+                        )
                             .map(One::Probe);
                     }
                     Some("script") => {

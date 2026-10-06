@@ -139,6 +139,8 @@ impl ChangeProvider for FakeChangeProvider {
 struct FakeRelation {
     kind: String,
     format: Option<String>,
+    /// Its name in the warehouse, when set: a target expecting another is unknown.
+    named: Option<String>,
     /// Statement template → its first row.
     rows: BTreeMap<String, ProbeRow>,
 }
@@ -174,6 +176,7 @@ impl FakeRelationProbe {
             FakeRelation {
                 kind: kind.into(),
                 format: format.map(str::to_owned),
+                named: None,
                 rows: BTreeMap::new(),
             },
         );
@@ -208,6 +211,15 @@ impl FakeRelationProbe {
                     .collect(),
             );
         }
+    }
+
+    /// `source`'s relation is called `relation` in the warehouse, e.g. `"db"."main"."orders"`.
+    #[must_use]
+    pub fn named(self, source: &str, relation: impl Into<String>) -> Self {
+        if let Some(found) = lock(&self.relations).get_mut(source) {
+            found.named = Some(relation.into());
+        }
+        self
     }
 
     /// Makes [`probe`](RelationProbe::probe) fail, as when the warehouse can't be
@@ -296,10 +308,22 @@ impl RelationProbe for FakeRelationProbe {
             targets
                 .iter()
                 .map(|t| {
-                    let answer = relations.get(&t.id).map_or_else(
-                        || ProbeAnswer::Unknown("no such relation".to_owned()),
-                        |relation| Self::answer(relation, request),
-                    );
+                    let answer = match relations.get(&t.id) {
+                        None => ProbeAnswer::Unknown("no such relation".to_owned()),
+                        Some(FakeRelation {
+                            named: Some(named), ..
+                        }) if t
+                            .relation
+                            .as_ref()
+                            .is_some_and(|want| !want.eq_ignore_ascii_case(named)) =>
+                        {
+                            ProbeAnswer::Unknown(format!(
+                                "it is `{named}` here, not `{}`",
+                                t.relation.as_deref().unwrap_or_default()
+                            ))
+                        }
+                        Some(relation) => Self::answer(relation, request),
+                    };
                     if matches!(answer, ProbeAnswer::Rows(_)) {
                         probed.push(t.id.clone());
                     }

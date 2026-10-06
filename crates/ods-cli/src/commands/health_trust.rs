@@ -33,22 +33,35 @@ pub(super) enum Origin {
 }
 
 impl Origin {
-    /// Where `config`'s `[[health.checks]]` come from. The array is one setting: a later
-    /// layer replaces it whole, so its source names the file every check in it is from.
+    /// Where `config`'s probes come from. The `[[health.checks]]` array is one setting:
+    /// a later layer replaces it whole, so its source names the file every check in it
+    /// is from. `[health.probes]` says where they run, so a project file that sets it
+    /// makes even the user's own probes the project's to answer for: a repository can't
+    /// point them at another target without the user trusting that.
     pub(super) fn of(config: &Loaded) -> Self {
-        let key = ["health".to_owned(), "checks".to_owned()];
-        let Some(setting) = config.effective(&key) else {
+        let source = |key: &[&str]| {
+            let key: Vec<String> = key.iter().map(|k| (*k).to_owned()).collect();
+            config.effective(&key).map(|s| s.source.clone())
+        };
+        let Some(checks) = source(&["health", "checks"]) else {
             return Self::None;
         };
-        let file = match &setting.source {
-            Source::File { kind, path } | Source::Profile { kind, path, .. } => {
-                if *kind == FileKind::User {
-                    return Self::User(path.clone());
-                }
-                path.clone()
-            }
+        let from_project = [
+            ["health", "probes", "target"],
+            ["health", "probes", "profile"],
+        ]
+        .iter()
+        .filter_map(|key| source(key))
+        .find(|s| file_kind(s) != Some(FileKind::User));
+        let source = match (file_kind(&checks), from_project) {
+            (Some(FileKind::User), None) => return Self::User(file_path(&checks)),
+            (Some(FileKind::User), Some(project)) => project,
+            _ => checks,
+        };
+        let file = match file_kind(&source) {
+            Some(_) => file_path(&source),
             // Anything but a file is the project's to answer for: the current directory.
-            _ => std::env::current_dir().unwrap_or_default().join("ods.toml"),
+            None => std::env::current_dir().unwrap_or_default().join("ods.toml"),
         };
         let dir = file.parent().unwrap_or(Path::new("."));
         let root = std::fs::canonicalize(dir)
@@ -56,6 +69,22 @@ impl Origin {
             .to_string_lossy()
             .into_owned();
         Self::Project { file, root }
+    }
+}
+
+/// The kind of file a setting comes from; `None` when it isn't from a file.
+fn file_kind(source: &Source) -> Option<FileKind> {
+    match source {
+        Source::File { kind, .. } | Source::Profile { kind, .. } => Some(*kind),
+        _ => None,
+    }
+}
+
+/// The file a setting comes from; empty when it isn't from a file.
+fn file_path(source: &Source) -> PathBuf {
+    match source {
+        Source::File { path, .. } | Source::Profile { path, .. } => path.clone(),
+        _ => PathBuf::new(),
     }
 }
 

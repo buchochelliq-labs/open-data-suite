@@ -388,6 +388,19 @@ fn allow_elevated_login_runs_the_probe_on_its_own_target_and_says_so() {
         "model.jaffle_ods.orders\n",
         "only the node the probe selects"
     );
+    let warning = &envelope["diagnostics"][0];
+    assert_eq!(warning["level"], "warning", "{envelope:#}");
+    assert_eq!(warning["code"], "ODS-W0704");
+    for part in ["own risk", "no warranty", "dbt target `health_ro`"] {
+        assert!(
+            warning["message"].as_str().unwrap().contains(part),
+            "{part}: {warning:#}"
+        );
+    }
+    assert_eq!(
+        finding["evidence"]["connection"], "dbt target `health_ro`",
+        "{finding:#}"
+    );
     let seen = std::fs::read_to_string(&probing.seen).unwrap();
     assert!(
         seen.contains(r#""--target", "health_ro""#),
@@ -422,6 +435,11 @@ fn the_override_warns_in_text_too() {
         .env("FAKE_DBT_PROBE", &probing.warehouse)
         .output()
         .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: --allow-elevated-login"),
+        "warned before anything ran: {stderr}"
+    );
     let text = String::from_utf8_lossy(&out.stdout);
     for part in [
         "--allow-elevated-login",
@@ -432,4 +450,56 @@ fn the_override_warns_in_text_too() {
     ] {
         assert!(text.contains(part), "{part}: {text}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn probes_never_run_on_the_build_target() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let (code, envelope) = probing.check(&["--allow-elevated-login", "--target", "health_ro"]);
+    assert_eq!(code, 4, "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("the target the project builds with"),
+        "{message}"
+    );
+    assert!(!probing.seen.exists(), "dbt never ran");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_node_resolved_elsewhere_on_the_probe_target_is_unknown() {
+    let probing = Probing::new(READ_ONLY_TARGET, "5");
+    let doc = serde_json::json!({
+        "orders": {
+            "type": "table",
+            "relation": "\"jaffle_ods\".\"readonly\".\"orders\"",
+            "rows": {"select count(*) as n from {relation}": {"n": "5"}},
+        },
+    });
+    std::fs::write(&probing.warehouse, doc.to_string()).unwrap();
+    let (_, envelope) = probing.check(&["--allow-elevated-login"]);
+    let finding = probe(&envelope);
+    assert_eq!(
+        finding["status"], "unknown",
+        "never other data: {finding:#}"
+    );
+    assert!(
+        finding["reason"]
+            .as_str()
+            .unwrap()
+            .contains("\"jaffle_ods\".\"readonly\".\"orders\""),
+        "{finding:#}"
+    );
+    assert!(!probing.probed.exists(), "nothing ran against it");
+}
+
+#[test]
+fn a_project_that_points_the_users_probes_at_a_target_needs_trust() {
+    let project = Project::new(READ_ONLY_TARGET);
+    std::fs::create_dir_all(project.home.path().join("ods")).unwrap();
+    std::fs::write(project.home.path().join("ods/config.toml"), PROBE).unwrap();
+    let (_, envelope) = project.check(&[]);
+    let reason = probe(&envelope)["reason"].as_str().unwrap().to_owned();
+    assert!(reason.contains("not trusted"), "{reason}");
 }

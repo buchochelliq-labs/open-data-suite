@@ -34,13 +34,14 @@ use percent_encoding::percent_decode_str;
 /// Marks the row as ODS's answer, not something else dbt printed.
 const MARKER: &str = "ods_relation_probe";
 
-/// The query, with `@IDS@`, `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill in. Relation
+/// The query, with `@IDS@`, `@EXPECT@`, `@KINDS@`, `@FORMAT@` and `@STATEMENTS@` to fill
+/// in. Relation
 /// quoting is left to the adapter: `rel|string` renders the name by its own rules. `execute` is
 /// false while dbt parses it, when there is no connection to ask.
 const TEMPLATE: &str = "\
 {%- set out = {} -%}{%- set ns = namespace(probed=0) -%}\
 {%- set qs = @STATEMENTS@ -%}\
-{%- set ids = @IDS@ -%}\
+{%- set ids = @IDS@ -%}{%- set expect = @EXPECT@ -%}\
 {%- if execute -%}\
 {%- for s in graph.sources.values()|list + graph.nodes.values()|list \
 if s.resource_type in ['source', 'model', 'seed', 'snapshot'] -%}\
@@ -49,15 +50,19 @@ if s.resource_type in ['source', 'model', 'seed', 'snapshot'] -%}\
 {%- set rel = adapter.get_relation(s.database, s.schema, \
 s.identifier if s.resource_type == 'source' else s.alias) -%}\
 {%- if rel is none -%}{%- do out.update({k: {'missing': 1}}) -%}\
+{%- elif s.unique_id in expect and (rel|string)|lower != expect[s.unique_id]|lower -%}\
+{%- do out.update({k: {'moved': (rel|string)|urlencode}}) -%}\
 {%- elif rel.type not in @KINDS@ -%}{%- do out.update({k: {'kind': (rel.type or '')|string|urlencode}}) -%}\
 @FORMAT@\
 {%- else -%}{%- set rows = [] -%}\
 {%- for q, cols in qs -%}{%- set r = run_query(q.replace('@PLACEHOLDER@', rel|string)) -%}{%- set row = {} -%}\
 {%- if r.rows|length > 0 -%}\
-{%- for c in cols -%}{%- for n in r.column_names \
-if n|lower == c|lower and r.rows[0][n] is not none -%}\
-{%- do row.update({c: r.rows[0][n]|string|urlencode}) -%}\
-{%- endfor -%}{%- endfor -%}{%- endif -%}{%- do rows.append(row) -%}\
+{%- for c in cols -%}{%- set hits = [] -%}\
+{%- for n in r.column_names if n|lower == c|lower -%}{%- do hits.append(n) -%}{%- endfor -%}\
+{%- set n = c if c in hits else (hits[0] if hits|length == 1 else none) -%}\
+{%- if n is not none and r.rows[0][n] is not none -%}\
+{%- do row.update({c: r.rows[0][n]|string|urlencode}) -%}{%- endif -%}\
+{%- endfor -%}{%- endif -%}{%- do rows.append(row) -%}\
 {%- endfor -%}{%- do out.update({k: {'rows': rows}}) -%}\
 {%- endif -%}\
 {%- endif -%}\
@@ -75,9 +80,16 @@ pub(crate) fn plain_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
-/// The inline query for `request`, probing the sources in `ids` (each a
-/// [`plain_id`]) and nothing else.
-pub(crate) fn query(request: &ProbeRequest, ids: &[&str]) -> String {
+/// Whether a relation name can travel in the query as it is: no brace or `%`, so
+/// nothing in it reads as Jinja however it is quoted.
+pub(crate) fn plain_relation(relation: &str) -> bool {
+    !relation.is_empty() && !relation.contains(['{', '}', '%', '#'])
+}
+
+/// The inline query for `request`, probing the nodes in `targets` (each a
+/// [`plain_id`], with the relation it must be, if any, a [`plain_relation`]) and
+/// nothing else.
+pub(crate) fn query(request: &ProbeRequest, targets: &[(&str, Option<&str>)]) -> String {
     // JSON arrays of strings are Jinja list literals. Kinds, formats and columns are
     // plain identifiers, and templates have no braces but the placeholder (the SDK
     // checks both), so nothing here can close a Jinja block.
@@ -88,8 +100,18 @@ pub(crate) fn query(request: &ProbeRequest, ids: &[&str]) -> String {
         .map(|s| (s.template(), s.columns()))
         .collect();
     let statements = serde_json::to_string(&statements).unwrap_or_default();
-    let ids: Vec<&str> = ids.iter().copied().filter(|id| plain_id(id)).collect();
+    let sent: Vec<&(&str, Option<&str>)> = targets
+        .iter()
+        .filter(|(id, relation)| plain_id(id) && relation.is_none_or(plain_relation))
+        .collect();
+    let ids: Vec<&str> = sent.iter().map(|(id, _)| *id).collect();
     let ids = serde_json::to_string(&ids).unwrap_or_default();
+    // A JSON object of strings is a Jinja dict literal, read the same way.
+    let expect: BTreeMap<&str, &str> = sent
+        .iter()
+        .filter_map(|(id, relation)| relation.map(|r| (*id, r)))
+        .collect();
+    let expect = serde_json::to_string(&expect).unwrap_or_default();
     let format = request.filter().format().map_or_else(String::new, |f| {
         format!(
             "{{%- elif not (rel.is_{f} is sameas true) -%}}{{%- do out.update({{k: {{'format': 0}}}}) -%}}"
@@ -98,6 +120,7 @@ pub(crate) fn query(request: &ProbeRequest, ids: &[&str]) -> String {
     // The statements go in last, so nothing in them is taken for a marker.
     TEMPLATE
         .replace("@IDS@", &ids)
+        .replace("@EXPECT@", &expect)
         .replace("@KINDS@", &kinds)
         .replace("@FORMAT@", &format)
         .replace("@PLACEHOLDER@", PLACEHOLDER)
@@ -109,6 +132,8 @@ pub(crate) fn query(request: &ProbeRequest, ids: &[&str]) -> String {
 pub(crate) enum Found {
     /// The adapter has no such relation.
     Missing,
+    /// The adapter's relation for it isn't the one expected: this one.
+    Moved(String),
     /// A relation of another kind, as the adapter names it.
     Kind(String),
     /// The adapter didn't confirm the filter's format.
@@ -136,6 +161,13 @@ fn decode(text: &str) -> Result<String, String> {
 fn found(answer: &serde_json::Value) -> Result<Found, String> {
     if answer.get("missing").is_some() {
         return Ok(Found::Missing);
+    }
+    if let Some(moved) = answer.get("moved") {
+        return moved
+            .as_str()
+            .ok_or_else(|| "a relation name isn't text".to_owned())
+            .and_then(decode)
+            .map(Found::Moved);
     }
     if let Some(kind) = answer.get("kind") {
         return kind
@@ -233,7 +265,12 @@ mod tests {
     fn the_query_carries_the_request_and_names_no_source() {
         let query = query(
             &request(Some("columnar")),
-            &["source.p.raw.a", "source.p.raw.b", "source.p.raw.{{ x }}"],
+            &[
+                ("source.p.raw.a", None),
+                ("source.p.raw.b", Some("\"db\".\"raw\".\"b\"")),
+                ("source.p.raw.{{ x }}", None),
+                ("source.p.raw.c", Some("{{ evil }}")),
+            ],
         );
         assert!(query.contains(MARKER));
         assert!(
@@ -241,6 +278,11 @@ mod tests {
             "only plain ids are sent: {query}"
         );
         assert!(query.contains("if s.unique_id in ids"), "{query}");
+        assert!(
+            query.contains(r#"set expect = {"source.p.raw.b":"\"db\".\"raw\".\"b\""}"#),
+            "{query}"
+        );
+        assert!(!query.contains("evil"), "{query}");
         assert!(query.contains("graph.sources.values()"));
         assert!(
             query.contains("s.resource_type in ['source', 'model', 'seed', 'snapshot']"),
@@ -276,6 +318,7 @@ mod tests {
     #[test]
     fn without_a_format_nothing_is_confirmed() {
         let query = query(&request(None), &[]);
+        assert!(query.contains("set expect = {}"), "{query}");
         assert!(!query.contains("is sameas true"), "{query}");
         assert!(!query.contains("'format'"), "{query}");
     }
@@ -300,6 +343,7 @@ mod tests {
                 "source.p.raw.b": {"kind": "view"},
                 "source.p.raw.c": {"format": 0},
                 "source.p.raw.d": {"missing": 1},
+                "source.p.raw.e": {"moved": "%22db%22.%22x%22.%22e%22"},
             },
         });
         let probed = parse(&format!("not json\n{}\n", shown(&answer))).unwrap();
@@ -316,6 +360,10 @@ mod tests {
         assert_eq!(probed.sources["source.p.raw.b"], Found::Kind("view".into()));
         assert_eq!(probed.sources["source.p.raw.c"], Found::Format);
         assert_eq!(probed.sources["source.p.raw.d"], Found::Missing);
+        assert_eq!(
+            probed.sources["source.p.raw.e"],
+            Found::Moved("\"db\".\"x\".\"e\"".to_owned())
+        );
     }
 
     #[test]

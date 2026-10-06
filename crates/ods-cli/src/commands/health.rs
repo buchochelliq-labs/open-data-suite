@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ use super::state_plan::{Sources, Workspace, block_on, common, store_error};
 use super::state_settings::StateSettings;
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, Module};
-use crate::present::{Level, Present, Span, Tone, ViewNode};
+use crate::present::{Diagnostic, Level, Present, Span, Tone, ViewNode};
 
 /// `ods health`.
 pub struct HealthCommand;
@@ -42,6 +43,10 @@ impl Module for HealthCommand {
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         match matches.subcommand() {
             Some(("check", args)) => {
+                if args.get_flag("allow-elevated-login") {
+                    // Before anything runs, whatever the output mode or what happens next.
+                    let _ = writeln!(std::io::stderr(), "warning: {ELEVATED_WARNING}");
+                }
                 let report = CheckReport::build(args, ctx.config)?;
                 match report.failure() {
                     Some(error) => ctx.emit_failed(&report, error),
@@ -102,23 +107,53 @@ fn check_command() -> Command {
 /// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
 /// `None` when no probe is configured, or no target is: probes never borrow the build's
 /// own target, which can write. dbt can't say what its login may do, so every probe it
-/// runs needs `--allow-elevated-login` until a provider reports privileges.
+/// runs needs `--allow-elevated-login` until a provider reports privileges. Each node
+/// is probed only on the relation its build made, as the manifest names it.
+///
+/// # Errors
+/// The probe target is the build's.
 fn probe_connection(
     args: &ArgMatches,
     config: &Loaded,
     settings: &StateSettings,
     health: &ods_health::HealthSettings,
-) -> Option<ProbeConnection> {
+    manifest: &ods_provider_dbt::Manifest,
+) -> Result<Option<ProbeConnection>, CliError> {
     if health.probe_definitions().is_empty() {
-        return None;
+        return Ok(None);
     }
-    let probes = config.config.health.probes.as_ref()?;
-    let target = probes.target.as_deref()?;
+    let Some(probes) = config.config.health.probes.as_ref() else {
+        return Ok(None);
+    };
+    let Some(target) = probes.target.as_deref() else {
+        return Ok(None);
+    };
+    if settings.target.as_ref().is_some_and(|t| t.value == target) {
+        return Err(CliError::new(
+            ExitStatus::Config,
+            codes::HEALTH_CONFIG,
+            format!(
+                "health.probes.target: `{target}` is the target the project builds with; probes never run on it"
+            ),
+        )
+        .with_hint("name a target in profiles.yml whose login can only read what the probes select"));
+    }
     let mut executor = super::state_run::executor(args, settings).target(target);
+    let mut label = format!("dbt target `{target}`");
     if let Some(profile) = &probes.profile {
         executor = executor.profile(profile);
+        let _ = write!(label, " (profile `{profile}`)");
     }
-    Some(ProbeConnection::without_privileges(Arc::new(executor)))
+    let relations = manifest
+        .nodes
+        .iter()
+        .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
+        .collect();
+    Ok(Some(
+        ProbeConnection::without_privileges(Arc::new(executor))
+            .labelled(label)
+            .expecting(relations),
+    ))
 }
 
 /// One node that isn't healthy, or every node in JSON.
@@ -199,7 +234,8 @@ impl CheckReport {
         super::serve_dashboard::check_probe_sql(&mut health, ws.manifest.adapter_type.as_deref())?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
         let allow_elevated_login = args.get_flag("allow-elevated-login");
-        if let Some(connection) = probe_connection(args, config, &settings, &health) {
+        if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
+        {
             health = health
                 .with_probe_connection(connection.allowing_elevated_login(allow_elevated_login));
         }
@@ -226,7 +262,11 @@ impl CheckReport {
                             dir.display()
                         ),
                     )
-                    .with_hint("the records already there are unchanged; `--no-record` checks without keeping one")
+                    .with_hint(if allow_elevated_login {
+                        "the records already there are unchanged; `--no-record` checks without keeping one. Probes ran with `--allow-elevated-login`, possibly under a login that can do more than read"
+                    } else {
+                        "the records already there are unchanged; `--no-record` checks without keeping one"
+                    })
                 })?;
             Some(written)
         };
@@ -400,6 +440,15 @@ fn severity(severity: Severity) -> &'static str {
 impl Present for CheckReport {
     const COMMAND: &'static str = "health.check";
 
+    fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.elevated_login
+            .iter()
+            .map(|elevated| {
+                Diagnostic::warning(codes::HEALTH_ELEVATED_LOGIN, elevated_warning(elevated))
+            })
+            .collect()
+    }
+
     fn view(&self) -> ViewNode {
         let mut blocks = vec![ViewNode::Heading(format!("Health of {}", self.scope))];
         let mut facts: Vec<(String, Vec<Span>)> = HEALTHS
@@ -504,24 +553,28 @@ impl Present for CheckReport {
 }
 
 /// What every run with `--allow-elevated-login` says (ADR-0030 §4c): that ODS can't stop
-/// a probe from writing under a login that may, that it is at the user's own risk, and,
-/// when probes ran so, the login and what it can do.
+/// a probe from writing under a login that may, and that it is at the user's own risk.
+const ELEVATED_WARNING: &str = "--allow-elevated-login: probe checks may run under a login that \
+    can do more than read. ODS checks each probe is one read-only query, but it can't stop a query \
+    from writing under a login that may write. You run them at your own risk: ODS comes with no \
+    warranty (see its licence), and its authors aren't responsible for any consequence, including \
+    changed or destroyed data.";
+
+/// [`ELEVATED_WARNING`], and, when probes ran so, the connection, its login and what it
+/// can do on each node's relation.
 fn elevated_warning(elevated: &ElevatedLogin) -> String {
-    let mut text = "--allow-elevated-login: probe checks may run under a login that can do more \
-                    than read. ODS checks each probe is one read-only query, but it can't stop a \
-                    query from writing under a login that may write. You run them at your own \
-                    risk: ODS comes with no warranty (see its licence), and its authors aren't \
-                    responsible for any consequence, including changed or destroyed data."
-        .to_owned();
+    let mut text = ELEVATED_WARNING.to_owned();
     if elevated.found.is_empty() {
         text.push_str(" This run, no probe needed it.");
         return text;
     }
-    let login = elevated.login.as_deref().map_or_else(
-        || "the probe login".to_owned(),
-        |l| format!("the login `{l}`"),
-    );
-    let _ = write!(text, " This run, probes ran under {login}, which, on");
+    let who = match (&elevated.login, &elevated.connection) {
+        (Some(login), Some(via)) => format!("the login `{login}` of {via}"),
+        (Some(login), None) => format!("the login `{login}`"),
+        (None, Some(via)) => format!("the login of {via}"),
+        (None, None) => "the probe login".to_owned(),
+    };
+    let _ = write!(text, " This run, probes ran under {who}, which, on");
     for (i, (node, found)) in elevated.found.iter().enumerate() {
         let sep = if i == 0 { " " } else { "; on " };
         let _ = write!(text, "{sep}`{node}`, {found}");

@@ -495,7 +495,7 @@ impl HealthSettings {
     /// # Errors
     /// A check id that isn't a built-in's, or a path pattern that isn't a valid glob.
     pub fn from_config(config: &HealthConfig) -> Result<Self, HealthConfigError> {
-        let configured = declared::Declared::from_config(&config.checks)?;
+        let configured = declared::Declared::from_config(&config.checks, config.probes.as_ref())?;
         if let Some(unknown) = config
             .builtin
             .keys()
