@@ -92,11 +92,16 @@ mappings go away.
   ```
 
   The released `ods` binary is `Ods::new().run()`.
-- **Registration** goes through `ods_sdk::Registry` rules (ADR-0006 §2). A plugin is
-  refused when:
-  - it was built against another contract version (`Contract::accepts`);
-  - its id or warehouse is already taken. A custom build replaces a built-in only by
-    saying so (`replacing`), never by registration order.
+- **Registration** follows ADR-0006 §2's rules:
+  - **Versions:** an in-process plugin is compiled against the same `ods-sdk` as the
+    host. One built against another SDK doesn't link, since its traits are other types,
+    so the compiler makes the version check. `Contract::accepts` is for out-of-process
+    plugins (§5).
+  - **Duplicates:** a plugin is refused when its id or warehouse is already taken. A
+    custom build replaces a built-in only by saying so (`replacing`), never by
+    registration order.
+- **One set per process:** `Ods::run` installs the set once, as logging is set up once,
+  and every command reads it. Without a custom build, the set is the built-ins.
 - **Visibility** (rule 4): `ods version --json` and `ods doctor` list every plugin,
   built in or added: its contract, version, id or warehouse, and the crate that
   registered it. A custom binary never passes for the released one.
@@ -116,7 +121,7 @@ pub trait WarehousePlugin: Send + Sync {
     fn warehouse(&self) -> &str;                 // e.g. "databricks"
     fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>>;
     fn privileges(&self, probe: Arc<dyn RelationProbe>)
-        -> Option<Arc<dyn PrivilegedProbe>>;     // probe + relation_privileges
+        -> Option<Arc<dyn PrivilegedProbe>>;     // ods_sdk: probe + relation_privileges
 }
 ```
 
@@ -164,7 +169,10 @@ After script checks (ADR-0030 phase 5):
   provider's fixtures. A plugin author runs it before publishing.
 
 ### 6. Where the code lives
-- **`ods-sdk`** gains the plugin protocol's types (`ods_sdk::protocol`: the envelope,
+- **`ods-sdk`** gains `PrivilegedProbe`, one object that is both a `RelationProbe` and
+  `RelationPrivileges` (ADR-0030 §4c: the login checked is the login probed), and
+  `RelationProbe` for `Arc<T>`, so a plugin can wrap whatever connection it's given. It
+  later gains the plugin protocol's types (`ods_sdk::protocol`: the envelope,
   `describe` and the per-contract requests and responses). They are pure serde types,
   with no process.
 - **`providers/ods-provider-process`** (new) holds the only code that starts plugin and
