@@ -186,8 +186,10 @@ fn failures_without_a_record_are_not_measured_never_zero() {
     assert!(failing["count"].is_null(), "{failing}");
     assert!(failing["href"].is_null());
     assert!(failing["how"].as_str().unwrap().starts_with("Not measured"));
-    // Without the record, `broken`'s last good build stands: its tests passed.
-    assert_eq!(row(&home["health"], "healthy")["count"], 2);
+    // Without the record, whether any node failed since can't be told: every node
+    // reads unknown, none healthy (AGENTS rule 3).
+    assert_eq!(row(&home["health"], "healthy")["count"], 0);
+    assert_eq!(row(&home["health"], "unknown")["count"], 4);
     assert!(row(&home["signals"], "failed_runs")["count"].is_null());
 }
 
@@ -266,4 +268,26 @@ fn another_scopes_failures_are_never_this_ones() {
     let unscoped = failed_run().with_run(None, None);
     let home = json(&dashboard(Some(unscoped)).home_at(true, at("2026-09-29T12:00:00Z")));
     assert!(row(&home["health"], "failing")["count"].is_null());
+}
+
+#[test]
+fn another_check_at_error_is_counted_even_without_the_runs_record() {
+    let config: ods_config::HealthConfig =
+        toml::from_str("[builtin.tests_required]\nseverity = \"error\"").unwrap();
+    let settings = ods_health::HealthSettings::from_config(&config).unwrap();
+    let home = json(
+        &dashboard(None)
+            .with_health(settings)
+            .home_at(true, at("2026-09-29T12:00:00Z")),
+    );
+    let failing = row(&home["health"], "failing");
+    // `untested` and `fresh` (never built) have no tests: tests_required fails at error,
+    // which outranks unknown. Nodes the last run may have failed aren't counted, and the
+    // row says so.
+    assert_eq!(failing["count"], 2, "{failing}");
+    assert_eq!(failing["href"], "catalog?health=failing");
+    assert_eq!(
+        failing["note"],
+        "at least: the last run's failures aren't measured"
+    );
 }

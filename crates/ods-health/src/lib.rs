@@ -533,7 +533,7 @@ impl HealthSettings {
         );
         if !failures_known && self.enabled(Builtin::LastRunFailed) {
             how.push_str(
-                " The last run's record doesn't say what failed, so failures aren't measured.",
+                " The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
             );
         }
         how
@@ -561,9 +561,12 @@ fn run(check: Builtin, node: &NodeFacts, failures: Option<&LastFailures>) -> (St
             ),
         },
         Builtin::LastRunFailed => match failures {
+            // No record of this scope's last run: whether it failed can't be told, so
+            // the check can't decide (AGENTS rule 3).
             None => (
-                Status::Skipped,
-                "the last run's record doesn't say what failed".to_owned(),
+                Status::Unknown,
+                "the last run's record doesn't say what failed: failures aren't measured"
+                    .to_owned(),
             ),
             Some(f) if f.failed.contains(&node.id) && since(f) => (
                 Status::Fail,
@@ -576,7 +579,7 @@ fn run(check: Builtin, node: &NodeFacts, failures: Option<&LastFailures>) -> (St
         },
         Builtin::LastRunSkipped => match failures {
             None => (
-                Status::Skipped,
+                Status::Unknown,
                 "the last run's record doesn't say what was skipped".to_owned(),
             ),
             Some(f) if f.skipped.contains(&node.id) && since(f) => (

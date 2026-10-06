@@ -122,7 +122,7 @@ expression: pretty(view.clone())
     {
       "key": "health",
       "label": "Health",
-      "note": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so failures aren't measured.",
+      "note": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
       "values": [
         {
           "count": 0,
@@ -194,7 +194,7 @@ expression: pretty(view.clone())
       ]
     }
   ],
-  "health_how": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so failures aren't measured.",
+  "health_how": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
   "layer_source": "the folder under the model paths",
   "query": {
     "descending": false,
@@ -220,17 +220,17 @@ expression: pretty(view.clone())
           },
           {
             "check": "last_run_failed",
-            "reason": "the last run's record doesn't say what failed",
+            "reason": "the last run's record doesn't say what failed: failures aren't measured",
             "severity": "error",
             "source": "builtin",
-            "status": "skipped"
+            "status": "unknown"
           },
           {
             "check": "last_run_skipped",
             "reason": "the last run's record doesn't say what was skipped",
             "severity": "warn",
             "source": "builtin",
-            "status": "skipped"
+            "status": "unknown"
           },
           {
             "check": "tests_required",
@@ -249,7 +249,9 @@ expression: pretty(view.clone())
         ],
         "health": "unknown",
         "reasons": [
-          "never built by ODS: nothing to judge it on"
+          "never built by ODS: nothing to judge it on",
+          "the last run's record doesn't say what failed: failures aren't measured",
+          "the last run's record doesn't say what was skipped"
         ]
       },
       "href": "catalog/model.shop.customers",
@@ -280,17 +282,17 @@ expression: pretty(view.clone())
           },
           {
             "check": "last_run_failed",
-            "reason": "the last run's record doesn't say what failed",
+            "reason": "the last run's record doesn't say what failed: failures aren't measured",
             "severity": "error",
             "source": "builtin",
-            "status": "skipped"
+            "status": "unknown"
           },
           {
             "check": "last_run_skipped",
             "reason": "the last run's record doesn't say what was skipped",
             "severity": "warn",
             "source": "builtin",
-            "status": "skipped"
+            "status": "unknown"
           },
           {
             "check": "tests_required",
@@ -309,7 +311,9 @@ expression: pretty(view.clone())
         ],
         "health": "unknown",
         "reasons": [
-          "never built by ODS: nothing to judge it on"
+          "never built by ODS: nothing to judge it on",
+          "the last run's record doesn't say what failed: failures aren't measured",
+          "the last run's record doesn't say what was skipped"
         ]
       },
       "href": "catalog/model.shop.orders",
@@ -342,17 +346,17 @@ expression: pretty(view.clone())
           },
           {
             "check": "last_run_failed",
-            "reason": "the last run's record doesn't say what failed",
+            "reason": "the last run's record doesn't say what failed: failures aren't measured",
             "severity": "error",
             "source": "builtin",
-            "status": "skipped"
+            "status": "unknown"
           },
           {
             "check": "last_run_skipped",
             "reason": "the last run's record doesn't say what was skipped",
             "severity": "warn",
             "source": "builtin",
-            "status": "skipped"
+            "status": "unknown"
           },
           {
             "check": "tests_required",
@@ -371,7 +375,9 @@ expression: pretty(view.clone())
         ],
         "health": "unknown",
         "reasons": [
-          "never built by ODS: nothing to judge it on"
+          "never built by ODS: nothing to judge it on",
+          "the last run's record doesn't say what failed: failures aren't measured",
+          "the last run's record doesn't say what was skipped"
         ]
       },
       "href": "catalog/seed.shop.raw_orders",

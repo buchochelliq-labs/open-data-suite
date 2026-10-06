@@ -20,6 +20,11 @@ fn passed() -> BuildFacts {
     built().tested("run-1", at("2026-09-28T09:05:00Z"), true)
 }
 
+/// A record of the last run in which nothing failed.
+fn clean() -> LastFailures {
+    failures(&[], &[])
+}
+
 fn failures(failed: &[&str], skipped: &[&str]) -> LastFailures {
     LastFailures::new(
         at("2026-09-29T09:00:00Z"),
@@ -49,7 +54,7 @@ fn health(settings: &HealthSettings, node: &NodeFacts, f: Option<&LastFailures>)
 fn a_tested_build_is_healthy_and_says_why() {
     let mut node = model("model.a", 1);
     node.build = Some(passed());
-    let badge = HealthSettings::default().evaluate(&node, None);
+    let badge = HealthSettings::default().evaluate(&node, Some(&clean()));
     assert_eq!(badge.health, Health::Healthy);
     assert_eq!(
         badge.reasons,
@@ -64,7 +69,7 @@ fn a_tested_build_is_healthy_and_says_why() {
 #[test]
 fn never_built_is_unknown_never_healthy() {
     let node = model("model.a", 0);
-    let badge = HealthSettings::default().evaluate(&node, None);
+    let badge = HealthSettings::default().evaluate(&node, Some(&clean()));
     assert_eq!(badge.health, Health::Unknown);
     assert_eq!(
         badge.reasons,
@@ -77,23 +82,23 @@ fn untested_unpassed_or_changed_tests_warn() {
     let s = HealthSettings::default();
     let mut untested = model("model.a", 0);
     untested.build = Some(built());
-    assert_eq!(health(&s, &untested, None), Health::Warning);
+    assert_eq!(health(&s, &untested, Some(&clean())), Health::Warning);
 
     let mut tested = model("model.b", 2);
     tested.build = Some(built());
-    let badge = s.evaluate(&tested, None);
+    let badge = s.evaluate(&tested, Some(&clean()));
     assert_eq!(badge.health, Health::Warning);
     assert!(badge.reasons[0].contains("haven't been recorded passing"));
 
     tested.build = Some(built().tested("run-1", at("2026-09-28T09:05:00Z"), false));
-    assert!(s.evaluate(&tested, None).reasons[0].contains("changed since"));
+    assert!(s.evaluate(&tested, Some(&clean())).reasons[0].contains("changed since"));
 }
 
 #[test]
 fn a_seed_without_tests_is_healthy_once_built() {
     let mut seed = NodeFacts::new("seed.s", "s", "seed");
     seed.build = Some(built());
-    let badge = HealthSettings::default().evaluate(&seed, None);
+    let badge = HealthSettings::default().evaluate(&seed, Some(&clean()));
     assert_eq!(badge.health, Health::Healthy);
     assert_eq!(badge.reasons[1], "a seed has no tests to run");
 }
@@ -122,6 +127,28 @@ fn a_failure_counts_until_a_later_build_replaces_it() {
     assert!(badge.reasons[0].starts_with("skipped in the last run"));
 }
 
+#[test]
+fn without_the_last_runs_record_the_run_checks_cant_decide() {
+    // Built and tested, but nothing says whether a later run failed it: unknown, never
+    // healthy (AGENTS rule 3); or a warning, if so configured.
+    let mut node = model("model.a", 1);
+    node.build = Some(passed());
+    let badge = HealthSettings::default().evaluate(&node, None);
+    assert_eq!(badge.health, Health::Unknown);
+    assert!(
+        badge.reasons[0].contains("failures aren't measured"),
+        "{:?}",
+        badge.reasons
+    );
+    let warning = settings("unknown_counts_as = \"warning\"");
+    assert_eq!(health(&warning, &node, None), Health::Warning);
+    // With both run checks off, the rest decide.
+    let off = settings(
+        "[builtin.last_run_failed]\nseverity = \"off\"\n[builtin.last_run_skipped]\nseverity = \"off\"",
+    );
+    assert_eq!(health(&off, &node, None), Health::Healthy);
+}
+
 // ---------------------------------------------------------------- configuration
 
 #[test]
@@ -129,7 +156,7 @@ fn a_check_turned_off_never_decides() {
     let s = settings("[builtin.tests_required]\nseverity = \"off\"");
     let mut node = model("model.a", 0);
     node.build = Some(built());
-    let badge = s.evaluate(&node, None);
+    let badge = s.evaluate(&node, Some(&clean()));
     assert_eq!(
         badge.health,
         Health::Healthy,
@@ -144,9 +171,9 @@ fn severity_decides_what_a_failure_does() {
     let mut node = model("model.a", 0);
     node.build = Some(built());
     let error = settings("[builtin.tests_required]\nseverity = \"error\"");
-    assert_eq!(health(&error, &node, None), Health::Failing);
+    assert_eq!(health(&error, &node, Some(&clean())), Health::Failing);
     let info = settings("[builtin.tests_required]\nseverity = \"info\"");
-    let badge = info.evaluate(&node, None);
+    let badge = info.evaluate(&node, Some(&clean()));
     assert_eq!(
         badge.health,
         Health::Healthy,
@@ -170,37 +197,45 @@ fn selectors_scope_a_check_by_type_tag_path_and_name() {
     mart.build = Some(built());
     mart.path = Some("models/marts/orders.sql".into());
     assert_eq!(
-        health(&s, &mart, None),
+        health(&s, &mart, Some(&clean())),
         Health::Warning,
         "a mart needs tests"
     );
 
     let mut staging = mart.clone();
     staging.path = Some("models/staging/stg_orders.sql".into());
-    assert_eq!(health(&s, &staging, None), Health::Healthy, "not selected");
+    assert_eq!(
+        health(&s, &staging, Some(&clean())),
+        Health::Healthy,
+        "not selected"
+    );
 
     let mut experimental = mart.clone();
     experimental.tags = vec!["experimental".into()];
-    assert_eq!(health(&s, &experimental, None), Health::Healthy, "excluded");
+    assert_eq!(
+        health(&s, &experimental, Some(&clean())),
+        Health::Healthy,
+        "excluded"
+    );
 
     // A node without a known path never matches a path selector.
     let mut unknown_path = mart.clone();
     unknown_path.path = None;
-    assert_eq!(health(&s, &unknown_path, None), Health::Healthy);
+    assert_eq!(health(&s, &unknown_path, Some(&clean())), Health::Healthy);
 
     let by_name = settings("[builtin.tests_required]\nselect = { name = [\"orders\"] }");
-    assert_eq!(health(&by_name, &mart, None), Health::Warning);
+    assert_eq!(health(&by_name, &mart, Some(&clean())), Health::Warning);
     // Selecting replaces the default scope: seeds can be required to have tests too.
     let seeds = settings("[builtin.tests_required]\nselect = { resource_type = [\"seed\"] }");
     let mut seed = NodeFacts::new("seed.s", "s", "seed");
     seed.build = Some(built());
-    assert_eq!(health(&seeds, &seed, None), Health::Warning);
+    assert_eq!(health(&seeds, &seed, Some(&clean())), Health::Warning);
 }
 
 #[test]
 fn unknown_can_count_as_a_warning_never_as_healthy() {
     let s = settings("unknown_counts_as = \"warning\"");
-    let badge = s.evaluate(&model("model.a", 0), None);
+    let badge = s.evaluate(&model("model.a", 0), Some(&clean()));
     assert_eq!(badge.health, Health::Warning);
     assert!(badge.reasons.iter().any(|r| r.starts_with("never built")));
     assert_eq!(s.unknown_counts_as(), Health::Warning);
@@ -211,7 +246,7 @@ fn with_built_off_a_never_built_node_is_judged_on_the_rest() {
     let s = settings("[builtin.built]\nseverity = \"off\"");
     let node = model("model.a", 1);
     // Never built: its tests can't have passed on a build, but it has tests.
-    assert_eq!(health(&s, &node, None), Health::Healthy);
+    assert_eq!(health(&s, &node, Some(&clean())), Health::Healthy);
     assert!(s.how(true).contains("built (off)"));
 }
 
@@ -224,7 +259,7 @@ fn with_every_check_off_nothing_is_healthy() {
     let s = settings(&all_off);
     let mut node = model("model.a", 1);
     node.build = Some(passed());
-    let badge = s.evaluate(&node, None);
+    let badge = s.evaluate(&node, Some(&clean()));
     assert_eq!(badge.health, Health::Unknown);
     assert_eq!(badge.reasons, ["no enabled check applies to it"]);
 }
@@ -264,14 +299,14 @@ fn how_describes_the_configuration() {
     assert!(how.contains("tests_required (off)"), "{how}");
     assert!(how.contains("last_run_failed (error)"), "{how}");
     assert!(how.contains("built (on)"), "it never fails: {how}");
-    assert!(how.contains("failures aren't measured"), "{how}");
-    assert!(!s.how(true).contains("failures aren't measured"));
+    assert!(how.contains("last-run checks can't decide"), "{how}");
+    assert!(!s.how(true).contains("last-run checks can't decide"));
 }
 
 #[test]
 fn counts_list_every_health() {
     let s = HealthSettings::default();
-    let badges = [s.evaluate(&model("model.a", 0), None)];
+    let badges = [s.evaluate(&model("model.a", 0), Some(&clean()))];
     let counts = counts(&badges);
     assert_eq!(counts.len(), 4);
     assert_eq!(counts[&Health::Unknown], 1);
@@ -307,7 +342,7 @@ proptest! {
         let s = settings(&config);
         let mut node = NodeFacts::new("x.y", "y", kind);
         node.tests = tests;
-        prop_assert_ne!(health(&s, &node, None), Health::Healthy);
+        prop_assert_ne!(health(&s, &node, Some(&clean())), Health::Healthy);
     }
 
     /// A badge's reasons always come from its findings, and its findings are only the

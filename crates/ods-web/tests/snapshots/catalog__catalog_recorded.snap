@@ -124,7 +124,7 @@ expression: pretty(view)
     {
       "key": "health",
       "label": "Health",
-      "note": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so failures aren't measured.",
+      "note": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now.",
       "values": [
         {
           "count": 2,
@@ -196,7 +196,7 @@ expression: pretty(view)
       ]
     }
   ],
-  "health_how": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so failures aren't measured.",
+  "health_how": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now.",
   "layer_source": "the folder under the model paths",
   "query": {
     "descending": false,
@@ -228,17 +228,17 @@ expression: pretty(view)
           },
           {
             "check": "last_run_failed",
-            "reason": "the last run's record doesn't say what failed",
+            "reason": "didn't fail in the last run",
             "severity": "error",
             "source": "builtin",
-            "status": "skipped"
+            "status": "pass"
           },
           {
             "check": "last_run_skipped",
-            "reason": "the last run's record doesn't say what was skipped",
+            "reason": "wasn't skipped in the last run",
             "severity": "warn",
             "source": "builtin",
-            "status": "skipped"
+            "status": "pass"
           },
           {
             "check": "tests_required",
@@ -294,17 +294,17 @@ expression: pretty(view)
           },
           {
             "check": "last_run_failed",
-            "reason": "the last run's record doesn't say what failed",
+            "reason": "didn't fail in the last run",
             "severity": "error",
             "source": "builtin",
-            "status": "skipped"
+            "status": "pass"
           },
           {
             "check": "last_run_skipped",
-            "reason": "the last run's record doesn't say what was skipped",
+            "reason": "wasn't skipped in the last run",
             "severity": "warn",
             "source": "builtin",
-            "status": "skipped"
+            "status": "pass"
           },
           {
             "check": "tests_required",
@@ -368,17 +368,17 @@ expression: pretty(view)
           },
           {
             "check": "last_run_failed",
-            "reason": "the last run's record doesn't say what failed",
+            "reason": "didn't fail in the last run",
             "severity": "error",
             "source": "builtin",
-            "status": "skipped"
+            "status": "pass"
           },
           {
             "check": "last_run_skipped",
-            "reason": "the last run's record doesn't say what was skipped",
+            "reason": "wasn't skipped in the last run",
             "severity": "warn",
             "source": "builtin",
-            "status": "skipped"
+            "status": "pass"
           },
           {
             "check": "tests_required",

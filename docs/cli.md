@@ -1280,8 +1280,8 @@ The built-in checks, and their defaults:
 | Check | Default | Fails when |
 |---|---|---|
 | `built` | on | never fails; a node ODS never built is *unknown*. Turned off, nodes are judged on the other checks alone |
-| `last_run_failed` | `error` | it failed in the last run (from the run's record, for this scope) and hasn't been built since |
-| `last_run_skipped` | `warn` | it was skipped in the last run because something upstream failed |
+| `last_run_failed` | `error` | it failed in the last run (from the run's record, for this scope) and hasn't been built since. Without a record of this scope's last run (`ods state build`/`run` keep one beside the store), it can't decide: *unknown* |
+| `last_run_skipped` | `warn` | it was skipped in the last run because something upstream failed; *unknown* without the record, as above |
 | `tests_required` | `warn`, models and snapshots | no test reads it |
 | `tests_passed` | `warn` | it has tests, and they weren't recorded passing on its current build, or changed since |
 
@@ -1302,6 +1302,8 @@ severity = "off"
   over the node's file) and `name`. A node matches when it matches every field that is
   set, and any value within a field. A node whose file isn't known never matches a
   `path`.
+- **Home's Failing count** counts nodes a check at severity `error` failed on. When the
+  last run's failures aren't known but another check is at `error`, it reads *at least*.
 - **Errors:** a check that doesn't exist, or a glob that isn't valid, is a configuration
   error when `ods serve` starts (exit 4, `ODS-E0102`).
 - **Explanations:** each badge's tooltip and its `findings` in `/api/catalog` say which

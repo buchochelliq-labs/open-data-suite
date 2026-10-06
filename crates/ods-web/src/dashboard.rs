@@ -1099,33 +1099,49 @@ impl Dashboard {
             })
             .collect();
         let counts = ods_health::counts(&badges);
-        let none = self.catalog.nodes.is_empty();
-        // Failures are measured only from a record that says what failed, by a check
-        // that is on; without them, and without nodes, nothing is (AGENTS rule 3).
-        let failures_measured = failures.is_some() && self.health.enabled(Builtin::LastRunFailed);
+        let no_nodes = self.catalog.nodes.is_empty();
+        // Which checks can make a node failing, and whether each could decide: the
+        // last run's failures only from a record that says what failed; any other
+        // check at severity error from the project and the store (#392 review).
+        let run_failures_on = self.health.enabled(Builtin::LastRunFailed);
+        let run_failures_known = run_failures_on && failures.is_some();
+        let other_errors = self.health.checks().iter().any(|(check, severity)| {
+            *check != Builtin::LastRunFailed && *severity == Some(ods_health::Severity::Error)
+        });
         HEALTHS
             .iter()
             .map(|&health| {
-                let measured = !none && (health != Health::Failing || failures_measured);
-                let count = measured.then(|| counts.get(&health).copied().unwrap_or(0));
+                let (measured, how, note) = match health {
+                    Health::Failing => match (run_failures_on, run_failures_known, other_errors) {
+                        (_, true, _) | (false, _, true) => (true, health.how().to_owned(), None),
+                        (true, false, true) => (
+                            true,
+                            "Nodes a check at severity error failed on. The last run's record doesn't say what failed, so nodes that failed in it aren't counted here: they read unknown.".to_owned(),
+                            Some("at least: the last run's failures aren't measured".to_owned()),
+                        ),
+                        (true, false, false) => (
+                            false,
+                            "Not measured: the last run's record doesn't say what failed.".to_owned(),
+                            None,
+                        ),
+                        (false, _, false) => (
+                            false,
+                            "Not measured: no check is at severity error (see [health] in ods.toml).".to_owned(),
+                            None,
+                        ),
+                    },
+                    _ => (true, health.how().to_owned(), None),
+                };
+                let count =
+                    (!no_nodes && measured).then(|| counts.get(&health).copied().unwrap_or(0));
                 CountRow {
                     key: health.key(),
                     label: health.label(),
                     count,
                     of: None,
-                    how: match health {
-                        Health::Failing if !self.health.enabled(Builtin::LastRunFailed) => {
-                            "Not measured: the last_run_failed check is off ([health.builtin.last_run_failed])."
-                                .to_owned()
-                        }
-                        Health::Failing if failures.is_none() => {
-                            "Not measured: the last run's record doesn't say what failed."
-                                .to_owned()
-                        }
-                        _ => health.how().to_owned(),
-                    },
+                    how,
                     href: count.map(|_| format!("catalog?health={}", health.key())),
-                    note: None,
+                    note,
                 }
             })
             .collect()

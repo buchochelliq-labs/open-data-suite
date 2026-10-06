@@ -33,6 +33,8 @@ libc.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+ods-config.workspace = true
+toml.workspace = true
 ods-provider-fake.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 

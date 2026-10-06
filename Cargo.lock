@@ -1487,6 +1487,7 @@ dependencies = [
  "html-escape",
  "insta",
  "libc",
+ "ods-config",
  "ods-core",
  "ods-erd",
  "ods-health",
@@ -1500,6 +1501,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "toml",
  "tracing",
 ]
 
