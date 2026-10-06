@@ -226,7 +226,7 @@ expression: pretty(&body)
     "target": null,
     "triggered_by": null
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "scope": "jaffle_ods/dev",
   "started_at": "2026-09-29T00:04:10Z",
   "state_rule": "This run recorded no snapshot (inferred: no listed snapshot has its id). Snapshot 3 was the last good state when it ran. A failed run never replaces the last good state; its successful builds, if any, weren't recorded.",

@@ -147,7 +147,7 @@ expression: pretty(&body)
     "status": "not_needed",
     "value": null
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "sources": [],
   "verdict": "customers would be built",
   "warnings": []

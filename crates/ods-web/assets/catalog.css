@@ -73,7 +73,7 @@ table.cat { width: 100%; border-collapse: collapse; font-size: 13px; table-layou
 .cat th a.on { color: var(--fg); font-weight: 600; }
 .cat th .arrow { color: var(--faint); font-size: 11px; }
 .cat th:nth-child(2) { width: 110px; } .cat th:nth-child(3) { width: 76px; } .cat th:nth-child(4) { width: 90px; }
-.cat th:nth-child(5) { width: 92px; } .cat th:nth-child(6) { width: 110px; } .cat th:nth-child(7) { width: 70px; } .cat th:nth-child(8) { width: 118px; }
+.cat th:nth-child(5) { width: 92px; } .cat th:nth-child(6) { width: 110px; } .cat th:nth-child(7) { width: 100px; } .cat th:nth-child(8) { width: 118px; }
 .cat td { height: 38px; border-top: 1px solid var(--line); color: var(--heading-muted); padding: 0 8px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cat td.name { display: flex; align-items: center; gap: 8px; height: 38px; }
 .cat td.name a { overflow: hidden; text-overflow: ellipsis; }
@@ -143,3 +143,5 @@ ol.reasons code { font-size: 12px; background: var(--bg); border: 1px solid var(
 }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .cols a.simulate { font-size: 12px; white-space: nowrap; }
+.health-legend .hdot { width: 8px; height: 8px; box-sizing: border-box; }
+.health-legend .how { flex-basis: 100%; }

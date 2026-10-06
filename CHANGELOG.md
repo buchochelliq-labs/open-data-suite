@@ -13,6 +13,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Breaking
+- The dashboard's JSON view models (`/api/home`, `/api/catalog`, `/api/shell` and the
+  other page APIs) are now at `schema_version` 3 (#354): a Catalog row's `health` is an
+  object (`health`, `reasons`) instead of `null`, Home's `coverage` rows replace
+  `placeholder` with `how` and `uncovered`, and its count rows gain `of`, `how`, `href`
+  and `note`. **What to do:** a script reading these APIs reads the new fields; the
+  live stream (`/api/runs/live`, `live_schema_version`) is unchanged.
 - The SQLite state database migrates to version 2 the first time an `ods state`
   command that opens it for use (`run`, `build`, `plan`, `history`, `test`, `export`, …)
   runs (a new `runs` table, the run ledger, ADR-0029); a copy of version 1 is kept beside
@@ -26,6 +32,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   store that keeps no ledger needs no change.
 
 ### Added
+- Health and coverage on the dashboard from real signals, replacing the `[n]`
+  placeholders. Each node in the Catalog has a health badge (*failing*, *warning*,
+  *healthy* or *unknown*), with its reasons and a `health` filter. Home counts nodes by
+  health, stale nodes and runs with failures, and shows coverage of tests, descriptions,
+  column constraints and source freshness, each listing what it misses. What ODS can't
+  measure reads *not measured*, never 0
+  ([docs](docs/cli.md#the-catalog-and-model-pages)) (#390, #354)
 - The dashboard's **Freshness evidence** screen (`/catalog/sources`, under Catalog):
   for each source and seed, the evidence ODS has about its data now, its grade
   (*exact*, *semantic*, *proxy*, *inferred*, *unknown*), what its readers were last

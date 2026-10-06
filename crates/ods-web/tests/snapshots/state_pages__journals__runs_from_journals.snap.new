@@ -105,7 +105,7 @@ expression: pretty(&body)
           "value": "1d"
         },
         {
-          "count": 1,
+          "count": 0,
           "label": "Last 7 days",
           "selected": false,
           "value": "7d"

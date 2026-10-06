@@ -547,7 +547,7 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
         "Catalog / Models, as the design: {page}"
     );
     assert!(page.contains(r#"<a href="lineage" data-section="lineage">"#));
-    // Rows: decision pills, last build, health placeholder, links to model pages.
+    // Rows: decision pills, last build, health (#354), links to model pages.
     assert!(page.contains(
         r#"<a class="mono" href="catalog/model.shop.orders" title="model.shop.orders">orders</a>"#
     ));
@@ -565,7 +565,24 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
         r#"title="snapshot 2, run 9ea38bd5-0000-4000-8000-000000000002, finished 2026-09-28T09:00:00Z">2 · 9ea38bd5</span>"#
     ));
     assert!(page.contains(r#"<span class="never">never built</span>"#));
-    assert!(page.contains(">[n]</span>"), "health waits for #117");
+    // Health: orders' tests passed on its build as they are now; customers was never
+    // built; the seed needs no tests.
+    for (node, health) in [
+        ("model.shop.orders", "healthy"),
+        ("model.shop.customers", "unknown"),
+        ("seed.shop.raw_orders", "healthy"),
+    ] {
+        let row = page
+            .split(&format!(r#"<tr data-node="{node}">"#))
+            .nth(1)
+            .and_then(|r| r.split("</tr>").next())
+            .unwrap_or_else(|| panic!("no row for {node}"));
+        assert!(
+            row.contains(&format!(r#"data-health="{health}""#)),
+            "{node}: {row}"
+        );
+    }
+    assert!(!page.contains(">[n]</span>"), "no placeholder is left");
     assert!(page.contains("python model"));
     assert!(page.contains("decisions against snapshot 2"));
     assert!(

@@ -60,6 +60,16 @@ Never built
 Unknown
 0
 From the plan against the latest snapshot, made offline. Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts).
+HEALTH
+Healthy
+7
+Warning
+6
+Failing
+0
+Unknown
+0
+Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS.
 LINEAGE CONFIDENCE
 parsed
 8
@@ -93,43 +103,56 @@ Name
 ↕
 customer_order_rank
 model	marts	table
-parsed	BUILD	[n]	1 · <run>
+parsed	BUILD
+Healthy	1 · <run>
 customer_segments
 python model	marts	table
-opaque	BUILD	[n]	3 · <run>
+opaque	BUILD
+Warning	3 · <run>
 customers
 model	marts	table
-parsed	BUILD	[n]	2 · <run>
+parsed	BUILD
+Warning	2 · <run>
 customers_snapshot_view
 model	marts	view
-parsed	BUILD	[n]	2 · <run>
+parsed	BUILD
+Warning	2 · <run>
 order_events
 model	marts	table
-parsed	REUSE	[n]	1 · <run>
+parsed	REUSE
+Warning	1 · <run>
 orders
 model	marts	table
-parsed	BUILD	[n]	1 · <run>
+parsed	BUILD
+Healthy	1 · <run>
 raw_customers
 seed	n/a	seed
-n/a	REUSE	[n]	1 · <run>
+n/a	REUSE
+Healthy	1 · <run>
 raw_orders
 seed	n/a	seed
-n/a	REUSE	[n]	1 · <run>
+n/a	REUSE
+Healthy	1 · <run>
 raw_payments
 seed	n/a	seed
-n/a	REUSE	[n]	1 · <run>
+n/a	REUSE
+Healthy	1 · <run>
 segment_summary
 model	marts	table
-inferred	BUILD	[n]	3 · <run>
+inferred	BUILD
+Warning	3 · <run>
 stg_customers
 model	staging	view
-parsed	REUSE	[n]	1 · <run>
+parsed	REUSE
+Warning	1 · <run>
 stg_orders
 model	staging	view
-parsed	REUSE	[n]	1 · <run>
+parsed	REUSE
+Healthy	1 · <run>
 stg_payments
 model	staging	view
-parsed	REUSE	[n]	1 · <run>
+parsed	REUSE
+Healthy	1 · <run>
 BUILD
 will run
 REUSE
@@ -142,5 +165,8 @@ Last built: snapshot · run
 Layer*
 Inferred from each model's first folder under the model paths (its dbt fqn), not declared. Seeds have none.
 Health
-[n]
-health signals from run, test and freshness evidence come later (#117)
+healthy
+warning
+failing
+unknown
+Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS.

@@ -43,8 +43,9 @@ under each heading are the design boards.
 
 ### Home: project health
 
-**Built** (#310). Health and coverage are still `[n]` placeholders, and a run's
-outcome on Home reads *recorded* (the Runs page has the journal's outcome).
+**Built** (#310). Health and coverage come from real signals (#354), and say *not
+measured* where ODS can't tell. A run's outcome in Home's run list reads *recorded*
+(the Runs page has the journal's outcome).
 
 ![Home](images/main.png)
 
@@ -53,12 +54,13 @@ outcome on Home reads *recorded* (the Runs page has the journal's outcome).
 - **Needs attention:** changed, unknown-evidence and opaque nodes.
 - **Summary panels:** health, test and doc coverage, and which modules are set up.
 
-**Needs:** State history (`ods state history`) and the plan. Health and coverage are
-`[n]` until the health signals exist.
+**Needs:** State history (`ods state history`), the plan, the last run's record and the
+manifest (for coverage).
 
 ### Catalog: models
 
-**Built** (#313). The health badge is `[n]` until the health signals exist (#117).
+**Built** (#313). Each node's health badge (#354) comes from the last run's record, its
+last build and its tests; the `health` facet filters by it. Scores and trends are #117.
 
 ![The Catalog and a model page in ods serve](../../assets/recordings/dashboard/catalog/catalog.webp)
 

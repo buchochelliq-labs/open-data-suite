@@ -28,6 +28,7 @@ mod erd_page;
 mod fonts;
 pub mod freshness;
 mod freshness_page;
+pub mod health;
 mod home;
 pub mod impact;
 mod impact_page;

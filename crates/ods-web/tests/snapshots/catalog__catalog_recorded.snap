@@ -122,6 +122,37 @@ expression: pretty(view)
       ]
     },
     {
+      "key": "health",
+      "label": "Health",
+      "note": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
+      "values": [
+        {
+          "count": 2,
+          "label": "Healthy",
+          "selected": false,
+          "value": "healthy"
+        },
+        {
+          "count": 0,
+          "label": "Warning",
+          "selected": false,
+          "value": "warning"
+        },
+        {
+          "count": 0,
+          "label": "Failing",
+          "selected": false,
+          "value": "failing"
+        },
+        {
+          "count": 1,
+          "label": "Unknown",
+          "selected": false,
+          "value": "unknown"
+        }
+      ]
+    },
+    {
       "key": "lineage",
       "label": "Lineage confidence",
       "note": "Column lineage from the SQL; seeds have none (n/a).",
@@ -165,6 +196,7 @@ expression: pretty(view)
       ]
     }
   ],
+  "health_how": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
   "layer_source": "the folder under the model paths",
   "query": {
     "descending": false,
@@ -185,7 +217,12 @@ expression: pretty(view)
         ],
         "summary": "no successful build recorded"
       },
-      "health": null,
+      "health": {
+        "health": "unknown",
+        "reasons": [
+          "never built by ODS: nothing to judge it on"
+        ]
+      },
       "href": "catalog/model.shop.customers",
       "id": "model.shop.customers",
       "last_build": null,
@@ -209,7 +246,13 @@ expression: pretty(view)
         ],
         "summary": "sql changed since run 9ea38bd5"
       },
-      "health": null,
+      "health": {
+        "health": "healthy",
+        "reasons": [
+          "built in run 9ea38bd5 at 2026-09-28T09:00:00Z",
+          "its tests passed in run 9ea38bd5 at 2026-09-28T09:05:00Z"
+        ]
+      },
       "href": "catalog/model.shop.orders",
       "id": "model.shop.orders",
       "last_build": {
@@ -240,7 +283,13 @@ expression: pretty(view)
         ],
         "summary": "code and inputs unchanged since run e6f54fe3"
       },
-      "health": null,
+      "health": {
+        "health": "healthy",
+        "reasons": [
+          "built in run e6f54fe3 at 2026-09-27T09:00:00Z",
+          "a seed has no tests to run"
+        ]
+      },
       "href": "catalog/seed.shop.raw_orders",
       "id": "seed.shop.raw_orders",
       "last_build": {
@@ -258,6 +307,6 @@ expression: pretty(view)
       "type_label": "seed"
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "total": 3
 }

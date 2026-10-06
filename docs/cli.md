@@ -683,7 +683,7 @@ column lineage. The URL holds the change (`?column=orders.amount&change=drop`, a
 `&to=` for the new name or type), so a simulation is a link to share. Each column on a
 Model page's *Columns* tab has a *Simulate* link that opens it with that column.
 `/api/lineage/impact` takes the same query and returns the page's view model at
-`schema_version` 2.
+`schema_version` 3.
 
 The simulator doesn't yet read dbt model contracts or exposures, so it can't warn that
 an enforced contract must change too, or name the dashboards downstream.
@@ -718,7 +718,7 @@ is not a relationship.
   keys gets no test: which side references which isn't known until a key is tested.
   *Already tested* lists the rest.
 - **Export SVG** downloads the diagram as drawn. *JSON* is `/api/erd` with the same
-  scope: the view model at `schema_version` 2, with the ERD itself at its own
+  scope: the view model at `schema_version` 3, with the ERD itself at its own
   `schema_version` 1. *Every relationship* lists them all as a table, which also works
   without script.
 
@@ -751,7 +751,16 @@ Home shows:
   `never built`, `new upstream data`), including reasons the list doesn't show. It says
   *Nothing* only when the plan builds nothing. The plan is made again on every page
   load, because a lag tolerance can run out while no file changes;
-- **health and coverage:** `[n]` placeholders until the health signals exist (#117);
+- **health** (#354): nodes counted by their health badge (below), each count linking to
+  them in the Catalog. Under them, *Stale* counts the nodes the plan rebuilds because
+  something changed since their last build, and *Runs with failures* counts the listed
+  runs that failed or partly failed, out of those whose outcome is known, with the last
+  run's outcome;
+- **coverage** (#354): models with tests, with descriptions and with column constraints,
+  and sources whose new data ODS can measure. Each bar lists what it doesn't cover,
+  linked. A signal ODS can't measure (e.g. failures without the last run's record, or
+  coverage of sources when there are none) reads *not measured*, never 0; each row's
+  tooltip says how it was worked out;
 - **modules:** *Ready* for what this page reads (lineage, and State once a run is
   recorded); *Available* for modules that work from the CLI but aren't checked here
   (ERD); *Planned* for the rest.
@@ -766,7 +775,7 @@ comes later. The search box hands its text to the explorer's search.
 
 The dashboard never writes configuration or state: the database is opened read-only,
 and every route is `GET`. `/api/shell` and `/api/home` return exactly what the page
-shows, as JSON view models at `schema_version` 2. The page uses IBM Plex, served by
+shows, as JSON view models at `schema_version` 3. The page uses IBM Plex, served by
 `ods serve` itself (no font CDN), with system fonts as the fallback.
 
 ### State pages
@@ -825,7 +834,7 @@ What the pages claim is what ODS records, and no more:
   logs (a failed node's summary says where dbt's full message is). CI runs are a
   *Planned* tab until server mode.
 
-The same view models are served as JSON at `schema_version` 2, `GET` only:
+The same view models are served as JSON at `schema_version` 3, `GET` only:
 `/api/state/plan` (with the same `?node=` and `?action=`), `/api/state/plan/<node>`
 (404 if not planned), `/api/state/runs` (with the same filters) and
 `/api/state/runs/<run_id>` (404 if not listed). Beyond loopback they leave out local
@@ -949,8 +958,17 @@ manifest, with facets to filter by and counts over every node:
 The table sorts by any column (decisions and confidences in the facets' order), and
 shows each node's last successful build as `snapshot · run` (when, in the tooltip) or
 *never built*. The builds come from the same snapshot the plan is made against. The
-Catalog has its own name search (`/` focuses it) in place of the header's. Health is `[n]` until
-the health signals exist (#117). Facets, the name search and the sort are in the URL
+Catalog has its own name search (`/` focuses it) in place of the header's. Each node's
+**health** badge (#354), with its reasons in the tooltip, is one of:
+- *failing:* it failed in the last run and hasn't been built since;
+- *warning:* it is built, but a model or snapshot has no tests, its tests weren't
+  recorded passing on this build or changed since, or it was skipped in the last run;
+- *healthy:* it is built, and its tests passed on this build as they are now (a seed
+  needs none);
+- *unknown:* ODS never built it.
+
+Failures come from the last run's record (`ods state build`/`run` keep it beside the
+store); without one they aren't counted. The `health` facet filters by it. Facets, the name search and the sort are in the URL
 query (`/catalog?layer=marts&decision=build&sort=last_built&desc=1`), so a filtered
 view can be bookmarked; the page works without script.
 
@@ -1006,7 +1024,7 @@ percent-encoding, gets a 404 page; `/catalog/` redirects to `/catalog`. Without 
 store, every node reads *never built* and its last build *never*.
 
 `/api/catalog` (with the same query) and `/api/catalog/<unique_id>` return the view
-models the pages render, at `schema_version` 2; every tab's data is in the latter,
+models the pages render, at `schema_version` 3; every tab's data is in the latter,
 including `relation_url`, `relation_url_label` and `relation_url_unavailable` (below).
 Beyond loopback they leave out file paths and error text.
 

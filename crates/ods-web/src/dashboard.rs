@@ -20,7 +20,7 @@ pub mod state;
 
 /// Version of the dashboard view models in `/api/shell` and `/api/home`. Additive
 /// fields don't change it; a removed or retyped field does.
-pub const DASHBOARD_SCHEMA_VERSION: u32 = 2;
+pub const DASHBOARD_SCHEMA_VERSION: u32 = 3;
 
 /// How many recent runs Home lists.
 pub const RECENT_RUNS: usize = 5;
@@ -671,10 +671,15 @@ pub struct HomeView {
     pub attention_more: usize,
     /// The plan the attention list comes from.
     pub plan: Option<PlanSummary>,
-    /// Health signals; counts are `None` until they exist (#117).
+    /// Nodes by health (#354), each row linking to them in the Catalog; a count is
+    /// `None` when it isn't measured.
     pub health: Vec<CountRow>,
-    /// Test and documentation coverage; counts are `None` until they exist (#117).
-    pub coverage: Vec<CoverageRow>,
+    /// How the health badges are worked out.
+    pub health_how: String,
+    /// Other signals: stale state, and runs with failures (#354).
+    pub signals: Vec<CountRow>,
+    /// Test, documentation, constraint and source-freshness coverage (#354).
+    pub coverage: Vec<crate::health::Coverage>,
     /// Which modules are set up.
     pub modules: Vec<ModuleStatus>,
 }
@@ -847,7 +852,7 @@ fn builds_for(plan: &ExecutionPlan) -> Vec<ReasonCount> {
     counts
 }
 
-/// A labelled count.
+/// A labelled count, and how it was worked out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -856,25 +861,16 @@ pub struct CountRow {
     pub key: &'static str,
     /// Its label.
     pub label: &'static str,
-    /// The count; `None` until it is measured.
+    /// The count; `None` when it isn't measured (never shown as 0).
     pub count: Option<usize>,
-}
-
-/// A coverage bar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub struct CoverageRow {
-    /// Stable key.
-    pub key: &'static str,
-    /// Its label.
-    pub label: &'static str,
-    /// What the placeholder stands for, e.g. `tested`.
-    pub placeholder: &'static str,
-    /// How many are covered; `None` until it is measured.
-    pub count: Option<usize>,
-    /// Out of how many.
-    pub total: usize,
+    /// Out of how many, when it is a share.
+    pub of: Option<usize>,
+    /// How it was worked out, for people.
+    pub how: String,
+    /// What it counts, relative to the dashboard's root, when it is measured.
+    pub href: Option<String>,
+    /// A line under it, e.g. the last run's outcome.
+    pub note: Option<String>,
 }
 
 // ----------------------------------------------------------------------- building
@@ -1004,13 +1000,13 @@ impl Dashboard {
                 fresh.planner = None;
                 let mut this = self.clone();
                 this.state = StateInput::Recorded(Box::new(fresh));
-                this.render_home(details)
+                this.render_home(details, now)
             }
-            _ => self.render_home(details),
+            _ => self.render_home(details, now),
         }
     }
 
-    fn render_home(&self, details: bool) -> HomeView {
+    fn render_home(&self, details: bool, now: Timestamp) -> HomeView {
         let names = self.names();
         let name_of = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
         let order = self.plan_order();
@@ -1041,7 +1037,6 @@ impl Dashboard {
             .collect();
         let (state, empty) = self.state_status(details);
         let (attention, attention_more) = self.attention();
-        let models = self.node_kinds.get("model").copied().unwrap_or(0);
         HomeView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             scope: self.scope.clone(),
@@ -1062,36 +1057,125 @@ impl Dashboard {
             attention,
             attention_more,
             plan: self.plan_summary(details),
-            health: [
-                ("healthy", "Healthy"),
-                ("warning", "Warning"),
-                ("failing", "Failing"),
-                ("unknown", "Unknown"),
-            ]
-            .map(|(key, label)| CountRow {
-                key,
-                label,
-                count: None,
-            })
-            .to_vec(),
-            coverage: vec![
-                CoverageRow {
-                    key: "tests",
-                    label: "Models with tests",
-                    placeholder: "tested",
-                    count: None,
-                    total: models,
-                },
-                CoverageRow {
-                    key: "descriptions",
-                    label: "Models with descriptions",
-                    placeholder: "described",
-                    count: None,
-                    total: models,
-                },
-            ],
+            health: self.health_rows(),
+            health_how: crate::health::badges_how(self.last_failures().is_some()),
+            signals: self.signals(details, now),
+            coverage: crate::health::coverage(&self.catalog, &self.freshness),
             modules: self.modules.clone(),
         }
+    }
+
+    /// What the last run's record says failed, when it says.
+    pub(crate) fn last_failures(&self) -> Option<crate::health::LastFailures> {
+        crate::health::LastFailures::of(self.history().and_then(|h| h.last_run.as_ref()))
+    }
+
+    /// Nodes by health (#354): each badge from the Catalog's nodes, linking to them.
+    fn health_rows(&self) -> Vec<CountRow> {
+        use crate::health::{HEALTHS, Health, node_health};
+        let failures = self.last_failures();
+        let mut counts: BTreeMap<Health, usize> = BTreeMap::new();
+        for node in &self.catalog.nodes {
+            *counts
+                .entry(node_health(&self.catalog, failures.as_ref(), node).health)
+                .or_default() += 1;
+        }
+        let none = self.catalog.nodes.is_empty();
+        HEALTHS
+            .iter()
+            .map(|&health| {
+                // Failures are only counted from a record that says what failed; without
+                // one, and without nodes, nothing is measured (AGENTS rule 3).
+                let measured = !none && (health != Health::Failing || failures.is_some());
+                let count = measured.then(|| counts.get(&health).copied().unwrap_or(0));
+                CountRow {
+                    key: health.key(),
+                    label: health.label(),
+                    count,
+                    of: None,
+                    how: match health {
+                        Health::Failing if failures.is_none() => {
+                            "Not measured: the last run's record doesn't say what failed."
+                                .to_owned()
+                        }
+                        _ => health.how().to_owned(),
+                    },
+                    href: count.map(|_| format!("catalog?health={}", health.key())),
+                    note: None,
+                }
+            })
+            .collect()
+    }
+
+    /// Stale state and runs with failures (#354).
+    fn signals(&self, details: bool, now: Timestamp) -> Vec<CountRow> {
+        let stale = self
+            .recorded()
+            .and_then(|r| r.plan.as_ref().ok())
+            .map(|plan| {
+                plan.with_action(PlanAction::Build)
+                    .filter(|e| {
+                        e.reasons
+                            .first()
+                            .is_some_and(|r| r.code != ReasonCode::NeverBuilt)
+                    })
+                    .count()
+            });
+        let rows = if self.history().is_some() {
+            self.run_rows(details, now)
+        } else {
+            Vec::new()
+        };
+        let known: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.outcome,
+                    state::RunOutcome::Succeeded
+                        | state::RunOutcome::Partial
+                        | state::RunOutcome::Failed
+                )
+            })
+            .collect();
+        let failed = known.iter().filter(|r| r.outcome.failed()).count();
+        vec![
+            CountRow {
+                key: "stale",
+                label: "Stale",
+                count: stale,
+                of: None,
+                how: if stale.is_some() {
+                    "Nodes the plan rebuilds because something changed since their last \
+                     build (code, data, checks or target); never-built nodes aren't counted."
+                        .to_owned()
+                } else {
+                    "Not measured: there is no plan against recorded state.".to_owned()
+                },
+                href: stale.map(|_| "catalog?decision=build".to_owned()),
+                note: None,
+            },
+            CountRow {
+                key: "failed_runs",
+                label: "Runs with failures",
+                count: (!known.is_empty()).then_some(failed),
+                of: (!known.is_empty()).then_some(known.len()),
+                how: if known.is_empty() {
+                    "Not measured: no listed run's outcome is known (from its journal or \
+                     the last run's record)."
+                        .to_owned()
+                } else {
+                    format!(
+                        "Runs that failed or partly failed, out of the {} listed whose \
+                         outcome is known; runs only their snapshot records aren't counted.",
+                        known.len()
+                    )
+                },
+                href: (!known.is_empty()).then(|| "state/runs".to_owned()),
+                note: rows
+                    .first()
+                    .map(|r| format!("last run: {}", r.outcome.word())),
+            },
+        ]
     }
 
     /// The plan against the latest snapshot, or why there is none.

@@ -72,7 +72,7 @@ expression: pretty(&body)
       "why": "code and inputs unchanged since run 9ea38bd5"
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "scope": "jaffle_ods/dev",
   "selected": {
     "action": "build",
@@ -219,7 +219,7 @@ expression: pretty(&body)
       "status": "not_needed",
       "value": null
     },
-    "schema_version": 2,
+    "schema_version": 3,
     "sources": [],
     "verdict": "customers would be built",
     "warnings": []

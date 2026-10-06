@@ -124,7 +124,7 @@ expression: pretty(&body)
     },
     "triggered_by": null
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "scope": "jaffle_ods/dev",
   "started_at": null,
   "state_rule": "Snapshot 3 replaced snapshot 2 with this run's successful builds; every other node keeps its last good build. Whether any node failed isn't stored for this run: it has no run journal.",

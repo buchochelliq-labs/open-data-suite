@@ -117,7 +117,7 @@ expression: pretty(view)
   "name": "orders",
   "relation": "db.orders",
   "resource_type": "model",
-  "schema_version": 2,
+  "schema_version": 3,
   "tags": [
     "core"
   ],

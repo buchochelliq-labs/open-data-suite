@@ -307,12 +307,13 @@ impl LastBuild {
 // ------------------------------------------------------------------------ queries
 
 /// The facets, in order: key (also the query parameter), label.
-const FACETS: [(&str, &str); 6] = [
+const FACETS: [(&str, &str); 7] = [
     ("type", "Resource type"),
     ("layer", "Layer"),
     ("materialized", "Materialization"),
     ("tag", "Tags"),
     ("decision", "Next-run decision"),
+    ("health", "Health"),
     ("lineage", "Lineage confidence"),
 ];
 
@@ -598,8 +599,8 @@ pub struct CatalogRow {
     pub lineage: LineageConfidence,
     /// Its next-run decision.
     pub decision: DecisionView,
-    /// Its health; `None` until health signals exist (#117).
-    pub health: Option<String>,
+    /// Its health, and why (#354).
+    pub health: crate::health::HealthBadge,
     /// Its last successful build; `None` when never built.
     pub last_build: Option<LastBuildView>,
     /// Its page, relative to the dashboard's root.
@@ -617,6 +618,8 @@ pub struct CatalogView {
     pub query: CatalogQuery,
     /// Where the decisions come from.
     pub decisions: DecisionsBasis,
+    /// How the health badges are worked out (#354).
+    pub health_how: String,
     /// How layers are worked out: they are derived, never declared.
     pub layer_source: Option<String>,
     /// The facets, in order; counts are over every node.
@@ -854,6 +857,8 @@ pub(crate) struct Context<'a> {
     pub(crate) children: BTreeMap<&'a str, Vec<&'a str>>,
     /// Run ids to shorten in messages, longest first so none is cut by another.
     runs: Vec<&'a str>,
+    /// What the last run's record says failed, when it says (#354).
+    failures: Option<crate::health::LastFailures>,
 }
 
 impl<'a> Context<'a> {
@@ -895,6 +900,7 @@ impl<'a> Context<'a> {
             nodes: input.nodes.iter().map(|n| (n.id.as_str(), n)).collect(),
             children,
             runs,
+            failures: dashboard.last_failures(),
         }
     }
 
@@ -1081,7 +1087,7 @@ impl<'a> Context<'a> {
             tags: node.tags.clone(),
             lineage: self.confidence(&node.id),
             decision: self.decision(&node.id),
-            health: None,
+            health: crate::health::node_health(self.input, self.failures.as_ref(), node),
             last_build: self.last_build(&node.id),
             href: node_href(&node.id),
         }
@@ -1107,6 +1113,7 @@ fn facet_values(row: &CatalogRow, facet: &str) -> Vec<String> {
         "tag" => row.tags.clone(),
         "decision" => vec![row.decision.decision.key().to_owned()],
         "lineage" => vec![row.lineage.key().to_owned()],
+        "health" => vec![row.health.health.key().to_owned()],
         _ => Vec::new(),
     }
 }
@@ -1204,6 +1211,10 @@ fn facet_order(
         "lineage" => CONFIDENCES
             .iter()
             .map(|c| (c.key().to_owned(), c.key().to_owned()))
+            .collect(),
+        "health" => crate::health::HEALTHS
+            .iter()
+            .map(|h| (h.key().to_owned(), h.label().to_owned()))
             .collect(),
         "layer" => {
             let depths = dag_depths(cx);
@@ -1316,6 +1327,7 @@ fn facets(cx: &Context<'_>, all: &[CatalogRow], query: &CatalogQuery) -> Vec<Fac
                     "decision" => Some(format!(
                         "From the plan against the latest snapshot, made offline. {REUSE_CAVEAT}"
                     )),
+                    "health" => Some(crate::health::badges_how(cx.failures.is_some())),
                     _ => None,
                 },
                 values,
@@ -1354,6 +1366,7 @@ impl Dashboard {
             query: query.clone(),
             decisions: cx.basis.clone(),
             layer_source: cx.input.layer_source.clone(),
+            health_how: crate::health::badges_how(cx.failures.is_some()),
             facets,
             total: cx.input.nodes.len(),
             rows,

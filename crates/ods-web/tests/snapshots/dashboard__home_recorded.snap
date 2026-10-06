@@ -27,42 +27,77 @@ expression: pretty(&body)
   "coverage": [
     {
       "count": null,
+      "how": "No models to measure.",
       "key": "tests",
       "label": "Models with tests",
-      "placeholder": "tested",
-      "total": 8
+      "total": 0,
+      "uncovered": []
     },
     {
       "count": null,
+      "how": "No models to measure.",
       "key": "descriptions",
       "label": "Models with descriptions",
-      "placeholder": "described",
-      "total": 8
+      "total": 0,
+      "uncovered": []
+    },
+    {
+      "count": null,
+      "how": "No models to measure.",
+      "key": "constraints",
+      "label": "Models with constraints",
+      "total": 0,
+      "uncovered": []
+    },
+    {
+      "count": null,
+      "how": "No sources declared: nothing to measure.",
+      "key": "source_freshness",
+      "label": "Sources with freshness",
+      "total": 0,
+      "uncovered": []
     }
   ],
   "empty": null,
   "health": [
     {
       "count": null,
+      "how": "Built, and its tests passed on that build as they are now (a seed needs none).",
+      "href": null,
       "key": "healthy",
-      "label": "Healthy"
+      "label": "Healthy",
+      "note": null,
+      "of": null
     },
     {
       "count": null,
+      "how": "Built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run.",
+      "href": null,
       "key": "warning",
-      "label": "Warning"
+      "label": "Warning",
+      "note": null,
+      "of": null
     },
     {
       "count": null,
+      "how": "Not measured: the last run's record doesn't say what failed.",
+      "href": null,
       "key": "failing",
-      "label": "Failing"
+      "label": "Failing",
+      "note": null,
+      "of": null
     },
     {
       "count": null,
+      "how": "Never built by ODS: nothing to judge it on.",
+      "href": null,
       "key": "unknown",
-      "label": "Unknown"
+      "label": "Unknown",
+      "note": null,
+      "of": null
     }
   ],
+  "health_how": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
   "last_run": {
     "built": 2,
     "built_names": [
@@ -171,8 +206,28 @@ expression: pretty(&body)
       "snapshot": 1
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "scope": "jaffle_ods/dev",
+  "signals": [
+    {
+      "count": 3,
+      "how": "Nodes the plan rebuilds because something changed since their last build (code, data, checks or target); never-built nodes aren't counted.",
+      "href": "catalog?decision=build",
+      "key": "stale",
+      "label": "Stale",
+      "note": null,
+      "of": null
+    },
+    {
+      "count": null,
+      "how": "Not measured: no listed run's outcome is known (from its journal or the last run's record).",
+      "href": null,
+      "key": "failed_runs",
+      "label": "Runs with failures",
+      "note": null,
+      "of": null
+    }
+  ],
   "state": "recorded",
   "store": {
     "full": ".ods/state.db",

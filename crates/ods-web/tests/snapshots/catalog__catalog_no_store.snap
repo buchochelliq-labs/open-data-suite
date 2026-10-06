@@ -120,6 +120,37 @@ expression: pretty(view.clone())
       ]
     },
     {
+      "key": "health",
+      "label": "Health",
+      "note": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
+      "values": [
+        {
+          "count": 0,
+          "label": "Healthy",
+          "selected": false,
+          "value": "healthy"
+        },
+        {
+          "count": 0,
+          "label": "Warning",
+          "selected": false,
+          "value": "warning"
+        },
+        {
+          "count": 0,
+          "label": "Failing",
+          "selected": false,
+          "value": "failing"
+        },
+        {
+          "count": 3,
+          "label": "Unknown",
+          "selected": false,
+          "value": "unknown"
+        }
+      ]
+    },
+    {
       "key": "lineage",
       "label": "Lineage confidence",
       "note": "Column lineage from the SQL; seeds have none (n/a).",
@@ -163,6 +194,7 @@ expression: pretty(view.clone())
       ]
     }
   ],
+  "health_how": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
   "layer_source": "the folder under the model paths",
   "query": {
     "descending": false,
@@ -177,7 +209,12 @@ expression: pretty(view.clone())
         "reasons": [],
         "summary": "no state store yet: nothing was ever recorded, so it builds next run"
       },
-      "health": null,
+      "health": {
+        "health": "unknown",
+        "reasons": [
+          "never built by ODS: nothing to judge it on"
+        ]
+      },
       "href": "catalog/model.shop.customers",
       "id": "model.shop.customers",
       "last_build": null,
@@ -195,7 +232,12 @@ expression: pretty(view.clone())
         "reasons": [],
         "summary": "no state store yet: nothing was ever recorded, so it builds next run"
       },
-      "health": null,
+      "health": {
+        "health": "unknown",
+        "reasons": [
+          "never built by ODS: nothing to judge it on"
+        ]
+      },
       "href": "catalog/model.shop.orders",
       "id": "model.shop.orders",
       "last_build": null,
@@ -215,7 +257,12 @@ expression: pretty(view.clone())
         "reasons": [],
         "summary": "no state store yet: nothing was ever recorded, so it builds next run"
       },
-      "health": null,
+      "health": {
+        "health": "unknown",
+        "reasons": [
+          "never built by ODS: nothing to judge it on"
+        ]
+      },
       "href": "catalog/seed.shop.raw_orders",
       "id": "seed.shop.raw_orders",
       "last_build": null,
@@ -228,6 +275,6 @@ expression: pretty(view.clone())
       "type_label": "seed"
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "total": 3
 }
