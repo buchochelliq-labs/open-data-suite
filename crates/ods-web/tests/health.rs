@@ -372,3 +372,19 @@ fn without_a_record_nothing_is_said_about_one() {
             .contains("ods health check")
     );
 }
+
+/// #401 review: a recorded check at severity error is measured on Home even without the
+/// last run's record, which only leaves that run's failures out.
+#[tokio::test]
+async fn a_recorded_error_check_is_measured_without_the_runs_record() {
+    let record = health_record().await;
+    let dashboard = dashboard(None).with_health_record(Some(&record));
+    let home = json(&dashboard.home_at(true, at("2026-09-29T12:00:00Z")));
+    let failing = row(&home["health"], "failing");
+    assert_eq!(failing["count"], 1, "{failing:#}");
+    assert_eq!(failing["href"], "catalog?health=failing");
+    assert!(
+        failing["note"].as_str().unwrap().starts_with("at least"),
+        "the run's failures still aren't measured: {failing:#}"
+    );
+}
