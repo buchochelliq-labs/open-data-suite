@@ -1512,4 +1512,60 @@ mod running {
         assert_eq!(found["model.p.orders"].status, Status::Skipped);
         assert_eq!(found["model.p.payments"].status, Status::Unknown);
     }
+
+    /// A connection that reads only, but answers about a relation it wasn't asked about.
+    struct Stray;
+
+    impl ods_sdk::Provider for Stray {
+        fn info(&self) -> ods_sdk::ProviderInfo {
+            FakeRelationProbe::new().info()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ods_sdk::contracts::probe::RelationProbe for Stray {
+        async fn probe(
+            &self,
+            _: &ods_sdk::contracts::probe::ProbeRequest,
+            targets: &[ods_sdk::contracts::probe::ProbeTarget],
+        ) -> Result<ods_sdk::contracts::probe::ProbeReport, ods_sdk::ProviderError> {
+            let rows = || {
+                ods_sdk::contracts::probe::ProbeAnswer::Rows(vec![BTreeMap::from([(
+                    "n".to_owned(),
+                    "5".to_owned(),
+                )])])
+            };
+            let mut answers: Vec<_> = targets.iter().map(|t| (t.id.clone(), rows())).collect();
+            answers.push(("model.p.customers".to_owned(), rows()));
+            Ok(ods_sdk::contracts::probe::ProbeReport::new(answers))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ods_sdk::contracts::privileges::RelationPrivileges for Stray {
+        async fn privileges(
+            &self,
+            targets: &[ods_sdk::contracts::probe::ProbeTarget],
+        ) -> Result<ods_sdk::contracts::privileges::PrivilegeReport, ods_sdk::ProviderError>
+        {
+            let mut fake = FakeRelationPrivileges::new();
+            for target in targets {
+                fake = fake.read_only(target.id.clone());
+            }
+            fake.privileges(targets).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_answers_about_another_relation_counts_for_nothing() {
+        let s = ready().with_probe_connection(ProbeConnection::new(Arc::new(Stray)));
+        let (found, _) = findings(&s).await;
+        let orders = &found["model.p.orders"];
+        assert_eq!(orders.status, Status::Unknown, "never a pass: {orders:?}");
+        assert!(
+            orders.reason.contains("which it wasn't asked about"),
+            "{}",
+            orders.reason
+        );
+    }
 }

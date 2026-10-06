@@ -454,6 +454,17 @@ impl Probe {
             .await
             .map_err(|_| format!("the probe didn't answer within {}", seconds(timeout)))?
             .map_err(|e| format!("the probe couldn't run: {e}"))?;
+        // An answer about a relation it wasn't asked about means it ran where it
+        // shouldn't have: none of its answers can be trusted.
+        if let Some((stranger, _)) = report
+            .targets
+            .iter()
+            .find(|(id, _)| !targets.iter().any(|t| t.id == *id))
+        {
+            return Err(format!(
+                "the probe answered about `{stranger}`, which it wasn't asked about, so none of its answers count"
+            ));
+        }
         let mut answers: BTreeMap<String, Option<ProbeAnswer>> = BTreeMap::new();
         for (id, answer) in report.targets {
             answers
