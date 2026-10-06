@@ -299,8 +299,7 @@ that can't be read is *unknown*, never read-only. Other warehouses have no privi
 report yet, so their probes still need `--allow-elevated-login`.
 
 **Known issues, and how to fix them.** Each makes the check refuse more than it must, or
-miss something a dedicated read-only principal would never have. Tracked in a follow-up
-issue of #392.
+miss something a dedicated read-only principal would never have. Tracked in #408.
 
 | # | Issue | Effect today | How to fix |
 |---|---|---|---|
