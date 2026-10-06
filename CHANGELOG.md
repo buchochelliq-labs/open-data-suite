@@ -12,6 +12,24 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-06
+
+The second release: dashboard screens backed by real signals, configurable health
+checks with a CI gate, what reuse saves, and failures explained node by node. **It
+migrates the state store and changes the dashboard's JSON APIs:** see **Breaking**.
+
+- **Health:** each node gets a health badge (*failing*, *warning*, *healthy* or
+  *unknown*) from checks `[health]` configures, with the findings and evidence behind
+  it; `ods health check` gates CI on them, and the `health_check` SDK contract lets
+  checks be added. Home shows coverage of tests, descriptions, constraints and source
+  freshness.
+- **New dashboard screens:** Freshness evidence, the ERD page and the Impact simulator.
+- **What reuse saved:** every run says so, and `ods state savings` totals it, as time
+  and, with `[state.cost]`, as cost, from a run ledger in the state store.
+- **Why it failed:** `ods state explain-failure` explains one node's failure, and
+  Databricks failures are checked against messages recorded from a real warehouse.
+- **Install:** Homebrew and Chocolatey packages, beside PyPI and the release archives.
+
 ### Breaking
 - The dashboard's JSON view models (`/api/home`, `/api/catalog`, `/api/shell` and the
   other page APIs) are now at `schema_version` 3 (#354): a Catalog row's `health` is an
