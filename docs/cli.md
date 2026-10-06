@@ -1351,7 +1351,11 @@ to `error` in `[health]` to gate on it too.
 - **Registered checks:** checks registered through the `health_check` contract (SDK 0.8)
   run beside the built-ins, each under a 60-second timeout. One that errs, times out,
   leaves a node unanswered or answers it twice is *unknown* for those nodes, never a
-  pass. Plugins that register them come with #387's loader.
+  pass; one that answers about a node it wasn't asked about is *unknown* for every
+  node. Plugins that register them come with #387's loader.
+- **Evidence:** each finding in `--json` and in the record carries `evidence`, what it
+  was concluded from as sorted keys and values (e.g. `run_id`, `built_at`,
+  `last_run_command`, `tests`), beside its `reason` for people.
 
 ### State settings in `ods.toml`
 

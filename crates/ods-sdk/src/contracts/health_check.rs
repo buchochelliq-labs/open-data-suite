@@ -18,7 +18,7 @@
 //! - A check never sees, and never reports, a resolved secret (AGENTS rule 9).
 //! - Providers advertise [`Capability::HealthCheck`](ods_core::Capability::HealthCheck).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
@@ -239,16 +239,28 @@ pub struct CheckFinding {
     pub status: Status,
     /// Why, for people.
     pub reason: String,
+    /// What it was concluded from, for machines (AGENTS rule 4): e.g. `rows` → `0`,
+    /// `checked_at` → a time. Sorted by key; never a secret's value (AGENTS rule 9).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub evidence: BTreeMap<String, String>,
 }
 
 impl CheckFinding {
-    /// A finding about `node`.
+    /// A finding about `node`, without evidence.
     pub fn new(node: impl Into<String>, status: Status, reason: impl Into<String>) -> Self {
         Self {
             node: node.into(),
             status,
             reason: reason.into(),
+            evidence: BTreeMap::new(),
         }
+    }
+
+    /// With `key` → `value` as evidence.
+    #[must_use]
+    pub fn with_evidence(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.evidence.insert(key.into(), value.into());
+        self
     }
 }
 

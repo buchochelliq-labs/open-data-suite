@@ -234,6 +234,9 @@ expression: pretty(view.clone())
           },
           {
             "check": "tests_required",
+            "evidence": {
+              "tests": "0"
+            },
             "reason": "no tests: nothing checks its data",
             "severity": "warn",
             "source": "builtin",
@@ -241,6 +244,9 @@ expression: pretty(view.clone())
           },
           {
             "check": "tests_passed",
+            "evidence": {
+              "tests": "0"
+            },
             "reason": "a model has no tests to run",
             "severity": "warn",
             "source": "builtin",
@@ -296,6 +302,9 @@ expression: pretty(view.clone())
           },
           {
             "check": "tests_required",
+            "evidence": {
+              "tests": "3"
+            },
             "reason": "3 test(s) read it",
             "severity": "warn",
             "source": "builtin",
@@ -303,6 +312,9 @@ expression: pretty(view.clone())
           },
           {
             "check": "tests_passed",
+            "evidence": {
+              "tests": "3"
+            },
             "reason": "never built: its tests can't have passed on a build",
             "severity": "warn",
             "source": "builtin",
@@ -367,6 +379,9 @@ expression: pretty(view.clone())
           },
           {
             "check": "tests_passed",
+            "evidence": {
+              "tests": "0"
+            },
             "reason": "a seed has no tests to run",
             "severity": "warn",
             "source": "builtin",
