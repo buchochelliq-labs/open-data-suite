@@ -971,7 +971,7 @@ fn a_missed_target_at_error_fails_the_gate_and_unknown_only_when_strict() {
 #[test]
 fn a_target_turned_off_says_nothing() {
     let s = settings("[coverage.tests]\ntarget = 0.8\nseverity = \"off\"\n");
-    assert!(s.coverage(&[measured("tests", Some(0), 10)]).is_empty());
+    assert_eq!(s.coverage(&[measured("tests", Some(0), 10)]), Vec::new());
 }
 
 #[test]
