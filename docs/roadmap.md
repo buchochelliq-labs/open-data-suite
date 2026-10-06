@@ -288,6 +288,7 @@ crates/
   ods-config/      # layered config, profiles, secret references
   ods-policy/      # allow/deny/require-approval evaluation
   ods-state/       # fingerprints, invalidation, planner, StateStore trait
+  ods-health/      # health checks, findings and badges, configured by [health] (ADR-0030)
   ods-erd/  ods-usage/  ods-ci/  ods-lsp/  ods-agent/  ods-mesh/  ods-synthetic/
   ods-cli/         # `ods` binary; module subcommand registration; presentation boundary
 providers/

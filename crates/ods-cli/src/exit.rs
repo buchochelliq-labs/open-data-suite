@@ -91,6 +91,9 @@ pub mod codes {
     /// or a file couldn't be written or replaced. The message names the files already
     /// replaced.
     pub const STATE_EXPORT: &str = "ODS-E0406";
+    /// `[health]` names a check that doesn't exist or a path glob that isn't valid: a
+    /// configuration schema violation, as the configuration's own (`ODS-E0102`).
+    pub const HEALTH_CONFIG: &str = "ODS-E0102";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

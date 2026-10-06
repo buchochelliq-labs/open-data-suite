@@ -62,6 +62,8 @@ pub struct Dashboard {
     /// The project's sources and what is known about their data, for the Freshness
     /// evidence screen (#350).
     pub freshness: crate::freshness::FreshnessInput,
+    /// The health checks as `[health]` configures them (#392, ADR-0030).
+    pub health: Arc<ods_health::HealthSettings>,
     /// The run journals beside the state database (#322), read for the live view even
     /// before the store exists: a first run writes its journal before its first
     /// snapshot.
@@ -87,6 +89,7 @@ impl Dashboard {
             catalog: crate::catalog::CatalogInput::default(),
             erd: None,
             freshness: crate::freshness::FreshnessInput::default(),
+            health: Arc::default(),
             journals: journal::JournalSource::default(),
         }
     }
@@ -163,6 +166,13 @@ impl Dashboard {
     #[must_use]
     pub fn with_erd(mut self, erd: crate::erd::ErdInput) -> Self {
         self.erd = Some(erd);
+        self
+    }
+
+    /// Sets the health checks, as `[health]` configures them (#392).
+    #[must_use]
+    pub fn with_health(mut self, settings: ods_health::HealthSettings) -> Self {
+        self.health = Arc::new(settings);
         self
     }
 
@@ -1058,7 +1068,7 @@ impl Dashboard {
             attention_more,
             plan: self.plan_summary(details),
             health: self.health_rows(),
-            health_how: crate::health::badges_how(self.last_failures().is_some()),
+            health_how: self.health.how(self.last_failures().is_some()),
             signals: self.signals(details, now),
             coverage: crate::health::coverage(&self.catalog, &self.freshness),
             modules: self.modules.clone(),
@@ -1068,27 +1078,35 @@ impl Dashboard {
     /// What the last run's record says failed, when it says, and only when it ran for
     /// this scope: a record of another target's run, or one that doesn't say which, could
     /// blame this target's nodes for another's failures.
-    pub(crate) fn last_failures(&self) -> Option<crate::health::LastFailures> {
-        crate::health::LastFailures::of(self.last_run())
+    pub(crate) fn last_failures(&self) -> Option<ods_health::LastFailures> {
+        crate::health::failures_of(self.last_run())
     }
 
-    /// Nodes by health (#354): each badge from the Catalog's nodes, linking to them.
+    /// Nodes by health (#354): each badge from the Catalog's nodes, as `[health]`
+    /// configures the checks (#392), linking to them.
     fn health_rows(&self) -> Vec<CountRow> {
-        use crate::health::{HEALTHS, Health, node_health};
+        use ods_health::{Builtin, HEALTHS, Health};
         let failures = self.last_failures();
-        let mut counts: BTreeMap<Health, usize> = BTreeMap::new();
-        for node in &self.catalog.nodes {
-            *counts
-                .entry(node_health(&self.catalog, failures.as_ref(), node).health)
-                .or_default() += 1;
-        }
+        let badges: Vec<ods_health::HealthBadge> = self
+            .catalog
+            .nodes
+            .iter()
+            .map(|node| {
+                self.health.evaluate(
+                    &crate::health::facts(&self.catalog, node),
+                    failures.as_ref(),
+                )
+            })
+            .collect();
+        let counts = ods_health::counts(&badges);
         let none = self.catalog.nodes.is_empty();
+        // Failures are measured only from a record that says what failed, by a check
+        // that is on; without them, and without nodes, nothing is (AGENTS rule 3).
+        let failures_measured = failures.is_some() && self.health.enabled(Builtin::LastRunFailed);
         HEALTHS
             .iter()
             .map(|&health| {
-                // Failures are only counted from a record that says what failed; without
-                // one, and without nodes, nothing is measured (AGENTS rule 3).
-                let measured = !none && (health != Health::Failing || failures.is_some());
+                let measured = !none && (health != Health::Failing || failures_measured);
                 let count = measured.then(|| counts.get(&health).copied().unwrap_or(0));
                 CountRow {
                     key: health.key(),
@@ -1096,6 +1114,10 @@ impl Dashboard {
                     count,
                     of: None,
                     how: match health {
+                        Health::Failing if !self.health.enabled(Builtin::LastRunFailed) => {
+                            "Not measured: the last_run_failed check is off ([health.builtin.last_run_failed])."
+                                .to_owned()
+                        }
                         Health::Failing if failures.is_none() => {
                             "Not measured: the last run's record doesn't say what failed."
                                 .to_owned()

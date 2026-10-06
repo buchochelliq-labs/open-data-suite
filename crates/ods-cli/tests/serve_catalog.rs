@@ -29,7 +29,15 @@ impl Drop for Server {
 }
 
 fn serve(target: &Path, extra: &[&str]) -> Server {
+    serve_with(target, extra, None)
+}
+
+/// `ods serve`, with `ods_toml` as the project's `ods.toml` when given.
+fn serve_with(target: &Path, extra: &[&str], ods_toml: Option<&str>) -> Server {
     let home = tempfile::tempdir().unwrap();
+    if let Some(toml) = ods_toml {
+        std::fs::write(home.path().join("ods.toml"), toml).unwrap();
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args(["serve", "--target-dir", target.to_str().unwrap()])
         .args(["--port", "0", "--json", "--no-watch"])
@@ -634,4 +642,125 @@ fn health_and_coverage_come_from_the_project_and_say_what_isnt_measured() {
         page.contains("13 of 13 nodes"),
         "the badge's link lists them"
     );
+}
+
+/// `[health]` tunes the badges (#392, ADR-0030): with `tests_required` off, an
+/// untested model built by the fake dbt is no longer a warning.
+#[cfg(unix)]
+#[test]
+fn health_settings_in_ods_toml_tune_the_badges() {
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::create_dir_all(dir.join("base")).unwrap();
+    std::fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        dir.join("base/manifest.json"),
+    )
+    .unwrap();
+    let target = dir.join("target");
+    let db = dir.join(".ods/state.db");
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--dbt"])
+        .arg(fixtures("fake-dbt/dbt"))
+        .args(["--dbt-output", "capture", "--target-dir"])
+        .arg(&target)
+        .arg("--state-db")
+        .arg(&db)
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", dir.join("base"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let db_arg = ["--state-db", db.to_str().unwrap()];
+    let health_of = |view: &Value, id: &str| -> String {
+        view["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["health"]["health"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // stg_customers has no tests in the demo project: a warning by default.
+    let untested = "model.jaffle_ods.stg_customers";
+    let server = serve(&target, &db_arg);
+    assert_eq!(
+        health_of(&json(&server, "api/catalog"), untested),
+        "warning"
+    );
+    drop(server);
+
+    let server = serve_with(
+        &target,
+        &db_arg,
+        Some("[health.builtin.tests_required]\nseverity = \"off\"\n"),
+    );
+    let view = json(&server, "api/catalog");
+    assert_eq!(health_of(&view, untested), "healthy", "no longer checked");
+    assert!(
+        view["health_how"]
+            .as_str()
+            .unwrap()
+            .contains("tests_required (off)"),
+        "{}",
+        view["health_how"]
+    );
+    let row = view["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == untested)
+        .unwrap()
+        .clone();
+    assert!(
+        row["health"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["check"] != "tests_required"),
+        "{row:#}"
+    );
+    drop(server);
+}
+
+/// A `[health]` check that doesn't exist is a configuration error when the server
+/// starts (exit 4), naming the real ones, never a silently ignored setting.
+#[test]
+fn a_misspelt_health_check_is_a_configuration_error() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("ods.toml"),
+        "[health.builtin.test_required]\nseverity = \"off\"\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["serve", "--target-dir"])
+        .arg(&target)
+        .args(["--port", "0", "--json", "--no-watch"])
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("health.builtin.test_required"),
+        "{message}"
+    );
+    assert!(
+        message.contains("tests_required"),
+        "names the real checks: {message}"
+    );
+    assert_eq!(envelope["diagnostics"][0]["code"], "ODS-E0102");
 }

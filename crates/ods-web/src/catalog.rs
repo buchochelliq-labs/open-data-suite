@@ -858,7 +858,9 @@ pub(crate) struct Context<'a> {
     /// Run ids to shorten in messages, longest first so none is cut by another.
     runs: Vec<&'a str>,
     /// What the last run's record says failed, when it says (#354).
-    failures: Option<crate::health::LastFailures>,
+    failures: Option<ods_health::LastFailures>,
+    /// The health checks as configured (#392).
+    health: &'a ods_health::HealthSettings,
 }
 
 impl<'a> Context<'a> {
@@ -901,6 +903,7 @@ impl<'a> Context<'a> {
             children,
             runs,
             failures: dashboard.last_failures(),
+            health: &dashboard.health,
         }
     }
 
@@ -1087,7 +1090,10 @@ impl<'a> Context<'a> {
             tags: node.tags.clone(),
             lineage: self.confidence(&node.id),
             decision: self.decision(&node.id),
-            health: crate::health::node_health(self.input, self.failures.as_ref(), node),
+            health: self.health.evaluate(
+                &crate::health::facts(self.input, node),
+                self.failures.as_ref(),
+            ),
             last_build: self.last_build(&node.id),
             href: node_href(&node.id),
         }
@@ -1327,7 +1333,7 @@ fn facets(cx: &Context<'_>, all: &[CatalogRow], query: &CatalogQuery) -> Vec<Fac
                     "decision" => Some(format!(
                         "From the plan against the latest snapshot, made offline. {REUSE_CAVEAT}"
                     )),
-                    "health" => Some(crate::health::badges_how(cx.failures.is_some())),
+                    "health" => Some(cx.health.how(cx.failures.is_some())),
                     _ => None,
                 },
                 values,
@@ -1366,7 +1372,7 @@ impl Dashboard {
             query: query.clone(),
             decisions: cx.basis.clone(),
             layer_source: cx.input.layer_source.clone(),
-            health_how: crate::health::badges_how(cx.failures.is_some()),
+            health_how: cx.health.how(cx.failures.is_some()),
             facets,
             total: cx.input.nodes.len(),
             rows,

@@ -28,6 +28,7 @@ ods-provider-fake = { path = "providers/ods-provider-fake" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 ods-store-sqlite = { path = "providers/ods-store-sqlite" }
 ods-state = { path = "crates/ods-state" }
+ods-health = { path = "crates/ods-health" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
@@ -62,6 +63,8 @@ parquet = { version = "60", default-features = false, features = ["zstd", "snap"
 pep440_rs = { version = "0.7", default-features = false }
 # Decodes the percent-encoded answer of the dbt relation probe (ADR-0022).
 percent-encoding = "2"
+# Path globs in health check selectors (ADR-0030). MIT OR Unlicense.
+globset = { version = "0.4", default-features = false }
 # Graph algorithms: dependency order, cycles, shortest join paths.
 proptest = { version = "1", default-features = false, features = ["std"] }
 petgraph = { version = "0.8", default-features = false, features = ["std"] }

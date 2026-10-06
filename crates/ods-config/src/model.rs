@@ -40,6 +40,10 @@ pub struct Config {
     /// Policy settings, consumed by the policy framework (#9).
     #[serde(default)]
     pub policy: PolicyConfig,
+    /// Health checks: which run, how severe a failure is, and on which nodes
+    /// (ADR-0030, #392). Check ids are validated by the health engine that reads them.
+    #[serde(default)]
+    pub health: HealthConfig,
 }
 
 /// `[project]`.
@@ -193,4 +197,78 @@ pub struct PolicyConfig {
     /// Policy rules, interpreted by the policy framework (#9).
     #[serde(default)]
     pub rules: toml::Table,
+}
+
+/// `[health]`: tunes the health checks (ADR-0030).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct HealthConfig {
+    /// What a check that couldn't decide does to a node's badge: `unknown` (the
+    /// default) or `warning`. Never healthy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_counts_as: Option<UnknownCountsAs>,
+    /// The built-in checks, by id, e.g. `[health.builtin.tests_required]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub builtin: BTreeMap<String, HealthCheckConfig>,
+}
+
+/// What a check that couldn't decide makes a node's badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnknownCountsAs {
+    /// Unknown: nothing vouches for it either way.
+    Unknown,
+    /// A warning.
+    Warning,
+}
+
+/// One check's settings.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct HealthCheckConfig {
+    /// How severe its failure is, or `off` to not run it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<HealthSeverity>,
+    /// The nodes it checks; replaces the check's own default scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<HealthSelector>,
+    /// Nodes it never checks, even when selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<HealthSelector>,
+}
+
+/// A check's severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthSeverity {
+    /// A failure makes the node failing, and fails `ods health check`.
+    Error,
+    /// A failure makes the node a warning.
+    Warn,
+    /// A failure is shown, and changes nothing.
+    Info,
+    /// The check doesn't run.
+    Off,
+}
+
+/// Which nodes a check applies to: a node matches when it matches every field that
+/// is set, and any value within a field.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct HealthSelector {
+    /// Resource types, e.g. `model`, `seed`, `snapshot`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_type: Vec<String>,
+    /// Tags; a node with any of them matches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Glob patterns over the node's file path, e.g. `models/marts/**`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    /// Node names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name: Vec<String>,
 }

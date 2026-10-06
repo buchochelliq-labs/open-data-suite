@@ -69,7 +69,7 @@ Failing
 0
 Unknown
 0
-Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS.
+A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now.
 LINEAGE CONFIDENCE
 parsed
 8
@@ -169,4 +169,4 @@ healthy
 warning
 failing
 unknown
-Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS.
+A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now.
