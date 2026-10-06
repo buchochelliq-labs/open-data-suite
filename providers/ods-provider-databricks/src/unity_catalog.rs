@@ -8,7 +8,9 @@
 //! - whether the login, or a group it is in (`is_account_group_member`, `is_member`),
 //!   owns the table, its schema or its catalog;
 //! - any privilege it holds on the table, its schema, its catalog or the metastore
-//!   beyond reading (`SELECT`, `BROWSE`, `USE CATALOG`, `USE SCHEMA`). The right to grant
+//!   beyond reading (`SELECT`, `BROWSE`, `USE CATALOG`, `USE SCHEMA`; on the metastore,
+//!   only the default `USE MARKETPLACE ASSETS`), in either spelling (`USE_SCHEMA` is how
+//!   `information_schema` writes it). The right to grant
 //!   comes with ownership or `MANAGE`, which these find; `is_grantable` is checked too,
 //!   though Unity Catalog reserves it;
 //! - whether it owns the metastore (its admin), or is in the workspace's `admins` group;
@@ -70,8 +72,13 @@ fn checks() -> Vec<Check> {
         what,
         grants: true,
     };
-    let beyond =
-        |allowed: &str| format!("(privilege_type not in ({allowed}) or is_grantable = 'YES')");
+    // `information_schema` spells privileges with underscores (`USE_SCHEMA`) where
+    // `GRANT` takes spaces (`USE SCHEMA`); compare in the `GRANT` spelling so either reads.
+    let beyond = |allowed: &str| {
+        format!(
+            "(replace(upper(privilege_type), '_', ' ') not in ({allowed}) or is_grantable = 'YES')"
+        )
+    };
     vec![
         owner(
             format!(
@@ -128,8 +135,11 @@ fn checks() -> Vec<Check> {
         grants(
             format!(
                 "select count(*) as n, concat_ws(', ', sort_array(collect_set(privilege_type))) as what \
-                 from system.information_schema.metastore_privileges where {{name}} is not null and {}",
-                login("grantee")
+                 from system.information_schema.metastore_privileges where {{name}} is not null and {} and {}",
+                login("grantee"),
+                // Granted to `account users` on every metastore by default; it lets a
+                // login see Marketplace listings, not change any relation.
+                beyond("'USE MARKETPLACE ASSETS'")
             ),
             "on the metastore",
         ),
@@ -383,6 +393,29 @@ mod tests {
             );
         }
         assert_eq!(request.timeout(), Some(TIMEOUT));
+    }
+
+    #[test]
+    fn grants_match_either_spelling_and_allow_the_default_metastore_grant() {
+        // A live run (#408) found `information_schema` writes `USE_SCHEMA`, which a
+        // spaced allowlist never matched, and `USE_MARKETPLACE_ASSETS` on the metastore.
+        let grants: Vec<_> = checks().into_iter().filter(|c| c.grants).collect();
+        assert_eq!(grants.len(), 4);
+        for check in &grants {
+            assert!(
+                check
+                    .sql
+                    .contains("replace(upper(privilege_type), '_', ' ') not in ("),
+                "{}",
+                check.sql
+            );
+            assert!(!check.sql.contains("'USE_"), "{}", check.sql);
+        }
+        let metastore = grants
+            .iter()
+            .find(|c| c.what == "on the metastore")
+            .unwrap();
+        assert!(metastore.sql.contains("not in ('USE MARKETPLACE ASSETS')"));
     }
 
     #[test]

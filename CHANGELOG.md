@@ -37,8 +37,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   `ods health check` reads `system.information_schema` through the probe target's own
   connection and runs a probe only on a managed table, view or materialized view whose
   login (or its groups) owns none of the relation, schema, catalog or metastore, holds
-  nothing on them or the metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and
-  `USE SCHEMA`, and isn't a workspace admin; anything it can't read, and any external
+  nothing on them beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` (nor on
+  the metastore beyond the default `USE MARKETPLACE ASSETS`), and isn't a workspace
+  admin; anything it can't read, and any external
   table, is *unknown*. Known limits (e.g. account admins aren't visible) and how they
   will be fixed are listed in ADR-0030 §4e. The Databricks provider has `UnityCatalog`,
   a `relation_probe` that also reports `relation_privileges`.

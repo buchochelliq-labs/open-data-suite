@@ -1398,8 +1398,9 @@ Reporting what a login may do is a provider capability (`relation_privileges`). 
 Databricks, ODS reads it from Unity Catalog's `system.information_schema`, through the
 probe target's own connection: a probe runs when the relation is a managed table, a
 view or a materialized view, and the login (or a group it is in) owns neither the
-relation, its schema, its catalog nor the metastore, holds nothing on them or on the
-metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA`, and isn't in the
+relation, its schema, its catalog nor the metastore, holds nothing on them beyond
+`SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` (nor on the metastore beyond the
+default `USE MARKETPLACE ASSETS`), and isn't in the
 workspace's `admins` group. Anything it can't read is *unknown*, and so is an external
 table, whose files its storage location could let the login write. Known limits, with
 how they will be fixed, are in
