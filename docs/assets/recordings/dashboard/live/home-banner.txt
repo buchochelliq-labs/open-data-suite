@@ -68,18 +68,30 @@ Python model: column lineage unknown
 The plan builds 6 nodes (ods state plan): 5 upstream code changed · 1 code changed
 Health
 Healthy
-[n]
+7
 Warning
-[n]
+6
 Failing
-[n]
+0
 Unknown
-[n]
+0
+Stale
+6
+Runs with failures
+1 / 3
+last run: unfinished
 Coverage
 Models with tests
-[tested] / 10
+5 / 10
+5 without
 Models with descriptions
-[described] / 10
+1 / 10
+9 without
+Models with constraints
+2 / 10
+8 without
+Sources with freshness
+not measured
 Modules
 Lineage (column-level)
 Ready

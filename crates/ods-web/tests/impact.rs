@@ -581,7 +581,7 @@ fn the_api_is_the_view_model_versioned() {
     );
     assert_eq!(status, 200, "{body}");
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["schema_version"], 3);
     assert_eq!(json["changes"][0]["change"], "drop");
     let verdicts: BTreeMap<String, String> = json["result"]["must_run"]
         .as_array()

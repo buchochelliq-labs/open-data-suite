@@ -345,8 +345,15 @@ fn home_is_served_with_the_shell_and_every_panel() {
     assert!(page.contains(r#"data-kind="opaque""#));
     assert!(page.contains(r#"href="lineage#node=model%2Ecustomers""#));
     assert!(page.contains("Code changed since run 9ea38bd5: sql"));
-    assert!(page.contains("[tested] / 8"));
-    assert!(page.contains("[n]"));
+    // Health and coverage (#354): this dashboard has no Catalog nodes, so nothing is
+    // measured, and says so rather than show 0 (AGENTS rule 3).
+    assert!(
+        !page.contains("[n]") && !page.contains("[tested]"),
+        "no placeholders"
+    );
+    assert!(page.contains(r#"data-signal="healthy""#));
+    assert!(page.contains(r#"data-coverage="tests""#));
+    assert!(page.contains(r#"<span class="na">not measured</span>"#));
     assert!(page.contains("Lineage (column-level)"));
     // No external fetches: the page must work offline and under the CSP.
     assert!(!page.contains("https://"), "no CDN or web fonts");

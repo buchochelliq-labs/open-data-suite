@@ -1708,7 +1708,7 @@ impl Dashboard {
     /// kept, and the runs of this scope whose journal is kept but that recorded no
     /// snapshot (e.g. they failed). The last run's command goes on the run whose id it
     /// records, and its outcome too when that run has no journal.
-    fn run_rows(&self, details: bool, now: Timestamp) -> Vec<RunRow> {
+    pub(crate) fn run_rows(&self, details: bool, now: Timestamp) -> Vec<RunRow> {
         let snapshots = self.snapshots();
         let files = self.journals().map(JournalSource::list).unwrap_or_default();
         let source = self.journals();
@@ -1811,7 +1811,7 @@ impl Dashboard {
 
     /// The last run, only if it names this page's scope: the file is kept per state
     /// database, which several targets may share.
-    fn last_run(&self) -> Option<&LastRun> {
+    pub(crate) fn last_run(&self) -> Option<&LastRun> {
         self.history()
             .and_then(|h| h.last_run.as_ref())
             .filter(|l| l.scope.as_deref() == Some(self.scope.as_str()))

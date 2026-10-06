@@ -12,6 +12,7 @@ use crate::catalog::{
     LineageConfidence, REUSE_RELATION,
 };
 use crate::dashboard::{ShellView, StateStatus};
+use crate::health::HealthBadge;
 use crate::home::{Frame, framed};
 use crate::state_pages::crumbs;
 
@@ -26,7 +27,11 @@ const COLUMNS: [(Option<&str>, &str, &str); 8] = [
     (Some("materialized"), "Material.", "materialization"),
     (Some("lineage"), "Lineage", "lineage confidence"),
     (Some("decision"), "Next run", "next-run decision"),
-    (None, "Health", "Health signals come later (#117)"),
+    (
+        None,
+        "Health",
+        "health, from the last run, builds and tests",
+    ),
     (Some("last_built"), "Last built", "last successful build"),
 ];
 
@@ -284,7 +289,7 @@ fn row_html(b: &mut String, row: &CatalogRow) {
     let na = r#"<span class="na">n/a</span>"#;
     let _ = write!(
         b,
-        r#"<tr data-node="{id}"><td class="name"><span class="bar {kind}"></span><a class="mono" href="{href}" title="{id}">{name}</a></td><td>{type_label}</td><td>{layer}</td><td>{mat}</td><td>{conf}</td><td>{pill}</td><td><span class="placeholder faint" title="Health signals come later (#117)">[n]</span></td><td class="last">{last}</td></tr>"#,
+        r#"<tr data-node="{id}"><td class="name"><span class="bar {kind}"></span><a class="mono" href="{href}" title="{id}">{name}</a></td><td>{type_label}</td><td>{layer}</td><td>{mat}</td><td>{conf}</td><td>{pill}</td><td>{health}</td><td class="last">{last}</td></tr>"#,
         id = attr(&row.id),
         kind = attr(&row.resource_type),
         href = attr(&row.href),
@@ -300,8 +305,19 @@ fn row_html(b: &mut String, row: &CatalogRow) {
             .map_or_else(|| na.to_owned(), |m| text(m).into_owned()),
         conf = confidence(row.lineage),
         pill = decision_pill(&row.decision),
+        health = health_badge(&row.health),
         last = last_built(row.last_build.as_ref()),
     );
+}
+
+/// A health badge: a dot and the word, why in its tooltip (#354).
+pub(crate) fn health_badge(badge: &HealthBadge) -> String {
+    format!(
+        r#"<span class="health" data-health="{key}" title="{why}"><span class="hdot {key}"></span>{label}</span>"#,
+        key = badge.health.key(),
+        why = attr(&badge.reasons.join("; ")),
+        label = text(badge.health.label()),
+    )
 }
 
 fn legend(b: &mut String, view: &CatalogView) {
@@ -314,7 +330,8 @@ fn legend(b: &mut String, view: &CatalogView) {
         .unwrap_or("No layers: the project doesn't say.");
     let _ = write!(
         b,
-        r#"<div class="cat-legend"><span><b>Layer*</b></span><span>{}</span></div><div class="cat-legend"><span><b>Health</b></span><span><span class="placeholder faint">[n]</span>health signals from run, test and freshness evidence come later (#117)</span></div>"#,
-        text(layer)
+        r#"<div class="cat-legend"><span><b>Layer*</b></span><span>{}</span></div><div class="cat-legend health-legend"><b>Health</b><span><span class="hdot healthy"></span>healthy</span><span><span class="hdot warning"></span>warning</span><span><span class="hdot failing"></span>failing</span><span><span class="hdot unknown"></span>unknown</span><span class="how">{health}</span></div>"#,
+        text(layer),
+        health = text(&view.health_how),
     );
 }

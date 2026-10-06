@@ -274,7 +274,7 @@ fn the_api_is_the_view_model_versioned() {
     let (status, body) = request(addr, "GET", "/api/erd?select=payments&depth=1");
     assert_eq!(status, 200, "{body}");
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["schema_version"], 3);
     assert_eq!(json["erd"]["schema_version"], 1);
     assert_eq!(json["erd"]["entities"].as_array().unwrap().len(), 2);
     assert_eq!(json["missing"][0]["basis"], "joined");

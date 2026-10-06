@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 use html_escape::{encode_double_quoted_attribute as attr, encode_text as text};
 
 use crate::dashboard::{
-    AttentionKind, HomeView, ModuleState, NavSection, SectionStatus, ShellView, StateStatus,
+    AttentionKind, CountRow, HomeView, ModuleState, NavSection, SectionStatus, ShellView,
+    StateStatus,
 };
 
 const CSS: &str = include_str!("../assets/dashboard.css");
@@ -502,34 +503,92 @@ fn attention(b: &mut String, home: &HomeView) {
     b.push_str("</section>");
 }
 
+/// A count row: linked to what it counts when measured, else "not measured", never 0
+/// (AGENTS rule 3); how it was worked out in its tooltip.
+fn count_row(b: &mut String, row: &CountRow, lead: &str) {
+    let value = match (row.count, row.of) {
+        (Some(n), Some(of)) => format!("{n} / {of}"),
+        (Some(n), None) => n.to_string(),
+        (None, _) => "not measured".to_owned(),
+    };
+    let label = match &row.href {
+        Some(href) => format!(r#"<a href="{}">{}</a>"#, attr(href), text(row.label)),
+        None => text(row.label).into_owned(),
+    };
+    let _ = write!(
+        b,
+        r#"<div class="row" data-signal="{key}" title="{how}">{lead}<span class="grow">{label}</span><span class="{cls}">{value}</span></div>"#,
+        key = attr(row.key),
+        how = attr(&row.how),
+        cls = if row.count.is_some() { "num" } else { "na" },
+        value = text(&value),
+    );
+    if let Some(note) = &row.note {
+        let _ = write!(b, r#"<div class="row-note muted">{}</div>"#, text(note));
+    }
+}
+
 /// Health, coverage and modules.
 fn panels(b: &mut String, home: &HomeView) {
     // Health, coverage, modules.
     b.push_str(r#"<div class="grid3"><section class="card" aria-label="Health"><h2>Health</h2>"#);
     for row in &home.health {
-        let _ = write!(
+        count_row(
             b,
-            r#"<div class="row"><span class="hdot {key}"></span><span class="grow">{label}</span><span class="num">{count}</span></div>"#,
-            key = attr(row.key),
-            label = text(row.label),
-            count = row
-                .count
-                .map_or_else(|| "[n]".to_owned(), |n| n.to_string()),
+            row,
+            &format!(r#"<span class="hdot {}"></span>"#, attr(row.key)),
         );
+    }
+    b.push_str(r#"<div class="sep"></div>"#);
+    for row in &home.signals {
+        count_row(b, row, "");
     }
     b.push_str(r#"</section><section class="card" aria-label="Coverage"><h2>Coverage</h2>"#);
     for row in &home.coverage {
         let (count, width) = match row.count {
-            Some(n) => (n.to_string(), (n * 100).checked_div(row.total).unwrap_or(0)),
-            None => (format!("[{}]", row.placeholder), 0),
+            Some(n) => (
+                format!("{n} / {}", row.total),
+                (n * 100).checked_div(row.total).unwrap_or(0),
+            ),
+            None => ("not measured".to_owned(), 0),
         };
         let _ = write!(
             b,
-            r#"<div class="cov"><span class="top"><span>{label}</span><span>{count} / {total}</span></span><span class="track"><span style="width:{width}%"></span></span></div>"#,
+            r#"<div class="cov" data-coverage="{key}" title="{how}"><span class="top"><span>{label}</span><span class="{cls}">{count}</span></span><span class="track"><span style="width:{width}%"></span></span>"#,
+            key = attr(row.key),
+            how = attr(&row.how),
             label = text(row.label),
+            cls = if row.count.is_some() { "num" } else { "na" },
             count = text(&count),
-            total = row.total,
         );
+        if !row.uncovered.is_empty() {
+            let _ = write!(
+                b,
+                r#"<details class="uncovered"><summary>{n} without</summary>"#,
+                n = row.uncovered.len()
+            );
+            for (i, node) in row.uncovered.iter().enumerate() {
+                if i > 0 {
+                    b.push_str(" · ");
+                }
+                match &node.href {
+                    Some(href) => {
+                        let _ = write!(
+                            b,
+                            r#"<a class="mono" href="{}" title="{}">{}</a>"#,
+                            attr(href),
+                            attr(&node.id),
+                            text(&node.name)
+                        );
+                    }
+                    None => {
+                        let _ = write!(b, r#"<span class="mono">{}</span>"#, text(&node.name));
+                    }
+                }
+            }
+            b.push_str("</details>");
+        }
+        b.push_str("</div>");
     }
     b.push_str(r#"</section><section class="card" aria-label="Modules"><h2>Modules</h2>"#);
     for module in &home.modules {

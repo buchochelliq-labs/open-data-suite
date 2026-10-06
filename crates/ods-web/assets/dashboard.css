@@ -187,3 +187,14 @@ table.runs { width: 100%; border-collapse: collapse; font-size: 13px; table-layo
 .live-go:hover { background: var(--accent-strong); color: var(--surface); }
 .live-run { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+/* Health and coverage (#354). */
+.card .sep { border-top: 1px solid var(--line); margin: 4px 0; }
+.card .row a { color: inherit; }
+.card .row a:hover { color: var(--accent); }
+.card .row .na, .cov .na { color: var(--muted); font-style: italic; font-size: 12px; }
+.card .row-note { font-size: 12px; margin: -6px 0 0 0; }
+.cov .uncovered { font-size: 12px; margin-top: 4px; }
+.cov .uncovered summary { cursor: pointer; color: var(--accent); }
+.cov .uncovered .mono { font-size: 12px; }
+.health { display: inline-flex; align-items: center; gap: 6px; }
+.health .hdot { width: 8px; height: 8px; box-sizing: border-box; }

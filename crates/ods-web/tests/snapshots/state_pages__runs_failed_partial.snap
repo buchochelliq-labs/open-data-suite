@@ -255,7 +255,7 @@ expression: pretty(&body)
     }
   ],
   "savings": null,
-  "schema_version": 2,
+  "schema_version": 3,
   "scope": "jaffle_ods/dev",
   "selected": "4c0b5c8f-0000-4000-8000-000000000003",
   "selected_nodes": [],

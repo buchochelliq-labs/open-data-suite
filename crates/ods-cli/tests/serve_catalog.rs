@@ -111,7 +111,7 @@ fn pairs(list: &[(&str, u64)]) -> Vec<(String, u64)> {
 fn without_a_state_store_the_catalog_lists_the_manifest_and_never_built() {
     let server = serve(&fixtures("jaffle-ods/artifacts/dbt-1.10"), &[]);
     let view = json(&server, "api/catalog");
-    assert_eq!(view["schema_version"], 2);
+    assert_eq!(view["schema_version"], 3);
     assert_eq!(view["total"], 13, "10 models and 3 seeds: {view}");
     assert_eq!(counts(&view, "type"), pairs(&[("model", 10), ("seed", 3)]));
     assert_eq!(
@@ -250,6 +250,21 @@ fn the_catalog_shows_the_plan_and_the_builds_the_state_store_recorded() {
         assert_eq!(row["last_build"]["run_id"], run, "{row}");
         assert_eq!(row["decision"]["decision"], "reuse", "{row}");
     }
+    // Health (#354): everything was built, and the build's record says nothing failed.
+    for row in view["rows"].as_array().unwrap() {
+        let health = row["health"]["health"].as_str().unwrap();
+        assert!(matches!(health, "healthy" | "warning"), "{row}");
+    }
+    let failing = home["health"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "failing")
+        .unwrap();
+    assert_eq!(
+        failing["count"], 0,
+        "measured from the run's record: {failing}"
+    );
     // Reuse is offline: the relation isn't claimed to be checked.
     assert_eq!(view["decisions"]["relations_checked"], false);
     assert!(
@@ -540,5 +555,83 @@ fn on_databricks_freshness_evidence_names_the_table_version_runs_read() {
             .iter()
             .any(|n| n.as_str().unwrap().starts_with("not read here")),
         "{feed:#}"
+    );
+}
+
+/// Health and coverage (#354) on the demo project: coverage counted from the manifest
+/// (each checked here against the manifest itself), and without a state store, every
+/// node's health unknown and failures not measured, never 0.
+#[test]
+fn health_and_coverage_come_from_the_project_and_say_what_isnt_measured() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(target.join("manifest.json")).unwrap()).unwrap();
+    let nodes = manifest["nodes"].as_object().unwrap();
+    let models: std::collections::BTreeSet<&str> = nodes
+        .iter()
+        .filter(|(_, n)| n["resource_type"] == "model")
+        .map(|(id, _)| id.as_str())
+        .collect();
+    let mut tested = std::collections::BTreeSet::new();
+    for test in nodes
+        .values()
+        .filter(|n| n["resource_type"] == "test")
+        .chain(
+            manifest["unit_tests"]
+                .as_object()
+                .into_iter()
+                .flat_map(|u| u.values()),
+        )
+    {
+        for id in test["depends_on"]["nodes"].as_array().unwrap() {
+            tested.insert(id.as_str().unwrap());
+        }
+    }
+    let expected_tested = models.iter().filter(|m| tested.contains(*m)).count();
+
+    let server = serve(&target, &[]);
+    let home = json(&server, "api/home");
+    let coverage = |key: &str| {
+        home["coverage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == key)
+            .unwrap()
+            .clone()
+    };
+    let tests = coverage("tests");
+    assert_eq!(tests["total"].as_u64(), Some(models.len() as u64));
+    assert_eq!(
+        tests["count"].as_u64(),
+        Some(expected_tested as u64),
+        "{tests:#}"
+    );
+    assert_eq!(
+        tests["uncovered"].as_array().unwrap().len(),
+        models.len() - expected_tested
+    );
+    // No sources in the demo project: not measured, never 0 of 0.
+    assert!(coverage("source_freshness")["count"].is_null());
+    let health = |key: &str| {
+        home["health"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == key)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(health("unknown")["count"], 13, "nothing was ever built");
+    assert_eq!(health("healthy")["count"], 0);
+    assert!(
+        health("failing")["count"].is_null(),
+        "no run record: not measured"
+    );
+    let (status, page) = get(&server, "catalog?health=unknown");
+    assert_eq!(status, 200);
+    assert!(
+        page.contains("13 of 13 nodes"),
+        "the badge's link lists them"
     );
 }
