@@ -4,6 +4,9 @@
 Standard library only, so the job needs nothing installed before it authenticates.
 
     ci.py token            get a short-lived workspace token and export it, masked
+    ci.py token probe      the same for the read-only probe service principal
+                           (`DATABRICKS_PROBE_CLIENT_ID`, `DATABRICKS_PROBE_CLIENT_SECRET`),
+                           exported as `DATABRICKS_PROBE_TOKEN` (#392, ADR-0030 §4c)
     ci.py sql STATEMENT    run STATEMENT on the warehouse and print the rows
 
 Authentication, in order:
@@ -162,10 +165,10 @@ def federated_token(workspace: str, client_id: str) -> str:
         raise
 
 
-def secret_token(workspace: str, client_id: str) -> str:
-    secret = env("DATABRICKS_CLIENT_SECRET", required=False)
+def secret_token(workspace: str, client_id: str, prefix: str = "DATABRICKS_") -> str:
+    secret = env(f"{prefix}CLIENT_SECRET", required=False)
     if not secret:
-        raise Failed("no DATABRICKS_CLIENT_SECRET to fall back to")
+        raise Failed(f"no {prefix}CLIENT_SECRET to fall back to")
     basic = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
 
     def grant(scope: str) -> str:
@@ -195,16 +198,21 @@ def summary(line: str) -> None:
             f.write(line + "\n")
 
 
-def cmd_token() -> None:
+def cmd_token(role: str = "") -> None:
+    """A token for the CI service principal, or, with `role` `probe`, for the probe's."""
+    prefix = f"DATABRICKS_{role.upper()}_" if role else "DATABRICKS_"
     workspace = host()
     # The environment's secret masking only hides the value as stored (with its
     # scheme); ODS and dbt print the bare hostname, so mask that too.
     print(f"::add-mask::{urllib.parse.urlsplit(workspace).hostname}")
-    client_id = env("DATABRICKS_CLIENT_ID")
+    client_id = env(f"{prefix}CLIENT_ID")
     method, token, refused = None, None, []
     for name, get in (
         ("workload identity federation", federated_token),
-        ("service principal OAuth secret", secret_token),
+        (
+            "service principal OAuth secret",
+            lambda w, c: secret_token(w, c, prefix),
+        ),
     ):
         try:
             token = get(workspace, client_id)
@@ -217,10 +225,10 @@ def cmd_token() -> None:
         raise Failed("no way to authenticate:\n  " + "\n  ".join(refused))
     # Mask before anything could print it.
     print(f"::add-mask::{token}")
-    export("DATABRICKS_TOKEN", token)
-    export("ODS_DATABRICKS_AUTH", method)
-    print(f"authenticated with {method}")
-    summary(f"**Databricks auth:** {method}")
+    export(f"{prefix}TOKEN", token)
+    export(f"ODS_DATABRICKS_{role.upper() + '_' if role else ''}AUTH", method)
+    print(f"authenticated {role or 'the CI service principal'} with {method}")
+    summary(f"**Databricks auth{f' ({role})' if role else ''}:** {method}")
     for why in refused:
         summary(f"- fell back: {why}")
 
@@ -273,6 +281,8 @@ def main(argv: list[str]) -> int:
         match argv:
             case ["token"]:
                 cmd_token()
+            case ["token", "probe"]:
+                cmd_token("probe")
             case ["sql", statement]:
                 cmd_sql(statement)
             case _:

@@ -11,7 +11,8 @@ on. The copy differs only where DuckDB and Databricks do:
 - Model contracts and constraints are left out: their data types (`integer`,
   `varchar`) and the foreign key's `main.orders` are DuckDB's. Data tests stay.
 - `profiles.yml` points at the workspace. The token is read from the environment when
-  dbt runs, never written to the file (AGENTS.md rule 9).
+  dbt runs, never written to the file (AGENTS.md rule 9). Its `health_ro` target is
+  the read-only probe service principal's, for `ods health check` (#392).
 
 The catalog and schema come from `ODS_CI_CATALOG` and `ODS_CI_SCHEMA`. To rehearse
 locally on another warehouse, point `ODS_CI_PROFILES_YML` at a `profiles.yml` to use
@@ -44,6 +45,16 @@ jaffle_ods:
       catalog: "{{ env_var('ODS_CI_CATALOG') }}"
       schema: "{{ env_var('ODS_CI_SCHEMA') }}"
       threads: 4
+    # The read-only probe service principal (#392, ADR-0030 §4c): the same catalog and
+    # schema, so a probe reads the relations the build made. Empty until it is set up.
+    health_ro:
+      type: databricks
+      host: "{{ env_var('DATABRICKS_HOST') | replace('https://', '') | replace('/', '') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DATABRICKS_PROBE_TOKEN', '') }}"
+      catalog: "{{ env_var('ODS_CI_CATALOG') }}"
+      schema: "{{ env_var('ODS_CI_SCHEMA') }}"
+      threads: 1
 """
 
 
