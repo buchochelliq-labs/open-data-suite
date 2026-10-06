@@ -887,3 +887,129 @@ fn a_plugin_cant_take_a_declared_checks_id() {
     ));
     assert!(clash.is_err());
 }
+
+// ---------------------------------------------------------------- coverage targets
+
+fn measured(key: &str, covered: Option<usize>, total: usize) -> Measured {
+    Measured::new(key, covered, total)
+}
+
+#[test]
+fn a_coverage_target_passes_when_reached_and_fails_below() {
+    let s = settings("[coverage.tests]\ntarget = 0.8\n");
+    let at_target = s.coverage(&[measured("tests", Some(8), 10)]);
+    assert_eq!(at_target.len(), 1);
+    assert_eq!(at_target[0].status, Status::Pass, "80% meets 80%");
+    assert_eq!(
+        at_target[0].severity,
+        Severity::Warn,
+        "warn unless configured"
+    );
+    assert_eq!(
+        at_target[0].reason,
+        "8 of 10 models with tests (80%), meeting the 80% target"
+    );
+
+    let below = s.coverage(&[measured("tests", Some(7), 10)]);
+    assert_eq!(below[0].status, Status::Fail);
+    assert_eq!(
+        below[0].reason,
+        "7 of 10 models with tests (70%), below the 80% target"
+    );
+    assert_eq!((below[0].covered, below[0].total), (Some(7), 10));
+    assert!(
+        s.how(true).contains("tests ≥ 80% (warn)"),
+        "{}",
+        s.how(true)
+    );
+}
+
+#[test]
+fn coverage_with_nothing_to_measure_is_unknown_never_reached() {
+    let s = settings("[coverage.source_freshness]\ntarget = 0.5\nseverity = \"error\"\n");
+    for measured in [
+        vec![measured("source_freshness", None, 0)],
+        vec![measured("source_freshness", Some(0), 0)],
+        vec![],
+    ] {
+        let found = s.coverage(&measured);
+        assert_eq!(found[0].status, Status::Unknown, "{measured:?}");
+        assert!(
+            found[0].reason.contains("nothing to measure"),
+            "{}",
+            found[0].reason
+        );
+    }
+}
+
+#[test]
+fn a_missed_target_at_error_fails_the_gate_and_unknown_only_when_strict() {
+    let s = settings("[coverage.descriptions]\ntarget = 1.0\nseverity = \"error\"\n");
+    let report = |covered: Option<usize>| {
+        HealthReport {
+            badges: BTreeMap::new(),
+            checks: Vec::new(),
+            coverage: Vec::new(),
+        }
+        .with_coverage(s.coverage(&[measured("descriptions", covered, 4)]))
+    };
+    assert!(report(Some(3)).fails(false));
+    assert!(!report(Some(4)).fails(true));
+    assert!(!report(None).fails(false));
+    assert!(report(None).fails(true));
+    // At warn, a miss never fails the gate.
+    let warn = settings("[coverage.descriptions]\ntarget = 1.0\n");
+    let report = HealthReport {
+        badges: BTreeMap::new(),
+        checks: Vec::new(),
+        coverage: Vec::new(),
+    }
+    .with_coverage(warn.coverage(&[measured("descriptions", Some(0), 4)]));
+    assert!(!report.fails(true));
+}
+
+#[test]
+fn a_target_turned_off_says_nothing() {
+    let s = settings("[coverage.tests]\ntarget = 0.8\nseverity = \"off\"\n");
+    assert!(s.coverage(&[measured("tests", Some(0), 10)]).is_empty());
+}
+
+#[test]
+fn a_misconfigured_target_is_a_configuration_error() {
+    let error = |toml: &str| {
+        let config: HealthConfig = toml::from_str(toml).unwrap();
+        HealthSettings::from_config(&config)
+            .unwrap_err()
+            .to_string()
+    };
+    let unknown = error("[coverage.docs]\ntarget = 0.8\n");
+    assert!(unknown.contains("health.coverage.docs"), "{unknown}");
+    assert!(
+        unknown.contains("descriptions"),
+        "lists the measures: {unknown}"
+    );
+    for bad in ["1.5", "-0.1", "nan"] {
+        let error = error(&format!("[coverage.tests]\ntarget = {bad}\n"));
+        assert!(
+            error.contains("health.coverage.tests.target"),
+            "{bad}: {error}"
+        );
+    }
+    assert!(toml::from_str::<HealthConfig>("[coverage.tests]\ntarget = 0.8\nlevel = 1\n").is_err());
+}
+
+#[test]
+fn a_share_keeps_thousandths_and_round_trips() {
+    let s = settings("[coverage.tests]\ntarget = 0.875\n");
+    let found = s.coverage(&[measured("tests", Some(7), 8)]);
+    assert_eq!(found[0].status, Status::Pass, "7/8 is exactly 87.5%");
+    assert!(
+        found[0].reason.ends_with("the 87.5% target"),
+        "{}",
+        found[0].reason
+    );
+    let json = serde_json::to_value(&found[0]).unwrap();
+    assert_eq!(json["target"], 0.875);
+    let back: CoverageFinding = serde_json::from_value(json).unwrap();
+    assert_eq!(back, found[0]);
+}

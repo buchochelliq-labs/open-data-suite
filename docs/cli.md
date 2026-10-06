@@ -1349,6 +1349,29 @@ JSON). An id that isn't valid, is a built-in's or is used twice, an empty `requi
 requirement not in the table, or a `kind` other than `declarative` is a configuration
 error (exit 4, `ODS-E0102`).
 
+#### Coverage targets
+
+`[health.coverage.<measure>]` sets the share of the project a coverage measure on Home
+must cover. Coverage is about the project as a whole, so a missed target never changes a
+node's badge: it shows on Home's bar and in `ods health check`.
+
+```toml
+[health.coverage.tests]
+target = 0.8          # 80% of models have tests
+severity = "error"    # missing it fails `ods health check`; default warn
+
+[health.coverage.descriptions]
+target = 0.5
+```
+
+The measures are Home's: `tests`, `descriptions`, `constraints` (models with each) and
+`source_freshness` (sources whose new data ODS can measure). A target is met when the
+covered share reaches it, missed when it doesn't, and *unknown* when there is nothing to
+measure (e.g. no sources); unknown is never met. Home draws each target on its bar and
+says whether it is met, with why in the tooltip, and `/api/home` gives each coverage
+row's `target` verdict. A measure that doesn't exist, or a target outside 0 to 1, is a
+configuration error (exit 4, `ODS-E0102`).
+
 The trust store, warehouse probes, scripts and plugins come in later phases of #392.
 
 ### ods health check
@@ -1369,7 +1392,7 @@ only: no database is created or migrated, and dbt isn't run.
 
 | Outcome | Exit |
 |---|---|
-| no check at severity `error` failed | 0 |
+| no check or coverage target at severity `error` failed | 0 |
 | one did | 5, `ODS-E0701` |
 | with `--strict`, one at severity `error` couldn't decide (*unknown*) | 5, `ODS-E0701` |
 | `[health]` is invalid | 4, `ODS-E0102` |

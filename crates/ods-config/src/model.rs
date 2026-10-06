@@ -215,6 +215,22 @@ pub struct HealthConfig {
     /// and a `unique` test of every mart (ADR-0030 §3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<DeclaredCheckConfig>,
+    /// Coverage targets by measure, e.g. `[health.coverage.tests]` with `target = 0.8`
+    /// (ADR-0030 §3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub coverage: BTreeMap<String, CoverageTargetConfig>,
+}
+
+/// A coverage target, e.g. `[health.coverage.tests]` (ADR-0030 §3).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct CoverageTargetConfig {
+    /// The share that must be covered, from 0 to 1, e.g. `0.8`.
+    pub target: f64,
+    /// How severe missing it is (default `warn`), or `off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<HealthSeverity>,
 }
 
 /// A check declared in `[[health.checks]]` (ADR-0030 §3).

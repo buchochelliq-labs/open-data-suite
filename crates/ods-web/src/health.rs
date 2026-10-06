@@ -73,6 +73,9 @@ pub struct Coverage {
     pub how: String,
     /// What isn't covered, by name.
     pub uncovered: Vec<NodeLink>,
+    /// Its target's verdict, when `[health.coverage]` sets one (ADR-0030 §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<ods_health::CoverageFinding>,
 }
 
 fn link(node: &CatalogNode) -> NodeLink {
@@ -114,6 +117,7 @@ fn over_models(
             how.to_owned()
         },
         uncovered,
+        target: None,
     }
 }
 
@@ -171,13 +175,58 @@ pub(crate) fn coverage(input: &CatalogInput, freshness: &FreshnessInput) -> Vec<
                 .to_owned()
         },
         uncovered,
+        target: None,
     });
+    rows
+}
+
+/// What the engine judges coverage targets on: each measure's count.
+pub fn measured(rows: &[Coverage]) -> Vec<ods_health::Measured> {
+    rows.iter()
+        .map(|r| ods_health::Measured::new(r.key, r.count, r.total))
+        .collect()
+}
+
+/// The project's coverage, measured as the dashboard shows it, for `ods health check`.
+pub fn project_coverage(
+    input: &CatalogInput,
+    freshness: &FreshnessInput,
+) -> Vec<ods_health::Measured> {
+    measured(&coverage(input, freshness))
+}
+
+/// The project's coverage, each measure with its target's verdict under `settings`.
+pub(crate) fn judged(
+    input: &CatalogInput,
+    freshness: &FreshnessInput,
+    settings: &ods_health::HealthSettings,
+) -> Vec<Coverage> {
+    let mut rows = coverage(input, freshness);
+    let verdicts = settings.coverage(&measured(&rows));
+    for row in &mut rows {
+        row.target = verdicts.iter().find(|v| v.measure == row.key).cloned();
+    }
     rows
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every measure the dashboard shows can have a target, and every measure a target
+    /// can be set for is one the dashboard measures (ADR-0030 §3).
+    #[test]
+    fn the_measures_are_the_engines() {
+        let shown: Vec<&str> = coverage(&CatalogInput::default(), &FreshnessInput::default())
+            .iter()
+            .map(|r| r.key)
+            .collect();
+        let targets: Vec<&str> = ods_health::COVERAGE_MEASURES
+            .iter()
+            .map(|(k, _)| *k)
+            .collect();
+        assert_eq!(shown, targets);
+    }
     use crate::catalog::{CatalogColumn, CatalogTest, LastBuild, TestKind};
     use crate::dashboard::state::LastOutcome;
     use crate::freshness::SourceInput;

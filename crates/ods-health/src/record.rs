@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 use crate::{CheckRun, CheckSource, Finding, HealthReport};
 
 /// The health record's format version.
-/// 1.1: a check's source can be `declarative`.
+/// 1.1: a check's source can be `declarative`, and a report holds its coverage
+/// targets' verdicts.
 pub const HEALTH_RECORD_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// How many records are kept; older ones are removed after each write.
@@ -234,6 +235,7 @@ mod tests {
             HealthReport {
                 badges: BTreeMap::new(),
                 checks: Vec::new(),
+                coverage: Vec::new(),
             },
         )
     }

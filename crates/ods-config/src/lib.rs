@@ -20,9 +20,10 @@ pub use load::{
     Replaced, Setting, load,
 };
 pub use model::{
-    CONFIG_VERSION, ColorPreference, Config, CostConfig, DeclaredCheckConfig, HealthCheckConfig,
-    HealthConfig, HealthSelector, HealthSeverity, LogConfig, LogLevel, OutputConfig, OutputFormat,
-    PolicyConfig, ProjectConfig, ProviderConfig, StateConfig, UnknownCountsAs,
+    CONFIG_VERSION, ColorPreference, Config, CostConfig, CoverageTargetConfig, DeclaredCheckConfig,
+    HealthCheckConfig, HealthConfig, HealthSelector, HealthSeverity, LogConfig, LogLevel,
+    OutputConfig, OutputFormat, PolicyConfig, ProjectConfig, ProviderConfig, StateConfig,
+    UnknownCountsAs,
 };
 pub use secret::{SecretRef, is_secret_key};
 pub use source::{FileKind, Source};

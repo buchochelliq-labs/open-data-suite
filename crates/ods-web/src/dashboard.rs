@@ -1130,7 +1130,7 @@ impl Dashboard {
             health_how: self.health_how(),
             health_recorded_at: self.health_record().map(|r| r.checked_at),
             signals: self.signals(details, now),
-            coverage: crate::health::coverage(&self.catalog, &self.freshness),
+            coverage: crate::health::judged(&self.catalog, &self.freshness, &self.health),
             modules: self.modules.clone(),
         }
     }

@@ -972,3 +972,53 @@ fn a_misdeclared_check_is_a_configuration_error() {
         "names what it can require: {message}"
     );
 }
+
+/// ADR-0030 §3: a coverage target is judged on Home and gates `ods health check`
+/// when missed at severity error.
+#[test]
+fn a_coverage_target_is_shown_on_home_and_gates_health_check() {
+    let target = fixtures("jaffle-ods/artifacts/dbt-1.10");
+    let toml = "[health.coverage.tests]\ntarget = 1.0\nseverity = \"error\"\n";
+    let server = serve_with(&target, &[], Some(toml));
+    let home = json(&server, "api/home");
+    let tests = home["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "tests")
+        .unwrap()["target"]
+        .clone();
+    assert_eq!(
+        tests["status"], "fail",
+        "not every demo model has tests: {tests:#}"
+    );
+    assert_eq!(tests["target"], 1.0);
+    let (_, page) = get(&server, "");
+    assert!(
+        page.contains(r#"<span class="cov-target" data-status="missed""#),
+        "{page}"
+    );
+    assert!(page.contains(r#"<span class="mark" style="left:100%"></span>"#));
+    drop(server);
+
+    let home_dir = tempfile::tempdir().unwrap();
+    std::fs::write(home_dir.path().join("ods.toml"), toml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["health", "check", "--no-record", "--json", "--target-dir"])
+        .arg(&target)
+        .current_dir(home_dir.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home_dir.path())
+        .output()
+        .unwrap();
+    let envelope: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+    assert_eq!(out.status.code(), Some(5), "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("the tests coverage target at severity error isn't met"),
+        "{message}"
+    );
+    assert_eq!(envelope["result"]["coverage"][0]["measure"], "tests");
+    assert_eq!(envelope["result"]["coverage"][0]["status"], "fail");
+}
