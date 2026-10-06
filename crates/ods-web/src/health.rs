@@ -417,8 +417,11 @@ mod tests {
         let f = failures(&["model.a"], &[]);
         assert_eq!(node_health(&older, Some(&f), &node).health, Health::Failing);
         // Never built and failed: failing, not unknown.
-        let never = input(vec![node.clone()], vec![]);
-        assert_eq!(node_health(&never, Some(&f), &node).health, Health::Failing);
+        let unbuilt = input(vec![node.clone()], vec![]);
+        assert_eq!(
+            node_health(&unbuilt, Some(&f), &node).health,
+            Health::Failing
+        );
         // Built after the failed run started: that build stands.
         let later = LastBuild::new(Some(2), "run-2", at("2026-09-29T10:00:00Z")).with_tested(
             "run-2",
@@ -426,8 +429,11 @@ mod tests {
             None,
             true,
         );
-        let newer = input(vec![node.clone()], vec![("model.a", later)]);
-        assert_eq!(node_health(&newer, Some(&f), &node).health, Health::Healthy);
+        let rebuilt = input(vec![node.clone()], vec![("model.a", later)]);
+        assert_eq!(
+            node_health(&rebuilt, Some(&f), &node).health,
+            Health::Healthy
+        );
         // Skipped: a warning.
         let tested = built().with_tested("run-1", at("2026-09-28T09:05:00Z"), None, true);
         let skipped = input(vec![node.clone()], vec![("model.a", tested)]);

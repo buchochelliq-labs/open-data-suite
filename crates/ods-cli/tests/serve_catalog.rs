@@ -261,7 +261,10 @@ fn the_catalog_shows_the_plan_and_the_builds_the_state_store_recorded() {
         .iter()
         .find(|r| r["key"] == "failing")
         .unwrap();
-    assert_eq!(failing["count"], 0, "measured from the run's record: {failing}");
+    assert_eq!(
+        failing["count"], 0,
+        "measured from the run's record: {failing}"
+    );
     // Reuse is offline: the relation isn't claimed to be checked.
     assert_eq!(view["decisions"]["relations_checked"], false);
     assert!(

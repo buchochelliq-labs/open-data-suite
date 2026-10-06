@@ -38,7 +38,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   health, stale nodes and runs with failures, and shows coverage of tests, descriptions,
   column constraints and source freshness, each listing what it misses. What ODS can't
   measure reads *not measured*, never 0
-  ([docs](docs/cli.md#the-catalog-and-model-pages)) (#390, #354)
+  ([docs](docs/cli.md#the-catalog-and-model-pages)) (#391, #354)
 - The dashboard's **Freshness evidence** screen (`/catalog/sources`, under Catalog):
   for each source and seed, the evidence ODS has about its data now, its grade
   (*exact*, *semantic*, *proxy*, *inferred*, *unknown*), what its readers were last
