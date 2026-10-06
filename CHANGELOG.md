@@ -12,6 +12,14 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Added
+- The dashboard counts the checks `ods health check` recorded (#392, ADR-0030 §6): it
+  works the built-in checks out itself, and takes every other check's findings from the
+  newest health record for its scope, in the badges and counts on Home and in the
+  Catalog. The "how" text names those checks and when they ran, `/api/home` and
+  `/api/catalog` give the time as `health_recorded_at`, and a node the record doesn't
+  cover is *unknown* for them, never healthy. A new record reloads the page.
+
 ### Changed
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of

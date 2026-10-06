@@ -764,3 +764,116 @@ fn a_misspelt_health_check_is_a_configuration_error() {
     );
     assert_eq!(envelope["diagnostics"][0]["code"], "ODS-E0102");
 }
+
+/// ADR-0030 §6: the dashboard works the built-ins out itself and takes every other
+/// check's findings from the latest health record for its scope, saying when that ran.
+/// No plugin can be registered from the command line yet, so the record is the one
+/// `ods health check` wrote, with a registered check's findings added.
+#[cfg(unix)]
+#[test]
+fn a_recorded_checks_findings_reach_the_badges_with_their_time() {
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::create_dir_all(dir.join("base")).unwrap();
+    std::fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/manifest.json"),
+        dir.join("base/manifest.json"),
+    )
+    .unwrap();
+    let target = dir.join("target");
+    let db = dir.join(".ods/state.db");
+    let out = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["state", "build", "--dbt"])
+        .arg(fixtures("fake-dbt/dbt"))
+        .args(["--dbt-output", "capture", "--target-dir"])
+        .arg(&target)
+        .arg("--state-db")
+        .arg(&db)
+        .current_dir(dir)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FAKE_DBT_BASE", dir.join("base"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let checked = ods_json(&target, &db, &["health", "check"]);
+    let written = PathBuf::from(checked["recorded"].as_str().unwrap());
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&written).unwrap()).unwrap();
+
+    // A registered check that fails one node and passes the rest; one node it never saw.
+    let failed = "model.jaffle_ods.orders";
+    let unseen = "model.jaffle_ods.customers";
+    record["checked_at"] = "2099-01-01T00:00:00Z".into();
+    record["report"]["checks"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "owner", "source": "plugin", "severity": "error", "about": "has an owner"
+        }));
+    let badges = record["report"]["badges"].as_object_mut().unwrap();
+    badges.remove(unseen);
+    for (id, badge) in badges.iter_mut() {
+        let status = if id == failed { "fail" } else { "pass" };
+        badge["findings"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "check": "owner", "source": "plugin", "status": status, "severity": "error",
+                "reason": format!("owner: {status}")
+            }));
+    }
+    std::fs::write(
+        written.with_file_name("2099-01-01T00-00-00Z-001.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+
+    let server = serve(&target, &["--state-db", db.to_str().unwrap()]);
+    let home = json(&server, "api/home");
+    assert_eq!(
+        home["health_recorded_at"], "2099-01-01T00:00:00Z",
+        "{home:#}"
+    );
+    assert!(
+        home["health_how"].as_str().unwrap().contains("`owner`"),
+        "{}",
+        home["health_how"]
+    );
+    let view = json(&server, "api/catalog");
+    let badge = |id: &str| -> Value {
+        view["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("no {id}"))["health"]
+            .clone()
+    };
+    assert_eq!(badge(failed)["health"], "failing", "{:#}", badge(failed));
+    let unseen = badge(unseen);
+    let owner = unseen["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["check"] == "owner")
+        .unwrap_or_else(|| panic!("{unseen:#}"))
+        .clone();
+    assert_eq!(owner["status"], "unknown", "never a pass: {owner:#}");
+    drop(server);
+
+    // Another scope's record says nothing about this one.
+    record["scope"] = "someone/else".into();
+    std::fs::write(
+        written.with_file_name("2099-01-02T00-00-00Z-001.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    std::fs::remove_file(written.with_file_name("2099-01-01T00-00-00Z-001.json")).unwrap();
+    let server = serve(&target, &["--state-db", db.to_str().unwrap()]);
+    let home = json(&server, "api/home");
+    assert!(home.get("health_recorded_at").is_none(), "{home:#}");
+}

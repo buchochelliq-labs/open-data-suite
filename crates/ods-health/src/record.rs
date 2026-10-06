@@ -10,7 +10,9 @@ use ods_core::SchemaVersion;
 use ods_core::state::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::HealthReport;
+use std::collections::BTreeMap;
+
+use crate::{CheckRun, CheckSource, Finding, HealthReport};
 
 /// The health record's format version.
 pub const HEALTH_RECORD_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
@@ -46,6 +48,82 @@ impl HealthRecord {
             scope: scope.into(),
             report,
         }
+    }
+}
+
+/// What a record says about the checks the dashboard doesn't run itself (ADR-0030 §6):
+/// it works the built-ins out live, and takes every other check's findings from the
+/// latest record, with that record's time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Recorded {
+    /// When the checks ran.
+    pub checked_at: Timestamp,
+    /// The recorded checks, in the order they ran.
+    pub checks: Vec<CheckRun>,
+    /// Their findings, by node.
+    findings: BTreeMap<String, Vec<Finding>>,
+}
+
+impl Recorded {
+    /// What `record` says about checks that aren't built in.
+    pub fn of(record: &HealthRecord) -> Self {
+        let recorded = |source: CheckSource| source != CheckSource::Builtin;
+        Self {
+            checked_at: record.checked_at,
+            checks: record
+                .report
+                .checks
+                .iter()
+                .filter(|c| recorded(c.source))
+                .cloned()
+                .collect(),
+            findings: record
+                .report
+                .badges
+                .iter()
+                .map(|(node, badge)| {
+                    let findings = badge
+                        .findings
+                        .iter()
+                        .filter(|f| recorded(f.source))
+                        .cloned()
+                        .collect();
+                    (node.clone(), findings)
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether the record holds any check the dashboard doesn't run itself.
+    pub fn is_empty(&self) -> bool {
+        self.checks.is_empty()
+    }
+
+    /// The recorded findings about `node`, one per recorded check. A check that has no
+    /// finding about it (the node is newer than the record) is *unknown* for it, never
+    /// a pass (AGENTS rule 3).
+    pub(crate) fn findings_for(&self, node: &str) -> Vec<Finding> {
+        let found = self.findings.get(node);
+        self.checks
+            .iter()
+            .map(|check| {
+                found
+                    .and_then(|f| f.iter().find(|f| f.check == check.id))
+                    .cloned()
+                    .unwrap_or_else(|| Finding {
+                        check: check.id.clone(),
+                        source: check.source,
+                        status: crate::Status::Unknown,
+                        severity: check.severity,
+                        reason: format!(
+                            "`{}` didn't check it: the last `ods health check` ({}) didn't cover it",
+                            check.id, self.checked_at
+                        ),
+                        evidence: BTreeMap::new(),
+                    })
+            })
+            .collect()
     }
 }
 

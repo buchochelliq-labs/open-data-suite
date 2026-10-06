@@ -973,7 +973,9 @@ Catalog has its own name search (`/` focuses it) in place of the header's. Each 
 - *unknown:* ODS never built it.
 
 Failures come from the last run's record (`ods state build`/`run` keep it beside the
-store); without one they aren't counted. The `health` facet filters by it. Facets, the name search and the sort are in the URL
+store); without one they aren't counted. Checks that aren't built in count as the last
+`ods health check` recorded them, as of when it ran (see [the health
+record](#ods-health-check)). The `health` facet filters by it. Facets, the name search and the sort are in the URL
 query (`/catalog?layer=marts&decision=build&sort=last_built&desc=1`), so a filtered
 view can be bookmarked; the page works without script.
 
@@ -1348,6 +1350,12 @@ to `error` in `[health]` to gate on it too.
   findings. The newest 20 are kept. A record is written whole, then renamed into place,
   so a reader never sees half of one, and a check run that fails leaves the others as
   they were. Nothing is recorded without a state store, or with `--no-record`.
+- **On the dashboard:** `ods serve` works the built-in checks out itself, and takes
+  every other check's findings from the newest record for its scope, so those count in
+  the badges and the counts on Home and in the Catalog. Their results age: the "how"
+  text names them and when they ran, and `/api/home` and `/api/catalog` give that time
+  as `health_recorded_at`. A node the record doesn't cover (added since) is *unknown*
+  for those checks, never healthy. A new record reloads the page.
 - **Registered checks:** checks registered through the `health_check` contract (SDK 0.8)
   run beside the built-ins, each under a 60-second timeout. One that errs, times out,
   leaves a node unanswered or answers it twice is *unknown* for those nodes, never a
