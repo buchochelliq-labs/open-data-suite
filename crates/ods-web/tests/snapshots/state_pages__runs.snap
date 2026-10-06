@@ -1,6 +1,5 @@
 ---
 source: crates/ods-web/tests/state_pages.rs
-assertion_line: 622
 expression: pretty(&body)
 ---
 {
@@ -99,19 +98,19 @@ expression: pretty(&body)
           "value": ""
         },
         {
-          "count": 0,
+          "count": "<relative to now>",
           "label": "Last day",
           "selected": false,
           "value": "1d"
         },
         {
-          "count": 3,
+          "count": "<relative to now>",
           "label": "Last 7 days",
           "selected": false,
           "value": "7d"
         },
         {
-          "count": 3,
+          "count": "<relative to now>",
           "label": "Last 30 days",
           "selected": false,
           "value": "30d"
