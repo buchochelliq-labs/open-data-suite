@@ -343,9 +343,26 @@ fn pretty(body: &str) -> String {
             other => other,
         }
     }
-    let value: serde_json::Value =
+    let mut value: serde_json::Value =
         serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {body}"));
+    relative_dates(&mut value);
     serde_json::to_string_pretty(&sorted(value)).unwrap()
+}
+
+/// The Runs page's date facet counts runs within a day, a week, … of now, so its
+/// counts change as the fixture's runs age: in snapshots they read as relative; the
+/// filter test checks them at fixed times.
+fn relative_dates(value: &mut serde_json::Value) {
+    let Some(facets) = value.get_mut("facets").and_then(|f| f.as_array_mut()) else {
+        return;
+    };
+    for facet in facets.iter_mut().filter(|f| f["key"] == "date") {
+        for option in facet["options"].as_array_mut().into_iter().flatten() {
+            if option["value"] != "" {
+                option["count"] = "<relative to now>".into();
+            }
+        }
+    }
 }
 
 #[test]
@@ -666,7 +683,13 @@ fn runs_list_what_the_store_records_and_nothing_more() {
     assert!(view.runs.is_empty(), "all older than a day");
     let dates = view.facets.iter().find(|f| f.key == "date").unwrap();
     assert_eq!(dates.options[0].count, 3, "All counts every run");
+    assert_eq!(dates.options[2].count, 3, "last 7 days");
     assert_eq!(dates.options[3].count, 3, "last 30 days");
+    // The same runs three weeks on: older than a week, within a month.
+    let later = dashboard.runs_view(true, at("2026-10-20T00:00:00Z"), &filter, &BTreeMap::new());
+    let dates = later.facets.iter().find(|f| f.key == "date").unwrap();
+    assert_eq!(dates.options[2].count, 0, "not in the last 7 days");
+    assert_eq!(dates.options[3].count, 3, "still in the last 30 days");
 }
 
 #[test]
