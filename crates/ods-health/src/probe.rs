@@ -91,7 +91,7 @@ impl fmt::Debug for ProbeConnection {
 
 /// Probes that ran under a login the check found could do more than read, or couldn't
 /// tell about, because the run allowed it (`--allow-elevated-login`, §4c).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct ElevatedLogin {
@@ -303,7 +303,7 @@ impl Probe {
             )
         } else if !connected {
             format!(
-                "{}: there is no warehouse connection to run probes through here",
+                "{}: no connection to run probes through; set `[health.probes] target` to a dbt target whose login can only read (ADR-0030 §4c)",
                 self.id
             )
         } else {

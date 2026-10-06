@@ -14,8 +14,8 @@
 //! - [`inspect`](RelationInspector::inspect) runs one `dbt show --inline` query that
 //!   asks the adapter which relations exist (#230).
 //! - [`probe`](RelationProbe::probe) runs one `dbt show --inline` query (more for a
-//!   long list of targets) that runs a few statements against each requested source's
-//!   relation, and no other (ADR-0022, ADR-0030 §5).
+//!   long list of targets) that runs a few statements against each requested node's
+//!   relation (a source, model, seed or snapshot), and no other (ADR-0022, ADR-0030 §5).
 //!
 //! dbt's own output goes to ODS's stderr (or is captured), never to stdout, which
 //! carries ODS's report.
@@ -1551,7 +1551,7 @@ fn probe_batches<'a>(ids: &[&'a str]) -> Vec<Vec<&'a str>> {
 }
 
 impl DbtExecutor {
-    /// One relation probe call, for the sources in `ids`.
+    /// One relation probe call, for the nodes in `ids`.
     async fn probe_batch(
         &self,
         request: &ProbeRequest,
@@ -1581,7 +1581,7 @@ impl DbtExecutor {
         let probed = crate::probe::parse(&stdout).map_err(|why| {
             ProviderError::Other(format!("the relation probe (`dbt show`) failed: {why}"))
         })?;
-        // Which sources dbt looked at: those of the project as it parsed it.
+        // Which nodes dbt looked at: those of the project as it parsed it.
         let manifest = crate::Manifest::read(&target.join("manifest.json")).map_err(|e| {
             ProviderError::Other(format!(
                 "the relation probe (`dbt show`) wrote no readable manifest: {e}"
@@ -1590,12 +1590,20 @@ impl DbtExecutor {
         let known: BTreeSet<String> = manifest
             .nodes
             .iter()
-            .filter(|n| n.resource_type == crate::ResourceType::Source)
+            .filter(|n| {
+                matches!(
+                    n.resource_type,
+                    crate::ResourceType::Source
+                        | crate::ResourceType::Model
+                        | crate::ResourceType::Seed
+                        | crate::ResourceType::Snapshot
+                )
+            })
             .map(|n| n.unique_id.clone())
             .collect();
         if probed.probed != known.len() {
             return Err(ProviderError::Other(format!(
-                "the relation probe saw {} sources, its manifest has {}",
+                "the relation probe saw {} sources, models, seeds and snapshots, its manifest has {}",
                 probed.probed,
                 known.len()
             )));
@@ -1653,7 +1661,8 @@ impl RelationProbe for DbtExecutor {
                         "dbt wasn't asked: its id has characters the probe doesn't send".to_owned(),
                     ),
                     _ if !known.contains(t.id.as_str()) => ProbeAnswer::Unknown(
-                        "dbt didn't probe it: not a source of the project it parsed".to_owned(),
+                        "dbt didn't probe it: not a source, model, seed or snapshot of the project it parsed"
+                            .to_owned(),
                     ),
                     Some(found) => probe_answer(found, request),
                     None => ProbeAnswer::Unknown("dbt didn't report on it".to_owned()),

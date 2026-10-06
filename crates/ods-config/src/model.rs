@@ -219,6 +219,25 @@ pub struct HealthConfig {
     /// (ADR-0030 §3).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coverage: BTreeMap<String, CoverageTargetConfig>,
+    /// The connection probe checks run through, e.g. `[health.probes]` with
+    /// `target = "health_readonly"` (ADR-0030 §4c). Without a target, probes never run:
+    /// they never borrow the build's own target, which can write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probes: Option<HealthProbesConfig>,
+}
+
+/// Where probe checks run, `[health.probes]` (ADR-0030 §4c): a dbt target for a
+/// principal that can only read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct HealthProbesConfig {
+    /// The dbt target in `profiles.yml`, e.g. `health_readonly`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// The dbt profile it is in, when not the project's (or `--dbt-profile`'s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 /// A coverage target, e.g. `[health.coverage.tests]` (ADR-0030 §3).

@@ -165,8 +165,8 @@ async fn one_dbt_call_answers_only_what_was_asked_and_failures_are_errors() {
         "{report:?}"
     );
     assert!(
-        matches!(&report.targets[3].1, ProbeAnswer::Unknown(why) if why.contains("not a source")),
-        "{report:?}"
+        matches!(&report.targets[3].1, ProbeAnswer::Unknown(why) if why.contains("no such relation")),
+        "a model the warehouse doesn't have: {report:?}"
     );
     assert!(
         matches!(&report.targets[4].1, ProbeAnswer::Unknown(why) if why.contains("characters")),
@@ -343,4 +343,42 @@ async fn a_probe_that_takes_too_long_is_stopped_and_fails() {
         .unwrap_err();
     assert!(err.to_string().contains("took longer than 1s"), "{err}");
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+#[tokio::test]
+async fn models_seeds_and_snapshots_are_probed_by_their_alias() {
+    let dir = scratch("nodes");
+    let doc = serde_json::json!({
+        "orders": {"type": "table", "rows": {DETAIL: {"id": "m1", "format": "delta"}}},
+        "raw_orders": {"type": "table", "rows": {DETAIL: {"id": "s1"}}},
+    });
+    std::fs::write(dir.join("warehouse.json"), doc.to_string()).unwrap();
+    let request = ProbeRequest::new(
+        ProbeFilter::kinds(["table", "view"]).unwrap(),
+        vec![ProbeStatement::new(DETAIL, ["id"]).unwrap()],
+    )
+    .unwrap();
+    let report = probe(&dir)
+        .probe(
+            &request,
+            &[
+                ProbeTarget::new("model.jaffle_ods.orders", "orders"),
+                ProbeTarget::new("seed.jaffle_ods.raw_orders", "raw_orders"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.targets,
+        [
+            (
+                "model.jaffle_ods.orders".to_owned(),
+                ProbeAnswer::Rows(vec![row(&[("id", "m1")])])
+            ),
+            (
+                "seed.jaffle_ods.raw_orders".to_owned(),
+                ProbeAnswer::Rows(vec![row(&[("id", "s1")])])
+            ),
+        ]
+    );
 }

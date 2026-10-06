@@ -1379,13 +1379,37 @@ guard stopped it, never a pass:
 - **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
   you have trusted that exact definition for that project with
   [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
-- **A read-only login.** Probes run under a connection that can do no more than read
-  what they probe (ADR-0030 §4c): just before each probe, ODS asks the connection what
-  its login may do on each relation, and refuses the probe, *unknown* with the login and
-  what it found, when the login can do more than read or that can't be told. The engine
-  for this is built; `ods health check` gets a probe connection, and
-  `--allow-elevated-login`, in the next step of #392. Until then a trusted probe reads
-  *unknown: there is no warehouse connection to run probes through here*.
+- **A read-only login.** Probes run under their own dbt target, `[health.probes]`, never
+  the build's (which can write), and only when that target's login can do no more than
+  read what they probe (ADR-0030 §4c). Just before each probe, ODS asks the connection
+  what its login may do on each relation, and refuses the probe, *unknown* with the login
+  and what it found, when the login can do more than read or that can't be told. Without
+  a `[health.probes]` target, probes don't run at all.
+
+```toml
+[health.probes]
+target = "health_readonly"   # a target in profiles.yml whose login can only read
+profile = "jaffle"           # optional: when not the project's (or --dbt-profile's)
+```
+
+Reporting what a login may do is a provider capability (`relation_privileges`), and no
+provider has it yet (Unity Catalog's comes in the next step of #392), so for now every
+probe is refused unless you run `ods health check --allow-elevated-login`:
+- it runs probes even when their login can do more than read, or that can't be told,
+  **at your own risk**: ODS checks each probe is one read-only query, but it can't stop a
+  query from writing under a login that may write. ODS comes with no warranty (see its
+  licence), and its authors aren't responsible for any consequence, including changed or
+  destroyed data;
+- it is a command-line flag only, never a setting, so a repository can't turn it on for
+  you, and it skips only this guard: the SQL must still be read-only and trusted;
+- every run that uses it warns, naming the login and what it found for each node, and
+  every probe that ran so carries `login_check: overridden` and `login_found` in its
+  evidence; `--json` and the health record keep them in `elevated_login`.
+
+Probes read sources, models, seeds and snapshots, through dbt (`dbt show`), on the
+relation dbt names for the node; an ephemeral model has none, so its probe is *unknown*.
+dbt prints its output as for `ods state` (`--dbt-output`), and each probe is limited to
+60 seconds, after which dbt is stopped and the probe is *unknown*.
 
 `pass` compares a column the query returns with a number, a `'string'` or `true`/`false`;
 only numbers can be ordered. A column that is missing, or isn't a number where one is
@@ -1422,7 +1446,7 @@ so it never reads past a target it misses. A measure that doesn't exist, or a ta
 outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
 `ODS-E0102`).
 
-The trust store, warehouse probes, scripts and plugins come in later phases of #392.
+Scripts and plugins come in later phases of #392.
 
 ### ods health trust
 
@@ -1458,11 +1482,14 @@ ods health check                  # exit 5 when a check at severity error fails
 ods health check --strict --json  # also when one couldn't decide; one JSON document
 ods health check --no-record      # don't keep the findings
 ods health check --allow-scripts  # trust this project's probes as they are now, this run only
+ods health check --allow-elevated-login  # run probes whose login can do more than read: your risk
 ```
 
 It takes the options `ods state` commands take to find the project and the state store
-(`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …), and reads them
-only: no database is created or migrated, and dbt isn't run.
+(`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …) and to call dbt
+(`--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars`, `--dbt-output`), and reads them
+only: no database is created or migrated, and dbt runs only for
+[probe checks](#probe-checks), on `[health.probes]`'s target.
 
 | Outcome | Exit |
 |---|---|

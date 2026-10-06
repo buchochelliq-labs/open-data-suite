@@ -1082,7 +1082,9 @@ fn a_probe_runs_only_once_every_guard_holds_and_never_passes_before() {
     let trusted = probe_finding(&s, &orders());
     assert_eq!(trusted.status, Status::Unknown, "nothing to run it through");
     assert!(
-        trusted.reason.contains("no warehouse connection"),
+        trusted
+            .reason
+            .contains("no connection to run probes through"),
         "{}",
         trusted.reason
     );

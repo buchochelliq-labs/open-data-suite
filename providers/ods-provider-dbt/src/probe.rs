@@ -1,12 +1,14 @@
-//! Runs a [`ProbeRequest`] against sources' relations through dbt (ADR-0022 §1).
+//! Runs a [`ProbeRequest`] against nodes' relations through dbt (ADR-0022 §1, ADR-0030
+//! §5): sources, models, seeds and snapshots.
 //!
 //! One `dbt show --inline` call runs the query [`query`] renders. dbt renders it with the
 //! user's own profile, so ODS never handles a credential (AGENTS.md rule 9). As in the
 //! relation check (ADR-0016), the query names no relation: it iterates `graph.sources`
-//! itself, and only the request and the requested ids travel on the command line (the
-//! executor splits a long list of ids over several calls). For each requested source
-//! it, and nothing else:
-//! - asks the adapter for the relation (`adapter.get_relation`); none means unknown;
+//! and `graph.nodes` itself, and only the request and the requested ids travel on the
+//! command line (the executor splits a long list of ids over several calls). For each
+//! requested node it, and nothing else:
+//! - asks the adapter for the relation (`adapter.get_relation`, with a source's
+//!   `identifier` or a node's `alias`); none (e.g. an ephemeral model) means unknown;
 //! - checks the relation's kind against the filter's kinds, and, when the filter names
 //!   a format `f`, that the adapter's relation says `is_<f>` is true. An adapter that
 //!   doesn't say is never taken to confirm it: the relation is skipped. dbt-databricks
@@ -14,10 +16,11 @@
 //!   Catalog schema; relations it lists without a format (e.g. `hive_metastore`) say
 //!   false, so they are skipped;
 //! - runs each statement with `run_query`, `{relation}` replaced by the relation as
-//!   the adapter renders it, and keeps the requested columns of its first row.
+//!   the adapter renders it, and keeps the requested columns of its first row, matched
+//!   whatever their case (some warehouses upper-case unquoted names).
 //!
 //! Jinja can't catch an error, so one statement that fails fails the whole call: the
-//! caller then treats every source as unknown.
+//! caller then treats every target as unknown.
 //!
 //! The answer is one row of JSON, under a marker. Its strings are percent-encoded by
 //! the query (`urlencode`), so a value with a quote or backslash can't break the SQL
@@ -39,19 +42,22 @@ const TEMPLATE: &str = "\
 {%- set qs = @STATEMENTS@ -%}\
 {%- set ids = @IDS@ -%}\
 {%- if execute -%}\
-{%- for s in graph.sources.values() -%}\
+{%- for s in graph.sources.values()|list + graph.nodes.values()|list \
+if s.resource_type in ['source', 'model', 'seed', 'snapshot'] -%}\
 {%- set ns.probed = ns.probed + 1 -%}\
 {%- if s.unique_id in ids -%}{%- set k = s.unique_id|urlencode -%}\
-{%- set rel = adapter.get_relation(s.database, s.schema, s.identifier) -%}\
+{%- set rel = adapter.get_relation(s.database, s.schema, \
+s.identifier if s.resource_type == 'source' else s.alias) -%}\
 {%- if rel is none -%}{%- do out.update({k: {'missing': 1}}) -%}\
 {%- elif rel.type not in @KINDS@ -%}{%- do out.update({k: {'kind': (rel.type or '')|string|urlencode}}) -%}\
 @FORMAT@\
 {%- else -%}{%- set rows = [] -%}\
 {%- for q, cols in qs -%}{%- set r = run_query(q.replace('@PLACEHOLDER@', rel|string)) -%}{%- set row = {} -%}\
 {%- if r.rows|length > 0 -%}\
-{%- for c in cols if c in r.column_names and r.rows[0][c] is not none -%}\
-{%- do row.update({c: r.rows[0][c]|string|urlencode}) -%}\
-{%- endfor -%}{%- endif -%}{%- do rows.append(row) -%}\
+{%- for c in cols -%}{%- for n in r.column_names \
+if n|lower == c|lower and r.rows[0][n] is not none -%}\
+{%- do row.update({c: r.rows[0][n]|string|urlencode}) -%}\
+{%- endfor -%}{%- endfor -%}{%- endif -%}{%- do rows.append(row) -%}\
 {%- endfor -%}{%- do out.update({k: {'rows': rows}}) -%}\
 {%- endif -%}\
 {%- endif -%}\
@@ -236,6 +242,11 @@ mod tests {
         );
         assert!(query.contains("if s.unique_id in ids"), "{query}");
         assert!(query.contains("graph.sources.values()"));
+        assert!(
+            query.contains("s.resource_type in ['source', 'model', 'seed', 'snapshot']"),
+            "{query}"
+        );
+        assert!(query.contains("n|lower == c|lower"), "{query}");
         assert!(
             query.contains(r#"rel.type not in ["table","view"]"#),
             "{query}"

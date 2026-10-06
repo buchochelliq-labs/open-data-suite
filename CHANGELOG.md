@@ -29,6 +29,14 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- Probe checks run (#392, ADR-0030 §4c): on their own dbt target, `[health.probes]`
+  `target` (and optional `profile`), never the build's; without one they don't run.
+  dbt probes sources, models, seeds and snapshots, matching the query's columns whatever
+  their case. Every probe is refused (*unknown*) unless its login is shown to only read,
+  which no provider reports yet; `ods health check --allow-elevated-login` runs them
+  anyway, at the user's own risk, warning on every run with the login and what was
+  found, and marking each such finding `login_check: overridden`. `ods health check`
+  takes `--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars` and `--dbt-output`.
 - The `relation_privileges` contract and capability (#392, ADR-0030 §4c), with a fake
   (`FakeRelationPrivileges`) and a conformance suite: a provider reports whether its
   login can only read each relation, or what it holds beyond reading. The health engine
