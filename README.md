@@ -3,9 +3,11 @@
 A Rust-first, provider-neutral control plane for analytics engineering. It starts with dbt
 and Databricks, and every decision it makes can be explained.
 
-> **Status:** very experimental, pre-alpha. The first release,
-> [v0.0.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.1), is
-> the State MVP with the first dashboard screens. `ods state`, the `ods serve`
+> **Status:** very experimental, pre-alpha. The latest release,
+> [v0.0.2](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.2), adds
+> health checks with a CI gate, what reuse saves, failure explanations and the
+> Freshness, ERD and Impact screens to the State MVP and first dashboard screens of
+> [v0.0.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.1). `ods state`, the `ods serve`
 > dashboard, column-level lineage, ERDs and an MCP server work as previews; everything
 > may change.
 >
@@ -43,7 +45,7 @@ These recordings are the real `ods` on the demo project in `fixtures/`, with a f
 | Module | What it does | Target |
 |---|---|---|
 | `ods state` | Incremental, explainable "what needs to run", handed back to dbt with exact selection; per-node run stats and a run journal | v0.0.1 |
-| `ods serve` dashboard | Read-only web view of State, runs, lineage and the catalog; every screen of the design by v0.1.0 | v0.0.1 (first screens), v0.1.0 (complete) |
+| `ods serve` dashboard | Read-only web view of State, runs, lineage and the catalog; every screen of the design by v0.1.0 | v0.0.1 (first screens), v0.0.2 (Freshness, ERD, Impact), v0.1.0 (complete) |
 | `ods lineage` | Column-level lineage, change impact, an offline explorer and OpenLineage export | preview |
 | `ods erd` / `ods usage` | Entity-relationship model and real consumer usage | v0.3.0 (`ods erd generate` is a preview today) |
 | `ods ci` | Change impact, selective CI, and PR reports | v0.4.0 |

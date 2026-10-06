@@ -16,6 +16,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
   each other. `/roadmap/` redirects to `/ROADMAP/`.
+- The README, the docs' Home and Install pages and the roadmap say v0.0.2 is released;
+  the install commands use `0.0.2` as the example version.
 
 ## [0.0.2] - 2026-10-06
 

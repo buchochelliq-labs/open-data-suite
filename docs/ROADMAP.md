@@ -168,6 +168,8 @@ watermark/partition triggers, WAIT decisions, clone/defer, distributed locking, 
 The M1 slices keep #17 and #19 open; their remainder ships in M2.
 
 ### R2 — ERD, Impact & hardening (→ **v0.0.2**)
+**Status (2026-10-06): released as [v0.0.2](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.2).**
+
 Goal: put on the dashboard what ODS already computes but only shows in the CLI, and
 harden what v0.0.1 ships. The two screens are part of the v0.1.0 design (#309) and
 come first because their engines exist.
