@@ -1396,15 +1396,17 @@ profile = "jaffle"           # optional: when not the project's (or --dbt-profil
 
 Reporting what a login may do is a provider capability (`relation_privileges`). On
 Databricks, ODS reads it from Unity Catalog's `system.information_schema`, through the
-probe target's own connection: a probe runs when the login (or a group it is in) owns
-neither the relation, its schema nor its catalog, holds nothing on them or on the
-metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA`, can grant nothing,
-and isn't in the workspace's `admins` group. Anything it can't read is *unknown*. Known
-limits, with how they will be fixed, are in
-[ADR-0030 §4e](adr/0030-configurable-and-pluggable-health-checks.md); the main one: a
-metastore or account admin isn't visible there and can pass as read-only, so run probes
-as a dedicated read-only principal. Relations outside Unity Catalog (e.g.
-`hive_metastore`) are *unknown*. Other warehouses have no privilege report yet, so their
+probe target's own connection: a probe runs when the relation is a managed table, a
+view or a materialized view, and the login (or a group it is in) owns neither the
+relation, its schema, its catalog nor the metastore, holds nothing on them or on the
+metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA`, and isn't in the
+workspace's `admins` group. Anything it can't read is *unknown*, and so is an external
+table, whose files its storage location could let the login write. Known limits, with
+how they will be fixed, are in
+[ADR-0030 §4e](adr/0030-configurable-and-pluggable-health-checks.md); the main one: an
+account admin isn't visible there and can pass as read-only, so run probes as a
+dedicated read-only principal. Relations outside Unity Catalog (e.g. `hive_metastore`)
+are *unknown*. Other warehouses have no privilege report yet, so their
 probes are refused unless you run `ods health check --allow-elevated-login`:
 - it runs probes even when their login can do more than read, or that can't be told,
   **at your own risk**: ODS checks each probe is one read-only query, but it can't stop a

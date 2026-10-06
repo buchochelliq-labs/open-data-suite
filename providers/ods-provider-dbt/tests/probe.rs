@@ -44,9 +44,11 @@ fn warehouse(dir: &Path, version: &str) {
     };
     let mut orders = table("0f1e-orders");
     orders["relation"] = serde_json::json!("\"jaffle\".\"raw\".\"orders\"");
+    let mut payments = table("it's \\ \"odd\"");
+    payments["identifier"] = serde_json::json!("pay'ments");
     let doc = serde_json::json!({
         "raw.orders": orders,
-        "raw.payments": table("it's \\ \"odd\""),
+        "raw.payments": payments,
         "raw.customers": {"type": "view"},
     });
     std::fs::write(dir.join("warehouse.json"), doc.to_string()).unwrap();
@@ -109,6 +111,15 @@ impl ProbeHarness for Harness {
         Some(source("customers"))
     }
 
+    fn unsafe_name(&self) -> Option<(ProbeRequest, ProbeTarget)> {
+        let request = ProbeRequest::new(
+            ProbeFilter::kinds(["table"]).unwrap(),
+            vec![ProbeStatement::by_name("select {name} as n", ["n"]).unwrap()],
+        )
+        .unwrap();
+        Some((request, source("payments")))
+    }
+
     fn elsewhere(&self) -> Option<ProbeTarget> {
         Some(source("orders").expecting("\"nowhere\".\"raw\".\"orders\""))
     }
@@ -118,7 +129,7 @@ impl ProbeHarness for Harness {
 async fn conforms() {
     let report = run(&Harness).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 5, "{report:?}");
+    assert_eq!(report.passed.len(), 6, "{report:?}");
 }
 
 fn row(pairs: &[(&str, &str)]) -> ProbeRow {
@@ -293,6 +304,7 @@ async fn real_dbt_runs_the_query() {
         vec![ProbeStatement::new("select 1 as one from {relation}", ["one"]).unwrap()],
     )
     .unwrap();
+    by_name_parts_arrive_as_literals(&executor, &asked[0]).await;
     let report = executor.probe(&formatted, &asked[..1]).await.unwrap();
     assert!(
         matches!(report.targets[0].1, ProbeAnswer::Skipped(_)),
@@ -428,5 +440,43 @@ async fn a_node_dbt_resolves_elsewhere_is_never_probed() {
         std::fs::read_to_string(&probed).unwrap(),
         "source.jaffle_ods.raw.orders\n",
         "only the first call ran anything"
+    );
+}
+
+/// A by-name statement gets the relation's parts as string literals, as dbt's adapter
+/// has them (real dbt only).
+async fn by_name_parts_arrive_as_literals(executor: &DbtExecutor, target: &ProbeTarget) {
+    // By name: the parts arrive as string literals, as dbt's adapter has them.
+    let by_name = ProbeRequest::new(
+        ProbeFilter::kinds(["table"]).unwrap(),
+        vec![
+            ProbeStatement::by_name(
+                "select {database} as db, {schema} as sch, {name} as nm",
+                ["db", "sch", "nm"],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let report = executor
+        .probe(&by_name, std::slice::from_ref(target))
+        .await
+        .unwrap();
+    let ProbeAnswer::Rows(rows) = &report.targets[0].1 else {
+        panic!("{report:?}");
+    };
+    assert_eq!(
+        rows[0].get("sch").map(String::as_str),
+        Some("main"),
+        "{report:?}"
+    );
+    assert_eq!(
+        rows[0].get("nm").map(String::as_str),
+        Some("raw_orders"),
+        "{report:?}"
+    );
+    assert!(
+        rows[0].get("db").is_some_and(|d| !d.is_empty()),
+        "{report:?}"
     );
 }

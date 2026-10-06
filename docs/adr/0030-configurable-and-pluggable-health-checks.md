@@ -287,8 +287,12 @@ statement can name the relation's parts as string literals (`{database}`, `{sche
 - whether the login, or a group it is in (`is_account_group_member`, `is_member`), owns
   the table, its schema or its catalog (`tables`, `schemata`, `catalogs`);
 - any privilege on the table, schema, catalog or metastore beyond `SELECT`, `BROWSE`,
-  `USE CATALOG` and `USE SCHEMA`, or any it can grant (`*_privileges`, `is_grantable`);
-- whether it is in the workspace's `admins` group.
+  `USE CATALOG` and `USE SCHEMA` (`*_privileges`; the right to grant comes with
+  ownership or `MANAGE`, which these find);
+- whether it owns the metastore (`metastores`), or is in the workspace's `admins` group;
+- that the relation is a managed table, a view or a materialized view (`table_type`): an
+  external table's files can be written through its storage location, which isn't
+  checked, so it is *unknown*.
 
 It is read-only only when every statement answered and none found anything; anything
 that can't be read is *unknown*, never read-only. Other warehouses have no privilege
@@ -300,21 +304,25 @@ issue of #392.
 
 | # | Issue | Effect today | How to fix |
 |---|---|---|---|
-| 1 | Metastore admins and account admins aren't visible in `information_schema`. | Such a login can pass as read-only. | Read the metastore's owner and the login's admin roles from the Unity Catalog and SCIM APIs (`current-metastore-assignment`, `metastores/{id}`, `Me`) through a Databricks connection, once secrets have a provider (#126); until then, document that probes need a dedicated principal. |
+| 1 | Account admins aren't visible in `information_schema` (metastore owners are, and are checked). | Such a login can pass as read-only. | Read the login's account roles from the account SCIM API (`Me`) through a Databricks connection, once secrets have a provider (#126); until then, probes need a dedicated principal that isn't an account admin. |
 | 2 | Only Unity Catalog reports privileges. | Probes on any other warehouse need `--allow-elevated-login`. | A `relation_privileges` per warehouse: Snowflake (`SHOW GRANTS` over the current role's hierarchy), PostgreSQL (`has_table_privilege`, `has_schema_privilege`, ownership in `pg_class`), BigQuery (`testIamPermissions`). |
 | 3 | Relations outside Unity Catalog (e.g. `hive_metastore`) aren't in `system.information_schema`. | *Unknown*: refused without the override. | `SHOW GRANTS` for legacy table ACLs, or state they are unsupported. |
 | 4 | A catalog, schema or name with a quote, backslash or brace isn't put in a string literal. | *Unknown* for that relation. | Adapter-specific literal escaping in the dbt provider (Databricks SQL escapes with `\`). |
 | 5 | Group membership relies on `is_account_group_member` and `is_member`; nested groups and service principals' identities (application id vs display name) aren't verified against a live workspace. | A grant through an unusual path may be missed, or a read-only login refused. | Verify in the Databricks CI job with a read-only service principal; fall back to SCIM group expansion if needed. |
-| 6 | Only `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` count as reading. | Other read-only privileges (e.g. `READ VOLUME`, `EXECUTE`) are refused as elevated. | Review Unity Catalog's privilege list and widen the allowlist where a privilege can't write. |
+| 6 | Only `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` count as reading, and any privilege on the metastore counts as more. | Other read-only privileges (e.g. `READ VOLUME`, `EXECUTE`) are refused as elevated; if every user holds a default metastore grant (e.g. `USE MARKETPLACE ASSETS` for `account users`), no probe ever runs without the override. | Review Unity Catalog's privilege list and widen the allowlists where a privilege can't write, metastore grants included. |
 | 7 | The check covers the probed relation and its containers, not other tables the probe's SQL may read (a read-only join). | Reading is allowed elsewhere without a check; nothing can write. | Use the SQL analyzer's table references to check every relation the query reads, or refuse queries naming other relations. |
 | 8 | Grants can change between the check and the query. | A narrow window. | None in ODS; a dedicated principal whose grants don't change is the control (§4c). |
 | 9 | Sources aren't in health's scope (§4d). | Probes can't select sources: a configuration error, or reported as unmatched. | Add sources to the health scope, with their own badges and counts. |
 | 10 | dbt's default target can't be compared with the probe target. | A probe target equal to an unnamed default build target isn't caught. | Resolve the build target with ODS's target check (`dbt` renders it) before comparing. |
-| 11 | Nine statements run per relation, one after another, in one dbt call. | Slow for many probed nodes. | One set-based query per schema or catalog for the batch. |
+| 11 | Ten statements run per relation, one after another, in one dbt call. | Slow for many probed nodes. | One set-based query per schema or catalog for the batch. |
 | 12 | Not yet run against a live workspace: tested with fakes and the fake dbt. | Behaviour on real Unity Catalog is unproven. | A read-only service principal and probe target in the Databricks CI job. |
+| 13 | External tables (and any `table_type` but managed, view or materialized view) are *unknown*: their files can be written through the storage location (`WRITE FILES` on an external location or credential), which isn't checked. | Probes on external tables need `--allow-elevated-login`. | Find the external location whose `url` prefixes the table's `storage_path` and check its owner and privileges (beyond `READ FILES`, `BROWSE`), and the storage credential's. |
+| 14 | Relation kinds outside the probe filter (table, view, materialized view), e.g. dbt-databricks' streaming tables, are skipped by the probe. | *Unknown*: refused without the override. | Add the kinds once their write paths are understood. |
+| 15 | The check assumes the `*_privileges` views show rows granted to the login's groups; Unity Catalog documents them as showing privileges the user may interact with. | If group grants are hidden from the login, it could pass as read-only. | Verify with a live workspace (row 12); if hidden, expand groups through SCIM and read grants with `SHOW GRANTS`. |
+| 16 | `is_grantable` is checked, but Unity Catalog reserves it (always `NO`). | None: grant rights come with ownership or `MANAGE`, which are found. | Drop the clause if it stays reserved. |
 
 ### 5. The contract and crate
-- **The probe contract, widened:** `relation_probe` becomes 0.2. `probe` takes neutral
+- **The probe contract, widened:** `relation_probe` becomes 0.2 (0.3 as built: by-name statements, §4e). `probe` takes neutral
   `ProbeTarget`s (an id, and the relation as the project names it), not only sources, so a
   probe check can target a model, a seed or a snapshot. Sources keep working as targets.
   ADR-0022's source-version reading moves to the new signature with no behaviour change. A

@@ -57,7 +57,7 @@ use crate::provider::{Contract, Provider};
 /// The `relation_probe` contract.
 pub const RELATION_PROBE: Contract = Contract {
     name: "relation_probe",
-    version: SchemaVersion::new(0, 2),
+    version: SchemaVersion::new(0, 3),
 };
 
 /// The placeholder a statement template names its relation with. The implementation

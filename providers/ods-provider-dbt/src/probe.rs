@@ -354,7 +354,12 @@ mod tests {
         let query = query(&request, &[("source.p.raw.a", None)]);
         assert!(query.contains(",[\"n\"],true]"), "{query}");
         assert!(query.contains("q.replace('{database}'"), "{query}");
-        assert!(query.contains("{'unsafe': 1}"), "{query}");
+        assert!(
+            query.contains(
+                r#"|select('in', "'\\{}")|list -%}{%- do out.update({k: {'unsafe': 1}}) -%}"#
+            ),
+            "the guard is exactly a quote, a backslash and the braces: {query}"
+        );
         assert!(!query.contains('@'), "every marker is filled: {query}");
     }
 

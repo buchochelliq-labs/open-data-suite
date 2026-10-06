@@ -8,16 +8,19 @@
 //! - whether the login, or a group it is in (`is_account_group_member`, `is_member`),
 //!   owns the table, its schema or its catalog;
 //! - any privilege it holds on the table, its schema, its catalog or the metastore
-//!   beyond reading (`SELECT`, `BROWSE`, `USE CATALOG`, `USE SCHEMA`), or any it can
-//!   grant on (`is_grantable`);
-//! - whether it is in the workspace's `admins` group.
+//!   beyond reading (`SELECT`, `BROWSE`, `USE CATALOG`, `USE SCHEMA`). The right to grant
+//!   comes with ownership or `MANAGE`, which these find; `is_grantable` is checked too,
+//!   though Unity Catalog reserves it;
+//! - whether it owns the metastore (its admin), or is in the workspace's `admins` group;
+//! - that the relation is a managed table, a view or a materialized view: an external
+//!   table's files can be written through its storage location, which isn't checked.
 //!
 //! The relation is read-only for the login only when every statement answered and none
 //! found anything. Whatever can't be read is unknown, never read-only (AGENTS rule 3).
 //!
 //! # Known limits (ADR-0030 §4c, "Known issues")
-//! - A metastore admin or account admin isn't visible in `information_schema`, so such a
-//!   login can look read-only. Run probes as a dedicated principal that is neither.
+//! - An account admin isn't visible in `information_schema`, so such a login can look
+//!   read-only. Run probes as a dedicated principal that isn't one.
 //! - Relations outside Unity Catalog (e.g. `hive_metastore`) aren't in
 //!   `system.information_schema`: unknown.
 //! - A name with a quote, backslash or brace isn't put in a string literal: unknown.
@@ -131,6 +134,14 @@ fn checks() -> Vec<Check> {
             "on the metastore",
         ),
         owner(
+            format!(
+                "select count(*) as n from system.information_schema.metastores where \
+                 {{name}} is not null and {}",
+                login("metastore_owner")
+            ),
+            "owner (admin) of the metastore",
+        ),
+        owner(
             "select cast(is_member('admins') as int) as n, {name} as relation_name".to_owned(),
             "a workspace admin (in `admins`)",
         ),
@@ -140,14 +151,18 @@ fn checks() -> Vec<Check> {
 /// The statement that says whether the catalog shows the relation, and to whom.
 fn seen() -> String {
     format!(
-        "select current_user() as login, count(*) as found from system.information_schema.tables \
-         where {THE_TABLE}"
+        "select current_user() as login, count(*) as found, max(table_type) as kind \
+         from system.information_schema.tables where {THE_TABLE}"
     )
 }
 
+/// The kinds of relation whose data only Unity Catalog's grants govern. An external
+/// table's files can be written through its storage location, which isn't checked.
+const GOVERNED: [&str; 3] = ["MANAGED", "VIEW", "MATERIALIZED_VIEW"];
+
 /// The request that reads a relation's privileges: [`seen`], then each of [`checks`].
 fn request() -> Result<ProbeRequest, InvalidProbe> {
-    let mut statements = vec![ProbeStatement::by_name(seen(), ["login", "found"])?];
+    let mut statements = vec![ProbeStatement::by_name(seen(), ["login", "found", "kind"])?];
     for check in checks() {
         statements.push(if check.grants {
             ProbeStatement::by_name(check.sql, ["n", "what"])?
@@ -189,6 +204,24 @@ fn access(rows: &[ProbeRow]) -> (Option<String>, Access) {
             return (
                 login,
                 unknown("Unity Catalog didn't say whether it shows the relation"),
+            );
+        }
+    }
+    match first.get("kind").map(|k| k.trim().to_ascii_uppercase()) {
+        Some(kind) if GOVERNED.contains(&kind.as_str()) => {}
+        Some(kind) => {
+            return (
+                login,
+                Access::Unknown(format!(
+                    "a {} table: who can write its files through its storage location isn't checked",
+                    kind.to_ascii_lowercase()
+                )),
+            );
+        }
+        None => {
+            return (
+                login,
+                unknown("Unity Catalog didn't say what kind of relation it is"),
             );
         }
     }
@@ -314,7 +347,11 @@ mod tests {
 
     /// The rows of a relation the login can only read, with `change` applied.
     fn rows(change: impl FnOnce(&mut Vec<ProbeRow>)) -> Vec<ProbeRow> {
-        let mut rows = vec![row(&[("login", "reader@example.com"), ("found", "1")])];
+        let mut rows = vec![row(&[
+            ("login", "reader@example.com"),
+            ("found", "1"),
+            ("kind", "MANAGED"),
+        ])];
         for check in checks() {
             rows.push(if check.grants {
                 row(&[("n", "0"), ("what", "")])
@@ -357,7 +394,7 @@ mod tests {
         let (_, found) = access(&rows(|r| {
             r[2] = row(&[("n", "1")]);
             r[4] = row(&[("n", "2"), ("what", "MODIFY, SELECT")]);
-            r[8] = row(&[("n", "1")]);
+            r[9] = row(&[("n", "1")]);
         }));
         assert_eq!(
             found,
@@ -372,9 +409,14 @@ mod tests {
     #[test]
     fn what_cant_be_read_is_unknown_never_read_only() {
         for change in [
-            Box::new(|r: &mut Vec<ProbeRow>| r[0] = row(&[("login", "x"), ("found", "0")]))
-                as Box<dyn FnOnce(&mut Vec<ProbeRow>)>,
-            Box::new(|r: &mut Vec<ProbeRow>| r[0] = row(&[("login", "x")])),
+            Box::new(|r: &mut Vec<ProbeRow>| {
+                r[0] = row(&[("login", "x"), ("found", "0"), ("kind", "MANAGED")]);
+            }) as Box<dyn FnOnce(&mut Vec<ProbeRow>)>,
+            Box::new(|r: &mut Vec<ProbeRow>| r[0] = row(&[("login", "x"), ("kind", "MANAGED")])),
+            Box::new(|r: &mut Vec<ProbeRow>| {
+                r[0] = row(&[("login", "x"), ("found", "1"), ("kind", "EXTERNAL")]);
+            }),
+            Box::new(|r: &mut Vec<ProbeRow>| r[0] = row(&[("login", "x"), ("found", "1")])),
             Box::new(|r: &mut Vec<ProbeRow>| r[3] = row(&[("n", "many")])),
             Box::new(|r: &mut Vec<ProbeRow>| {
                 r.pop();
@@ -409,7 +451,11 @@ mod tests {
                 fake = fake.with_relation(id, "table", None);
                 for (i, statement) in request.statements().iter().enumerate() {
                     let values: Vec<(&str, &str)> = match i {
-                        0 => vec![("login", "reader@example.com"), ("found", "1")],
+                        0 => vec![
+                            ("login", "reader@example.com"),
+                            ("found", "1"),
+                            ("kind", "MANAGED"),
+                        ],
                         2 if owns_schema => vec![("n", "1")],
                         _ => vec![("n", "0"), ("what", "")],
                     };
