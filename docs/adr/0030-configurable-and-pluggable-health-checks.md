@@ -102,8 +102,8 @@ A check yields, for each node (or source) in its scope, a **finding**:
 |---|---|---|---|
 | 1 | **Built-in** checks (#354's, and more): last run failed, tests required, tests passed on this build, description, constraints, stale, source freshness | ODS | in-process |
 | 2 | **Declarative**: rules over the project's metadata (`require = ["description", "test:unique"]` for a selector) | config | in-process |
-| 3 | **Probe**: read-only SQL with a pass condition (`select count(*) as n from {relation}`, `n > 0`) | config | through the `relation_probe` contract (ADR-0022), on the provider's connection |
-| 4 | **Script**: any executable speaking the check protocol (§4) | experts | a child process, opt-in |
+| 3 | **Probe**: one read-only query with a pass condition (`select count(*) as n from {relation}`, `n > 0`), validated as read-only (§4a) | config, trusted (§4b) | through the `relation_probe` contract (ADR-0022), widened to any relation (§5), on the provider's connection |
+| 4 | **Script**: any executable speaking the check protocol (§4) | experts, trusted (§4b) | a child process |
 | 5 | **Plugin**: a `HealthCheck` from another crate or an external provider (#387) | anyone | registered like any provider |
 
 ### 3. Configuration
@@ -168,12 +168,54 @@ severity = "warn"
   the reason. It is never `pass`.
 - **Environment:** ODS passes no credentials and no resolved secrets. The child inherits the
   user's environment, as `dbt` would, and the docs say so.
-- **Trust:** scripts run only when the user opts in. That means `health.scripts = "allow"` in
-  a user-level config file, which a repository can't set, or `--allow-scripts` on the
-  command. Otherwise each script check records `unknown: scripts aren't allowed here` and
-  says how to allow them. #9 can later replace this with a policy.
+
+### 4a. Probes are read-only, checked before they run
+`RelationProbe` trusts its caller to send only read-only statements (ADR-0022), so the
+engine is that caller and checks every probe's `sql` when the configuration loads:
+- **Parser:** the CLI wires in the project dialect's SQL analyzer (`ods-provider-sqlparser`,
+  the same as lineage, ADR-0008) through a small `ReadOnlyQuery` check. The engine never
+  names a parser.
+- **Shape:** the query must parse as **exactly one** query statement: a `SELECT`,
+  `WITH … SELECT`, or a set operation of them.
+- **Rejected:** anything else is a configuration error naming the check, before anything
+  connects. That covers DML, DDL, `MERGE`, `CALL`, `COPY`, `SET`, `USE`, transaction control,
+  several statements, `SELECT … INTO`, and anything that doesn't parse.
+- **Relation:** the `{relation}` placeholder is replaced by the provider, quoted by its own
+  rules (ADR-0022), never by string concatenation in the engine.
+- **Limits:** results are capped at the probe's row limit, with a timeout.
+
+Read-only isn't the same as harmless (a heavy query still costs warehouse time), so probes
+are also behind trust (§4b).
+
+### 4b. Trust: a project's scripts and probes run only once that project is trusted
+A repository's `ods.toml` can name commands and queries, and cloning a repository mustn't be
+enough to run them. One global switch isn't enough either: allowing scripts once would allow
+every repository cloned afterwards. So trust is per project and per definition:
+- **The trust store:** `ods health trust` records, in the user's own config directory
+  (never in a repository), a trust entry. It holds:
+  - the project's root path;
+  - a digest of every script `command`, probe `sql` and their check ids, as the merged
+    configuration defines them.
+
+  Each entry says when it was made.
+- **Running:** a script or probe check runs only when its project's entry exists and its
+  definition's digest still matches. A changed command or query is untrusted again until
+  `ods health trust` runs again, which shows what changed.
+- **Untrusted:** an untrusted check records `unknown: not trusted for this project`, with
+  the command to trust it. It never runs and never passes.
+- **Definitions from the user's own layer:** script and probe checks defined only in the
+  user's own configuration layer (ADR-0005), not in the project's files, are trusted without
+  an entry, since the user wrote them.
+- **`--allow-scripts`:** trusts the current definitions for one invocation, for CI, where the
+  repository is the thing being checked. It is never persisted.
+- **Later:** #9 can replace the trust store with a policy.
 
 ### 5. The contract and crate
+- **The probe contract, widened:** `relation_probe` becomes 0.2. `probe` takes neutral
+  `ProbeTarget`s (an id, and the relation as the project names it), not only sources, so a
+  probe check can target a model, a seed or a snapshot. Sources keep working as targets.
+  ADR-0022's source-version reading moves to the new signature with no behaviour change. A
+  provider that can't probe a target answers `Unknown` for it, as today.
 - **Contract:** `ods-sdk` gains the `health_check` contract (0.1):
   `HealthCheck::describe() -> CheckInfo` and
   `async check(&self, scope: &CheckScope) -> Result<Vec<Finding>, ProviderError>`.
@@ -204,7 +246,11 @@ graph LR
 
 ### 6. Running and recording
 - **`ods health check`** runs every enabled check and prints the findings (human, plain or
-  JSON, per ADR-0003). It exits with code 1 when any `error` fails, so it can gate CI.
+  JSON, per ADR-0003). Its exit codes follow ADR-0004, so it can gate CI:
+  - **5** (check failed): the checks ran and a finding at severity `error` failed, or an
+    `error`-severity check was `unknown` when `--strict` is set;
+  - **1:** the command itself couldn't complete;
+  - **4:** the configuration is invalid, e.g. a probe that isn't read-only.
   `--select`, `--check` and `--allow-scripts` narrow or allow.
 - **Optionally**, `ods state build`/`run` run the checks after a successful run
   (`health.after_run = true`).
@@ -225,7 +271,8 @@ graph LR
   - #117 can score and trend over the recorded findings.
 - **Negative / trade-offs:**
   - **New surface:** a new crate, contract, persisted format and command.
-  - **Scripts:** they need a trust model and care with their environment.
+  - **Trust:** scripts and probes need a trust store, and users must re-trust a project
+    when its checks change.
   - **Probes:** they only work where a `relation_probe` exists (Databricks today).
     Elsewhere a probe check is `unknown`, which is correct but may surprise users.
   - **Stale results:** the dashboard shows recorded results, which age. The record's time is
@@ -236,8 +283,9 @@ graph LR
   2. The `health_check` contract, fake and conformance tests, and `ods health check` with the
      health record.
   3. Declarative checks and coverage targets.
-  4. Probe checks.
-  5. Script checks and the trust model.
+  4. The trust store (§4b), then probe checks with read-only validation (§4a) and
+     `relation_probe` 0.2.
+  5. Script checks.
   6. External plugins, through #387's loader.
   7. Scoring and trends (#117).
 
