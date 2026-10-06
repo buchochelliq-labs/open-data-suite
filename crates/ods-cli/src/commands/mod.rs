@@ -6,6 +6,7 @@ mod doctor;
 mod doctor_checks;
 mod erd;
 mod failures;
+mod health;
 mod lineage;
 mod mcp;
 mod mcp_data;
@@ -35,6 +36,7 @@ pub use completions::Completions;
 pub use config::Config;
 pub use doctor::Doctor;
 pub use erd::ErdCommand;
+pub use health::HealthCommand;
 pub use lineage::Lineage;
 pub use mcp::Mcp;
 pub use planned::Planned;
@@ -82,6 +84,9 @@ pub fn default_registry() -> Registry {
     registry
         .register(Box::new(ErdCommand))
         .expect("built-in command names are unique and not reserved");
+    registry
+        .register(Box::new(HealthCommand))
+        .expect("built-in command names are unique and not reserved");
     for &(name, about, milestone) in PLANNED {
         registry
             .register(Box::new(Planned::new(name, about, milestone)))
@@ -122,6 +127,7 @@ mod tests {
             [
                 "state",
                 "erd",
+                "health",
                 "usage",
                 "ci",
                 "lsp",

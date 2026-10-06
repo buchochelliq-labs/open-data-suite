@@ -420,7 +420,7 @@ const SNAPSHOTS_READ: usize = RUNS_LISTED + 1;
 
 /// How many history lines (summaries only) are read to tell which snapshot recorded a
 /// node's last build (#313); older ones show the run without a snapshot.
-const RUNS_INDEXED: usize = 10_000;
+pub(super) const RUNS_INDEXED: usize = 10_000;
 
 /// The store as people read it: as given when relative, else relative to the working
 /// directory or with `~` for the home directory; and in full.

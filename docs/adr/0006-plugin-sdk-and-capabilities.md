@@ -1,6 +1,6 @@
 # ADR-0006: Plugin SDK, contracts and capabilities
 
-- **Status:** Accepted (2026-10-04). Not built yet, now follow-ups: the CLI builds providers directly rather than through `Registry` and `ProviderFactory` from `[providers.*]` (§2). `SDK_VERSION` is 0.7 and the output envelope 1.0, not the 0.3 and 0.1 this text names.
+- **Status:** Accepted (2026-10-04). Not built yet, now follow-ups: the CLI builds providers directly rather than through `Registry` and `ProviderFactory` from `[providers.*]` (§2). `SDK_VERSION` is 0.8 and the output envelope 1.0, not the 0.3 and 0.1 this text names.
 - **Date:** 2026-09-24
 - **Issues:** #2 (plugin SDK), #3 (capability negotiation); related #99 (conformance), #28 (locking)
 - **Deciders:** @n1ckyb
@@ -88,8 +88,9 @@ then have to break.
     `atomic_replace`, `change_tracking`, `query_history`, `source_freshness`,
     `schema_versioning`, `column_usage`, `constraint_metadata`, `lease_expiry`,
     `fencing_tokens`, `run_events` ([ADR-0024](0024-run-events-node-stats-and-run-journal.md))
-    `error_explain` ([ADR-0025](0025-error-explanations.md)), `relation_link` (§7) and
-    `run_ledger` ([ADR-0029](0029-build-timings-and-the-run-ledger.md)).
+    `error_explain` ([ADR-0025](0025-error-explanations.md)), `relation_link` (§7),
+    `run_ledger` ([ADR-0029](0029-build-timings-and-the-run-ledger.md)) and
+    `health_check` ([ADR-0030](0030-configurable-and-pluggable-health-checks.md)).
   - Third parties extend the vocabulary with `x-<namespace>.<name>`, a validated
     `CustomCapability` that can only be built by parsing, so it can never spell a
     well-known name.

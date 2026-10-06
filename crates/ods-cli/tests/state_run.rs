@@ -4798,3 +4798,103 @@ fn savings_cost_what_reuse_avoided_at_the_configured_rate() {
         .unwrap_or_else(|| panic!("{plain}"));
     insta::assert_snapshot!("savings_cost_plain", line);
 }
+
+/// #392, ADR-0030 §6: `ods health check` gates CI. It exits 0 when no check at
+/// severity error fails, 5 when one does, and with `--strict` also when one can't decide;
+/// each run is recorded beside the store, and a mistake in `[health]` is exit 4.
+#[test]
+fn health_check_gates_on_error_checks_and_records_its_findings() {
+    let project = Project::new("health-check");
+    project.run_ok(&[]);
+
+    let (code, json) = project.ods(&["health", "check"]);
+    assert_eq!(code, 0, "{json:#}");
+    let result = &json["result"];
+    assert_eq!(json["command"], "health.check");
+    assert_eq!(result["failed"], false);
+    assert_eq!(result["last_run_known"], true);
+    // Built without tests: warnings, not failures.
+    assert!(
+        result["counts"]["warning"].as_u64().unwrap() > 0,
+        "{result:#}"
+    );
+    assert_eq!(result["counts"]["failing"], 0, "{result:#}");
+    let recorded = std::path::PathBuf::from(result["recorded"].as_str().unwrap());
+    assert!(recorded.starts_with(project.dir.join(".ods/state.db.health")));
+    let record: Value = serde_json::from_slice(&std::fs::read(&recorded).unwrap()).unwrap();
+    assert_eq!(record["schema_version"]["major"], 1);
+    assert_eq!(record["scope"], result["scope"]);
+
+    // `--no-record` checks without keeping one.
+    let (code, json) = project.ods(&["health", "check", "--no-record"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(json["result"]["recorded"].is_null());
+    assert_eq!(
+        std::fs::read_dir(project.dir.join(".ods/state.db.health"))
+            .unwrap()
+            .count(),
+        1
+    );
+
+    // A model that failed in the last run fails `last_run_failed`, at severity error.
+    project.change_code("model.jaffle_ods.orders");
+    let failing = project.with("FAKE_DBT_FAIL", "orders");
+    let (code, json) = failing.run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    let (code, json) = failing.ods(&["health", "check"]);
+    assert_eq!(code, 5, "{json:#}");
+    assert_eq!(json["diagnostics"][0]["code"], "ODS-E0701", "{json:#}");
+    let orders = json["result"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "model.jaffle_ods.orders")
+        .unwrap();
+    assert_eq!(orders["health"], "failing", "{orders:#}");
+    let (code, plain) = failing.ods_plain_status(&["health", "check", "--no-record"]);
+    assert_eq!(code, 5, "{plain}");
+    assert!(plain.contains("model.jaffle_ods.orders"), "{plain}");
+    assert!(plain.contains("failing"), "{plain}");
+}
+
+/// #392: `[health]` tunes the gate: a check raised to severity error fails it, one
+/// turned off can't, `--strict` fails on what can't be decided, and a check id that
+/// doesn't exist is a configuration error.
+#[test]
+fn health_settings_tune_the_gate() {
+    let project = Project::new("health-settings");
+    project.run_ok(&[]);
+    let toml = |text: &str| std::fs::write(project.dir.join("ods.toml"), text).unwrap();
+
+    // Not tested on its build: a warning by default, a failure at severity error.
+    toml("[health.builtin.tests_passed]\nseverity = \"error\"\n");
+    let (code, json) = project.ods(&["health", "check", "--no-record"]);
+    assert_eq!(code, 5, "{json:#}");
+
+    toml("[health.builtin.tests_passed]\nseverity = \"off\"\n");
+    let (code, json) = project.ods(&["health", "check", "--no-record"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert!(
+        json["result"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["id"] != "tests_passed"),
+        "{json:#}"
+    );
+
+    // Without a record of the last run, `last_run_failed` can't decide: only
+    // `--strict` fails on that.
+    std::fs::remove_file(project.dir.join(".ods/state.db.last-run.json")).unwrap();
+    let (code, json) = project.ods(&["health", "check", "--no-record"]);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["result"]["last_run_known"], false);
+    let (code, json) = project.ods(&["health", "check", "--no-record", "--strict"]);
+    assert_eq!(code, 5, "{json:#}");
+    assert_eq!(json["result"]["strict"], true);
+
+    toml("[health.builtin.nope]\nseverity = \"warn\"\n");
+    let (code, json) = project.ods(&["health", "check"]);
+    assert_eq!(code, 4, "{json:#}");
+    assert_eq!(json["diagnostics"][0]["code"], "ODS-E0102", "{json:#}");
+}

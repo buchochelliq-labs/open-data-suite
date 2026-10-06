@@ -21,6 +21,7 @@
 //! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
 //! | [`RelationProbe`](probe::RelationProbe) | #17 | defined (ADR-0022) |
 //! | [`RelationLinker`](relation_link::RelationLinker) | #329 | defined (ADR-0006 §7) |
+//! | [`HealthCheck`](health_check::HealthCheck) | #392 | defined (ADR-0030) |
 //! | `CloneProvider` | #29 | planned |
 //! | `PolicyProvider` | #9 | planned |
 //! | `EventSink` | #8 | planned |
@@ -32,6 +33,7 @@
 pub mod changes;
 pub mod error_catalogue;
 pub mod executor;
+pub mod health_check;
 pub mod lock;
 pub mod observed_lineage;
 pub mod probe;

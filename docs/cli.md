@@ -17,6 +17,7 @@ codes).
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
+| `ods health check` | available (preview): run the health checks `[health]` configures and gate CI on them, see [below](#ods-health-check) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -129,6 +130,8 @@ meanings get new numbers.
 | `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
 | `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
 | `ODS-E0501` | `ods doctor` found checks that fail (exit status 5). Each finding has its own code: see [`ods doctor`](#ods-doctor). |
+| `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
+| `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 
 ## Environment variables
 
@@ -1310,6 +1313,45 @@ severity = "off"
   check concluded what. The Catalog's legend lists the checks as configured.
 
 The trust store, warehouse probes, scripts and plugins come in later phases of #392.
+
+### ods health check
+
+`ods health check` runs every enabled check on the project's nodes and prints their
+health, the checks that ran and why each node that isn't healthy isn't. It gives CI a
+health gate ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §6):
+
+```sh
+ods health check                  # exit 5 when a check at severity error fails
+ods health check --strict --json  # also when one couldn't decide; one JSON document
+ods health check --no-record      # don't keep the findings
+```
+
+It takes the options `ods state` commands take to find the project and the state store
+(`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …), and reads them
+only: no database is created or migrated, and dbt isn't run.
+
+| Outcome | Exit |
+|---|---|
+| no check at severity `error` failed | 0 |
+| one did | 5, `ODS-E0701` |
+| with `--strict`, one at severity `error` couldn't decide (*unknown*) | 5, `ODS-E0701` |
+| `[health]` is invalid | 4, `ODS-E0102` |
+| the project or the store can't be read, or the record can't be written | 1 |
+
+With the defaults, only `last_run_failed` is at severity `error`, so the gate fails on
+nodes that failed in the last run and haven't been built since. Raise any other check
+to `error` in `[health]` to gate on it too.
+
+- **The health record:** each check run is kept beside the state store, in
+  `<state db>.health/` (e.g. `.ods/state.db.health/2026-10-06T09-00-00Z-001.json`), as JSON
+  with a `schema_version`, the scope, the time, the checks that ran and every node's
+  findings. The newest 20 are kept. A record is written whole, then renamed into place,
+  so a reader never sees half of one, and a check run that fails leaves the others as
+  they were. Nothing is recorded without a state store, or with `--no-record`.
+- **Registered checks:** checks registered through the `health_check` contract (SDK 0.8)
+  run beside the built-ins, each under a 60-second timeout. One that errs, times out,
+  leaves a node unanswered or answers it twice is *unknown* for those nodes, never a
+  pass. Plugins that register them come with #387's loader.
 
 ### State settings in `ods.toml`
 
