@@ -1,0 +1,249 @@
+# ADR-0030: Configurable and pluggable health checks
+
+- **Status:** Proposed
+- **Date:** 2026-10-06
+- **Issues:** #392 (this design), #354 (the first badges), #117 (scoring and trends), #387 (external providers), #9 (policy)
+- **Deciders:** @n1ckyb
+
+## Context
+#354 gave the dashboard health badges and coverage from real signals. Its rules are fixed in
+code:
+- which checks run;
+- which kinds of node need tests;
+- what counts as a warning.
+
+Teams differ. One wants every mart described, another wants a `unique` test on every primary
+key, and a third wants to know that a table received rows in the last six hours. Users should
+be able to:
+1. **tune** the built-in checks: turn them on or off, change their severity, scope them,
+   and set their parameters;
+2. **declare** their own checks in configuration over what ODS already knows;
+3. **probe** the warehouse with read-only checks;
+4. **script** any check they can write, for experts;
+5. **plug in** checks others ship, as with every other ODS contract (ADR-0006).
+
+#117 asks for a "scoring policy configurable" health model with "every score decomposed into
+visible evidence"; this ADR is its foundation.
+
+Constraints:
+- **Rule 1:** no vendor logic in core. Warehouse probes go through a contract (ADR-0022's
+  relation probe), never through a vendor's SQL in the engine.
+- **Rule 3:** a check that can't run (disabled data, a timeout, a crash, a missing
+  capability) gives **unknown**, never **pass**. Unknown is never shown as healthy.
+- **Rule 4:** every finding names its check, where the check came from, and its evidence, as
+  text and JSON.
+- **Rule 9:** a script or probe never receives a resolved secret through ODS. A probe runs
+  on the connection the provider already has.
+- **The dashboard stays read-only and offline** (ADR-0009): it never runs a script or a
+  query. It reads results recorded by the CLI.
+- **Configuration** follows ADR-0005: layered `ods.toml`, unknown keys are errors, and
+  credentials are only ever references.
+- **Executing commands named in a repository's config** is a supply-chain risk: cloning a
+  repository and running `ods` shouldn't run its scripts unasked.
+
+## Options considered
+### Option A: Keep fixed rules, with a few config flags
+Expose a handful of booleans (e.g. `require_tests_for = ["model"]`) and leave the rest in code.
+- **Pros:** small, with no new contract, crate or format.
+- **Cons:** every new need is an ODS release. It doesn't meet the probe, script or plugin
+  needs, and #117 would have to replace it anyway.
+
+### Option B: A general policy language (Rego/CEL) for health
+Express every check as a policy in an embedded language, evaluated by #9's policy framework.
+- **Pros:** one language for health and for approvals (#9), and very expressive.
+- **Cons:**
+  - Probes and scripts still need a separate mechanism.
+  - It adds a large dependency and a language most dbt users don't know.
+  - #9 is M6 and not built.
+  - Policies about *actions* (allow, deny, approve) and checks about *data* (pass, warn,
+    fail) are different shapes.
+
+### Option C: One check engine with tiered sources, a contract, and recorded results (chosen)
+Every check, whatever its source, implements one `HealthCheck` contract and yields per-node
+findings. The CLI runs the engine and records the results; the dashboard and MCP read them.
+Sources are tiered from simple to expert: built-in, declarative, probe, script and plugin.
+- **Pros:**
+  - Each tier is useful alone, and they all share severity, scoping, evidence and storage.
+  - It is pluggable by construction, the dashboard stays read-only, and #117 can score over
+    the recorded findings.
+- **Cons:**
+  - A new crate, contract and persisted format.
+  - Scripts need a trust model.
+
+## Decision
+Health checks are one engine with five check sources, all behind one contract, configured in
+`[health]`, run by the CLI, and recorded for the dashboard.
+
+### 1. Findings
+A check yields, for each node (or source) in its scope, a **finding**:
+
+```json
+{ "check": "tests.required", "source": "builtin", "node": "model.shop.orders",
+  "status": "fail", "severity": "warn",
+  "reasons": ["no tests: nothing checks its data"],
+  "evidence": [{"kind": "tests", "value": "0"}], "observed_at": "…" }
+```
+
+- **`status`** is one of `pass`, `fail`, `unknown` or `skipped`:
+  - `unknown` means the check couldn't decide;
+  - `skipped` means the node is out of the check's scope.
+- **`severity`** is the configured weight of a `fail`: `error`, `warn` or `info`.
+- **A node's badge** is computed from its findings by the **badge rule**:
+  - by default, any `fail` at `error` makes it *failing*;
+  - else any `fail` at `warn`, or any `unknown` from an enabled check, makes it *warning*;
+  - else, if every enabled check passed, it is *healthy*;
+  - with no findings it is *unknown*.
+
+  The rule is configurable (e.g. `unknown_counts_as = "warning" | "unknown"`), but `unknown`
+  can never count as healthy (rule 3).
+
+### 2. Sources
+| Tier | Source | Who writes it | Runs where |
+|---|---|---|---|
+| 1 | **Built-in** checks (#354's, and more): last run failed, tests required, tests passed on this build, description, constraints, stale, source freshness | ODS | in-process |
+| 2 | **Declarative**: rules over the project's metadata (`require = ["description", "test:unique"]` for a selector) | config | in-process |
+| 3 | **Probe**: read-only SQL with a pass condition (`select count(*) as n from {relation}`, `n > 0`) | config | through the `relation_probe` contract (ADR-0022), on the provider's connection |
+| 4 | **Script**: any executable speaking the check protocol (§4) | experts | a child process, opt-in |
+| 5 | **Plugin**: a `HealthCheck` from another crate or an external provider (#387) | anyone | registered like any provider |
+
+### 3. Configuration
+`[health]` lives in `ods.toml`, layered as ADR-0005 describes:
+
+```toml
+[health]
+badge.unknown_counts_as = "warning"     # or "unknown"; never "healthy"
+coverage.tests = { target = 0.8, severity = "warn" }
+
+[health.builtin.tests_required]
+severity = "error"                      # error | warn | info | off
+select = { resource_type = ["model", "snapshot"], path = ["models/marts/**"] }
+exclude = { tags = ["experimental"] }
+
+[health.builtin.stale]
+severity = "warn"
+older_than = "24h"
+
+[[health.checks]]                        # declarative
+id = "marts.documented"
+select = { path = ["models/marts/**"] }
+require = ["description", "test:unique"]
+severity = "warn"
+
+[[health.checks]]                        # probe
+id = "orders.has_rows"
+kind = "probe"
+select = { name = ["orders"] }
+sql = "select count(*) as n from {relation}"
+pass = "n > 0"
+severity = "error"
+
+[[health.checks]]                        # script
+id = "pii.columns_tagged"
+kind = "script"
+command = ["python", "checks/pii.py"]
+timeout = "30s"
+severity = "warn"
+```
+
+- **Selectors** use the same vocabulary as the Catalog's facets, plus dbt-style paths and
+  tags.
+- **Check ids** are unique. A configured check can't reuse a built-in's id; it overrides one
+  through `[health.builtin.<id>]`.
+- **The `pass` expression** is a small, typed comparison language: column, operator, literal,
+  combined with `and`/`or`. It is parsed and validated at load time. A full expression
+  language waits for #117 and #9.
+
+### 4. The script protocol
+- **Request:** ODS starts `command` (never through a shell), with the project's root as
+  the working directory. It writes one JSON request to stdin, with:
+  - `protocol: {major: 1, minor: 0}`;
+  - the check's id and its config parameters;
+  - the nodes in scope, with the manifest facts ODS already exposes (ids, names, kinds,
+    paths, tags, columns, tests, last builds);
+  - the artifact paths.
+- **Response:** the script answers with one JSON document on stdout, `{protocol, findings:
+  [...]}`, using the finding shape of §1. Stderr is captured as the check's log.
+- **Failure:** a non-zero exit, a timeout, malformed output, a finding about a node outside
+  the scope, or an unknown protocol major gives `unknown` findings for the whole scope, with
+  the reason. It is never `pass`.
+- **Environment:** ODS passes no credentials and no resolved secrets. The child inherits the
+  user's environment, as `dbt` would, and the docs say so.
+- **Trust:** scripts run only when the user opts in. That means `health.scripts = "allow"` in
+  a user-level config file, which a repository can't set, or `--allow-scripts` on the
+  command. Otherwise each script check records `unknown: scripts aren't allowed here` and
+  says how to allow them. #9 can later replace this with a policy.
+
+### 5. The contract and crate
+- **Contract:** `ods-sdk` gains the `health_check` contract (0.1):
+  `HealthCheck::describe() -> CheckInfo` and
+  `async check(&self, scope: &CheckScope) -> Result<Vec<Finding>, ProviderError>`.
+  Capabilities say what a check needs (`metadata`, `run_record`, `relation_probe`,
+  `process`). It has a fake in `ods-provider-fake`, and conformance tests: every in-scope node
+  answered exactly once, unknown on error, and no finding outside the scope.
+- **Crate:** a new module crate **`ods-health`** holds:
+  - the engine (scoping, running checks with timeouts, the badge rule, coverage);
+  - the built-in and declarative checks;
+  - the script runner, which is the only part that starts a process.
+
+  Probe checks call a `RelationProbe` the CLI wires in. Like every module, `ods-health`
+  depends on `ods-core`, `ods-config` (for its types) and `ods-sdk`, never on providers or
+  other modules (ADR-0001).
+- **Placement:** #354's logic moves from `ods-web` into `ods-health`. `ods-web` only renders.
+
+```mermaid
+graph LR
+  core[ods-core] --> sdk[ods-sdk<br/>health_check contract]
+  config[ods-config<br/>health section] --> health
+  sdk --> health[ods-health<br/>engine, built-ins, declarative, script runner]
+  sdk --> prov[providers<br/>relation_probe, plugins]
+  health --> cli[ods-cli<br/>ods health check, wiring]
+  prov --> cli
+  cli --> record[(health record)]
+  record --> web[ods-web / ods-mcp<br/>read only]
+```
+
+### 6. Running and recording
+- **`ods health check`** runs every enabled check and prints the findings (human, plain or
+  JSON, per ADR-0003). It exits with code 1 when any `error` fails, so it can gate CI.
+  `--select`, `--check` and `--allow-scripts` narrow or allow.
+- **Optionally**, `ods state build`/`run` run the checks after a successful run
+  (`health.after_run = true`).
+- **The health record:** results are written as a versioned **health record** beside the
+  store, like the run journals (ADR-0024). It is `health/<timestamp>.json` with a
+  `schema_version` and keeps the last N records. A failed check run never deletes the last
+  record (rule 5).
+- **The dashboard** reads the latest record and recomputes only the in-process built-ins
+  live. It shows each node's findings by check and source, when they were recorded, and any
+  check that is configured but has no record yet as *not run*.
+
+## Consequences
+- **Positive:**
+  - Teams tune or extend health without an ODS release.
+  - Experts can check anything with a script, and vendors or communities can ship checks as
+    plugins.
+  - `ods health check` gives CI a health gate.
+  - #117 can score and trend over the recorded findings.
+- **Negative / trade-offs:**
+  - **New surface:** a new crate, contract, persisted format and command.
+  - **Scripts:** they need a trust model and care with their environment.
+  - **Probes:** they only work where a `relation_probe` exists (Databricks today).
+    Elsewhere a probe check is `unknown`, which is correct but may surprise users.
+  - **Stale results:** the dashboard shows recorded results, which age. The record's time is
+    always shown.
+- **Follow-up issues (phases of #392):**
+  1. `ods-health` crate, with #354's logic moved into it, plus `[health]` config for the
+     built-ins.
+  2. The `health_check` contract, fake and conformance tests, and `ods health check` with the
+     health record.
+  3. Declarative checks and coverage targets.
+  4. Probe checks.
+  5. Script checks and the trust model.
+  6. External plugins, through #387's loader.
+  7. Scoring and trends (#117).
+
+## References
+- #354, PR #391: the first health badges.
+- ADR-0005 (configuration), ADR-0006 (plugins and capabilities), ADR-0009 (read-only
+  dashboard), ADR-0022 (relation probe), ADR-0024 (journals beside the store).
+- Prior art: dbt's `dbt-project-evaluator` and `dbt-checkpoint`, which are rule sets over the
+  manifest; Great Expectations and Soda, which are data checks with configurable severities.

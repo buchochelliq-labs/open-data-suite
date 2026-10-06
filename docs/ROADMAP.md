@@ -203,6 +203,7 @@ v0.0.x.
 | **#354** | Health badges and coverage from real signals (the dashboard slice of #117) |
 | #355 | Run timeline: a per-thread Gantt view (playback follow-up, ADR-0026) |
 | #388 | Freshness evidence: the source versions the last dry run read, without the server connecting |
+| #392 | Configurable and pluggable health checks: `[health]` config, declarative, probe and script checks, plugins ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md)) |
 
 #310–#313 are in the M1 GitHub milestone because they ship in v0.0.1, and #64 and #347
 are in R2 because they ship in v0.0.2. #309 closes when every screen is built.

@@ -121,4 +121,5 @@ nav:
       - adr/0027-federated-build-graph-across-project-formats.md
       - adr/0028-open-data-environments.md
       - adr/0029-build-timings-and-the-run-ledger.md
+      - adr/0030-configurable-and-pluggable-health-checks.md
   - Legal and trademarks: legal.md
