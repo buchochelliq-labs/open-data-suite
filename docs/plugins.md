@@ -19,6 +19,7 @@ the same suites from its own tests (#99).
 | `LockProvider` | `lock` | `LockHarness` | async | `FakeLockProvider` |
 | `ObservedLineageSource` | `observed_lineage` | `ObservedLineageHarness` | sync | `FakeObservedLineageSource` |
 | `RelationProbe` | `probe` | `ProbeHarness` | async | `FakeRelationProbe` |
+| `RelationPrivileges` | `privileges` | `PrivilegesHarness` | async | `FakeRelationPrivileges` |
 | `RelationLinker` | `relation_link` | `RelationLinkHarness` | sync | `FakeRelationLinker` |
 | `RelationInspector` | `relations` | `RelationHarness` | async | `FakeExecutor` |
 | `SqlLineageAnalyzer` | `sql_lineage` | `SqlLineageHarness` | sync | `FakeSqlLineageAnalyzer` |

@@ -19,8 +19,10 @@
 //! | [`ErrorCatalogue`](error_catalogue::ErrorCatalogue) | #323 | defined (ADR-0025) |
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
 //! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
-//! | [`RelationProbe`](probe::RelationProbe) | #17 | defined (ADR-0022) |
+//! | [`RelationProbe`](probe::RelationProbe) | #17, #392 | defined (ADR-0022, ADR-0030 §5) |
+//! | [`RelationPrivileges`](privileges::RelationPrivileges) | #392 | defined (ADR-0030 §4c) |
 //! | [`RelationLinker`](relation_link::RelationLinker) | #329 | defined (ADR-0006 §7) |
+//! | [`HealthCheck`](health_check::HealthCheck) | #392 | defined (ADR-0030) |
 //! | `CloneProvider` | #29 | planned |
 //! | `PolicyProvider` | #9 | planned |
 //! | `EventSink` | #8 | planned |
@@ -32,8 +34,10 @@
 pub mod changes;
 pub mod error_catalogue;
 pub mod executor;
+pub mod health_check;
 pub mod lock;
 pub mod observed_lineage;
+pub mod privileges;
 pub mod probe;
 pub mod relation_link;
 pub mod relations;

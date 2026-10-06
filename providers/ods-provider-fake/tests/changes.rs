@@ -8,7 +8,7 @@ use ods_sdk::conformance::changes::{ChangeHarness, run as run_changes};
 use ods_sdk::conformance::probe::{ProbeHarness, run as run_probe};
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource};
 use ods_sdk::contracts::probe::{
-    ProbeAnswer, ProbeFilter, ProbeRequest, ProbeStatement, RelationProbe,
+    ProbeAnswer, ProbeFilter, ProbeRequest, ProbeStatement, ProbeTarget, RelationProbe,
 };
 
 #[derive(Default)]
@@ -95,7 +95,9 @@ impl ProbeHarness for Probe {
                     [("id", "a1"), ("format", "columnar"), ("extra", "x")],
                 )
                 .with_relation("source.suite.raw.b", "table", Some("columnar"))
-                .with_relation("source.suite.raw.view", "view", None),
+                .with_relation("source.suite.raw.view", "view", None)
+                .named("source.suite.raw.a", "suite.raw.a")
+                .with_parts("source.suite.raw.b", "suite", "raw", "it's"),
         )
     }
 
@@ -103,15 +105,28 @@ impl ProbeHarness for Probe {
         request()
     }
 
-    fn matching(&self) -> Vec<RequestedSource> {
+    fn matching(&self) -> Vec<ProbeTarget> {
         vec![
-            RequestedSource::new("source.suite.raw.a", "raw.a"),
-            RequestedSource::new("source.suite.raw.b", "raw.b"),
+            ProbeTarget::new("source.suite.raw.a", "raw.a"),
+            ProbeTarget::new("source.suite.raw.b", "raw.b"),
         ]
     }
 
-    fn excluded(&self) -> Option<RequestedSource> {
-        Some(RequestedSource::new("source.suite.raw.view", "raw.view"))
+    fn excluded(&self) -> Option<ProbeTarget> {
+        Some(ProbeTarget::new("source.suite.raw.view", "raw.view"))
+    }
+
+    fn elsewhere(&self) -> Option<ProbeTarget> {
+        Some(ProbeTarget::new("source.suite.raw.a", "raw.a").expecting("other.raw.a"))
+    }
+
+    fn unsafe_name(&self) -> Option<(ProbeRequest, ProbeTarget)> {
+        let request = ProbeRequest::new(
+            ProbeFilter::kinds(["table"]).unwrap(),
+            vec![ProbeStatement::by_name("select {name} as n", ["n"]).unwrap()],
+        )
+        .unwrap();
+        Some((request, ProbeTarget::new("source.suite.raw.b", "raw.b")))
     }
 }
 
@@ -119,7 +134,7 @@ impl ProbeHarness for Probe {
 async fn the_relation_probe_conforms() {
     let report = run_probe(&Probe).await;
     assert!(report.skipped.is_empty(), "{report:?}");
-    assert_eq!(report.passed.len(), 4, "{report:?}");
+    assert_eq!(report.passed.len(), 6, "{report:?}");
 }
 
 #[tokio::test]
@@ -129,20 +144,25 @@ async fn the_probe_returns_requested_columns_and_skips_unconfirmed_formats() {
         .with_row("a", DETAIL, [("id", "a1"), ("extra", "x")])
         .with_relation("b", "table", None)
         .with_relation("c", "table", Some("rows"));
-    let sources = ["a", "b", "c"].map(|s| RequestedSource::new(s, s));
-    let report = probe.probe(&request(), &sources).await.unwrap();
+    let targets = ["a", "b", "c"].map(|s| ProbeTarget::new(s, s));
+    let report = probe.probe(&request(), &targets).await.unwrap();
     assert_eq!(
-        report.sources[0].1,
+        report.targets[0].1,
         ProbeAnswer::Rows(vec![
             [("id".to_owned(), "a1".to_owned())].into(),
             ods_sdk::contracts::probe::ProbeRow::new()
         ])
     );
     assert!(
-        matches!(&report.sources[1].1, ProbeAnswer::Skipped(why) if why.contains("can't be confirmed"))
+        matches!(&report.targets[1].1, ProbeAnswer::Skipped(why) if why.contains("can't be confirmed"))
     );
     assert!(
-        matches!(&report.sources[2].1, ProbeAnswer::Skipped(why) if why.contains("stored as rows"))
+        matches!(&report.targets[2].1, ProbeAnswer::Skipped(why) if why.contains("stored as rows"))
     );
-    assert!(probe.failing().probe(&request(), &sources).await.is_err());
+    assert_eq!(
+        probe.probed(),
+        ["a"],
+        "only relations that matched ran anything"
+    );
+    assert!(probe.failing().probe(&request(), &targets).await.is_err());
 }

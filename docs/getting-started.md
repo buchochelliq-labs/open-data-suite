@@ -141,4 +141,4 @@ are documented in the [CLI reference](cli.md#exit-status).
 - [Column-level lineage](lineage.md), with a live demo.
 - [State on Databricks](databricks.md), with source table versions.
 - [CLI reference](cli.md), which covers every command and flag.
-- [Roadmap](roadmap.md), for what's coming and when.
+- [Roadmap](ROADMAP.md), for what's coming and when.

@@ -1,7 +1,7 @@
 # ADR-0030: Configurable and pluggable health checks
 
-- **Status:** Proposed
-- **Date:** 2026-10-06
+- **Status:** Accepted (2026-10-06). Phases 1 and 2 are built (#392): the `ods-health` crate and `[health]` for the built-in checks; the `health_check` contract 0.1 with its fake and conformance suite, `ods health check` and the health record (`<state db>.health/<time>-<n>.json`, the newest 20 kept). As built, a finding's evidence is a map of key to value, sorted by key, rather than the list sketched in §1. The dashboard reads the newest record for its scope: it works the built-ins out live and takes every other check's findings from the record, with its time (`health_recorded_at`). Declarative checks (`[[health.checks]]` with `require`, phase 3) are built: they run in-process like the built-ins, so the dashboard works them out live too, and the `health_check` contract is 0.2 (`NodeFacts` says whether a node is described, its tests' types and its constraints). Coverage targets (`[health.coverage.<measure>]`, phase 3) are built too: the engine judges the measures a host gives it, and the dashboard and `ods health check` give it Home's coverage, so a missed target shows on Home and, at `error`, fails the gate; it never changes a node's badge. The record format is 1.1 (a `declarative` source, and the report's `coverage` verdicts). Phase 4, first half: the trust store and `ods health trust` (§4b, §4d), and probe checks configured, checked as read-only SQL (§4a) and trusted. Phase 4, second half, in part: `relation_probe` 0.2 (§5: neutral `ProbeTarget`s, a timeout, and statements run only against the requested targets' relations, which the dbt provider passes to `dbt show` by id, several calls for a long list), the `relation_privileges` contract 0.1 and capability with its fake and conformance suite, and the engine running probes through a `ProbeConnection` the host wires in, built from one object that both probes and reports its login's privileges, so the login checked is the login the query runs under: the login check just before each probe (§4c), `pass` judged on the row, and the `--allow-elevated-login` override's `login_check: overridden` evidence and the report's `elevated_login`, which the record keeps. `ods health check` runs probes through dbt on `[health.probes]`'s `target` (and `profile`), never the build's, with `--allow-elevated-login`; dbt probes sources, models, seeds and snapshots (a node's `alias`), matching columns whatever their case. dbt itself can't report privileges, so on a warehouse with no privilege report every probe needs the override. As built: the trust digest also covers `[health.probes]`'s `target` and `profile` and the dbt `program`, `project_dir`, `profiles_dir` and `profile` that configuration sets; a node with no relation in the manifest is never probed; sources aren't in health's scope, so a probe naming them is a configuration error and one that selects nothing is reported (`unmatched_probes`) and fails `--strict` at `error`; and a project file that sets them makes even the user's own probes need trust; a probe target equal to the build's is a configuration error; a probe reads only the relation the build made (`ProbeTarget::expecting`, the manifest's `relation_name`), and a node dbt resolves elsewhere under the probe target is *unknown* before anything runs; the override warns on stderr before anything runs, with the report, and in `--json` as `ODS-W0704`, naming the connection (`dbt target …`). Unity Catalog's `relation_privileges` is built too (§4e), with its known issues and how to fix them listed there. Not built yet: scripts (5), plugins (6).
+- **Date:** 2026-10-06 (amended 2026-10-06: least privilege for probes, §4c; the trust store and probe configuration as built, §4d; the login check on Unity Catalog and its known issues, §4e)
 - **Issues:** #392 (this design), #354 (the first badges), #117 (scoring and trends), #387 (external providers), #9 (policy)
 - **Deciders:** @n1ckyb
 
@@ -210,8 +210,118 @@ every repository cloned afterwards. So trust is per project and per definition:
   repository is the thing being checked. It is never persisted.
 - **Later:** #9 can replace the trust store with a policy.
 
+### 4c. Least privilege: a probe runs only under a read-only login (amendment, 2026-10-06)
+Parsing a probe's SQL (§4a) is one guard; the login it runs under is a second,
+independent one: a login that can't write can't be made to write, whatever the parser
+missed. So a probe runs only when its connection can do no more than read what it probes.
+- **Its own connection.** Probes run through `relation_probe`, which the dbt provider
+  answers with `dbt show` on a dbt target. A project's build target can write (dbt builds
+  tables), so probes name their own target: `[health.probes] target = "health_readonly"`,
+  or `profile` and `target`, for a read-only principal. Without one, probe checks are
+  *unknown*: they never run on the build target.
+- **Checked before every probe run.** The engine asks the provider what the connection's
+  principal can do on each probed relation, its schema and its catalog (or the warehouse's
+  equivalents). It refuses the probe, *unknown* with the reason, when the principal:
+  - holds any privilege beyond reading, e.g. `MODIFY`, `CREATE …`, `ALL PRIVILEGES`,
+    `MANAGE` or `APPLY TAG` (reading means `SELECT` and the `USE`/`BROWSE` privileges
+    needed to reach a relation);
+  - owns the relation, its schema or its catalog;
+  - is an administrator of the metastore or the account, where the warehouse says so.
+- **What can't be told is refused.** A provider that can't report privileges, or a report
+  that can't be read, is *unknown*, never a run (rule 3). Reporting privileges is a
+  capability (`relation_privileges`) a provider advertises, so the engine never names a
+  warehouse (rule 1). Unity Catalog reports them through `information_schema`
+  (`table_privileges`, `schema_privileges`, `catalog_privileges`, with inherited grants,
+  and the `*_owner` columns), queried through the same connection.
+- **Limits, stated.** The check covers what the probe reads and its containers, not
+  everything the principal can reach elsewhere: a dedicated read-only principal is the
+  real control, and this check proves it is read-only where it matters. Grants can change
+  between the check and the query; the check runs immediately before each probe.
+- **An explicit override, for one run.** `ods health check --allow-elevated-login` runs
+  probes even when the check finds more than read access, or can't tell. It is the user's
+  decision, at their own risk:
+  - It is a command-line flag only, never a configuration key, so a repository can't
+    turn it on for whoever runs it.
+  - It skips this check only: the SQL must still be one read-only query (§4a) and the
+    definition still trusted (§4b).
+  - Every run that uses it warns, naming the login and the privileges found, that ODS
+    can't prevent a query from writing under that login, and that running it is at the
+    user's own risk, with no warranty (the project's licence).
+  - Every probe that ran so carries `login_check: overridden` in its evidence, in
+    `--json`, the health record and the dashboard: it is never hidden afterwards.
+
+### 4d. The trust store and probe configuration, as built (amendment, 2026-10-06)
+- **Where:** `<user config dir>/ods/trust.json`, beside the user's `config.toml`
+  (ADR-0005), never in a repository. It is JSON with a `schema_version` (1.0), written
+  whole and renamed into place, and only by `ods health trust`.
+- **What:** one entry per project, keyed by the canonical path of the directory holding
+  the project's `ods.toml` (or `ods.local.toml`), with `trusted_at` and, per check id, a
+  `sha256:` digest of what decides what runs: its `kind`, `sql` (or, for scripts,
+  `command`), `select` and `exclude`, and, for probes, `[health.probes]`'s `target` and
+  `profile`. Severity and `pass` aren't in it: changing them
+  changes the verdict, not what runs or where.
+- **Which definitions need it:** checks whose `[[health.checks]]` comes from a project or
+  local file. The array is one setting (ADR-0005 layers replace it whole), so its source
+  says which file defined every check in it; checks from the user's own `config.toml` need
+  no entry.
+- **`ods health trust`** lists the definitions that aren't trusted yet, with their SQL or
+  command and what changed, and records the current ones; `--revoke` removes the project's
+  entry. `ods health check --allow-scripts` trusts the current definitions for that run
+  only.
+- **A probe check** is `kind = "probe"` with `sql` (one read-only query with `{relation}`
+  once), `pass` and a `select` (required: a probe never runs on every node by default); it
+  can't have `require`. `pass` is a comparison of a column the query returns with a literal
+  (`=`, `!=`, `<`, `<=`, `>`, `>=`; numbers, `'strings'`, `true`/`false`), combined with
+  `and`/`or` and parentheses. The columns it names are the ones the probe reads. A value
+  that isn't a number where the comparison needs one is *unknown*, never a pass.
+
+### 4e. The login check on Unity Catalog, and its known issues (amendment, 2026-10-06)
+**As built.** On a Databricks project, `ods health check` wraps the dbt connection in the
+Databricks provider's `UnityCatalog`, which answers `relation_privileges` through the
+same connection, so the login checked is the login the probes run under. A probe
+statement can name the relation's parts as string literals (`{database}`, `{schema}`,
+`{name}`, `ProbeStatement::by_name`), and for each probed relation it reads
+`system.information_schema`, one summary row per statement:
+- that the catalog shows the relation to the login (`tables`), and the login's name
+  (`current_user()`);
+- whether the login, or a group it is in (`is_account_group_member`, `is_member`), owns
+  the table, its schema or its catalog (`tables`, `schemata`, `catalogs`);
+- any privilege on the table, schema, catalog or metastore beyond `SELECT`, `BROWSE`,
+  `USE CATALOG` and `USE SCHEMA` (`*_privileges`; the right to grant comes with
+  ownership or `MANAGE`, which these find);
+- whether it owns the metastore (`metastores`), or is in the workspace's `admins` group;
+- that the relation is a managed table, a view or a materialized view (`table_type`): an
+  external table's files can be written through its storage location, which isn't
+  checked, so it is *unknown*.
+
+It is read-only only when every statement answered and none found anything; anything
+that can't be read is *unknown*, never read-only. Other warehouses have no privilege
+report yet, so their probes still need `--allow-elevated-login`.
+
+**Known issues, and how to fix them.** Each makes the check refuse more than it must, or
+miss something a dedicated read-only principal would never have. Tracked in #408.
+
+| # | Issue | Effect today | How to fix |
+|---|---|---|---|
+| 1 | Account admins aren't visible in `information_schema` (metastore owners are, and are checked). | Such a login can pass as read-only. | Read the login's account roles from the account SCIM API (`Me`) through a Databricks connection, once secrets have a provider (#126); until then, probes need a dedicated principal that isn't an account admin. |
+| 2 | Only Unity Catalog reports privileges. | Probes on any other warehouse need `--allow-elevated-login`. | A `relation_privileges` per warehouse: Snowflake (`SHOW GRANTS` over the current role's hierarchy), PostgreSQL (`has_table_privilege`, `has_schema_privilege`, ownership in `pg_class`), BigQuery (`testIamPermissions`). |
+| 3 | Relations outside Unity Catalog (e.g. `hive_metastore`) aren't in `system.information_schema`. | *Unknown*: refused without the override. | `SHOW GRANTS` for legacy table ACLs, or state they are unsupported. |
+| 4 | A catalog, schema or name with a quote, backslash or brace isn't put in a string literal. | *Unknown* for that relation. | Adapter-specific literal escaping in the dbt provider (Databricks SQL escapes with `\`). |
+| 5 | Group membership relies on `is_account_group_member` and `is_member`; nested groups and service principals' identities (application id vs display name) aren't verified against a live workspace. | A grant through an unusual path may be missed, or a read-only login refused. | Verify in the Databricks CI job with a read-only service principal; fall back to SCIM group expansion if needed. |
+| 6 | Only `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` count as reading, and any privilege on the metastore counts as more. | Other read-only privileges (e.g. `READ VOLUME`, `EXECUTE`) are refused as elevated; if every user holds a default metastore grant (e.g. `USE MARKETPLACE ASSETS` for `account users`), no probe ever runs without the override. | Review Unity Catalog's privilege list and widen the allowlists where a privilege can't write, metastore grants included. |
+| 7 | The check covers the probed relation and its containers, not other tables the probe's SQL may read (a read-only join). | Reading is allowed elsewhere without a check; nothing can write. | Use the SQL analyzer's table references to check every relation the query reads, or refuse queries naming other relations. |
+| 8 | Grants can change between the check and the query. | A narrow window. | None in ODS; a dedicated principal whose grants don't change is the control (§4c). |
+| 9 | Sources aren't in health's scope (§4d). | Probes can't select sources: a configuration error, or reported as unmatched. | Add sources to the health scope, with their own badges and counts. |
+| 10 | dbt's default target can't be compared with the probe target. | A probe target equal to an unnamed default build target isn't caught. | Resolve the build target with ODS's target check (`dbt` renders it) before comparing. |
+| 11 | Ten statements run per relation, one after another, in one dbt call. | Slow for many probed nodes. | One set-based query per schema or catalog for the batch. |
+| 12 | Not yet run against a live workspace: tested with fakes and the fake dbt. | Behaviour on real Unity Catalog is unproven. | The `databricks` workflow's probe step, which runs once a read-only service principal is set up in a catalog of its own (`docs/contributing-databricks.md`): `workspace` grants `CREATE SCHEMA` to every user, so a principal there is never read-only. |
+| 13 | External tables (and any `table_type` but managed, view or materialized view) are *unknown*: their files can be written through the storage location (`WRITE FILES` on an external location or credential), which isn't checked. | Probes on external tables need `--allow-elevated-login`. | Find the external location whose `url` prefixes the table's `storage_path` and check its owner and privileges (beyond `READ FILES`, `BROWSE`), and the storage credential's. |
+| 14 | Relation kinds outside the probe filter (table, view, materialized view), e.g. dbt-databricks' streaming tables, are skipped by the probe. | *Unknown*: refused without the override. | Add the kinds once their write paths are understood. |
+| 15 | The check assumes the `*_privileges` views show rows granted to the login's groups; Unity Catalog documents them as showing privileges the user may interact with. | If group grants are hidden from the login, it could pass as read-only. | Verify with a live workspace (row 12); if hidden, expand groups through SCIM and read grants with `SHOW GRANTS`. |
+| 16 | `is_grantable` is checked, but Unity Catalog reserves it (always `NO`). | None: grant rights come with ownership or `MANAGE`, which are found. | Drop the clause if it stays reserved. |
+
 ### 5. The contract and crate
-- **The probe contract, widened:** `relation_probe` becomes 0.2. `probe` takes neutral
+- **The probe contract, widened:** `relation_probe` becomes 0.2 (0.3 as built: by-name statements, §4e). `probe` takes neutral
   `ProbeTarget`s (an id, and the relation as the project names it), not only sources, so a
   probe check can target a model, a seed or a snapshot. Sources keep working as targets.
   ADR-0022's source-version reading moves to the new signature with no behaviour change. A

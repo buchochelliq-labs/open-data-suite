@@ -324,6 +324,26 @@ fn a_source_freshness_file_written_later_reloads_the_dashboard() {
     assert!(!message.contains("doctor"), "{message}");
 }
 
+/// A new health record (`ods health check`, ADR-0030 §6) reloads the dashboard: the
+/// records' directory is watched, and it need not exist when the server starts.
+#[test]
+fn a_new_health_record_reloads_the_dashboard() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    fs::create_dir_all(&target).unwrap();
+    for file in ["manifest.json", "catalog.json"] {
+        fs::copy(fixture().join(file), target.join(file)).unwrap();
+    }
+    let db = scratch.path().join(".ods/state.db");
+    let server = serve(&target, &["--state-db", db.to_str().unwrap()]);
+    assert_eq!(generation(&server).0, 1);
+    std::thread::sleep(Duration::from_millis(1100));
+    let records = scratch.path().join(".ods/state.db.health");
+    fs::create_dir_all(&records).unwrap();
+    fs::write(records.join("2099-01-01T00-00-00Z-001.json"), "{}").unwrap();
+    wait_for_generation(&server, 2);
+}
+
 /// Runs `ods state build` with the fake dbt in `dir`, with `envs` for the fake dbt.
 #[cfg(unix)]
 fn fake_build(dir: &Path, envs: &[(&str, &str)], extra: &[&str]) -> std::process::Output {

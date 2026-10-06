@@ -28,6 +28,12 @@ pub trait Present: Serialize {
 
     /// Builds the human-facing view. Must be a pure function of `self`.
     fn view(&self) -> ViewNode;
+
+    /// Warnings the JSON envelope carries beside the result, for what the view says in
+    /// a notice that machines must see too. None by default.
+    fn diagnostics(&self) -> Vec<Diagnostic> {
+        Vec::new()
+    }
 }
 
 /// Severity of a [`Diagnostic`]. Part of the JSON contract.
@@ -57,6 +63,18 @@ pub struct Diagnostic {
     /// Optional next step for the user; omitted from JSON when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+}
+
+impl Diagnostic {
+    /// A warning with `code` and `message`.
+    pub fn warning(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            level: Severity::Warning,
+            code,
+            message: message.into(),
+            hint: None,
+        }
+    }
 }
 
 /// The single object written to stdout in JSON mode.
@@ -102,7 +120,7 @@ pub fn emit<T: Present>(
     out: &mut dyn Write,
 ) -> io::Result<()> {
     match settings.mode {
-        Mode::Json => write_envelope(out, T::COMMAND, Some(result), &[]),
+        Mode::Json => write_envelope(out, T::COMMAND, Some(result), &result.diagnostics()),
         Mode::Plain => out.write_all(backend::plain::render(&result.view()).as_bytes()),
         Mode::Human => {
             let renderer = backend::rich::RichRenderer::new(settings.color, settings.width);
@@ -126,13 +144,14 @@ pub fn emit_with_error<T: Present>(
     if settings.mode != Mode::Json {
         return emit(result, settings, out);
     }
-    let diagnostic = Diagnostic {
+    let mut diagnostics = result.diagnostics();
+    diagnostics.push(Diagnostic {
         level: Severity::Error,
         code: error.code,
         message: error.message.clone(),
         hint: error.hint.clone(),
-    };
-    write_envelope(out, T::COMMAND, Some(result), &[diagnostic])
+    });
+    write_envelope(out, T::COMMAND, Some(result), &diagnostics)
 }
 
 /// Writes a failed command's JSON envelope: `result` is `null` and the error is the

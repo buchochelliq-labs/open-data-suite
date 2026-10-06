@@ -89,6 +89,43 @@ Do this once, as a workspace admin.
    set `DATABRICKS_OAUTH_SCOPES` to ask for something else.
    Skip this if federation works and you'd rather store no secret at all.
 
+### A read-only service principal for probe checks
+`ods health check` runs probe checks only under a login that can do no more than read
+([ADR-0030 §4c, §4e](adr/0030-configurable-and-pluggable-health-checks.md)). The job
+tests that with a second service principal, which reads the run's schema while the CI
+one owns it. Until it is set up, those steps are skipped.
+
+The `workspace` catalog grants `USE CATALOG` and `CREATE SCHEMA` to every user, so a
+principal there can always create objects through its groups, and ODS (correctly)
+refuses to probe under it. The job therefore runs in a catalog of its own, with only
+explicit grants:
+
+1. **Catalog:** create it and give the CI service principal what it had on `workspace`:
+   ```sql
+   CREATE CATALOG ods_ci;
+   GRANT USE CATALOG, CREATE SCHEMA ON CATALOG ods_ci TO `<ci-application-id>`;
+   ```
+   Then set `DATABRICKS_CATALOG` to `ods_ci` (below). Check it has nothing else:
+   `SHOW GRANTS ON CATALOG ods_ci` should list only your own ownership and these.
+2. **Probe service principal:** add a second one as in step 1 above, with **Can use** on
+   the warehouse (step 2), and only:
+   ```sql
+   GRANT USE CATALOG ON CATALOG ods_ci TO `<probe-application-id>`;
+   ```
+   Each run's schema is granted to it by the job (`USE SCHEMA`, `SELECT`), which the CI
+   principal can do because it owns the schema. Don't make it a workspace admin, an
+   account admin or the owner of anything.
+3. **Federation:** a policy on the probe principal like step 4's, with the same issuer,
+   subject and audience. Or, as a fallback, an OAuth secret for it.
+4. **GitHub environment:** set `DATABRICKS_PROBE_CLIENT_ID` (and, for the fallback,
+   the secret `DATABRICKS_PROBE_CLIENT_SECRET`), below.
+
+The step checks that a probe on `orders` passes under the probe principal with
+`login_check: read_only`, and that the same probe is refused under the CI principal,
+which owns the schema. The job summary shows both findings. If the first is refused,
+its reason names what Unity Catalog reported: a default metastore grant, for instance
+(ADR-0030 §4e, #408).
+
 ## Setting up the GitHub environment
 Settings → Environments → `databricks-free`:
 
@@ -99,9 +136,11 @@ Settings → Environments → `databricks-free`:
 | Variable | `DATABRICKS_CLIENT_ID` | the service principal's application ID |
 | Variable | `DATABRICKS_ACCOUNT_ID` | optional: the federation audience, if it's the account ID |
 | Variable | `DATABRICKS_TOKEN_AUDIENCE` | optional: the federation audience, if it's something else |
-| Variable | `DATABRICKS_CATALOG` | optional; defaults to `workspace` |
+| Variable | `DATABRICKS_CATALOG` | optional; defaults to `workspace`; `ods_ci` for probe checks (above) |
+| Variable | `DATABRICKS_PROBE_CLIENT_ID` | optional: the read-only probe service principal's application ID |
 | Variable | `DATABRICKS_OAUTH_SCOPES` | optional; defaults to trying `all-apis`, then `sql` |
 | Secret | `DATABRICKS_CLIENT_SECRET` | optional: the fallback secret |
+| Secret | `DATABRICKS_PROBE_CLIENT_SECRET` | optional: the probe principal's fallback secret |
 
 Settings can also be stored as environment secrets: the workflow reads each one as a
 variable first, then as a secret. Variables are easier to check, because secrets are

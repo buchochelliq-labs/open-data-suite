@@ -62,6 +62,11 @@ pub enum Capability {
     /// A state store keeps a ledger of runs: what each reused and built, for runs that
     /// commit nothing too (ADR-0029). Without it, savings can't be reported over time.
     RunLedger,
+    /// A provider checks nodes' health and reports a finding per node (ADR-0030).
+    HealthCheck,
+    /// What the login a provider connects as may do on a relation and its containers
+    /// can be reported, so a probe runs only under a read-only login (ADR-0030 §4c).
+    RelationPrivileges,
     /// A capability outside the well-known set, as `x-<namespace>.<name>`.
     Custom(CustomCapability),
 }
@@ -104,7 +109,7 @@ impl FromStr for CustomCapability {
 
 impl Capability {
     /// Every well-known capability, for documentation and tests.
-    pub const WELL_KNOWN: [Capability; 17] = [
+    pub const WELL_KNOWN: [Capability; 19] = [
         Capability::RelationVersions,
         Capability::RelationProbe,
         Capability::RelationExistence,
@@ -122,6 +127,8 @@ impl Capability {
         Capability::ErrorExplain,
         Capability::RelationLink,
         Capability::RunLedger,
+        Capability::HealthCheck,
+        Capability::RelationPrivileges,
     ];
 
     /// The capability's stable name.
@@ -144,6 +151,8 @@ impl Capability {
             Capability::ErrorExplain => "error_explain",
             Capability::RelationLink => "relation_link",
             Capability::RunLedger => "run_ledger",
+            Capability::HealthCheck => "health_check",
+            Capability::RelationPrivileges => "relation_privileges",
             Capability::Custom(custom) => custom.as_str(),
         }
     }

@@ -1,6 +1,6 @@
-//! `RelationProbe`: runs a few read-only statements against each of a set of sources'
-//! relations, through a connection the provider already has, and returns their first
-//! rows (ADR-0022 §1).
+//! `RelationProbe`: runs a few read-only statements against each of a set of nodes'
+//! relations (sources, models, seeds, snapshots), through a connection the provider
+//! already has, and returns their first rows (ADR-0022 §1, ADR-0030 §5).
 //!
 //! The request is typed and says nothing about how it runs: a filter on the relations
 //! to probe, and statement templates. How the filter is checked and the statements run
@@ -9,8 +9,9 @@
 //!
 //! # Semantics
 //! - [`probe`](RelationProbe::probe) runs only the request's statements, which the
-//!   caller vouches are read-only.
-//! - The report lists every requested source exactly once, in request order.
+//!   caller vouches are read-only, and only against the relations of the requested
+//!   [targets](ProbeTarget): never against a relation it wasn't asked about.
+//! - The report lists every requested target exactly once, in request order.
 //! - A relation is probed only if the implementation can show it matches the
 //!   [filter](ProbeFilter): its kind is one of the filter's kinds and, when the filter
 //!   names a format, the implementation confirmed that format. A relation it can't
@@ -21,16 +22,29 @@
 //!   from its first result row, as strings; a column the statement didn't return, or
 //!   returned as null, is absent, and a statement that returned no rows gives an empty
 //!   row.
-//! - A source the implementation didn't recognise, or couldn't probe, is
+//! - A target that names its [relation](ProbeTarget::relation) is probed only when the
+//!   relation the implementation finds for it is that one (compared ignoring case, as
+//!   warehouses differ on it); another (e.g. the node resolved under another target or
+//!   schema) is [`ProbeAnswer::Unknown`], saying which, and nothing runs against it.
+//! - A [by-name](ProbeStatement::by_name) statement gets the relation's database
+//!   (catalog), schema and name as string literals in place of [`NAME_PARTS`]. An
+//!   implementation that can't write a part as a literal safely (e.g. it has a quote)
+//!   answers [`ProbeAnswer::Unknown`] for that relation and runs nothing against it.
+//! - A target the implementation didn't recognise, or couldn't probe, is
 //!   [`ProbeAnswer::Unknown`] with a reason, never `Rows` or `Skipped`: `Skipped` is only
 //!   for a relation it recognised that doesn't match the filter.
-//! - `Err` means nothing was read: callers treat every requested source as unknown.
+//! - `Err` means nothing was read: callers treat every requested target as unknown.
 //!   An implementation that can't isolate one relation's failure (e.g. one query for
 //!   all of them) fails the whole call.
-//! - Implementations answer in one batch whatever the number of sources, and may look
-//!   at more relations than were requested to do so.
+//! - With a [timeout](ProbeRequest::with_timeout), a call that takes longer fails, and
+//!   stops what it started on ODS's side (e.g. the process it ran); a statement the
+//!   warehouse already accepted may run on there until the warehouse ends it.
+//! - Implementations answer in as few batches as they can, and may look at more
+//!   relations than were requested to do so (e.g. to list them), but run nothing
+//!   against those.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
@@ -43,7 +57,7 @@ use crate::provider::{Contract, Provider};
 /// The `relation_probe` contract.
 pub const RELATION_PROBE: Contract = Contract {
     name: "relation_probe",
-    version: SchemaVersion::new(0, 1),
+    version: SchemaVersion::new(0, 3),
 };
 
 /// The placeholder a statement template names its relation with. The implementation
@@ -79,7 +93,16 @@ fn identifier(what: &str, name: &str) -> Result<String, InvalidProbe> {
 pub struct ProbeStatement {
     template: String,
     columns: Vec<String>,
+    /// Whether it names the relation's parts as string literals ([`NAME_PARTS`])
+    /// rather than the relation itself ([`PLACEHOLDER`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    by_name: bool,
 }
+
+/// The placeholders a [by-name](ProbeStatement::by_name) statement names its
+/// relation's parts with: its database (catalog), schema and name. The implementation
+/// replaces each with that part as a string literal, e.g. `'shop'`.
+pub const NAME_PARTS: [&str; 3] = ["{database}", "{schema}", "{name}"];
 
 impl ProbeStatement {
     /// A statement from `template`, which names its relation once, as [`PLACEHOLDER`],
@@ -105,14 +128,52 @@ impl ProbeStatement {
                 "`{template}` has braces other than `{PLACEHOLDER}`"
             )));
         }
-        let columns = columns
-            .into_iter()
-            .map(|c| identifier("column", &c.into()))
-            .collect::<Result<Vec<_>, _>>()?;
-        if columns.is_empty() {
-            return Err(InvalidProbe(format!("`{template}` returns no columns")));
+        Ok(Self {
+            columns: columns_of(&template, columns)?,
+            template,
+            by_name: false,
+        })
+    }
+
+    /// A statement about the relation from its catalog's metadata, e.g. its grants:
+    /// `template` names the relation's parts as [`NAME_PARTS`] (each any number of
+    /// times, at least one of them), which the implementation replaces with string
+    /// literals, and never the relation itself.
+    ///
+    /// # Errors
+    /// Returns [`InvalidProbe`] if the template names no part, names [`PLACEHOLDER`],
+    /// has other braces, or a column isn't a plain identifier, or there are no columns.
+    pub fn by_name(
+        template: impl Into<String>,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<Self, InvalidProbe> {
+        let template = template.into();
+        if template.contains(PLACEHOLDER) || !NAME_PARTS.iter().any(|p| template.contains(p)) {
+            return Err(InvalidProbe(format!(
+                "`{template}` must name its relation by its parts ({}), not as `{PLACEHOLDER}`",
+                NAME_PARTS.join(", ")
+            )));
         }
-        Ok(Self { template, columns })
+        let rest = NAME_PARTS
+            .iter()
+            .fold(template.clone(), |rest, part| rest.replace(part, ""));
+        if rest.contains(['{', '}']) {
+            return Err(InvalidProbe(format!(
+                "`{template}` has braces other than {}",
+                NAME_PARTS.join(", ")
+            )));
+        }
+        Ok(Self {
+            columns: columns_of(&template, columns)?,
+            template,
+            by_name: true,
+        })
+    }
+
+    /// Whether it names the relation's parts ([`by_name`](Self::by_name)) rather than
+    /// the relation.
+    pub fn is_by_name(&self) -> bool {
+        self.by_name
     }
 
     /// The template, with [`PLACEHOLDER`] where the relation goes.
@@ -128,6 +189,61 @@ impl ProbeStatement {
     /// The statement for `relation`, a name the implementation has already quoted.
     pub fn render(&self, relation: &str) -> String {
         self.template.replace(PLACEHOLDER, relation)
+    }
+}
+
+/// `columns`, checked: plain identifiers, at least one.
+fn columns_of(
+    template: &str,
+    columns: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<Vec<String>, InvalidProbe> {
+    let columns = columns
+        .into_iter()
+        .map(|c| identifier("column", &c.into()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if columns.is_empty() {
+        return Err(InvalidProbe(format!("`{template}` returns no columns")));
+    }
+    Ok(columns)
+}
+
+/// A node whose relation to probe: a source, model, seed or snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ProbeTarget {
+    /// Its id, e.g. `source.shop.raw.orders` or `model.shop.orders`.
+    pub id: String,
+    /// Its name as the project gives it, for messages, e.g. `raw.orders` or `orders`.
+    pub name: String,
+    /// The relation the caller expects, as the project's artifacts name it (e.g.
+    /// `"db"."main"."orders"`), if it knows: the implementation probes nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
+}
+
+impl ProbeTarget {
+    /// A node to probe.
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            relation: None,
+        }
+    }
+
+    /// The same target, which must be the relation `relation` (see
+    /// [`relation`](Self::relation)).
+    #[must_use]
+    pub fn expecting(mut self, relation: impl Into<String>) -> Self {
+        self.relation = Some(relation.into());
+        self
+    }
+}
+
+impl From<&RequestedSource> for ProbeTarget {
+    fn from(source: &RequestedSource) -> Self {
+        Self::new(source.id.clone(), source.name.clone())
     }
 }
 
@@ -184,6 +300,8 @@ impl ProbeFilter {
 pub struct ProbeRequest {
     filter: ProbeFilter,
     statements: Vec<ProbeStatement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout: Option<Duration>,
 }
 
 impl ProbeRequest {
@@ -195,7 +313,23 @@ impl ProbeRequest {
         if statements.is_empty() {
             return Err(InvalidProbe("there is no statement to run".to_owned()));
         }
-        Ok(Self { filter, statements })
+        Ok(Self {
+            filter,
+            statements,
+            timeout: None,
+        })
+    }
+
+    /// The same request, failing when it takes longer than `timeout`.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// How long a call may take, if limited.
+    pub fn timeout(&self) -> Option<Duration> {
+        self.timeout
     }
 
     /// Which relations to probe.
@@ -213,7 +347,7 @@ impl ProbeRequest {
 /// or null.
 pub type ProbeRow = BTreeMap<String, String>;
 
-/// What probing one source's relation found.
+/// What probing one target's relation found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -231,28 +365,29 @@ pub enum ProbeAnswer {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct ProbeReport {
-    /// Every requested source, in request order.
-    pub sources: Vec<(String, ProbeAnswer)>,
+    /// Every requested target, by id, in request order.
+    pub targets: Vec<(String, ProbeAnswer)>,
 }
 
 impl ProbeReport {
     /// A report, for implementations to return.
-    pub fn new(sources: Vec<(String, ProbeAnswer)>) -> Self {
-        Self { sources }
+    pub fn new(targets: Vec<(String, ProbeAnswer)>) -> Self {
+        Self { targets }
     }
 }
 
-/// Runs read-only statements against sources' relations.
+/// Runs read-only statements against nodes' relations.
 #[async_trait]
 pub trait RelationProbe: Provider {
-    /// Runs `request` against the relation of each of `sources`.
+    /// Runs `request` against the relation of each of `targets`, and nothing else.
     ///
     /// # Errors
-    /// Returns [`ProviderError`] if the probe couldn't run; nothing was read.
+    /// Returns [`ProviderError`] if the probe couldn't run, or ran out of time; nothing
+    /// was read.
     async fn probe(
         &self,
         request: &ProbeRequest,
-        sources: &[RequestedSource],
+        targets: &[ProbeTarget],
     ) -> Result<ProbeReport, ProviderError>;
 }
 
@@ -276,6 +411,20 @@ mod tests {
         assert!(ProbeStatement::new("select * from {relation}", ["a b"]).is_err());
         assert!(ProbeStatement::new("select * from {relation}", ["1a"]).is_err());
         assert!(ProbeStatement::new("select * from {relation}", Vec::<String>::new()).is_err());
+        let by_name = ProbeStatement::by_name(
+            "select count(*) as n from t where c = {database} and s = {schema} and n = {name} or n = {name}",
+            ["n"],
+        )
+        .unwrap();
+        assert!(by_name.is_by_name());
+        assert!(!ok.is_by_name());
+        for bad in [
+            "select 1",
+            "select * from {relation} where n = {name}",
+            "select {other} where n = {name}",
+        ] {
+            assert!(ProbeStatement::by_name(bad, ["a"]).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -293,5 +442,8 @@ mod tests {
         let statement = ProbeStatement::new("select * from {relation}", ["a"]).unwrap();
         let request = ProbeRequest::new(filter, vec![statement.clone()]).unwrap();
         assert_eq!(request.statements(), [statement]);
+        assert_eq!(request.timeout(), None);
+        let request = request.with_timeout(Duration::from_secs(30));
+        assert_eq!(request.timeout(), Some(Duration::from_secs(30)));
     }
 }

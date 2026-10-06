@@ -6,7 +6,7 @@ hide:
 # OpenDataSuite (ODS)
 
 !!! danger "Very experimental"
-    ODS is **pre-alpha software**; the first release is v0.0.1. Commands, flags, output
+    ODS is **pre-alpha software**; the latest release is v0.0.2. Commands, flags, output
     and file formats change without notice. Results can be incomplete or wrong. Use it
     to explore and give feedback, and don't rely on it for production decisions.
 

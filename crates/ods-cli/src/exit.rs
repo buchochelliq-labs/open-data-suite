@@ -91,6 +91,23 @@ pub mod codes {
     /// or a file couldn't be written or replaced. The message names the files already
     /// replaced.
     pub const STATE_EXPORT: &str = "ODS-E0406";
+    /// `[health]` names a check that doesn't exist or a path glob that isn't valid: a
+    /// configuration schema violation, as the configuration's own (`ODS-E0102`).
+    pub const HEALTH_CONFIG: &str = "ODS-E0102";
+    /// `ods health check` found a check at severity `error` that fails (or, with
+    /// `--strict`, can't decide).
+    pub const HEALTH_FAILED: &str = "ODS-E0701";
+    /// `ods health check` couldn't write its health record.
+    pub const HEALTH_RECORD: &str = "ODS-E0702";
+    /// `ods health trust` couldn't read or write the trust store, or there is no user
+    /// configuration directory to keep it in.
+    pub const HEALTH_TRUST: &str = "ODS-E0703";
+    /// A warning: `ods health check --allow-elevated-login` let probes run under a login
+    /// that wasn't shown to only read.
+    pub const HEALTH_ELEVATED_LOGIN: &str = "ODS-W0704";
+    /// A warning: a probe check selected no node health checks see, so it checked
+    /// nothing.
+    pub const HEALTH_UNMATCHED_PROBE: &str = "ODS-W0705";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

@@ -13,6 +13,117 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Breaking
+- `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
+  gains `test_types`, `described` and `constraints` (all default when absent). **What
+  to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
+- The `relation_probe` contract is 0.3 (#392, ADR-0030 §5, §4e). 0.3: a probe statement
+  can name the relation's parts as string literals (`ProbeStatement::by_name`,
+  `{database}`, `{schema}`, `{name}`); an implementation that can't write a part as a
+  literal safely answers unknown and runs nothing (conformance case
+  `a_name_that_cant_be_a_literal_is_never_probed`). 0.2: `RelationProbe::probe` takes
+  `ProbeTarget`s (an id and a name, for any node with a relation, not only sources) in
+  place of `RequestedSource`s, `ProbeReport::sources` is `targets`, a `ProbeRequest` can
+  carry a timeout, and statements run only against the requested targets' relations.
+  The dbt provider now passes the requested ids to `dbt show` (several calls for a long
+  list) instead of running the statements against every source. **What to do:** a
+  provider implementing `RelationProbe` takes `&[ProbeTarget]`, runs nothing against a
+  relation it wasn't asked about, and honours `ProbeRequest::timeout`.
+- The health record's format is 1.1, as a check's source can be `declarative` or
+  `probe` and a report holds its coverage targets' verdicts. ODS 0.0.2
+  doesn't read 1.1 records: run `ods health check` again after going back to it.
+
+### Added
+- Probe checks on Databricks check their login in Unity Catalog (#392, ADR-0030 §4e):
+  `ods health check` reads `system.information_schema` through the probe target's own
+  connection and runs a probe only on a managed table, view or materialized view whose
+  login (or its groups) owns none of the relation, schema, catalog or metastore, holds
+  nothing on them or the metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and
+  `USE SCHEMA`, and isn't a workspace admin; anything it can't read, and any external
+  table, is *unknown*. Known limits (e.g. account admins aren't visible) and how they
+  will be fixed are listed in ADR-0030 §4e. The Databricks provider has `UnityCatalog`,
+  a `relation_probe` that also reports `relation_privileges`.
+- Probe checks run (#392, ADR-0030 §4c): on their own dbt target, `[health.probes]`
+  `target` (and optional `profile`), never the build's; without one they don't run.
+  dbt probes sources, models, seeds and snapshots, matching the query's columns whatever
+  their case. Every probe is refused (*unknown*) unless its login is shown to only read,
+  which no provider reports yet; `ods health check --allow-elevated-login` runs them
+  anyway, at the user's own risk, warning on every run with the login and what was
+  found (in `--json`, a `warning` diagnostic `ODS-W0704`), and marking each such
+  finding `login_check: overridden`. A probe reads only the relation the build made: a
+  node dbt resolves elsewhere under the probe target is *unknown*. A probe target equal
+  to the build's is a configuration error, and the trust digest covers `[health.probes]`,
+  and the dbt `program`, `project_dir`, `profiles_dir` and `profile` configuration
+  sets, so pointing trusted probes at another target or login needs trust again. A node
+  the manifest names no relation for (e.g. ephemeral) is never probed; sources can't be
+  probed yet, and a probe that selects nothing is reported (`ODS-W0705`) and fails
+  `--strict` at severity `error`. `ods health check`
+  takes `--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars` and `--dbt-output`.
+- A `ProbeTarget` can name the relation it must be (`expecting`); `relation_probe`
+  answers *unknown* for a node it finds elsewhere, and its conformance suite checks it
+  when a harness has such a target (`ProbeHarness::elsewhere`).
+- The `relation_privileges` contract and capability (#392, ADR-0030 §4c), with a fake
+  (`FakeRelationPrivileges`) and a conformance suite: a provider reports whether its
+  login can only read each relation, or what it holds beyond reading. The health engine
+  asks it just before every probe, refuses a probe whose login can do more than read or
+  can't be shown to only read (*unknown*, naming the login and what it found), and judges
+  `pass` on the row a probe returns. A run that allows an elevated login marks each such
+  finding `login_check: overridden` and keeps the login and what was found in the report
+  and health record (`elevated_login`). `ods health check` wires a probe connection in
+  the next step of #392.
+- Probe checks and the trust store (#392, ADR-0030 §4a–§4d): `[[health.checks]]` with
+  `kind = "probe"`, `select`, `sql` (one read-only query with `{relation}`) and `pass`
+  (e.g. `n > 0`). A probe whose SQL could write, lock or change a session is a
+  configuration error before anything connects (exit 4). A probe a project defines runs
+  only once `ods health trust` has trusted that exact definition for that project; trust
+  is kept in `trust.json` in your own configuration directory, a changed query is
+  untrusted again, `ods health trust --revoke` forgets a project, and
+  `ods health check --allow-scripts` trusts for one run only. Until then a probe is
+  *unknown*, never a pass. Probes run under a read-only login in the next step of #392.
+- Declared health checks (#392, ADR-0030 §2–3): `[[health.checks]]` in `ods.toml` with an
+  `id`, `select`/`exclude`, `require` (`description`, `tests`, `test:<type>`,
+  `constraints`, `tag:<tag>`) and a `severity` (default `warn`). They run on the
+  project's metadata in the dashboard's badges and in `ods health check`'s gate, and
+  name what each failing node is missing. A check that can't run as written is a
+  configuration error (exit 4).
+- Coverage targets (#392, ADR-0030 §3): `[health.coverage.<measure>]` with a `target`
+  share and a `severity` (default `warn`) for Home's measures (`tests`,
+  `descriptions`, `constraints`, `source_freshness`). Home draws each target on its bar
+  and says whether it is met (`target` on each `/api/home` coverage row), and
+  `ods health check` lists them (`coverage` in `--json`) and, for one missed at
+  `error`, exits 5. Nothing to measure is unknown, never met.
+- The dashboard counts the checks `ods health check` recorded (#392, ADR-0030 §6): it
+  works the built-in checks out itself, and takes every other check's findings from the
+  newest health record for its scope, in the badges and counts on Home and in the
+  Catalog. The "how" text names those checks and when they ran, `/api/home` and
+  `/api/catalog` give the time as `health_recorded_at`, and a node the record doesn't
+  cover is *unknown* for them, never healthy. A new record reloads the page.
+
+### Changed
+- The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
+  of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
+  each other. `/roadmap/` redirects to `/ROADMAP/`.
+- The README, the docs' Home and Install pages and the roadmap say v0.0.2 is released;
+  the install commands use `0.0.2` as the example version.
+
+## [0.0.2] - 2026-10-06
+
+The second release: dashboard screens backed by real signals, configurable health
+checks with a CI gate, what reuse saves, and failures explained node by node. **It
+migrates the state store and changes the dashboard's JSON APIs:** see **Breaking**.
+
+- **Health:** each node gets a health badge (*failing*, *warning*, *healthy* or
+  *unknown*) from checks `[health]` configures, with the findings and evidence behind
+  it; `ods health check` gates CI on them, and the `health_check` SDK contract lets
+  checks be added. Home shows coverage of tests, descriptions, constraints and source
+  freshness.
+- **New dashboard screens:** Freshness evidence, the ERD page and the Impact simulator.
+- **What reuse saved:** every run says so, and `ods state savings` totals it, as time
+  and, with `[state.cost]`, as cost, from a run ledger in the state store.
+- **Why it failed:** `ods state explain-failure` explains one node's failure, and
+  Databricks failures are checked against messages recorded from a real warehouse.
+- **Install:** Homebrew and Chocolatey packages, beside PyPI and the release archives.
+
+### Breaking
 - The dashboard's JSON view models (`/api/home`, `/api/catalog`, `/api/shell` and the
   other page APIs) are now at `schema_version` 3 (#354): a Catalog row's `health` is an
   object (`health`, `reasons`) instead of `null`, Home's `coverage` rows replace
@@ -26,12 +137,31 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   do:** nothing, unless you go back to an older `ods`, or the database is read-only: an
   older `ods` refuses the migrated database, so restore the copy (`ods state doctor`
   lists it); a read-only one must be migrated where it is writable first.
-- `SDK_VERSION` is now 0.7 (#210): the `state_store` contract is 0.3, with
+- `SDK_VERSION` is now 0.8 (0.0.1 shipped 0.6). The `state_store` contract is 0.3, with
   `record_run` and `runs` (the run ledger) behind the new capability `run_ledger`; both
-  default to `Unsupported`. **What to do:** rebuild out-of-process plugins against it; a
-  store that keeps no ledger needs no change.
+  default to `Unsupported` (#210). The `health_check` contract 0.1 is new (#392, under
+  **Added**). **What to do:** rebuild out-of-process plugins against SDK 0.8; a store
+  that keeps no ledger needs no other change.
 
 ### Added
+- `ods health check` runs the health checks `[health]` configures and gates CI on them:
+  exit 5 when a check at severity `error` fails, and with `--strict` also when one
+  couldn't decide; `--json` for one document. Each run is kept beside the state store as
+  a versioned health record (`<state db>.health/`, the newest 20), unless `--no-record`
+  ([docs](docs/cli.md#ods-health-check)) (#392)
+- The `health_check` SDK contract 0.1 (capability `health_check`), with a fake and a
+  conformance suite: checks registered through it run beside the built-ins, under a
+  timeout, and one that errs, times out, skips a node or answers about one it wasn't
+  asked about is *unknown*, never a pass. Findings carry machine-readable `evidence`
+  (sorted keys and values) beside their reason, in the dashboard's `findings` too.
+  `SDK_VERSION` is now 0.8 (#392)
+- `[health]` in `ods.toml` tunes the dashboard's health checks
+  ([ADR-0030](docs/adr/0030-configurable-and-pluggable-health-checks.md)): turn each
+  built-in check (`built`, `last_run_failed`, `last_run_skipped`, `tests_required`,
+  `tests_passed`) off or set its severity (`error`, `warn` or `info`), scope it with
+  `select`/`exclude` by resource type, tag, path glob or name, and choose whether a check
+  that couldn't decide counts as unknown or a warning. Each badge now lists its
+  `findings`, one per check ([docs](docs/cli.md#health-settings-in-odstoml)) (#394, #392)
 - Health and coverage on the dashboard from real signals, replacing the `[n]`
   placeholders. Each node in the Catalog has a health badge (*failing*, *warning*,
   *healthy* or *unknown*), with its reasons and a `health` filter. Home counts nodes by

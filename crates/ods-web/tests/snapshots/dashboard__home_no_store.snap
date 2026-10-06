@@ -56,7 +56,7 @@ expression: pretty(&body)
   "health": [
     {
       "count": null,
-      "how": "Built, and its tests passed on that build as they are now (a seed needs none).",
+      "how": "Every enabled check passed: built, and its tests passed on that build as they are now (a seed needs none).",
       "href": null,
       "key": "healthy",
       "label": "Healthy",
@@ -65,7 +65,7 @@ expression: pretty(&body)
     },
     {
       "count": null,
-      "how": "Built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run.",
+      "how": "A check at severity warn failed: by default, no tests (models and snapshots), tests not recorded passing on this build or changed since, or skipped in the last run.",
       "href": null,
       "key": "warning",
       "label": "Warning",
@@ -83,7 +83,7 @@ expression: pretty(&body)
     },
     {
       "count": null,
-      "how": "Never built by ODS: nothing to judge it on.",
+      "how": "A check couldn't decide, e.g. ODS never built it: nothing to judge it on.",
       "href": null,
       "key": "unknown",
       "label": "Unknown",
@@ -91,7 +91,7 @@ expression: pretty(&body)
       "of": null
     }
   ],
-  "health_how": "Failing: failed in the last run and not built since. Warning: built, but without tests (models and snapshots), with tests not recorded passing on this build or changed since, or skipped in the last run. Healthy: built, and its tests passed on this build as they are now. Unknown: never built by ODS. The last run's record doesn't say what failed, so failures aren't measured.",
+  "health_how": "A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now. The last run's record doesn't say what failed, so the last-run checks can't decide, and nodes they apply to read unknown (or a warning, as configured).",
   "last_run": null,
   "modules": [
     {

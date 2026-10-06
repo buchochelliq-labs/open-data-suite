@@ -536,9 +536,9 @@ impl Steps {
                 count(nodes, "node")
             ),
             // The only probe ODS runs reads table versions (ADR-0022).
-            DbtStep::RelationProbe { sources } => format!(
+            DbtStep::RelationProbe { relations } => format!(
                 "dbt show: reading table versions for {}",
-                count(sources, "source")
+                count(relations, "source")
             ),
             _ => "dbt".to_owned(),
         };

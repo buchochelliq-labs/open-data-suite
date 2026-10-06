@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion, VersionReport};
-use ods_sdk::contracts::probe::{ProbeAnswer, ProbeReport, ProbeRequest, ProbeRow, RelationProbe};
+use ods_sdk::contracts::probe::{
+    ProbeAnswer, ProbeReport, ProbeRequest, ProbeRow, ProbeStatement, ProbeTarget, RelationProbe,
+};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
 use crate::KIND;
@@ -137,17 +139,24 @@ impl ChangeProvider for FakeChangeProvider {
 struct FakeRelation {
     kind: String,
     format: Option<String>,
+    /// Its name in the warehouse, when set: a target expecting another is unknown.
+    named: Option<String>,
+    /// Its database, schema and name, when set: a by-name statement can't run on one
+    /// with a quote, backslash or brace.
+    parts: Option<[String; 3]>,
     /// Statement template → its first row.
     rows: BTreeMap<String, ProbeRow>,
 }
 
-/// A relation probe over sources' relations with a kind, an optional format, and the
+/// A relation probe over nodes' relations with a kind, an optional format, and the
 /// first row each statement template returns. A statement it has no row for returns
-/// no rows. It confirms a format only when the relation has one.
+/// no rows. It confirms a format only when the relation has one. It remembers which
+/// relations it ran statements against, in order.
 #[derive(Debug, Clone, Default)]
 pub struct FakeRelationProbe {
     fails: bool,
     relations: Arc<Mutex<BTreeMap<String, FakeRelation>>>,
+    probed: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeRelationProbe {
@@ -156,7 +165,8 @@ impl FakeRelationProbe {
         Self::default()
     }
 
-    /// `source`'s relation is a `kind` (e.g. `table`), stored in `format` if known.
+    /// The relation of `source` (any node id) is a `kind` (e.g. `table`), stored in
+    /// `format` if known.
     #[must_use]
     pub fn with_relation(
         self,
@@ -169,6 +179,8 @@ impl FakeRelationProbe {
             FakeRelation {
                 kind: kind.into(),
                 format: format.map(str::to_owned),
+                named: None,
+                parts: None,
                 rows: BTreeMap::new(),
             },
         );
@@ -205,12 +217,36 @@ impl FakeRelationProbe {
         }
     }
 
+    /// `source`'s relation is called `relation` in the warehouse, e.g. `"db"."main"."orders"`.
+    #[must_use]
+    pub fn named(self, source: &str, relation: impl Into<String>) -> Self {
+        if let Some(found) = lock(&self.relations).get_mut(source) {
+            found.named = Some(relation.into());
+        }
+        self
+    }
+
+    /// `source`'s relation is `name` in `schema` of `database`.
+    #[must_use]
+    pub fn with_parts(self, source: &str, database: &str, schema: &str, name: &str) -> Self {
+        if let Some(found) = lock(&self.relations).get_mut(source) {
+            found.parts = Some([database, schema, name].map(str::to_owned));
+        }
+        self
+    }
+
     /// Makes [`probe`](RelationProbe::probe) fail, as when the warehouse can't be
     /// reached.
     #[must_use]
     pub fn failing(mut self) -> Self {
         self.fails = true;
         self
+    }
+
+    /// The ids of the relations statements ran against, in order (shared between
+    /// clones).
+    pub fn probed(&self) -> Vec<String> {
+        lock(&self.probed).clone()
     }
 
     fn answer(relation: &FakeRelation, request: &ProbeRequest) -> ProbeAnswer {
@@ -272,7 +308,7 @@ impl RelationProbe for FakeRelationProbe {
     async fn probe(
         &self,
         request: &ProbeRequest,
-        sources: &[RequestedSource],
+        targets: &[ProbeTarget],
     ) -> Result<ProbeReport, ProviderError> {
         if self.fails {
             return Err(ProviderError::Other(
@@ -280,15 +316,40 @@ impl RelationProbe for FakeRelationProbe {
             ));
         }
         let relations = lock(&self.relations);
+        let mut probed = lock(&self.probed);
         Ok(ProbeReport::new(
-            sources
+            targets
                 .iter()
-                .map(|s| {
-                    let answer = relations.get(&s.id).map_or_else(
-                        || ProbeAnswer::Unknown("unknown source".to_owned()),
-                        |relation| Self::answer(relation, request),
-                    );
-                    (s.id.clone(), answer)
+                .map(|t| {
+                    let answer = match relations.get(&t.id) {
+                        None => ProbeAnswer::Unknown("no such relation".to_owned()),
+                        Some(FakeRelation {
+                            named: Some(named), ..
+                        }) if t
+                            .relation
+                            .as_ref()
+                            .is_some_and(|want| !want.eq_ignore_ascii_case(named)) =>
+                        {
+                            ProbeAnswer::Unknown(format!(
+                                "it is `{named}` here, not `{}`",
+                                t.relation.as_deref().unwrap_or_default()
+                            ))
+                        }
+                        Some(FakeRelation {
+                            parts: Some(parts), ..
+                        }) if request.statements().iter().any(ProbeStatement::is_by_name)
+                            && parts.iter().any(|p| p.contains(['\'', '\\', '{', '}'])) =>
+                        {
+                            ProbeAnswer::Unknown(
+                                "its name can't be put in a string literal".to_owned(),
+                            )
+                        }
+                        Some(relation) => Self::answer(relation, request),
+                    };
+                    if matches!(answer, ProbeAnswer::Rows(_)) {
+                        probed.push(t.id.clone());
+                    }
+                    (t.id.clone(), answer)
                 })
                 .collect(),
         ))

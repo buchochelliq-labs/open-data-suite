@@ -36,6 +36,27 @@ jobs:
         env:
           NO_MKDOCS_2_WARNING: "1"
         run: mkdocs build --strict
+      # The roadmap was also published at /roadmap/ until it became one page,
+      # docs/ROADMAP.md. Keep the old URL working with a redirect page. It is written
+      # here rather than in docs/ (or by a redirect plugin) because roadmap/ and
+      # ROADMAP/ are the same path on a case-insensitive disk.
+      - name: Redirect the old roadmap URL
+        run: |
+          test ! -e site/roadmap
+          mkdir site/roadmap
+          cat > site/roadmap/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>Roadmap</title>
+            <link rel="canonical" href="../ROADMAP/">
+            <meta http-equiv="refresh" content="0; url=../ROADMAP/">
+          </head>
+          <body><p>The roadmap has moved to <a href="../ROADMAP/">ROADMAP</a>.</p></body>
+          </html>
+          HTML
+          test -s site/ROADMAP/index.html
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Generate the live lineage demo from the fixture project

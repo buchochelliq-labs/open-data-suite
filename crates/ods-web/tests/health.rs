@@ -186,8 +186,10 @@ fn failures_without_a_record_are_not_measured_never_zero() {
     assert!(failing["count"].is_null(), "{failing}");
     assert!(failing["href"].is_null());
     assert!(failing["how"].as_str().unwrap().starts_with("Not measured"));
-    // Without the record, `broken`'s last good build stands: its tests passed.
-    assert_eq!(row(&home["health"], "healthy")["count"], 2);
+    // Without the record, whether any node failed since can't be told: every node
+    // reads unknown, none healthy (AGENTS rule 3).
+    assert_eq!(row(&home["health"], "healthy")["count"], 0);
+    assert_eq!(row(&home["health"], "unknown")["count"], 4);
     assert!(row(&home["signals"], "failed_runs")["count"].is_null());
 }
 
@@ -266,4 +268,156 @@ fn another_scopes_failures_are_never_this_ones() {
     let unscoped = failed_run().with_run(None, None);
     let home = json(&dashboard(Some(unscoped)).home_at(true, at("2026-09-29T12:00:00Z")));
     assert!(row(&home["health"], "failing")["count"].is_null());
+}
+
+#[test]
+fn another_check_at_error_is_counted_even_without_the_runs_record() {
+    let config: ods_config::HealthConfig =
+        toml::from_str("[builtin.tests_required]\nseverity = \"error\"").unwrap();
+    let settings = ods_health::HealthSettings::from_config(&config).unwrap();
+    let home = json(
+        &dashboard(None)
+            .with_health(settings)
+            .home_at(true, at("2026-09-29T12:00:00Z")),
+    );
+    let failing = row(&home["health"], "failing");
+    // `untested` and `fresh` (never built) have no tests: tests_required fails at error,
+    // which outranks unknown. Nodes the last run may have failed aren't counted, and the
+    // row says so.
+    assert_eq!(failing["count"], 2, "{failing}");
+    assert_eq!(failing["href"], "catalog?health=failing");
+    assert_eq!(
+        failing["note"],
+        "at least: the last run's failures aren't measured"
+    );
+}
+
+/// What `ods health check` records: the built-ins, and a registered check that finds
+/// `good` without an owner.
+async fn health_record() -> ods_health::record::HealthRecord {
+    use ods_health::{HealthSettings, LastFailures, Severity};
+    use ods_provider_fake::FakeHealthCheck;
+    let settings = HealthSettings::default()
+        .with_check(std::sync::Arc::new(
+            FakeHealthCheck::new("owner", Severity::Error).failing("model.shop.good"),
+        ))
+        .unwrap();
+    let catalog = CatalogInput::new(nodes()).with_last_builds(builds());
+    let failures = LastFailures::new(
+        at("2026-09-29T09:00:00Z"),
+        "ods state build",
+        ["model.shop.broken".to_owned()],
+        Vec::<String>::new(),
+    );
+    let scope = ods_web::health::check_scope(&catalog, Some(failures));
+    let report = settings.run(&scope, ods_health::CHECK_TIMEOUT).await;
+    ods_health::record::HealthRecord::new("shop/dev", at("2026-09-29T10:00:00Z"), report)
+}
+
+#[tokio::test]
+async fn a_recorded_checks_findings_count_with_their_time() {
+    let record = health_record().await;
+    let dashboard = dashboard(Some(failed_run())).with_health_record(Some(&record));
+    let now = at("2026-09-29T12:00:00Z");
+
+    let home = json(&dashboard.home_at(true, now));
+    assert_eq!(row(&home["health"], "failing")["count"], 2, "{home:#}");
+    assert_eq!(row(&home["health"], "healthy")["count"], 0);
+    assert_eq!(home["health_recorded_at"], "2026-09-29T10:00:00Z");
+    let how = home["health_how"].as_str().unwrap();
+    assert!(
+        how.contains("2026-09-29T10:00:00Z") && how.contains("`owner`"),
+        "{how}"
+    );
+
+    let query = CatalogQuery::from_pairs(&[("health".to_owned(), "failing".to_owned())]);
+    let view = json(&dashboard.catalog_at(&document(), &query, true, now));
+    assert_eq!(view["health_recorded_at"], "2026-09-29T10:00:00Z");
+    let good = view["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "model.shop.good")
+        .unwrap();
+    let owner: Vec<&serde_json::Value> = good["health"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["check"] == "owner")
+        .collect();
+    assert_eq!(owner.len(), 1, "{good:#}");
+    assert_eq!(owner[0]["source"], "plugin");
+    assert_eq!(owner[0]["status"], "fail");
+}
+
+#[tokio::test]
+async fn a_node_the_record_didnt_cover_is_unknown_for_its_checks() {
+    let mut record = health_record().await;
+    record.report.badges.remove("model.shop.good");
+    let dashboard = dashboard(Some(failed_run())).with_health_record(Some(&record));
+    let home = json(&dashboard.home_at(true, at("2026-09-29T12:00:00Z")));
+    // `good` would be healthy on the built-ins; the recorded check never vouched for it.
+    assert_eq!(row(&home["health"], "healthy")["count"], 0, "{home:#}");
+    assert_eq!(row(&home["health"], "unknown")["count"], 2);
+}
+
+#[test]
+fn without_a_record_nothing_is_said_about_one() {
+    let home = json(&dashboard(Some(failed_run())).home_at(true, at("2026-09-29T12:00:00Z")));
+    assert!(home.get("health_recorded_at").is_none(), "{home:#}");
+    assert!(
+        !home["health_how"]
+            .as_str()
+            .unwrap()
+            .contains("ods health check")
+    );
+}
+
+/// #401 review: a recorded check at severity error is measured on Home even without the
+/// last run's record, which only leaves that run's failures out.
+#[tokio::test]
+async fn a_recorded_error_check_is_measured_without_the_runs_record() {
+    let record = health_record().await;
+    let dashboard = dashboard(None).with_health_record(Some(&record));
+    let home = json(&dashboard.home_at(true, at("2026-09-29T12:00:00Z")));
+    let failing = row(&home["health"], "failing");
+    assert_eq!(failing["count"], 1, "{failing:#}");
+    assert_eq!(failing["href"], "catalog?health=failing");
+    assert!(
+        failing["note"].as_str().unwrap().starts_with("at least"),
+        "the run's failures still aren't measured: {failing:#}"
+    );
+}
+
+/// ADR-0030 §3: `[health.coverage]` targets are judged on Home's coverage, each with
+/// its verdict, and drawn on its bar.
+#[test]
+fn coverage_targets_are_judged_on_home() {
+    let config: ods_config::HealthConfig = toml::from_str(
+        "[coverage.tests]\ntarget = 0.75\nseverity = \"error\"\n[coverage.descriptions]\ntarget = 0.25\n",
+    )
+    .unwrap();
+    let settings = ods_health::HealthSettings::from_config(&config).unwrap();
+    let dashboard = dashboard(None).with_health(settings);
+    let home = json(&dashboard.home_at(true, at("2026-09-29T12:00:00Z")));
+    // 2 of 4 models have tests; 1 of 4 a description.
+    let tests = &row(&home["coverage"], "tests")["target"];
+    assert_eq!(tests["status"], "fail", "{tests:#}");
+    assert_eq!(tests["severity"], "error");
+    assert_eq!(tests["target"], 0.75);
+    assert_eq!(
+        tests["reason"],
+        "2 of 4 models with tests (50%), below the 75% target"
+    );
+    assert_eq!(
+        row(&home["coverage"], "descriptions")["target"]["status"],
+        "pass"
+    );
+    assert!(
+        row(&home["coverage"], "constraints")
+            .get("target")
+            .is_none()
+    );
+    let how = home["health_how"].as_str().unwrap();
+    assert!(how.contains("tests ≥ 75% (error)"), "{how}");
 }

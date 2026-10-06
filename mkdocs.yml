@@ -88,9 +88,7 @@ nav:
       - design/README.md
       - Dashboard: design/dashboard/README.md
       - VS Code: design/vscode-extension/README.md
-  - Roadmap:
-      - Overview: roadmap.md
-      - Full plan: ROADMAP.md
+  - Roadmap: ROADMAP.md
   - Decisions (ADRs):
       - adr/README.md
       - adr/0001-monorepo-architecture-and-module-boundaries.md

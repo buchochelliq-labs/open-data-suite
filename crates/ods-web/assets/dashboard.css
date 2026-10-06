@@ -136,6 +136,11 @@ table.runs { width: 100%; border-collapse: collapse; font-size: 13px; table-layo
 .hdot.unknown { background: var(--surface); border: 2px dashed var(--faint); }
 .cov { display: flex; flex-direction: column; gap: 6px; }
 .cov .top { display: flex; justify-content: space-between; }
+.cov .track { position: relative; }
+.cov .track > .mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); }
+.cov .cov-target { font-size: 12px; color: var(--muted); }
+.cov .cov-target[data-status="met"] { color: var(--ok); }
+.cov .cov-target[data-status="missed"] { color: var(--warn-text); font-weight: 600; }
 .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
 .track > span { display: block; height: 100%; background: var(--ok); }
 .mod { display: flex; justify-content: space-between; gap: 12px; }

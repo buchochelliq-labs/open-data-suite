@@ -59,6 +59,47 @@ pub(super) fn state_args(command: Command) -> Command {
         ))
 }
 
+/// The health checks `[health]` sets up (ADR-0030).
+///
+/// # Errors
+/// A check id that isn't a built-in's, or a path glob that isn't valid (exit 4).
+pub(super) fn health_settings(
+    config: &ods_config::Loaded,
+) -> Result<ods_health::HealthSettings, CliError> {
+    let mut health = ods_health::HealthSettings::from_config(&config.config.health)
+        .map_err(|e| config_error(&e))?;
+    // Before any project is read, probes are checked in the generic dialect, so a probe
+    // that can write is an error however ODS is started.
+    check_probe_sql(&mut health, None)?;
+    Ok(health)
+}
+
+/// Checks every probe's SQL is one read-only query in the dialect of `adapter` (the
+/// project's warehouse type, if known), with the SQL analyzer lineage uses (ADR-0030
+/// §4a).
+///
+/// # Errors
+/// A probe that isn't one read-only query (exit 4).
+pub(super) fn check_probe_sql(
+    health: &mut ods_health::HealthSettings,
+    adapter: Option<&str>,
+) -> Result<(), CliError> {
+    let dialect = adapter
+        .and_then(ods_provider_sqlparser::SqlDialect::from_name)
+        .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic);
+    health
+        .check_probe_sql(&|sql| ods_provider_sqlparser::read_only_query(dialect, sql))
+        .map_err(|e| config_error(&e))
+}
+
+fn config_error(e: &ods_health::HealthConfigError) -> CliError {
+    CliError::new(
+        crate::exit::ExitStatus::Config,
+        crate::exit::codes::HEALTH_CONFIG,
+        e.to_string(),
+    )
+}
+
 /// Reads the dashboard's facts; built once, then asked again on every reload.
 pub(super) struct DashboardSource {
     args: ArgMatches,
@@ -67,6 +108,9 @@ pub(super) struct DashboardSource {
     links: LinkSettings,
     /// What an hour of build time costs (`[state.cost]`), for the savings panel.
     cost: Option<ods_config::CostConfig>,
+    /// The health checks as `[health]` configures them (#392); a mistake there is a
+    /// configuration error when the server starts, not a badge.
+    health: ods_health::HealthSettings,
 }
 
 impl DashboardSource {
@@ -76,6 +120,7 @@ impl DashboardSource {
             settings: StateSettings::resolve(args, config)?,
             links: LinkSettings::read(config),
             cost: config.config.state.cost.clone(),
+            health: health_settings(config)?,
         })
     }
 
@@ -96,7 +141,16 @@ impl DashboardSource {
         // kept for `ods state retry`, which the Runs page shows (#311).
         let mut last_run = db.clone().into_os_string();
         last_run.push(".last-run.json");
-        vec![db, PathBuf::from(wal), sources, PathBuf::from(last_run)]
+        // `ods health check` adds a record to this directory, which changes its time
+        // (ADR-0030 §6).
+        let health = ods_health::record::dir_for(&db);
+        vec![
+            db,
+            PathBuf::from(wal),
+            sources,
+            PathBuf::from(last_run),
+            health,
+        ]
     }
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
@@ -182,6 +236,12 @@ impl DashboardSource {
         // The Freshness evidence screen (#350): the sources as the planner sees them.
         let freshness = super::serve_catalog::freshness(&ws);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
+        // The checks `ods health check` ran that the dashboard doesn't run itself
+        // (ADR-0030 §6), from the newest record for this scope.
+        let health_record = ods_health::record::latest(
+            &ods_health::record::dir_for(&ws.state_db),
+            &ws.scope.to_string(),
+        );
         let target = self
             .settings
             .target
@@ -196,6 +256,8 @@ impl DashboardSource {
             .with_modules(modules(recorded))
             .with_catalog(catalog)
             .with_freshness(freshness)
+            .with_health(self.health.clone())
+            .with_health_record(health_record.as_ref())
             // The live run view (#322): journals are read even before the store
             // exists, since a first run writes its journal before its first snapshot.
             .with_journals(ods_sdk::run_journal::Journals::beside(&ws.state_db))
@@ -399,7 +461,7 @@ const SNAPSHOTS_READ: usize = RUNS_LISTED + 1;
 
 /// How many history lines (summaries only) are read to tell which snapshot recorded a
 /// node's last build (#313); older ones show the run without a snapshot.
-const RUNS_INDEXED: usize = 10_000;
+pub(super) const RUNS_INDEXED: usize = 10_000;
 
 /// The store as people read it: as given when relative, else relative to the working
 /// directory or with `~` for the home directory; and in full.

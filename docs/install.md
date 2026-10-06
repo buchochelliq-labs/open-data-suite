@@ -1,7 +1,7 @@
 # Install
 
 !!! note "Versions"
-    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.0.1` as the
+    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.0.2` as the
     example version; the [releases](https://github.com/buchochelliq-labs/open-data-suite/releases)
     list the latest.
 
@@ -83,7 +83,7 @@ the licences of the open-source software built into `ods`.
 === "Linux"
 
     ```sh
-    version=0.0.1 target=x86_64-unknown-linux-musl
+    version=0.0.2 target=x86_64-unknown-linux-musl
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     sha256sum --check --ignore-missing SHA256SUMS
@@ -94,7 +94,7 @@ the licences of the open-source software built into `ods`.
 === "macOS"
 
     ```sh
-    version=0.0.1 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
+    version=0.0.2 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     shasum -a 256 --check --ignore-missing SHA256SUMS
@@ -105,7 +105,7 @@ the licences of the open-source software built into `ods`.
 === "Windows (PowerShell)"
 
     ```powershell
-    $version = "0.0.1"; $name = "ods-v$version-x86_64-pc-windows-msvc"
+    $version = "0.0.2"; $name = "ods-v$version-x86_64-pc-windows-msvc"
     $base = "https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version"
     Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
@@ -125,7 +125,7 @@ a signed statement that the release workflow built it from the tagged commit. Wi
 [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify ods-v0.0.1-x86_64-unknown-linux-musl.tar.gz \
+gh attestation verify ods-v0.0.2-x86_64-unknown-linux-musl.tar.gz \
   --repo buchochelliq-labs/open-data-suite
 ```
 
@@ -188,7 +188,10 @@ One-time setup, by a repository and PyPI admin:
   existing release by hand (**Actions → Chocolatey → Run workflow**, `publish` on), the
   environment must also allow the branch the workflow runs from. Each push goes through
   Chocolatey's automated checks, and the package's first version through human
-  moderation, before it is listed.
+  moderation, before it is listed. While a version is still in moderation, Chocolatey
+  refuses newer ones with **403 Forbidden**, so the release's `chocolatey / push` job
+  fails until the earlier version is approved. Then push the newer release by hand as
+  above (v0.0.2 waited this way for v0.0.1).
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,

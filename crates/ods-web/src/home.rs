@@ -545,50 +545,7 @@ fn panels(b: &mut String, home: &HomeView) {
     }
     b.push_str(r#"</section><section class="card" aria-label="Coverage"><h2>Coverage</h2>"#);
     for row in &home.coverage {
-        let (count, width) = match row.count {
-            Some(n) => (
-                format!("{n} / {}", row.total),
-                (n * 100).checked_div(row.total).unwrap_or(0),
-            ),
-            None => ("not measured".to_owned(), 0),
-        };
-        let _ = write!(
-            b,
-            r#"<div class="cov" data-coverage="{key}" title="{how}"><span class="top"><span>{label}</span><span class="{cls}">{count}</span></span><span class="track"><span style="width:{width}%"></span></span>"#,
-            key = attr(row.key),
-            how = attr(&row.how),
-            label = text(row.label),
-            cls = if row.count.is_some() { "num" } else { "na" },
-            count = text(&count),
-        );
-        if !row.uncovered.is_empty() {
-            let _ = write!(
-                b,
-                r#"<details class="uncovered"><summary>{n} without</summary>"#,
-                n = row.uncovered.len()
-            );
-            for (i, node) in row.uncovered.iter().enumerate() {
-                if i > 0 {
-                    b.push_str(" · ");
-                }
-                match &node.href {
-                    Some(href) => {
-                        let _ = write!(
-                            b,
-                            r#"<a class="mono" href="{}" title="{}">{}</a>"#,
-                            attr(href),
-                            attr(&node.id),
-                            text(&node.name)
-                        );
-                    }
-                    None => {
-                        let _ = write!(b, r#"<span class="mono">{}</span>"#, text(&node.name));
-                    }
-                }
-            }
-            b.push_str("</details>");
-        }
-        b.push_str("</div>");
+        coverage_row(b, row);
     }
     b.push_str(r#"</section><section class="card" aria-label="Modules"><h2>Modules</h2>"#);
     for module in &home.modules {
@@ -614,6 +571,74 @@ fn panels(b: &mut String, home: &HomeView) {
         );
     }
     b.push_str("</section></div>");
+}
+
+/// One coverage measure: its bar, its target when set, and what it doesn't cover.
+fn coverage_row(b: &mut String, row: &crate::health::Coverage) {
+    let (count, width) = match row.count {
+        Some(n) => (
+            format!("{n} / {}", row.total),
+            (n * 100).checked_div(row.total).unwrap_or(0),
+        ),
+        None => ("not measured".to_owned(), 0),
+    };
+    // A target, when set: its marker on the bar, and whether it is met.
+    let (target, marker) = match &row.target {
+        Some(t) => (
+            format!(
+                r#" <span class="cov-target" data-status="{status}" title="{why}">target {share}</span>"#,
+                status = match t.status {
+                    ods_health::Status::Pass => "met",
+                    ods_health::Status::Fail => "missed",
+                    _ => "unknown",
+                },
+                why = attr(&t.reason),
+                share = text(&t.target.to_string()),
+            ),
+            format!(
+                r#"<span class="mark" style="left:{}%"></span>"#,
+                (t.target.get() * 100.0).round()
+            ),
+        ),
+        None => (String::new(), String::new()),
+    };
+    let _ = write!(
+        b,
+        r#"<div class="cov" data-coverage="{key}" title="{how}"><span class="top"><span>{label}{target}</span><span class="{cls}">{count}</span></span><span class="track"><span style="width:{width}%"></span>{marker}</span>"#,
+        key = attr(row.key),
+        how = attr(&row.how),
+        label = text(row.label),
+        cls = if row.count.is_some() { "num" } else { "na" },
+        count = text(&count),
+    );
+    if !row.uncovered.is_empty() {
+        let _ = write!(
+            b,
+            r#"<details class="uncovered"><summary>{n} without</summary>"#,
+            n = row.uncovered.len()
+        );
+        for (i, node) in row.uncovered.iter().enumerate() {
+            if i > 0 {
+                b.push_str(" · ");
+            }
+            match &node.href {
+                Some(href) => {
+                    let _ = write!(
+                        b,
+                        r#"<a class="mono" href="{}" title="{}">{}</a>"#,
+                        attr(href),
+                        attr(&node.id),
+                        text(&node.name)
+                    );
+                }
+                None => {
+                    let _ = write!(b, r#"<span class="mono">{}</span>"#, text(&node.name));
+                }
+            }
+        }
+        b.push_str("</details>");
+    }
+    b.push_str("</div>");
 }
 
 /// Percent-encodes a URL fragment value.

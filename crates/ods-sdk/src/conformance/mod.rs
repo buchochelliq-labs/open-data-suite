@@ -17,8 +17,10 @@
 pub mod changes;
 pub mod error_catalogue;
 pub mod executor;
+pub mod health_check;
 pub mod lock;
 pub mod observed_lineage;
+pub mod privileges;
 pub mod probe;
 pub mod relation_link;
 pub mod relations;

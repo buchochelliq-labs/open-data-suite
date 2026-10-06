@@ -51,6 +51,8 @@ jobs:
       DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
       DATABRICKS_TOKEN_AUDIENCE: ${{ vars.DATABRICKS_TOKEN_AUDIENCE || secrets.DATABRICKS_TOKEN_AUDIENCE }}
       DATABRICKS_OAUTH_SCOPES: ${{ vars.DATABRICKS_OAUTH_SCOPES }}
+      # The read-only service principal probe checks run under (#392); unset skips them.
+      DATABRICKS_PROBE_CLIENT_ID: ${{ vars.DATABRICKS_PROBE_CLIENT_ID || secrets.DATABRICKS_PROBE_CLIENT_ID }}
       CATALOG: ${{ vars.DATABRICKS_CATALOG || secrets.DATABRICKS_CATALOG || 'workspace' }}
       SCHEMA: ods_ci_${{ github.run_id }}_${{ github.run_attempt }}
     steps:
@@ -109,6 +111,23 @@ jobs:
           export PATH="$HOME/dbt-databricks-venv/bin:$PATH"
           unset DATABRICKS_CLIENT_ID DATABRICKS_ACCOUNT_ID DATABRICKS_TOKEN_AUDIENCE DATABRICKS_OAUTH_SCOPES
           ODS_CI_CATALOG="$CATALOG" ODS_CI_SCHEMA="$SCHEMA" bash .github/databricks/source-versions.sh
+      # Probe checks under a read-only login (#392, ADR-0030 §4c, §4e): a second service
+      # principal reads the run's schema, which the CI one owns and grants it. Skipped
+      # until that principal is set up (docs/contributing-databricks.md).
+      - name: Grant the probe service principal read access to the run's schema
+        if: env.DATABRICKS_PROBE_CLIENT_ID != ''
+        run: python .github/databricks/ci.py sql "GRANT USE SCHEMA, SELECT ON SCHEMA \`$CATALOG\`.\`$SCHEMA\` TO \`$DATABRICKS_PROBE_CLIENT_ID\`"
+      - name: Authenticate the probe service principal
+        if: env.DATABRICKS_PROBE_CLIENT_ID != ''
+        env:
+          DATABRICKS_PROBE_CLIENT_SECRET: ${{ secrets.DATABRICKS_PROBE_CLIENT_SECRET }}
+        run: python .github/databricks/ci.py token probe
+      - name: ods health check under a read-only login
+        if: env.DATABRICKS_PROBE_CLIENT_ID != ''
+        run: |
+          export PATH="$HOME/dbt-databricks-venv/bin:$PATH"
+          unset DATABRICKS_CLIENT_ID DATABRICKS_ACCOUNT_ID DATABRICKS_TOKEN_AUDIENCE DATABRICKS_OAUTH_SCOPES
+          ODS_CI_CATALOG="$CATALOG" ODS_CI_SCHEMA="$SCHEMA" bash .github/databricks/health-probes.sh
       # Real Databricks messages for the dbt error catalogue's tests (#349), printed
       # between `ods-errors` markers: they become
       # fixtures/dbt/jaffle-ods/artifacts/dbt-databricks-errors/errors.json.

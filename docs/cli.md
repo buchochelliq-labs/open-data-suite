@@ -17,6 +17,8 @@ codes).
 | `ods state plan\|record\|history` | available (preview): plan what to build or reuse, record dbt runs as state, see [below](#state-plan-record-history) |
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
+| `ods health check` | available (preview): run the health checks `[health]` configures and gate CI on them, see [below](#ods-health-check) |
+| `ods health trust` | available (preview): review this project's probe checks and trust them to run, see [below](#ods-health-trust) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -115,7 +117,7 @@ meanings get new numbers.
 | `ODS-E0003` | The command is planned but not implemented yet. |
 | `ODS-E0004` | `ODS_LOG` holds an unknown log level. |
 | `ODS-E0101` | A configuration file can't be read or isn't valid TOML. |
-| `ODS-E0102` | Configuration schema violation: unknown key, wrong type or value out of range. |
+| `ODS-E0102` | Configuration schema violation: unknown key, wrong type or value out of range, or a `[health]` check id or path glob that doesn't exist or isn't valid. |
 | `ODS-E0103` | A credential is written as plaintext instead of a secret reference. |
 | `ODS-E0104` | The selected profile is not defined. |
 | `ODS-E0201` | dbt artifacts are missing, unreadable or an unsupported version, or lineage output can't be written. |
@@ -129,6 +131,11 @@ meanings get new numbers.
 | `ODS-E0404` | `ods state compile`, `run`, `seed`, `snapshot`, `build`, `test`: dbt couldn't run (e.g. `dbt compile` failed), or nodes or tests failed. Successes are still recorded. `ods state export`: dbt couldn't say which target it builds in. |
 | `ODS-E0406` | `ods state export` couldn't write its directory: another export to it holds the lock, or a file couldn't be written or replaced. The message names the files already replaced; run the export again to repair it. |
 | `ODS-E0501` | `ods doctor` found checks that fail (exit status 5). Each finding has its own code: see [`ods doctor`](#ods-doctor). |
+| `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
+| `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
+| `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
+| `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
+| `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
 ## Environment variables
 
@@ -213,6 +220,8 @@ format = "json"
     `never`) and `output.width` (at least 20)
   - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
   - `state.db` and `state.environment`: see [State settings](#state-settings-in-odstoml)
+  - `health.unknown_counts_as` and `health.builtin.<check>.severity`, `.select` and
+    `.exclude`: see [Health settings](#health-settings-in-odstoml)
   - `providers.<name>.kind` and `providers.<name>.settings`. For `kind = "dbt"` the
     settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
     `target_dir`, all strings; any other key is an error
@@ -968,7 +977,9 @@ Catalog has its own name search (`/` focuses it) in place of the header's. Each 
 - *unknown:* ODS never built it.
 
 Failures come from the last run's record (`ods state build`/`run` keep it beside the
-store); without one they aren't counted. The `health` facet filters by it. Facets, the name search and the sort are in the URL
+store); without one they aren't counted. Checks that aren't built in count as the last
+`ods health check` recorded them, as of when it ran (see [the health
+record](#ods-health-check)). The `health` facet filters by it. Facets, the name search and the sort are in the URL
 query (`/catalog?layer=marts&decision=build&sort=last_built&desc=1`), so a filtered
 view can be bookmarked; the page works without script.
 
@@ -1257,6 +1268,292 @@ it handles the flag (#227):
 
 The report says which settings were in effect and where each came from, e.g.
 `dbt: target prod (DBT_TARGET), target_dir target (default)`; `-v` logs it too.
+
+### Health settings in `ods.toml`
+
+The dashboard's health badges (#354) come from checks that `[health]` tunes
+([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md), #392). Each node gets a
+finding from every enabled check that applies to it, and its badge is worked out from
+them:
+- **Failing:** a check at severity `error` failed.
+- **Unknown:** a check couldn't decide, e.g. the node was never built. With
+  `unknown_counts_as = "warning"`, this is a warning instead. It is never healthy.
+- **Warning:** a check at severity `warn` failed.
+- **Healthy:** every enabled check that applies passed. A check at severity `info` is
+  shown but changes nothing.
+
+If no enabled check applies to a node, it is unknown.
+
+The built-in checks, and their defaults:
+
+| Check | Default | Fails when |
+|---|---|---|
+| `built` | on | never fails; a node ODS never built is *unknown*. Turned off, nodes are judged on the other checks alone |
+| `last_run_failed` | `error` | it failed in the last run (from the run's record, for this scope) and hasn't been built since. Without a record of this scope's last run (`ods state build`/`run` keep one beside the store), it can't decide: *unknown* |
+| `last_run_skipped` | `warn` | it was skipped in the last run because something upstream failed; *unknown* without the record, as above |
+| `tests_required` | `warn`, models and snapshots | no test reads it |
+| `tests_passed` | `warn` | it has tests, and they weren't recorded passing on its current build, or changed since |
+
+```toml
+[health]
+unknown_counts_as = "unknown"            # or "warning"
+
+[health.builtin.tests_required]
+severity = "error"                       # error | warn | info | off
+select = { path = ["models/marts/**"] }  # replaces the check's default scope
+exclude = { tags = ["experimental"] }
+
+[health.builtin.last_run_skipped]
+severity = "off"
+```
+
+- **Selectors:** `select` and `exclude` take `resource_type`, `tags`, `path` (globs
+  over the node's file) and `name`. A node matches when it matches every field that is
+  set, and any value within a field. A node whose file isn't known never matches a
+  `path`.
+- **Home's Failing count** counts nodes a check at severity `error` failed on. When the
+  last run's failures aren't known but another check is at `error`, it reads *at least*.
+- **Errors:** a check that doesn't exist, or a glob that isn't valid, is a configuration
+  error when `ods serve` starts (exit 4, `ODS-E0102`). So is a declared check that can't
+  run as written (below).
+- **Explanations:** each badge's tooltip and its `findings` in `/api/catalog` say which
+  check concluded what. The Catalog's legend lists the checks as configured.
+
+#### Declared checks
+
+A project can declare its own checks over what its metadata says, under
+`[[health.checks]]`. They need no build or warehouse: the project says what each node
+has, so they pass or fail, and are never *unknown*.
+
+```toml
+[[health.checks]]
+id = "marts.documented"                  # unique; not a built-in's
+select = { path = ["models/marts/**"] }  # every node when not set
+exclude = { tags = ["experimental"] }
+require = ["description", "test:unique"]
+severity = "warn"                        # the default; error | warn | info | off
+```
+
+`require` lists what every selected node must have:
+
+| Requirement | Met when the node has |
+|---|---|
+| `description` | a description that isn't blank |
+| `tests` | at least one test |
+| `test:<type>` | a test of that type, e.g. `test:unique`, `test:not_null`, or a custom generic test's name |
+| `constraints` | at least one column constraint |
+| `tag:<tag>` | that tag |
+
+A node lacking any of them fails, and the finding names what is missing (e.g.
+``marts.documented: no description; no `unique` test``); its `evidence` lists `require`
+and `missing`. A node the check doesn't select is skipped. The dashboard and
+`ods health check` both run declared checks on the project as it is now; they are listed
+as `declared` in the legend and in `ods health check`'s output (`source: declarative` in
+JSON). An id that isn't valid, is a built-in's or is used twice, an empty `require`, a
+requirement not in the table, or a `kind` other than `declarative` is a configuration
+error (exit 4, `ODS-E0102`).
+
+#### Probe checks
+
+A probe check sends one read-only query to the warehouse for each node it selects, and
+passes when a condition over the row it returns holds
+([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §4a–§4d):
+
+```toml
+[[health.checks]]
+id = "orders.has_rows"
+kind = "probe"
+select = { name = ["orders"] }          # required: a probe names what it reads
+sql = "select count(*) as n from {relation}"
+pass = "n > 0"                          # =, !=, <, <=, >, >=; and, or, ( )
+severity = "error"
+```
+
+A probe runs only once three guards hold, and until then it is *unknown*, saying which
+guard stopped it, never a pass:
+- **Read-only SQL.** `sql` must be exactly one query (`SELECT`, `WITH … SELECT`, or a set
+  operation of them) with `{relation}` once, which the warehouse provider replaces with
+  the node's relation, quoted. Anything that could write, lock rows or change a session
+  (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `SELECT … INTO`, DDL, `SET`, `USE`, several
+  statements, a write hidden in a CTE) is a configuration error before anything connects
+  (exit 4, `ODS-E0102`), in `ods health check` and `ods serve` alike. It is checked with
+  the SQL analyzer lineage uses, in the project's dialect.
+- **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
+  you have trusted that exact definition for that project with
+  [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
+- **A read-only login.** Probes run under their own dbt target, `[health.probes]`, never
+  the build's (which can write), and only when that target's login can do no more than
+  read what they probe (ADR-0030 §4c). Just before each probe, ODS asks the connection
+  what its login may do on each relation, and refuses the probe, *unknown* with the login
+  and what it found, when the login can do more than read or that can't be told. Without
+  a `[health.probes]` target, probes don't run at all.
+
+```toml
+[health.probes]
+target = "health_readonly"   # a target in profiles.yml whose login can only read
+profile = "jaffle"           # optional: when not the project's (or --dbt-profile's)
+```
+
+Reporting what a login may do is a provider capability (`relation_privileges`). On
+Databricks, ODS reads it from Unity Catalog's `system.information_schema`, through the
+probe target's own connection: a probe runs when the relation is a managed table, a
+view or a materialized view, and the login (or a group it is in) owns neither the
+relation, its schema, its catalog nor the metastore, holds nothing on them or on the
+metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA`, and isn't in the
+workspace's `admins` group. Anything it can't read is *unknown*, and so is an external
+table, whose files its storage location could let the login write. Known limits, with
+how they will be fixed, are in
+[ADR-0030 §4e](adr/0030-configurable-and-pluggable-health-checks.md); the main one: an
+account admin isn't visible there and can pass as read-only, so run probes as a
+dedicated read-only principal. Relations outside Unity Catalog (e.g. `hive_metastore`)
+are *unknown*. Other warehouses have no privilege report yet, so their
+probes are refused unless you run `ods health check --allow-elevated-login`:
+- it runs probes even when their login can do more than read, or that can't be told,
+  **at your own risk**: ODS checks each probe is one read-only query, but it can't stop a
+  query from writing under a login that may write. ODS comes with no warranty (see its
+  licence), and its authors aren't responsible for any consequence, including changed or
+  destroyed data;
+- it is a command-line flag only, never a setting, so a repository can't turn it on for
+  you, and it skips only this guard: the SQL must still be read-only and trusted;
+- every run that uses it warns on stderr before anything runs, and again with the
+  report, naming the connection, its login if known, and what it found for each node
+  (in `--json`, a `warning` diagnostic, `ODS-W0704`); every probe that ran so carries
+  `login_check: overridden` and `login_found` in its evidence, and `--json` and the
+  health record keep them in `elevated_login`.
+
+Probes read sources, models, seeds and snapshots, through dbt (`dbt show`), and only the
+relation the build made, as the manifest names it (`relation_name`): dbt resolves a node
+again under the probe target, and when that gives another relation (e.g. the target has
+another schema) the probe is *unknown* and nothing runs against it, so give the probe
+target the build's database and schema. An ephemeral model has no relation, so its probe
+is *unknown* too, and so is any node the manifest names no relation for. Sources can't
+be probed yet: a probe whose `select` names `resource_type = ["source"]` is a
+configuration error, and a probe that selects no model, seed or snapshot is reported
+(`unmatched_probes`, warning `ODS-W0705`) and, at severity `error`, fails `--strict`.
+A probe target that is the build's own (`--target`, `DBT_TARGET` or the
+configured one) is a configuration error (exit 4); dbt's default target can't be told
+apart, so name the build's target when you set one for probes. Running probes runs dbt,
+with the profile it finds (`--profiles-dir`, `DBT_PROFILES_DIR`, or dbt's own lookup,
+which starts in the project), as `ods state` does.
+dbt prints its output as for `ods state` (`--dbt-output`), and each probe is limited to
+60 seconds, after which dbt is stopped and the probe is *unknown*.
+
+`pass` compares a column the query returns with a number, a `'string'` or `true`/`false`;
+only numbers can be ordered. A column that is missing, or isn't a number where one is
+needed, makes the probe *unknown*. Probes need the warehouse, so the dashboard never runs
+them: it shows what the last `ods health check` recorded, with when.
+The columns `pass` names are kept in each finding's evidence (`row.<column>`), so they
+are written to the health record and shown on the dashboard: don't select a column you
+wouldn't want kept there.
+
+#### Coverage targets
+
+`[health.coverage.<measure>]` sets the share of the project a coverage measure on Home
+must cover. Coverage is about the project as a whole, so a missed target never changes a
+node's badge: it shows on Home's bar and in `ods health check`.
+
+```toml
+[health.coverage.tests]
+target = 0.8          # 80% of models have tests
+severity = "error"    # missing it fails `ods health check`; default warn
+
+[health.coverage.descriptions]
+target = 0.5
+```
+
+The measures are Home's: `tests`, `descriptions`, `constraints` (models with each) and
+`source_freshness` (sources whose new data ODS can measure). A target is met when the
+covered share reaches it, missed when it doesn't, and *unknown* when there is nothing to
+measure (e.g. no sources); unknown is never met. Home draws each target on its bar and
+says whether it is met, with why in the tooltip, and `/api/home` gives each coverage
+row's `target` verdict. `ods health check` measures as the dashboard does, reading source
+freshness results from `--sources` or `<target-dir>/sources.json`. Targets and shares
+are kept to the thousandth (`0.875` is 87.5%); a share is said to the thousandth below,
+so it never reads past a target it misses. A measure that doesn't exist, or a target
+outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
+`ODS-E0102`).
+
+Scripts and plugins come in later phases of #392.
+
+### ods health trust
+
+`ods health trust` lists the probe checks this project defines, with their SQL and
+whether each is new, changed or already trusted, then trusts them as they are now:
+
+```sh
+ods health trust            # review and trust this project's probes
+ods health trust --revoke   # forget them: its probes won't run
+```
+
+- **Where trust is kept:** `trust.json` in your own configuration directory, beside your
+  `config.toml` (`$XDG_CONFIG_HOME/ods/`, else `~/.config/ods/`, `%APPDATA%\ods\` on
+  Windows), never in the repository. Each project has an entry, keyed by the directory
+  its `ods.toml` is in, with a `sha256:` digest per check of what decides what runs and
+  where: its SQL, what it selects, `[health.probes]`'s `target` and `profile`, and the
+  dbt settings configuration gives (`program`, `project_dir`, `profiles_dir`, `profile`;
+  flags and `DBT_*` variables are yours, so they aren't pinned).
+  Changing any of them makes the probe untrusted again; changing its `pass` or
+  `severity` doesn't. Probes in your own `config.toml` need trust too when a project
+  file sets `[health.probes]`: a repository can't point them at another target.
+- **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
+  defined is no longer trusted. Cloning a repository never trusts anything.
+- **In CI**, where the repository is what is being checked, `ods health check
+  --allow-scripts` trusts the current definitions for that run only, and keeps nothing.
+- **A trust store that can't be read** trusts nothing, and `ods health trust` leaves it
+  as it is rather than overwrite it (exit 1, `ODS-E0703`).
+
+### ods health check
+
+`ods health check` runs every enabled check on the project's nodes and prints their
+health, the checks that ran and why each node that isn't healthy isn't. It gives CI a
+health gate ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §6):
+
+```sh
+ods health check                  # exit 5 when a check at severity error fails
+ods health check --strict --json  # also when one couldn't decide; one JSON document
+ods health check --no-record      # don't keep the findings
+ods health check --allow-scripts  # trust this project's probes as they are now, this run only
+ods health check --allow-elevated-login  # run probes whose login can do more than read: your risk
+```
+
+It takes the options `ods state` commands take to find the project and the state store
+(`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …) and to call dbt
+(`--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars`, `--dbt-output`), and reads them
+only: no database is created or migrated, and dbt runs only for
+[probe checks](#probe-checks), on `[health.probes]`'s target.
+
+| Outcome | Exit |
+|---|---|
+| no check or coverage target at severity `error` failed | 0 |
+| one did | 5, `ODS-E0701` |
+| with `--strict`, one at severity `error` couldn't decide (*unknown*) | 5, `ODS-E0701` |
+| `[health]` is invalid | 4, `ODS-E0102` |
+| the project or the store can't be read, or the record can't be written | 1 |
+
+With the defaults, only `last_run_failed` is at severity `error`, so the gate fails on
+nodes that failed in the last run and haven't been built since. Raise any other check
+to `error` in `[health]` to gate on it too.
+
+- **The health record:** each check run is kept beside the state store, in
+  `<state db>.health/` (e.g. `.ods/state.db.health/2026-10-06T09-00-00Z-001.json`), as JSON
+  with a `schema_version`, the scope, the time, the checks that ran and every node's
+  findings. The newest 20 are kept. A record is written whole, then renamed into place,
+  so a reader never sees half of one, and a check run that fails leaves the others as
+  they were. Nothing is recorded without a state store, or with `--no-record`.
+- **On the dashboard:** `ods serve` works the built-in checks out itself, and takes
+  every other check's findings from the newest record for its scope, so those count in
+  the badges and the counts on Home and in the Catalog. Their results age: the "how"
+  text names them and when they ran, and `/api/home` and `/api/catalog` give that time
+  as `health_recorded_at`. A node the record doesn't cover (added since) is *unknown*
+  for those checks, never healthy. A new record reloads the page.
+- **Registered checks:** checks registered through the `health_check` contract (SDK 0.9)
+  run beside the built-ins, each under a 60-second timeout. One that errs, times out,
+  leaves a node unanswered or answers it twice is *unknown* for those nodes, never a
+  pass; one that answers about a node it wasn't asked about is *unknown* for every
+  node. Plugins that register them come with #387's loader.
+- **Evidence:** each finding in `--json` and in the record carries `evidence`, what it
+  was concluded from as sorted keys and values (e.g. `run_id`, `built_at`,
+  `last_run_command`, `tests`), beside its `reason` for people.
 
 ### State settings in `ods.toml`
 

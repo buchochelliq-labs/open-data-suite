@@ -11,9 +11,11 @@ LSP, Agent, Mesh, Synthetic). dbt is the first project format; Databricks/Unity
 Catalog is the first warehouse. Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before
 starting work — it maps every GitHub issue to a milestone and release.
 
-Current phase: **M0 Foundations → M1 State MVP (v0.0.1, the first public release)**. Work
-outside M0/M1 needs a reason (e.g. the user asked for it explicitly). Releases stay v0.0.x
-until the whole dashboard design is built; v0.1.0 means the dashboard is complete (UX1, #309).
+Current phase: **UX1 ODS Dashboard (→ v0.1.0)**, after v0.0.1 (M1, the State MVP) and
+v0.0.2 (R2, ERD, Impact & hardening). Work outside UX1 needs a reason (e.g. the user asked
+for it explicitly). Releases stay v0.0.x until the whole dashboard design is built; v0.1.0
+means the dashboard is complete (UX1, #309). Later-milestone work that lands before then
+ships in a v0.0.x release.
 
 ## Non-negotiable architecture rules
 
