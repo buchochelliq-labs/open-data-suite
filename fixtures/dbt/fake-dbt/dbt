@@ -352,7 +352,7 @@ def probe(query, manifest, target):
                 with open(os.environ["FAKE_DBT_PROBED"], "a") as f:
                     f.write(source_id + "\n")
             rows = []
-            for template, columns in statements:
+            for template, columns, *_ in statements:
                 row = rel.get("rows", {}).get(template, {})
                 rows.append({c: quote(row[c]) for c in columns if row.get(c) is not None})
             out[quote(source_id)] = {"rows": rows}

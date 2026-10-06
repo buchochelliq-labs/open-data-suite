@@ -16,6 +16,8 @@ use ods_health::{
     CheckRun, CheckSource, CoverageFinding, Finding, Health, HealthBadge, HealthReport, Severity,
 };
 use ods_health::{ElevatedLogin, HEALTHS, LastFailures, ProbeConnection, Status};
+use ods_provider_databricks::UnityCatalog;
+use ods_provider_dbt::executor::DbtExecutor;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
@@ -152,11 +154,20 @@ fn probe_pins(settings: &StateSettings) -> BTreeMap<String, String> {
     .collect()
 }
 
+/// The probe connection for the dbt adapter `adapter_type`: on Databricks, Unity
+/// Catalog reports what the login may do, through the same dbt connection; elsewhere
+/// nothing can, so every probe needs `--allow-elevated-login` (ADR-0030 §4c).
+fn connection_for(adapter_type: Option<&str>, executor: DbtExecutor) -> ProbeConnection {
+    match adapter_type {
+        Some("databricks") => ProbeConnection::new(Arc::new(UnityCatalog::new(executor))),
+        _ => ProbeConnection::without_privileges(Arc::new(executor)),
+    }
+}
+
 /// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
 /// `None` when no probe is configured, or no target is: probes never borrow the build's
-/// own target, which can write. dbt can't say what its login may do, so every probe it
-/// runs needs `--allow-elevated-login` until a provider reports privileges. Each node
-/// is probed only on the relation its build made, as the manifest names it.
+/// own target, which can write. Each node is probed only on the relation its build
+/// made, as the manifest names it.
 ///
 /// # Errors
 /// The probe target is the build's.
@@ -198,7 +209,7 @@ fn probe_connection(
         .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
         .collect();
     Ok(Some(
-        ProbeConnection::without_privileges(Arc::new(executor))
+        connection_for(manifest.adapter_type.as_deref(), executor)
             .labelled(label)
             .expecting(relations),
     ))
@@ -661,4 +672,27 @@ fn unmatched_warning(ids: &[String]) -> String {
         if ids.len() == 1 { "s" } else { "" },
         if ids.len() == 1 { "it" } else { "they" },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use ods_core::Capability;
+    use ods_sdk::Provider as _;
+
+    use super::*;
+
+    #[test]
+    fn only_databricks_probes_report_what_their_login_may_do() {
+        let executor = || DbtExecutor::new("dbt", "target");
+        let uc = format!("{:?}", connection_for(Some("databricks"), executor()));
+        assert!(uc.contains("privileges: Some"), "{uc}");
+        let other = format!("{:?}", connection_for(Some("duckdb"), executor()));
+        assert!(other.contains("privileges: None"), "{other}");
+        assert!(
+            UnityCatalog::new(executor())
+                .info()
+                .capabilities
+                .contains(&Capability::RelationPrivileges)
+        );
+    }
 }

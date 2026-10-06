@@ -29,6 +29,16 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- Probe checks on Databricks check their login in Unity Catalog (#392, ADR-0030 §4e):
+  `ods health check` reads `system.information_schema` through the probe target's own
+  connection and runs a probe only when the login (or its groups) owns none of the
+  relation, schema or catalog, holds nothing on them or the metastore beyond `SELECT`,
+  `BROWSE`, `USE CATALOG` and `USE SCHEMA`, can grant nothing and isn't a workspace
+  admin; anything it can't read is *unknown*. Known limits (e.g. metastore and account
+  admins aren't visible) and how they will be fixed are listed in ADR-0030 §4e. Probe
+  statements can name a relation's parts as string literals (`ProbeStatement::by_name`,
+  `{database}`, `{schema}`, `{name}`), and the Databricks provider has `UnityCatalog`,
+  a `relation_probe` that also reports `relation_privileges`.
 - Probe checks run (#392, ADR-0030 §4c): on their own dbt target, `[health.probes]`
   `target` (and optional `profile`), never the build's; without one they don't run.
   dbt probes sources, models, seeds and snapshots, matching the query's columns whatever

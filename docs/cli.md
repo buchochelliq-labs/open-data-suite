@@ -1394,9 +1394,18 @@ target = "health_readonly"   # a target in profiles.yml whose login can only rea
 profile = "jaffle"           # optional: when not the project's (or --dbt-profile's)
 ```
 
-Reporting what a login may do is a provider capability (`relation_privileges`), and no
-provider has it yet (Unity Catalog's comes in the next step of #392), so for now every
-probe is refused unless you run `ods health check --allow-elevated-login`:
+Reporting what a login may do is a provider capability (`relation_privileges`). On
+Databricks, ODS reads it from Unity Catalog's `system.information_schema`, through the
+probe target's own connection: a probe runs when the login (or a group it is in) owns
+neither the relation, its schema nor its catalog, holds nothing on them or on the
+metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA`, can grant nothing,
+and isn't in the workspace's `admins` group. Anything it can't read is *unknown*. Known
+limits, with how they will be fixed, are in
+[ADR-0030 §4e](adr/0030-configurable-and-pluggable-health-checks.md); the main one: a
+metastore or account admin isn't visible there and can pass as read-only, so run probes
+as a dedicated read-only principal. Relations outside Unity Catalog (e.g.
+`hive_metastore`) are *unknown*. Other warehouses have no privilege report yet, so their
+probes are refused unless you run `ods health check --allow-elevated-login`:
 - it runs probes even when their login can do more than read, or that can't be told,
   **at your own risk**: ODS checks each probe is one read-only query, but it can't stop a
   query from writing under a login that may write. ODS comes with no warranty (see its
