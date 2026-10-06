@@ -120,4 +120,5 @@ nav:
       - adr/0028-open-data-environments.md
       - adr/0029-build-timings-and-the-run-ledger.md
       - adr/0030-configurable-and-pluggable-health-checks.md
+      - adr/0031-plugin-registry-and-loading.md
   - Legal and trademarks: legal.md
