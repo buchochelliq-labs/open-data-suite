@@ -432,9 +432,7 @@ fn explainer(
         .map(|n| (n.id.clone(), n.parents.clone()))
         .collect();
     let mut explainer = Explainer::new(Arc::new(
-        ods_provider_dbt::error_catalogue::ProjectCatalogue::new(
-            crate::plugins::installed().errors(ws.manifest.adapter_type.as_deref()),
-        ),
+        crate::plugins::installed().project_catalogue(ws.manifest.adapter_type.as_deref()),
     ))
     .with_missing_columns(missing)
     .with_parents(parents)

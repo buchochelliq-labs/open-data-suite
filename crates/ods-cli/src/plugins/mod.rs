@@ -377,6 +377,28 @@ impl Plugins {
         self.warehouse(warehouse)?.errors()
     }
 
+    /// Every other warehouse plugin's error catalogue, by warehouse: asked after dbt's,
+    /// for a run on another warehouse, or before dbt names the project's.
+    pub fn other_errors(&self, warehouse: Option<&str>) -> Vec<Arc<dyn ErrorCatalogue>> {
+        self.warehouses
+            .iter()
+            .filter(|(w, _)| Some(w.as_str()) != warehouse)
+            .filter_map(|(_, (p, _))| p.errors())
+            .collect()
+    }
+
+    /// The error catalogue for a project on `warehouse` (ADR-0031 §3a): its plugin's,
+    /// then dbt's, then every other plugin's.
+    pub fn project_catalogue(
+        &self,
+        warehouse: Option<&str>,
+    ) -> ods_provider_dbt::error_catalogue::ProjectCatalogue {
+        ods_provider_dbt::error_catalogue::ProjectCatalogue::new(
+            self.errors(warehouse),
+            self.other_errors(warehouse),
+        )
+    }
+
     /// The SQL dialect for `warehouse`'s SQL: its plugin's, else the warehouse kind
     /// itself, for the parser to map (`None` when there is neither).
     pub fn dialect(&self, warehouse: Option<&str>) -> Option<String> {
@@ -565,6 +587,11 @@ mod tests {
             "databricks"
         );
         assert!(plugins.errors(Some("duckdb")).is_none());
+        // Another warehouse's project, or one not yet named, still has Databricks' after
+        // dbt's.
+        assert_eq!(plugins.other_errors(Some("duckdb")).len(), 1);
+        assert_eq!(plugins.other_errors(None).len(), 1);
+        assert!(plugins.other_errors(Some("databricks")).is_empty());
         // Without a plugin, the kind is the dialect's name, for the parser to map.
         assert_eq!(plugins.dialect(Some("duckdb")).as_deref(), Some("duckdb"));
         assert_eq!(plugins.dialect(None), None);

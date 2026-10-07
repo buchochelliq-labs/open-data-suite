@@ -77,7 +77,7 @@ impl ProjectFiles<'_> {
             .manifest
             .or(self.last_manifest)
             .and_then(|m| m.adapter_type.as_deref());
-        ProjectCatalogue::new(crate::plugins::installed().errors(warehouse))
+        crate::plugins::installed().project_catalogue(warehouse)
     }
 
     fn last_index(&self) -> Option<ProjectIndex> {
@@ -216,7 +216,6 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
         return Vec::new();
     }
     let catalogue = evidence.files.catalogue();
-    let info = catalogue.catalogue();
     let index = evidence.files.index();
     let history = earlier_runs(evidence.state_db, run);
     // Lineage only if a missing column needs it: it analyzes the whole project.
@@ -227,11 +226,14 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
             continue;
         };
         let stats = &summary.stats;
-        let classification = match &stats.error {
-            Some(error) => catalogue.classify(error),
-            None => ods_sdk::contracts::error_catalogue::Classification::NotRecognised {
-                category: ods_core::failure::ErrorCategory::Unknown,
-            },
+        let (classification, info) = match &stats.error {
+            Some(error) => catalogue.classify_attributed(error),
+            None => (
+                ods_sdk::contracts::error_catalogue::Classification::NotRecognised {
+                    category: ods_core::failure::ErrorCategory::Unknown,
+                },
+                catalogue.catalogue(),
+            ),
         };
         let wants_lineage = matches!(
             &classification,
@@ -272,11 +274,14 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
     }
     let state_db = evidence.state_db_flag;
     for check in checks {
-        let classification = match &check.error {
-            Some(error) => catalogue.classify(error),
-            None => ods_sdk::contracts::error_catalogue::Classification::NotRecognised {
-                category: ods_core::failure::ErrorCategory::Unknown,
-            },
+        let (classification, info) = match &check.error {
+            Some(error) => catalogue.classify_attributed(error),
+            None => (
+                ods_sdk::contracts::error_catalogue::Classification::NotRecognised {
+                    category: ods_core::failure::ErrorCategory::Unknown,
+                },
+                catalogue.catalogue(),
+            ),
         };
         let mut facts = FailureFacts::new(&check.check, &classification, &info, FailureStage::Run);
         facts.check = Some(check);
@@ -299,8 +304,7 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
 pub(super) fn explain_prepare(output: &str, evidence: &Evidence<'_>) -> Option<ErrorExplanation> {
     let failure = project_failure(output)?;
     let catalogue = evidence.files.catalogue();
-    let info = catalogue.catalogue();
-    let classification = catalogue.classify_project(&failure);
+    let (classification, info) = catalogue.classify_project(&failure);
     // dbt writes no manifest when it can't resolve a reference; for did-you-mean, the
     // one it wrote last still names the project's nodes (a guess either way).
     let index = evidence.files.index().or_else(|| {
