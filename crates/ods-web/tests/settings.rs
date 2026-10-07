@@ -99,6 +99,10 @@ fn dashboard() -> Dashboard {
 }
 
 fn start(dashboard: Dashboard, addr: [u8; 4]) -> SocketAddr {
+    start_with(dashboard, &ServeOptions::new((addr, 0).into()))
+}
+
+fn start_with(dashboard: Dashboard, options: &ServeOptions) -> SocketAddr {
     let (graph, _) = build(
         &LineageProject::new(vec![]),
         &FakeSqlLineageAnalyzer::new(),
@@ -107,7 +111,7 @@ fn start(dashboard: Dashboard, addr: [u8; 4]) -> SocketAddr {
     .unwrap();
     let document = graph.document(&|id: &str| id.to_owned(), &GraphFilter::default());
     let snapshot = Snapshot::new(document, graph, "fixture").with_dashboard(dashboard);
-    let app = router(snapshot, &ServeOptions::new((addr, 0).into()));
+    let app = router(snapshot, options);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -247,4 +251,20 @@ fn a_trailing_slash_leads_to_the_page() {
         head.to_ascii_lowercase().contains("location: /settings\r"),
         "{head}"
     );
+}
+
+#[test]
+fn behind_a_proxy_on_loopback_nothing_private_is_shown_either() {
+    // Bound to loopback, but `--allow-host` names a proxy's host: requests may come
+    // from anywhere.
+    let options = ServeOptions::new(([127, 0, 0, 1], 0).into())
+        .with_allowed_hosts(["ods.example.com".to_owned()]);
+    let addr = start_with(dashboard(), &options);
+    let (status, _, body) = get(addr, "/api/settings");
+    assert_eq!(status, 200, "{body}");
+    assert!(!body.contains(PRIVATE), "{body}");
+    assert!(!body.contains("DATABRICKS_CLIENT_SECRET"), "{body}");
+    let (_, _, page) = get(addr, "/settings");
+    assert!(!page.contains(PRIVATE), "{page}");
+    assert!(page.contains("shown on this machine only"), "{page}");
 }

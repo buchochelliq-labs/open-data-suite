@@ -74,6 +74,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
   it writes; beyond loopback it shows no value, path or check detail.
   `/api/settings` returns the same view model.
+
 - Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
   released CLI as a library: a crate of your own adds health checks
   (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.
@@ -187,6 +188,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   each other. `/roadmap/` redirects to `/ROADMAP/`.
 - The README, the docs' Home and Install pages and the roadmap say v0.0.2 is released;
   the install commands use `0.0.2` as the example version.
+
+### Fixed
+- `ods serve` bound to loopback but behind a proxy (`--allow-host`) no longer shows
+  local paths, configuration values or error text: requests may come from elsewhere,
+  so every page treats it as beyond loopback (#351).
 
 ## [0.0.2] - 2026-10-06
 

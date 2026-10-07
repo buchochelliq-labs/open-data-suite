@@ -152,6 +152,14 @@ impl ServeOptions {
 
     /// `None` accepts any `Host`: bound beyond loopback with no allow-list, which the
     /// caller has been warned about.
+    /// Whether pages may show local paths, configuration values and error text: only
+    /// when every request comes from this machine, that is, bound to loopback with no
+    /// other `Host` allowed. A name allowed with `--allow-host` is a proxy's, forwarding
+    /// requests from elsewhere.
+    fn details(&self) -> bool {
+        self.addr.ip().is_loopback() && self.allowed_hosts.is_empty()
+    }
+
     fn host_policy(&self) -> Option<Vec<String>> {
         let loopback = self.addr.ip().is_loopback();
         if !loopback && self.allowed_hosts.is_empty() {
@@ -214,8 +222,8 @@ pub(crate) struct AppState {
     snapshot: RwLock<Arc<Snapshot>>,
     pub(crate) generation: AtomicU64,
     last_error: Mutex<Option<String>>,
-    /// Whether `/api/version` may show local paths and error text. Only on loopback:
-    /// beyond it, those go to the server log.
+    /// Whether pages may show local paths, values and error text: on loopback with no
+    /// other host allowed ([`ServeOptions::details`]); else those go to the server log.
     pub(crate) details: bool,
     /// The live run streams open now, and their limits (#322).
     pub(crate) streams: crate::live::Streams,
@@ -243,7 +251,7 @@ fn new_state(snapshot: Snapshot, options: &ServeOptions) -> Shared {
         snapshot: RwLock::new(Arc::new(snapshot)),
         generation: AtomicU64::new(1),
         last_error: Mutex::new(None),
-        details: options.addr.ip().is_loopback(),
+        details: options.details(),
         streams: crate::live::Streams::new(options.streams),
     })
 }

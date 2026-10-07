@@ -617,7 +617,9 @@ It listens on loopback by default and then only answers requests for `localhost`
 `127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
 authentication yet (#97): with `--host` anything other than loopback, put it behind a
 proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
-`/api/version` hides local paths and error text (they go to the server log). Responses
+and on loopback with any `--allow-host` (a proxy forwards requests from elsewhere),
+every page and API leaves out local paths, configuration values and error text (they go
+to the server log). Responses
 carry a strict Content-Security-Policy, and nothing is written. `--base-path` accepts
 plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
 
