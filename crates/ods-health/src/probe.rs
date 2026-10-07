@@ -185,12 +185,8 @@ struct Variant {
 pub struct ProbeDefinition {
     /// The check's id.
     pub id: String,
-    /// Its query, as configured; with one per warehouse, each on its own line as
-    /// `<kind>: <query>`.
-    pub sql: String,
-    /// Its queries by warehouse kind, when it gives one per warehouse; empty when it
-    /// gives one query for every warehouse.
-    pub per_warehouse: BTreeMap<String, String>,
+    /// Its query, or its queries by warehouse kind, as configured.
+    pub sql: ProbeSql,
     /// `sha256:` and the digest of what decides what runs and where (§4d).
     pub digest: String,
 }
@@ -374,7 +370,8 @@ impl Probe {
         self.variants.get(self.chosen.as_ref()?)
     }
 
-    /// Its queries for people: the one query, or `<kind>: <query>` per line.
+    /// Its queries, for [`about`](Self::about) when none applies here: the one query,
+    /// or `<kind>: <query>` for each.
     fn sql_text(&self) -> String {
         if self.single {
             return self
@@ -388,7 +385,7 @@ impl Probe {
             .iter()
             .map(|(kind, v)| format!("{kind}: {}", v.sql))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("; ")
     }
 
     /// Marks it trusted, or not.
@@ -398,17 +395,18 @@ impl Probe {
 
     /// What a trust entry pins for it.
     pub(crate) fn definition(&self) -> ProbeDefinition {
+        let mut queries = self
+            .variants
+            .iter()
+            .map(|(kind, v)| (kind.clone(), v.sql.clone()));
+        let sql = if self.single {
+            ProbeSql::One(queries.next().map(|(_, sql)| sql).unwrap_or_default())
+        } else {
+            ProbeSql::PerWarehouse(queries.collect())
+        };
         ProbeDefinition {
             id: self.id.clone(),
-            sql: self.sql_text(),
-            per_warehouse: if self.single {
-                BTreeMap::new()
-            } else {
-                self.variants
-                    .iter()
-                    .map(|(kind, v)| (kind.clone(), v.sql.clone()))
-                    .collect()
-            },
+            sql,
             digest: self.digest.clone(),
         }
     }
@@ -442,15 +440,11 @@ impl Probe {
             ("read_only_checked".to_owned(), self.read_only.to_string()),
             ("trusted".to_owned(), self.trusted.to_string()),
         ]);
-        match (self.variant(), &self.chosen) {
-            (Some(variant), Some(kind)) => {
-                evidence.insert("sql".to_owned(), variant.sql.clone());
-                if !self.single {
-                    evidence.insert("sql_for".to_owned(), kind.clone());
-                }
-            }
-            _ => {
-                evidence.insert("sql".to_owned(), self.sql_text());
+        // With no query for this warehouse, there is no query to name.
+        if let (Some(variant), Some(kind)) = (self.variant(), &self.chosen) {
+            evidence.insert("sql".to_owned(), variant.sql.clone());
+            if !self.single {
+                evidence.insert("sql_for".to_owned(), kind.clone());
             }
         }
         evidence

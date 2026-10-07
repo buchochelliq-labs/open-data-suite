@@ -220,8 +220,7 @@ mod tests {
     fn definition(id: &str, digest: &str) -> ProbeDefinition {
         ProbeDefinition {
             id: id.to_owned(),
-            sql: "select 1 as n from {relation}".to_owned(),
-            per_warehouse: BTreeMap::new(),
+            sql: "select 1 as n from {relation}".into(),
             digest: digest.to_owned(),
         }
     }
