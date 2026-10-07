@@ -1246,6 +1246,7 @@ dependencies = [
 name = "ods-cli"
 version = "0.0.2"
 dependencies = [
+ "async-trait",
  "clap",
  "clap_complete",
  "ods-config",

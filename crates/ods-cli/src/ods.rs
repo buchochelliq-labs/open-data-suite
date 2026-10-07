@@ -63,17 +63,23 @@ impl Ods {
     /// Adds the providers for one warehouse.
     ///
     /// # Errors
-    /// Another plugin, built in or added, serves that warehouse.
+    /// Another plugin, built in or added, serves that warehouse, or it names a SQL
+    /// dialect the parser doesn't know.
     pub fn warehouse(mut self, plugin: Arc<dyn WarehousePlugin>) -> Result<Self, PluginError> {
         self.plugins.add_warehouse(plugin)?;
         Ok(self)
     }
 
     /// Adds the providers for one warehouse in place of those serving it.
-    #[must_use]
-    pub fn replacing_warehouse(mut self, plugin: Arc<dyn WarehousePlugin>) -> Self {
-        self.plugins.replace_warehouse(plugin);
-        self
+    ///
+    /// # Errors
+    /// It names a SQL dialect the parser doesn't know.
+    pub fn replacing_warehouse(
+        mut self,
+        plugin: Arc<dyn WarehousePlugin>,
+    ) -> Result<Self, PluginError> {
+        self.plugins.replace_warehouse(plugin)?;
+        Ok(self)
     }
 
     /// The plugins it will run with.

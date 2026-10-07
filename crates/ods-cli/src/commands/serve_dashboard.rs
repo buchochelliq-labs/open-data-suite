@@ -101,7 +101,11 @@ pub(super) fn check_probe_sql(
     health: &mut ods_health::HealthSettings,
     adapter: Option<&str>,
 ) -> Result<(), CliError> {
-    let dialect = adapter
+    // The warehouse plugin's dialect, else the kind's; else generic SQL, which can only
+    // refuse more (ADR-0031 §3a).
+    let dialect = crate::plugins::installed()
+        .dialect(adapter)
+        .as_deref()
         .and_then(ods_provider_sqlparser::SqlDialect::from_name)
         .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic);
     health

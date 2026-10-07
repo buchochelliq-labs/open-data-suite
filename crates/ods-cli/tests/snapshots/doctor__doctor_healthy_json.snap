@@ -337,6 +337,14 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           {
             "key": "relation_privileges.databricks",
             "value": "relation_privileges 0.1 for databricks (ods-provider-databricks [ods-version], built in)"
+          },
+          {
+            "key": "relation_linker.databricks",
+            "value": "relation_linker 0.1 for databricks (ods-provider-databricks [ods-version], built in)"
+          },
+          {
+            "key": "observed_lineage_source.databricks",
+            "value": "observed_lineage_source 0.1 for databricks (ods-provider-databricks [ods-version], built in)"
           }
         ]
       },

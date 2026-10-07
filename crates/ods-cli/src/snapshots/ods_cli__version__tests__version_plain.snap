@@ -5,4 +5,4 @@ expression: "render(Mode::Plain)"
 ods: 1.2.3
 sdk: 0.1
 output schema: 0.1
-plugins: change_provider 0.1 for databricks (ods-provider-databricks [ods-version], built in); relation_privileges 0.1 for databricks (ods-provider-databricks [ods-version], built in)
+plugins: change_provider 0.1 for databricks (ods-provider-databricks [ods-version], built in); relation_privileges 0.1 for databricks (ods-provider-databricks [ods-version], built in); relation_linker 0.1 for databricks (ods-provider-databricks [ods-version], built in); observed_lineage_source 0.1 for databricks (ods-provider-databricks [ods-version], built in)

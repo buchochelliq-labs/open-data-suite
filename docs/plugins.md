@@ -100,15 +100,26 @@ that runs the released CLI with your plugins added
 - **Health checks.** Any `HealthCheck` (ADR-0030). `ods health check` runs it with the
   built-in, declared and probe checks, and the dashboard shows its recorded findings.
 - **Warehouse plugins.** A `WarehousePlugin` serves one warehouse kind, as the project
-  names it (for dbt, the manifest's `adapter_type`, e.g. `snowflake`). Given the
-  connection dbt already has (a `RelationProbe`), it can return:
-  - a `ChangeProvider`, which reads sources' data versions for `ods state`;
-  - a `PrivilegedProbe` (a `RelationProbe` that is also `RelationPrivileges`), which
-    reports what the probe login may do, so probe checks can run without
-    `--allow-elevated-login`.
+  names it (for dbt, the manifest's `adapter_type`, e.g. `snowflake`), the way dbt picks
+  its adapter. It never connects on its own. Every method is optional:
+  - `changes`: a `ChangeProvider` over the connection dbt already has (a
+    `RelationProbe`), which reads sources' data versions for `ods state`;
+  - `privileges`: a `PrivilegedProbe` (a `RelationProbe` that is also
+    `RelationPrivileges`), which reports what the probe login may do, so probe checks
+    can run without `--allow-elevated-login`;
+  - `links`: a `RelationLinker` for "Open in warehouse", built from the warehouse's
+    `[providers.<name>]` settings (`WarehouseSettings`, with secret references left
+    unresolved), or the reason there are no links;
+  - `observed_lineage`: an `ObservedLineageSource` reading what the user exported
+    from the warehouse, for `ods lineage compare --observed`;
+  - `dialect`: the SQL dialect column lineage parses its SQL in, by the shared
+    parser's name for it (a name the parser doesn't know refuses the plugin).
 
-  The released `ods` has one built-in warehouse plugin: Databricks, with Delta table
-  versions and Unity Catalog's login check.
+  What a plugin offers is **detected**, never declared: ODS calls each method, over a
+  connection that refuses every statement and with empty settings, and lists what
+  comes back. The released `ods` has one built-in warehouse plugin, Databricks: Delta
+  table versions, Unity Catalog's login check, Catalog Explorer links, Unity Catalog's
+  column lineage exports and the Databricks dialect.
 
 ```rust
 // src/main.rs of your crate
@@ -131,9 +142,11 @@ fn main() -> ExitCode {
 
 - **Registration is strict.** A health check needs a valid id that no other plugin
   check has. A warehouse already served, by a built-in or another plugin, is refused.
-  To replace one, say so with `replacing_warehouse`.
+  To replace one, say so with `replacing_warehouse`. A dialect the parser doesn't know
+  is refused either way.
 - **Visible.** `ods version` and `ods doctor` (`capabilities.plugins`) list every
-  plugin, with its contract and crate, and say which are built in.
+  plugin, with each contract it was detected to implement and its crate, and say
+  which are built in.
 - **Configured like the built-ins.** `[health.plugins.<id>]` takes `severity`
   (including `off`), `select` and `exclude` ([docs/cli.md](cli.md#plugin-checks)). An
   id no plugin check has is a configuration error.
