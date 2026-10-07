@@ -135,7 +135,7 @@ meanings get new numbers.
 | `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
-| `ODS-E0801` | `ods plugin show` names a plugin this `ods` doesn't run with (exit status 2). The hint lists those it does. |
+| `ODS-E0801` | `ods plugin show` names a plugin this `ods` doesn't run with, or a name several plugins share without `--kind` (exit status 2). The hint lists the plugins, or the kinds to choose from. |
 | `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
 | `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
@@ -263,8 +263,10 @@ version it implements and what it reads, and for a warehouse, the warehouses it 
 on and what it inherits from them (error patterns and the dialect, ADR-0031 §3b).
 What a plugin offers is found by asking it, never as it declares (ADR-0031 §3c): each
 feature's factory is called with a connection that refuses every statement, so listing
-runs nothing and connects to nothing. A feature it offers that can't be used as
-configured says why (e.g. Databricks' links without a `host`).
+runs nothing and connects to nothing. Whether a feature it offers can be used is judged
+with this project's configuration, as a run would use it: one that can't says why (e.g.
+Databricks' links without a `host`). A health check and a warehouse may share a name;
+`--kind warehouse` or `--kind health_check` says which to show.
 
 `--json` gives each plugin's `name`, `kind` (`warehouse` or `health_check`), `from`,
 `builtin`, `features` (`name`, `contract`, `contract_version`, `detail`, `unavailable`)

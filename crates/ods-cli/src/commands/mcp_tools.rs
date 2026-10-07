@@ -31,6 +31,8 @@ pub(super) struct Project {
     /// The state database, when `ods mcp` was given one; otherwise the State commands'
     /// own default (configuration, then `.ods/state.db`).
     state_db: Option<PathBuf>,
+    /// The configuration, for whether a plugin's features can be used here.
+    config: Option<ods_config::Config>,
 }
 
 impl Project {
@@ -46,7 +48,15 @@ impl Project {
             preference,
             artifacts_flag,
             state_db: None,
+            config: None,
         }
+    }
+
+    /// Judges plugins' features with `config` (`ods_list_plugins`).
+    #[must_use]
+    pub(super) fn with_config(mut self, config: &ods_config::Config) -> Self {
+        self.config = Some(config.clone());
+        self
     }
 
     /// Reads runs from the state database at `path`.
@@ -623,7 +633,7 @@ fn join_gaps(erd: &Erd, loaded: &Loaded) -> Vec<Value> {
 /// The plugins this `ods` runs with and what each offers, as `ods plugin list --json`
 /// gives them (ADR-0031 §3c): so an agent can tell what this `ods` can do.
 fn list_plugins(project: &Project) -> ToolOutput {
-    let plugins = super::plugin::views(crate::plugins::installed(), &project.load.warehouses);
+    let plugins = super::plugin::views(crate::plugins::installed(), project.config.as_ref());
     match serde_json::to_value(plugins) {
         Ok(plugins) => ToolOutput::Json(json!({ "plugins": plugins })),
         Err(e) => ToolOutput::Error(e.to_string()),
