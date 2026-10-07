@@ -108,6 +108,9 @@ pub mod codes {
     /// A warning: a probe check selected no node health checks see, so it checked
     /// nothing.
     pub const HEALTH_UNMATCHED_PROBE: &str = "ODS-W0705";
+    /// `ods plugin show` names a plugin this `ods` doesn't run with, or one several share
+    /// without `--kind` (exit 2).
+    pub const PLUGIN_UNKNOWN: &str = "ODS-E0801";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

@@ -24,7 +24,7 @@ mod databricks;
 mod detect;
 mod settings;
 
-pub use detect::{Detected, Feature};
+pub use detect::{Detected, Feature, PluginKind};
 pub use settings::WarehouseSettings;
 
 /// The crate a plugin comes from, for people: `ods version` and `ods doctor` name it,
@@ -385,7 +385,7 @@ impl Plugins {
 
     /// The warehouses `warehouse` is built on, nearest first: `[warehouses.<kind>]
     /// extends` when configured, else its plugin's [`parents`](WarehousePlugin::parents).
-    fn parents_of(&self, warehouse: &str, configured: &Warehouses) -> Vec<String> {
+    pub fn parents_of(&self, warehouse: &str, configured: &Warehouses) -> Vec<String> {
         match configured.get(warehouse).and_then(|w| w.extends.clone()) {
             Some(extends) => extends,
             None => self
