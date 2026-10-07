@@ -166,6 +166,21 @@ fn main() -> ExitCode {
 health check (`custom.owner_tagged`) and a warehouse plugin for `duckdb`, passes both
 conformance suites, and tests the binary end to end. Copy it to start.
 
+## Built-in warehouses
+
+What the released `ods` knows about each warehouse it has a plugin for, as `ods plugin
+list` and `ods plugin show <kind>` report it (detected by asking the plugin, never as it
+declares). A warehouse without a plugin works too: dbt runs it, ODS reads dbt's error
+patterns and maps the dialect from its kind, and the rest is not offered. A warehouse
+built on another (`Built on`, or `[warehouses.<kind>] extends`) also takes that one's
+error patterns and dialect (ADR-0031 §3b).
+
+<!-- built-in-warehouses:start (generated; see commands/plugin.rs) -->
+| Warehouse | Source versions | Login check | Links | Observed lineage | Error patterns | Dialect | Built on |
+|---|---|---|---|---|---|---|---|
+| `databricks` | table version from the Delta history | yes | yes | yes | databricks catalogue 1 | databricks | `spark` |
+<!-- built-in-warehouses:end -->
+
 ## Writing a source-version provider
 
 A source-version provider is a `ChangeProvider`, offered by a warehouse plugin's

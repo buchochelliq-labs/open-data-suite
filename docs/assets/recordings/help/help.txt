@@ -17,6 +17,7 @@ icies`, `doctor`, `retry`, `explain`, `explain-failure`, `diff`, `graph`, `expor
   lineage      Column-level lineage, downstream impact and OpenLineage export
   serve        Host the read-only dashboard, the lineage explorer and their JSON API over HTTP
   mcp          Serve the ODS tools to AI agents over the Model Context Protocol (stdio)
+  plugin       List the plugins this ods runs with, and what each offers
   doctor       Check that ODS can work here: configuration, dbt project, tools, target, state store and provider capabil
 ities
   config       Inspect configuration and profiles
@@ -37,4 +38,3 @@ Options:
   -h, --help               Print help (see more with '--help')
   -V, --version            Print version
 ❯
-

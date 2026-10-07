@@ -28,6 +28,7 @@ codes).
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the read-only dashboard, the lineage explorer and their JSON API, see [below](#the-dashboard) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
+| `ods plugin list\|show` | available (preview): the plugins this `ods` runs with and what each offers, see [below](#ods-plugin) |
 | `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
@@ -134,6 +135,7 @@ meanings get new numbers.
 | `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
+| `ODS-E0801` | `ods plugin show` names a plugin this `ods` doesn't run with (exit status 2). The hint lists those it does. |
 | `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
 | `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
@@ -252,6 +254,25 @@ providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file .
 ```
 
 Configuration errors exit with status 4.
+
+## `ods plugin`
+
+`ods plugin list` names every plugin this `ods` runs with, one line each, and
+`ods plugin show <name>` shows one: each thing it offers, with the SDK contract and
+version it implements and what it reads, and for a warehouse, the warehouses it is built
+on and what it inherits from them (error patterns and the dialect, ADR-0031 §3b).
+What a plugin offers is found by asking it, never as it declares (ADR-0031 §3c): each
+feature's factory is called with a connection that refuses every statement, so listing
+runs nothing and connects to nothing. A feature it offers that can't be used as
+configured says why (e.g. Databricks' links without a `host`).
+
+`--json` gives each plugin's `name`, `kind` (`warehouse` or `health_check`), `from`,
+`builtin`, `features` (`name`, `contract`, `contract_version`, `detail`, `unavailable`)
+and, for a warehouse, `parents`, `parents_from` (`plugin`, or `configuration` when
+`[warehouses.<kind>] extends` sets them) and `inherited`. The MCP tool
+`ods_list_plugins` answers the same. A warehouse without a plugin works too, with dbt's
+error patterns and the dialect of its kind; it just isn't listed. The built-in
+warehouses are in [Writing a provider](plugins.md#built-in-warehouses).
 
 ## `ods doctor`
 
@@ -2508,6 +2529,7 @@ The JSON form works for Cursor (`.cursor/mcp.json`), VS Code (`.vscode/mcp.json`
 | Tool | Answers |
 |---|---|
 | `ods_project_summary` | dbt version, counts, lineage coverage, whether dbt State is used |
+| `ods_list_plugins` | the plugins this `ods` runs with and what each offers, as [`ods plugin list`](#ods-plugin) gives them |
 | `ods_search` | models and columns by name |
 | `ods_get_node` | where each column of a model comes from |
 | `ods_lineage` | the column-level graph around models or columns (JSON or Mermaid) |

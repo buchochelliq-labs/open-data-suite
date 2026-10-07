@@ -620,6 +620,16 @@ fn join_gaps(erd: &Erd, loaded: &Loaded) -> Vec<Value> {
     out
 }
 
+/// The plugins this `ods` runs with and what each offers, as `ods plugin list --json`
+/// gives them (ADR-0031 §3c): so an agent can tell what this `ods` can do.
+fn list_plugins(project: &Project) -> ToolOutput {
+    let plugins = super::plugin::views(crate::plugins::installed(), &project.load.warehouses);
+    match serde_json::to_value(plugins) {
+        Ok(plugins) => ToolOutput::Json(json!({ "plugins": plugins })),
+        Err(e) => ToolOutput::Error(e.to_string()),
+    }
+}
+
 // ---------------------------------------------------------------- registration
 
 type Handler = fn(&Project, &Value) -> ToolOutput;
@@ -661,6 +671,15 @@ pub(super) fn all(project: &Arc<Project>) -> Vec<Box<dyn Tool>> {
                 schema(&json!({}), &[]),
             ),
             |p, _| project_summary(p),
+        ),
+        (
+            ToolDefinition::read_only(
+                "ods_list_plugins",
+                "Plugins and what they offer",
+                "What this ods can do beyond the dbt project: each health-check and warehouse plugin it runs with, and what each offers (source versions, login check, warehouse links, observed lineage, error patterns, SQL dialect), as detected. A warehouse lists what it inherits from those it is built on. A warehouse with no plugin still works, with dbt's error patterns and no warehouse features.",
+                schema(&json!({}), &[]),
+            ),
+            |p, _| list_plugins(p),
         ),
         (
             ToolDefinition::read_only(

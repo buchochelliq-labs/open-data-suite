@@ -36,6 +36,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- `ods plugin list` and `ods plugin show <name>` (#415, ADR-0031 §3c): the plugins this
+  `ods` runs with and what each offers, detected by asking it, in human, plain and
+  `--json` forms. `show` gives each feature's contract and version, and a warehouse's
+  parents and what it inherits from them. An unknown name is a usage error
+  (`ODS-E0801`, exit 2) listing the plugins there are. The MCP server's
+  `ods_list_plugins` tool answers the same, and `docs/plugins.md` lists the built-in
+  warehouses from the same detection (a test keeps them in step).
 - Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
   released CLI as a library: a crate of your own adds health checks
   (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.

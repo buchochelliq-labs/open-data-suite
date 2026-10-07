@@ -13,6 +13,7 @@ mod mcp;
 mod mcp_data;
 mod mcp_tools;
 mod planned;
+mod plugin;
 mod relation_links;
 mod run_journal;
 mod run_stats;
@@ -41,6 +42,7 @@ pub use health::HealthCommand;
 pub use lineage::Lineage;
 pub use mcp::Mcp;
 pub use planned::Planned;
+pub use plugin::PluginCommand;
 pub use serve::Serve;
 pub use state::State;
 pub(crate) use state_settings::validate as validate_provider_settings;
@@ -103,6 +105,9 @@ pub fn default_registry() -> Registry {
         .register(Box::new(Mcp))
         .expect("built-in command names are unique and not reserved");
     registry
+        .register(Box::new(PluginCommand))
+        .expect("built-in command names are unique and not reserved");
+    registry
         .register(Box::new(Doctor))
         .expect("built-in command names are unique and not reserved");
     registry
@@ -136,6 +141,7 @@ mod tests {
                 "lineage",
                 "serve",
                 "mcp",
+                "plugin",
                 "doctor",
                 "config",
                 "version",

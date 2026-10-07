@@ -19,6 +19,27 @@ use serde::Serialize;
 
 use super::{Origin, WarehousePlugin, WarehouseSettings};
 
+/// What kind of plugin it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PluginKind {
+    /// A health check (ADR-0030 §5).
+    HealthCheck,
+    /// What ODS knows about a warehouse (ADR-0031 §3).
+    Warehouse,
+}
+
+impl PluginKind {
+    /// Its name, as JSON spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::HealthCheck => "health_check",
+            Self::Warehouse => "warehouse",
+        }
+    }
+}
+
 /// One plugin, and what it offers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +47,8 @@ use super::{Origin, WarehousePlugin, WarehouseSettings};
 pub struct Detected {
     /// The check's id, or the warehouse kind.
     pub name: String,
+    /// What kind of plugin it is.
+    pub kind: PluginKind,
     /// Where it comes from: a crate and its version.
     pub from: String,
     /// Whether the released `ods` has it.
@@ -142,6 +165,7 @@ pub(super) fn warehouse(plugin: &dyn WarehousePlugin, builtin: bool) -> Detected
     }
     Detected {
         name: plugin.warehouse().to_owned(),
+        kind: PluginKind::Warehouse,
         from: format!("{} {}", origin.name, origin.version),
         builtin,
         features,
@@ -152,6 +176,7 @@ pub(super) fn warehouse(plugin: &dyn WarehousePlugin, builtin: bool) -> Detected
 pub(super) fn check(check: &dyn HealthCheck, origin: Origin, builtin: bool) -> Detected {
     Detected {
         name: check.describe().id,
+        kind: PluginKind::HealthCheck,
         from: format!("{} {}", origin.name, origin.version),
         builtin,
         features: vec![Feature::new("health_check", Some(HEALTH_CHECK))],
