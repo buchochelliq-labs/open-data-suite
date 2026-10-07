@@ -91,9 +91,10 @@ pub(super) fn health_settings_with(
     Ok(health)
 }
 
-/// Checks every probe's SQL is one read-only query in the dialect of `adapter` (the
-/// project's warehouse type, if known), with the SQL analyzer lineage uses (ADR-0030
-/// §4a).
+/// Checks every probe's SQL is one read-only query, with the SQL analyzer lineage uses
+/// (ADR-0030 §4a): a query given for a warehouse in that warehouse's dialect, else in
+/// that of `adapter` (the project's warehouse type, if known). Then picks each probe's
+/// query for `adapter` (ADR-0031 §3b).
 ///
 /// # Errors
 /// A probe that isn't one read-only query (exit 4).
@@ -102,16 +103,26 @@ pub(super) fn check_probe_sql(
     adapter: Option<&str>,
     warehouses: &crate::plugins::Warehouses,
 ) -> Result<(), CliError> {
-    // The warehouse plugin's dialect, else the kind's; else generic SQL, which can only
-    // refuse more (ADR-0031 §3a).
-    let dialect = crate::plugins::installed()
-        .dialect(adapter, warehouses)
-        .as_deref()
-        .and_then(ods_provider_sqlparser::SqlDialect::from_name)
-        .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic);
+    let plugins = crate::plugins::installed();
+    // A warehouse's dialect: its plugin's (or a parent's), else the kind's; else generic
+    // SQL, which can only refuse more (ADR-0031 §3a, §3b). A query given for one
+    // warehouse is read as that warehouse's; one for every warehouse, as the project's.
+    let dialect = |kind: Option<&str>| {
+        plugins
+            .dialect(kind, warehouses)
+            .as_deref()
+            .and_then(ods_provider_sqlparser::SqlDialect::from_name)
+            .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic)
+    };
     health
-        .check_probe_sql(&|sql| ods_provider_sqlparser::read_only_query(dialect, sql))
-        .map_err(|e| config_error(&e))
+        .check_probe_sql(&|kind, sql| {
+            ods_provider_sqlparser::read_only_query(dialect(kind.or(adapter)), sql)
+        })
+        .map_err(|e| config_error(&e))?;
+    // The query for this project's warehouse, by the same order as its error patterns
+    // (ADR-0031 §3b).
+    health.choose_probe_sql(&adapter.map_or_else(Vec::new, |w| plugins.chain(w, warehouses)));
+    Ok(())
 }
 
 fn config_error(e: &ods_health::HealthConfigError) -> CliError {

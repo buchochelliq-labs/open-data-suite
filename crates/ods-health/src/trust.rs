@@ -221,6 +221,7 @@ mod tests {
         ProbeDefinition {
             id: id.to_owned(),
             sql: "select 1 as n from {relation}".to_owned(),
+            per_warehouse: BTreeMap::new(),
             digest: digest.to_owned(),
         }
     }

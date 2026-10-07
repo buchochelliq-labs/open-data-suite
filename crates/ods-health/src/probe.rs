@@ -15,7 +15,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ods_config::DeclaredCheckConfig;
+use ods_config::{DeclaredCheckConfig, ProbeSql};
 use ods_sdk::contracts::privileges::{Access, PrivilegedProbe, RelationPrivileges};
 use ods_sdk::contracts::probe::{
     PLACEHOLDER, ProbeAnswer, ProbeFilter, ProbeRequest, ProbeStatement, ProbeTarget, RelationProbe,
@@ -145,10 +145,15 @@ pub(crate) struct Probe {
     pub(crate) severity: Option<Severity>,
     select: Selector,
     exclude: Option<Selector>,
-    sql: String,
+    /// Its queries, by warehouse kind, with [`DEFAULT`] for the rest (ADR-0031 §3b).
+    variants: BTreeMap<String, Variant>,
+    /// Whether `sql` was one query for every warehouse rather than a table of them.
+    single: bool,
+    /// The warehouse kind whose query runs on this project, once
+    /// [`choose`](Self::choose)n; `None` when none applies.
+    chosen: Option<String>,
     pass_text: String,
     pass: Pass,
-    statement: ProbeStatement,
     /// What its digest is made from, before [`pin`](Self::pin).
     digested: Vec<u8>,
     digest: String,
@@ -158,14 +163,34 @@ pub(crate) struct Probe {
     trusted: bool,
 }
 
+/// The key of the query a probe runs on a warehouse it names no query for (ADR-0031
+/// §3b).
+pub const DEFAULT: &str = "default";
+
+/// The host's SQL analyzer, as probes are checked with it (ADR-0030 §4a): given the
+/// warehouse kind a query is for (`None` for a probe's one query or its `default`) and
+/// the query, why it isn't one read-only query, if it isn't.
+pub type ReadOnlyCheck<'a> = dyn Fn(Option<&str>, &str) -> Result<(), String> + 'a;
+
+/// One of a probe's queries.
+#[derive(Debug, Clone)]
+struct Variant {
+    sql: String,
+    statement: ProbeStatement,
+}
+
 /// What a trust entry pins for one probe: the definition the user reviewed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ProbeDefinition {
     /// The check's id.
     pub id: String,
-    /// Its query, as configured.
+    /// Its query, as configured; with one per warehouse, each on its own line as
+    /// `<kind>: <query>`.
     pub sql: String,
+    /// Its queries by warehouse kind, when it gives one per warehouse; empty when it
+    /// gives one query for every warehouse.
+    pub per_warehouse: BTreeMap<String, String>,
     /// `sha256:` and the digest of what decides what runs and where (§4d).
     pub digest: String,
 }
@@ -175,7 +200,9 @@ pub struct ProbeDefinition {
 struct Digested<'a> {
     id: &'a str,
     kind: &'a str,
-    sql: &'a str,
+    /// As configured: one query is digested as a string, as before per-warehouse queries
+    /// existed, so its trust holds.
+    sql: &'a ProbeSql,
     select: Option<&'a ods_config::HealthSelector>,
     exclude: Option<&'a ods_config::HealthSelector>,
     /// The connection it runs through, `[health.probes]`: a repository that points
@@ -217,7 +244,7 @@ impl Probe {
                 "{at}.select: probes read models, seeds and snapshots; sources can't be probed yet"
             )));
         }
-        let sql = config.sql.as_deref().ok_or_else(|| {
+        let sql = config.sql.as_ref().ok_or_else(|| {
             HealthConfigError(format!(
                 "{at}.sql: a probe needs one read-only query with {PLACEHOLDER}, e.g. \"select count(*) as n from {PLACEHOLDER}\""
             ))
@@ -229,8 +256,36 @@ impl Probe {
         })?;
         let pass = Pass::parse(pass_text)
             .map_err(|e| HealthConfigError(format!("{at}.pass: `{pass_text}`: {e}")))?;
-        let statement = ProbeStatement::new(sql, pass.columns())
-            .map_err(|e| HealthConfigError(format!("{at}.sql: {e}")))?;
+        let (queries, single) = match sql {
+            ProbeSql::One(sql) => (BTreeMap::from([(DEFAULT.to_owned(), sql.clone())]), true),
+            ProbeSql::PerWarehouse(queries) => (queries.clone(), false),
+            _ => {
+                return Err(HealthConfigError(format!(
+                    "{at}.sql: a query, or a table of queries by warehouse"
+                )));
+            }
+        };
+        if queries.is_empty() {
+            return Err(HealthConfigError(format!(
+                "{at}.sql: name a query for at least one warehouse, or `{DEFAULT}`, e.g. sql = {{ {DEFAULT} = \"select count(*) as n from {PLACEHOLDER}\" }}"
+            )));
+        }
+        let mut variants = BTreeMap::new();
+        for (kind, sql) in queries {
+            let key = if single {
+                format!("{at}.sql")
+            } else {
+                format!("{at}.sql.{kind}")
+            };
+            if kind.trim().is_empty() {
+                return Err(HealthConfigError(format!(
+                    "{at}.sql: a warehouse kind can't be empty"
+                )));
+            }
+            let statement = ProbeStatement::new(&sql, pass.columns())
+                .map_err(|e| HealthConfigError(format!("{key}: {e}")))?;
+            variants.insert(kind, Variant { sql, statement });
+        }
         let digested = Digested {
             id: &config.id,
             kind: "probe",
@@ -248,10 +303,12 @@ impl Probe {
             severity,
             select,
             exclude,
-            sql: sql.to_owned(),
+            variants,
+            single,
+            // Until a warehouse is known, the query for every warehouse.
+            chosen: single.then(|| DEFAULT.to_owned()),
             pass_text: pass_text.to_owned(),
             pass,
-            statement,
             digest: format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
             digested: bytes,
             read_only: false,
@@ -271,19 +328,67 @@ impl Probe {
         self.digest = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
     }
 
-    /// Checks its SQL with `read_only`, the host's analyzer (§4a).
+    /// Checks each of its queries with `read_only`, the host's analyzer, given the
+    /// warehouse kind it is for (`None` for [`DEFAULT`]), so each is read in its own
+    /// warehouse's dialect (§4a; ADR-0031 §3b).
     pub(crate) fn check_read_only(
         &mut self,
-        read_only: &dyn Fn(&str) -> Result<(), String>,
+        read_only: &ReadOnlyCheck<'_>,
     ) -> Result<(), HealthConfigError> {
-        read_only(&self.statement.render(CHECKED_AS)).map_err(|why| {
-            HealthConfigError(format!(
-                "{}.sql: probe `{}` must be one read-only query, but {why}",
-                self.at, self.id
-            ))
-        })?;
+        for (kind, variant) in &self.variants {
+            let warehouse = (kind != DEFAULT).then_some(kind.as_str());
+            read_only(warehouse, &variant.statement.render(CHECKED_AS)).map_err(|why| {
+                let key = if self.single {
+                    format!("{}.sql", self.at)
+                } else {
+                    format!("{}.sql.{kind}", self.at)
+                };
+                HealthConfigError(format!(
+                    "{key}: probe `{}` must be one read-only query, but {why}",
+                    self.id
+                ))
+            })?;
+        }
         self.read_only = true;
         Ok(())
+    }
+
+    /// Picks the query for a project on the first of `chain` (a warehouse kind, then the
+    /// warehouses it is built on, nearest first) that it gives one for, else its
+    /// [`DEFAULT`]; none when neither applies, and the probe is then *unknown*, never run
+    /// with a guess (ADR-0031 §3b).
+    pub(crate) fn choose(&mut self, chain: &[String]) {
+        self.chosen = chain
+            .iter()
+            .find(|kind| kind.as_str() != DEFAULT && self.variants.contains_key(*kind))
+            .cloned()
+            .or_else(|| {
+                self.variants
+                    .contains_key(DEFAULT)
+                    .then(|| DEFAULT.to_owned())
+            });
+    }
+
+    /// The query that runs on this project, if one applies.
+    fn variant(&self) -> Option<&Variant> {
+        self.variants.get(self.chosen.as_ref()?)
+    }
+
+    /// Its queries for people: the one query, or `<kind>: <query>` per line.
+    fn sql_text(&self) -> String {
+        if self.single {
+            return self
+                .variants
+                .values()
+                .next()
+                .map(|v| v.sql.clone())
+                .unwrap_or_default();
+        }
+        self.variants
+            .iter()
+            .map(|(kind, v)| format!("{kind}: {}", v.sql))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Marks it trusted, or not.
@@ -295,14 +400,25 @@ impl Probe {
     pub(crate) fn definition(&self) -> ProbeDefinition {
         ProbeDefinition {
             id: self.id.clone(),
-            sql: self.sql.clone(),
+            sql: self.sql_text(),
+            per_warehouse: if self.single {
+                BTreeMap::new()
+            } else {
+                self.variants
+                    .iter()
+                    .map(|(kind, v)| (kind.clone(), v.sql.clone()))
+                    .collect()
+            },
             digest: self.digest.clone(),
         }
     }
 
-    /// What it checks, for people.
+    /// What it checks, for people: the query that runs here, else every query.
     pub(crate) fn about(&self) -> String {
-        format!("probe `{}`, passes when {}", self.sql, self.pass_text)
+        let sql = self
+            .variant()
+            .map_or_else(|| self.sql_text(), |v| v.sql.clone());
+        format!("probe `{sql}`, passes when {}", self.pass_text)
     }
 
     /// It, as a check that ran; `None` when it is off.
@@ -319,13 +435,25 @@ impl Probe {
         self.select.matches(node) && !self.exclude.as_ref().is_some_and(|s| s.matches(node))
     }
 
-    /// What every finding of it carries: the guards it passed, and its query.
+    /// What every finding of it carries: the guards it passed, and the query that runs
+    /// here, with the warehouse it was given for when it gives one per warehouse.
     fn evidence(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
+        let mut evidence = BTreeMap::from([
             ("read_only_checked".to_owned(), self.read_only.to_string()),
             ("trusted".to_owned(), self.trusted.to_string()),
-            ("sql".to_owned(), self.sql.clone()),
-        ])
+        ]);
+        match (self.variant(), &self.chosen) {
+            (Some(variant), Some(kind)) => {
+                evidence.insert("sql".to_owned(), variant.sql.clone());
+                if !self.single {
+                    evidence.insert("sql_for".to_owned(), kind.clone());
+                }
+            }
+            _ => {
+                evidence.insert("sql".to_owned(), self.sql_text());
+            }
+        }
+        evidence
     }
 
     fn finding(
@@ -357,6 +485,11 @@ impl Probe {
                 "not selected for this check".to_owned(),
                 BTreeMap::new(),
             ));
+        } else if self.variant().is_none() {
+            format!(
+                "{}: no query for this warehouse; give one for it, or a `{DEFAULT}`, in its `sql`",
+                self.id
+            )
         } else if !self.read_only {
             format!("{}: its SQL wasn't checked as one read-only query", self.id)
         } else if !self.trusted {
@@ -555,8 +688,12 @@ impl Probe {
         connection: &ProbeConnection,
         timeout: Duration,
     ) -> Result<BTreeMap<String, Option<ProbeAnswer>>, String> {
+        let statement = self
+            .variant()
+            .map(|v| v.statement.clone())
+            .ok_or_else(|| "no query for this warehouse".to_owned())?;
         let request = ProbeFilter::kinds(KINDS)
-            .and_then(|filter| ProbeRequest::new(filter, vec![self.statement.clone()]))
+            .and_then(|filter| ProbeRequest::new(filter, vec![statement]))
             .map_err(|e| e.to_string())?
             .with_timeout(timeout);
         // The provider stops on its own time out; this one is for one that doesn't.

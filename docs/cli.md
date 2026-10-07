@@ -1385,6 +1385,22 @@ guard stopped it, never a pass:
   statements, a write hidden in a CTE) is a configuration error before anything connects
   (exit 4, `ODS-E0102`), in `ods health check` and `ods serve` alike. It is checked with
   the SQL analyzer lineage uses, in the project's dialect.
+
+`sql` may instead give a query per warehouse kind (dbt's adapter type), with an
+optional `default` for any other, when a check needs SQL a warehouse spells its own way:
+
+```toml
+sql = { databricks = "select count_if(id is null) as n from {relation}",
+        default = "select sum(case when id is null then 1 else 0 end) as n from {relation}" }
+```
+
+The query that runs is the one for the project's warehouse, else for a warehouse it is
+built on (its plugin's parents, or `[warehouses.<kind>] extends`), else `default`, as
+error patterns are found ([ADR-0031 §3b](adr/0031-plugin-registry-and-loading.md)).
+With none of these, the probe is *unknown* ("no query for this warehouse"), never run
+with a guess. Every query is checked as read-only when the configuration loads, each in
+its own warehouse's dialect (`default` in the project's), and trust covers them all, so
+changing any one needs `ods health trust` again. A probe with one query keeps its trust.
 - **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
   you have trusted that exact definition for that project with
   [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
