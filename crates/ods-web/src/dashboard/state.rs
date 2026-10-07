@@ -2212,8 +2212,9 @@ impl Dashboard {
         });
         let threads = {
             let stats = journal.as_ref().map(|j| j.stats());
-            // What the run recorded; else, for a run that recorded no snapshot (a failed
-            // one) or not this node, what the project says now (inferred).
+            // What the run recorded, for a node it built; else, for a run that recorded
+            // no snapshot (a failed one), or a node its snapshot kept from an earlier
+            // build (one that failed in it), what the project says now (inferred).
             let project: BTreeMap<&str, &Vec<String>> = self
                 .catalog
                 .nodes
@@ -2221,7 +2222,7 @@ impl Dashboard {
                 .map(|n| (n.id.as_str(), &n.depends_on))
                 .collect();
             let parents = |id: &str| -> (Vec<String>, bool) {
-                match snapshot.and_then(|s| s.nodes.get(id)) {
+                match snapshot.and_then(|s| s.nodes.get(id).filter(|n| n.run_id == s.run_id)) {
                     Some(n) => (n.parents.keys().cloned().collect(), true),
                     None => (
                         project.get(id).map(|d| (*d).clone()).unwrap_or_default(),

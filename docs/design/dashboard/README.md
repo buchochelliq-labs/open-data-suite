@@ -239,8 +239,9 @@ A run still going isn't followed live yet (#322 step 4).
 - **Threads** (#355, `?tab=threads`): a row per thread with a bar per node it ran,
   coloured by outcome, its idle stretches hatched, and how long it was busy and idle.
   The critical path (from the node that finished last, back through the dependency it
-  waited on that finished last) is outlined and named, *inferred* when the run
-  recorded no snapshot and the project's dependencies now stand in. A bar opens the
+  waited on that finished last) is outlined and named, *inferred* when the run didn't
+  record a node's dependencies (no snapshot, or a node kept from an earlier build)
+  and the project's dependencies now stand in. A bar opens the
   replay at the node's start with the node selected. A journal rebuilt from final
   results (no start times) gets no bar: it says so and lists the finishes.
 - **Built this run:** why each node was built.

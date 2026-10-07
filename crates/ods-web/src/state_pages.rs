@@ -2819,7 +2819,7 @@ fn critical_line(b: &mut String, t: &crate::dashboard::threads::ThreadsView, run
             b,
             " {}",
             inferred_chip(
-                "The run recorded no dependencies for some of these nodes (it recorded no snapshot, or not them): the project's dependencies now are used, which may differ from when it ran"
+                "The run recorded no dependencies for some of these nodes (it recorded no snapshot, or kept them from an earlier build): the project's dependencies now are used, which may differ from when it ran"
             )
         );
     }

@@ -1652,6 +1652,31 @@ mod journals {
     }
 
     #[test]
+    fn a_node_its_snapshot_kept_from_an_earlier_build_makes_the_path_inferred() {
+        // Run 3 failed customers_view, so snapshot 3 keeps run 2's build of it, and
+        // the parents run 2 recorded, not run 3's.
+        let mut snapshots = snapshots();
+        let mut kept = node("select *", RUN_2, "2026-09-29T00:01:03Z");
+        kept.parents.insert("model.customers".into(), RUN_2.into());
+        snapshots[0]
+            .1
+            .nodes
+            .insert("model.customers_view".into(), kept);
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        run_3(&dir);
+        let history = History::new(snapshots).with_journals(Journals::in_dir(&dir));
+        let view = recorded(history, plan())
+            .run_view(true, RUN_3, &BTreeMap::new())
+            .unwrap();
+        let t = &view.threads;
+        assert_eq!(
+            t.critical_path.last().map(|n| n.node.as_str()),
+            Some("model.customers_view")
+        );
+        assert!(t.critical_inferred, "{t:?}");
+    }
+
+    #[test]
     fn a_journal_rebuilt_from_final_results_gets_no_bar() {
         const REBUILT: &str = "7d21a0c4-0000-4000-8000-0000000000aa";
         let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");

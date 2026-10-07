@@ -31,8 +31,8 @@ pub struct ThreadsView {
     /// How long the critical path's nodes took together, for people.
     pub critical_took: Option<String>,
     /// Whether the path rests on dependencies the run didn't record (it recorded no
-    /// snapshot, or not these nodes), taken from the project as it is now: inferred,
-    /// not known.
+    /// snapshot, or kept these nodes from an earlier build), taken from the project as
+    /// it is now: inferred, not known.
     pub critical_inferred: bool,
     /// Why there are no bars, when there are none.
     pub untimed: Option<String>,
