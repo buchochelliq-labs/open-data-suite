@@ -1398,9 +1398,12 @@ The query that runs is the one for the project's warehouse, else for a warehouse
 built on (its plugin's parents, or `[warehouses.<kind>] extends`), else `default`, as
 error patterns are found ([ADR-0031 §3b](adr/0031-plugin-registry-and-loading.md)).
 With none of these, the probe is *unknown* ("no query for this warehouse"), never run
-with a guess. Every query is checked as read-only when the configuration loads, each in
-its own warehouse's dialect (`default` in the project's), and trust covers them all, so
-changing any one needs `ods health trust` again. A probe with one query keeps its trust.
+with a guess. Every query is checked as read-only when the configuration loads: one
+given for a warehouse in that warehouse's dialect; one for every warehouse (or
+`default`), before the project is read, as one read-only query in some dialect ODS
+knows (a write is refused in every dialect), then by `ods health check` in the
+project's own dialect before it runs. Trust covers every query, so changing any one
+needs `ods health trust` again. A probe with one query keeps its trust.
 - **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
   you have trusted that exact definition for that project with
   [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.

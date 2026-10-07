@@ -1408,11 +1408,16 @@ fn a_probes_queries_are_all_in_its_definition_and_digest() {
     let definition = &s.probe_definitions()[0];
     assert_eq!(
         definition.sql,
-        "databricks: select count_if(id is not null) as n from {relation}\ndefault: select count(*) as n from {relation}"
-    );
-    assert_eq!(
-        definition.per_warehouse.keys().collect::<Vec<_>>(),
-        ["databricks", "default"]
+        ods_config::ProbeSql::PerWarehouse(BTreeMap::from([
+            (
+                "databricks".to_owned(),
+                "select count_if(id is not null) as n from {relation}".to_owned()
+            ),
+            (
+                "default".to_owned(),
+                "select count(*) as n from {relation}".to_owned()
+            ),
+        ]))
     );
     // Changing any one query, even one for another warehouse, needs trust again.
     let changed = settings(&PER_WAREHOUSE.replace("is not null", "is null"));
@@ -1420,7 +1425,10 @@ fn a_probes_queries_are_all_in_its_definition_and_digest() {
     // One query for every warehouse keeps the digest it had before queries per
     // warehouse existed, so its trust holds.
     let one = settings(ORDERS_HAS_ROWS);
-    assert!(one.probe_definitions()[0].per_warehouse.is_empty());
+    assert_eq!(
+        one.probe_definitions()[0].sql,
+        "select count(*) as n from {relation}".into()
+    );
     assert_eq!(one.probe_definitions()[0].digest, ORDERS_HAS_ROWS_DIGEST);
 }
 

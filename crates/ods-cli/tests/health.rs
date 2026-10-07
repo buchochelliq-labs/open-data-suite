@@ -250,8 +250,7 @@ fn a_probe_with_queries_per_warehouse_runs_the_projects_and_checks_every_one() {
     assert_eq!(code, 0, "{envelope:#}");
     let reviewed = &envelope["result"]["probes"][0];
     assert_eq!(
-        reviewed["per_warehouse"]["databricks"],
-        "select count_if(id is not null) as n from {relation}",
+        reviewed["sql"]["databricks"], "select count_if(id is not null) as n from {relation}",
         "{reviewed:#}"
     );
     let (_, envelope) = project.check(&[]);
@@ -279,6 +278,22 @@ fn a_probe_with_queries_per_warehouse_runs_the_projects_and_checks_every_one() {
         ),
         "{message}"
     );
+}
+
+#[test]
+fn a_probe_in_its_warehouses_own_sql_loads_and_is_checked_once_the_project_is_read() {
+    // Databricks time travel isn't generic SQL: it loads, so it can be reviewed and
+    // trusted, but this DuckDB project can't parse it, so it never runs here.
+    let project = Project::new(&PROBE.replace(
+        "select count(*) as n from {relation}",
+        "select count(*) as n from {relation} version as of 3",
+    ));
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    let (code, envelope) = project.check(&[]);
+    assert_eq!(code, 4, "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("duckdb"), "{message}");
 }
 
 #[test]
