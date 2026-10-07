@@ -128,6 +128,15 @@ expression: pretty(&body)
   "scope": "jaffle_ods/dev",
   "started_at": null,
   "state_rule": "Snapshot 3 replaced snapshot 2 with this run's successful builds; every other node keeps its last good build. Whether any node failed isn't stored for this run: it has no run journal.",
+  "threads": {
+    "critical_inferred": false,
+    "critical_path": [],
+    "critical_took": null,
+    "finishes_only": [],
+    "span_ms": null,
+    "threads": [],
+    "untimed": "No node ran in this run, or it has no journal."
+  },
   "timeline": [
     {
       "built": false,

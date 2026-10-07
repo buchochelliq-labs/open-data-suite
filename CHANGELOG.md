@@ -74,6 +74,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
   it writes; beyond loopback it shows no value, path or check detail.
   `/api/settings` returns the same view model.
+- The Run page's **Threads** tab (`/state/runs/<run>?tab=threads`, #355): the run by
+  thread, a bar per node coloured by outcome and the idle stretches between them, with
+  the critical path (the chain of dependencies that set the run's length) outlined and
+  named. A bar opens the replay on the DAG at the node's start, with the node selected.
+  A journal rebuilt from final results has no start times, so it gets no bar: the tab
+  says so and lists when each node finished. `/api/state/runs/<run>` has the same view
+  as `threads`.
 - **Saved table versions** (#388, ADR-0022 §7): `ods state build` and `run` (and their
   `--dry-run`) save the sources' table versions they read in
   `<state-db>.versions.json`. `ods state plan`, `ods state explain` and the dashboard,

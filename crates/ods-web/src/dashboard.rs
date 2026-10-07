@@ -17,6 +17,7 @@ use serde::Serialize;
 pub mod explain;
 pub mod journal;
 pub mod state;
+pub mod threads;
 
 /// Version of the dashboard view models in `/api/shell` and `/api/home`. Additive
 /// fields don't change it; a removed or retyped field does.

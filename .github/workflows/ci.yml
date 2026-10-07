@@ -171,6 +171,10 @@ jobs:
       # The Settings page (#351) in Chromium, light and dark, with no secret shown.
       - name: Settings page in a browser
         run: python crates/ods-web/tests/browser/settings.py -v
+      # The Run page's Threads tab (#355) in Chromium, on the board's demo run: the
+      # bars, the critical path, and a bar opening the replay; light and dark.
+      - name: Run threads in a browser
+        run: python crates/ods-web/tests/browser/threads.py -v
 
   # A custom `ods` built from a crate outside the workspace, as a third party's would
   # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary

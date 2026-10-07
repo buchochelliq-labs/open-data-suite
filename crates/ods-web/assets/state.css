@@ -7,6 +7,7 @@
   --row-warn: #FDF8EC; --pill-warn-bg: #FBEFD3; --pill-warn: #8A5A00;
   --pill-kept-bg: #F1F3F6; --pill-kept: #18202A; --pill-skip-bg: #EEF0F3; --pill-skip: #4A5462;
   --conf-bg: #DCE8FB; --conf: #1F4FA0; --conf-unknown: #AEB6C2; --impact-bg: #F6F7F9;
+  --on-bar: #FFFFFF;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -17,6 +18,7 @@
     --row-bad: #1F181C; --row-warn: #1E1C17; --pill-warn-bg: #3A2F14; --pill-warn: #E3B341;
     --pill-kept-bg: #2A3340; --pill-kept: #E4E9EF; --pill-skip-bg: #2A2F37; --pill-skip: #C3CBD5;
     --conf-bg: #1B2E52; --conf: #9CC0FF; --conf-unknown: #5B6474; --impact-bg: #1A1F27;
+    --on-bar: #0F1318;
   }
 }
 .st-split { flex-grow: 1; display: flex; min-height: 0; }
@@ -324,3 +326,27 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 /* "Open in warehouse" on the Run page's Nodes table (#329). */
 .st-wh { font-size: 12px; text-decoration: none; margin-left: 2px; }
 .st-links-note { margin: 8px 0 0; }
+
+/* ---- Threads tab (#355): a row per thread, its idle stretches hatched, the critical
+   path outlined (thicker, so it doesn't rest on colour alone). */
+.st-threads { background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.st-threads svg { max-width: 100%; height: auto; }
+.th-path { margin: 0; font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
+.th-busy { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+.th-hatch { stroke: var(--faint); stroke-width: 1; opacity: 0.6; }
+.th-gap { fill: url(#th-hatch); }
+.th-bar.built { fill: var(--build); } .th-bar.failed { fill: var(--bad); }
+.th-bar.running { fill: var(--build); opacity: 0.55; }
+.th-bar.unknown { fill: none; stroke: var(--dashed); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.th-bar.critical { stroke: var(--fg); stroke-width: 2.5; }
+.th-label { font-family: var(--mono); font-size: 11px; fill: var(--on-bar); pointer-events: none; }
+.th-link { cursor: pointer; }
+.th-link:hover .th-bar, .th-link:focus-visible .th-bar { opacity: 0.8; }
+.th-link:focus-visible { outline: 2px solid var(--accent); }
+.st-sw.th-crit { width: 18px; height: 10px; border-radius: 2px; background: var(--build); box-shadow: 0 0 0 2px var(--fg); }
+.st-sw.th-idle { width: 18px; height: 10px; background: repeating-linear-gradient(45deg, var(--faint) 0 1px, transparent 1px 4px); opacity: 0.8; }
+.th-sub { margin: 0; font-size: 13px; }
+.th-finishes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.th-finishes li { display: flex; align-items: center; gap: 8px; }
+.th-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dashed); }
+.th-dot.built { background: var(--build); } .th-dot.failed { background: var(--bad); }
