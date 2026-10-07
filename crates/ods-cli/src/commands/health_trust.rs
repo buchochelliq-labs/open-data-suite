@@ -148,7 +148,8 @@ struct Reviewed {
     id: String,
     /// How it stood before this run.
     standing: Standing,
-    sql: String,
+    /// Its query, or a table of them by warehouse kind (ADR-0031 §3b), as configured.
+    sql: ods_config::ProbeSql,
     digest: String,
 }
 
@@ -238,6 +239,19 @@ impl TrustReport {
     }
 }
 
+/// A probe's queries for people: the one query, or `<kind>: <query>` on a line each.
+fn sql_text(sql: &ods_config::ProbeSql) -> String {
+    match sql {
+        ods_config::ProbeSql::PerWarehouse(queries) => queries
+            .iter()
+            .map(|(kind, sql)| format!("{kind}: {sql}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        ods_config::ProbeSql::One(sql) => sql.clone(),
+        _ => String::new(),
+    }
+}
+
 fn reviewed(
     definitions: &[ProbeDefinition],
     standing: &BTreeMap<String, Standing>,
@@ -300,7 +314,7 @@ impl Present for TrustReport {
                         vec![
                             vec![Span::toned(p.id.as_str(), Tone::Code)],
                             vec![Span::toned(was, tone)],
-                            vec![Span::toned(p.sql.as_str(), Tone::Code)],
+                            vec![Span::toned(sql_text(&p.sql), Tone::Code)],
                         ]
                     })
                     .collect(),

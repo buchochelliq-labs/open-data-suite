@@ -1139,7 +1139,7 @@ fn a_probe_runs_only_once_every_guard_holds_and_never_passes_before() {
         unchecked.reason
     );
 
-    s.check_probe_sql(&|_| Ok(())).unwrap();
+    s.check_probe_sql(&|_, _| Ok(())).unwrap();
     let untrusted = probe_finding(&s, &orders());
     assert_eq!(untrusted.status, Status::Unknown);
     assert!(
@@ -1183,7 +1183,7 @@ fn a_probe_that_isnt_read_only_is_a_configuration_error_naming_why() {
     let mut s = settings(ORDERS_HAS_ROWS);
     let seen = std::cell::RefCell::new(String::new());
     let error = s
-        .check_probe_sql(&|sql| {
+        .check_probe_sql(&|_, sql| {
             seen.replace(sql.to_owned());
             Err("it contains a DELETE statement".to_owned())
         })
@@ -1292,6 +1292,175 @@ fn a_probes_digest_pins_what_runs_and_where_not_its_verdict() {
     assert_eq!(base, on(""), "an empty `[health.probes]` is no change");
 }
 
+// ------------------------------------------- a query per warehouse (ADR-0031 §3b)
+
+/// `ORDERS_HAS_ROWS`'s digest as computed before a probe could give a query per
+/// warehouse: trust given then must still hold.
+const ORDERS_HAS_ROWS_DIGEST: &str =
+    "sha256:e33ce67b11be15bc8c3bf83d8e42b2492fc2f27daf76b63295d2dfc7ce71f12b";
+
+/// `orders.has_rows` with a Databricks query and a `default`.
+const PER_WAREHOUSE: &str = r#"
+[[checks]]
+id = "orders.has_rows"
+kind = "probe"
+select = { name = ["orders"] }
+sql = { databricks = "select count_if(id is not null) as n from {relation}", default = "select count(*) as n from {relation}" }
+pass = "n > 0"
+severity = "error"
+"#;
+
+fn chain(kinds: &[&str]) -> Vec<String> {
+    kinds.iter().map(|k| (*k).to_owned()).collect()
+}
+
+#[test]
+fn each_of_a_probes_queries_is_checked_as_read_only_for_its_own_warehouse() {
+    let mut s = settings(PER_WAREHOUSE);
+    let seen = std::cell::RefCell::new(Vec::new());
+    s.check_probe_sql(&|kind, sql| {
+        seen.borrow_mut()
+            .push((kind.map(str::to_owned), sql.to_owned()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        *seen.borrow(),
+        [
+            (
+                Some("databricks".to_owned()),
+                "select count_if(id is not null) as n from ods_probe_relation".to_owned()
+            ),
+            (
+                None,
+                "select count(*) as n from ods_probe_relation".to_owned()
+            ),
+        ],
+        "`default` is read in the project's own dialect"
+    );
+    // A query that isn't read-only names its warehouse's key.
+    let error = s
+        .check_probe_sql(&|kind, _| match kind {
+            Some("databricks") => Err("it contains a DELETE statement".to_owned()),
+            _ => Ok(()),
+        })
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "health.checks[0].sql.databricks: probe `orders.has_rows` must be one read-only query, but it contains a DELETE statement"
+    );
+    // One query for every warehouse is read in the project's dialect, as before.
+    let mut one = settings(ORDERS_HAS_ROWS);
+    let kinds = std::cell::RefCell::new(Vec::new());
+    one.check_probe_sql(&|kind, _| {
+        kinds.borrow_mut().push(kind.map(str::to_owned));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(*kinds.borrow(), [None]);
+}
+
+#[test]
+fn a_probe_runs_the_query_for_its_warehouse_then_a_parents_then_its_default() {
+    let mut s = settings(PER_WAREHOUSE);
+    s.check_probe_sql(&|_, _| Ok(())).unwrap();
+    let about = |s: &HealthSettings| s.probes[0].run().map(|r| r.about).unwrap_or_default();
+    s.choose_probe_sql(&chain(&["databricks", "spark"]));
+    assert!(about(&s).contains("count_if"), "{}", about(&s));
+    // A warehouse built on Databricks runs Databricks' query.
+    s.choose_probe_sql(&chain(&["acmebricks", "databricks"]));
+    assert!(about(&s).contains("count_if"), "{}", about(&s));
+    s.choose_probe_sql(&chain(&["postgres"]));
+    assert!(about(&s).contains("count(*)"), "{}", about(&s));
+    // No warehouse known: the default.
+    s.choose_probe_sql(&[]);
+    assert!(about(&s).contains("count(*)"), "{}", about(&s));
+}
+
+#[test]
+fn with_no_query_for_its_warehouse_a_probe_is_unknown_never_run_with_a_guess() {
+    let mut s = settings(
+        &PER_WAREHOUSE.replace(r#", default = "select count(*) as n from {relation}""#, ""),
+    );
+    s.check_probe_sql(&|_, _| Ok(())).unwrap();
+    s.trust_probes(&BTreeSet::from(["orders.has_rows".to_owned()]));
+    s.choose_probe_sql(&chain(&["postgres"]));
+    let finding = probe_finding(&s, &orders());
+    assert_eq!(finding.status, Status::Unknown);
+    assert!(
+        finding.reason.contains("no query for this warehouse"),
+        "{}",
+        finding.reason
+    );
+    assert!(finding.reason.contains("`default`"), "{}", finding.reason);
+    s.choose_probe_sql(&chain(&["databricks"]));
+    assert!(
+        !probe_finding(&s, &orders())
+            .reason
+            .contains("no query for this warehouse")
+    );
+}
+
+#[test]
+fn a_probes_queries_are_all_in_its_definition_and_digest() {
+    let s = settings(PER_WAREHOUSE);
+    let definition = &s.probe_definitions()[0];
+    assert_eq!(
+        definition.sql,
+        ods_config::ProbeSql::PerWarehouse(BTreeMap::from([
+            (
+                "databricks".to_owned(),
+                "select count_if(id is not null) as n from {relation}".to_owned()
+            ),
+            (
+                "default".to_owned(),
+                "select count(*) as n from {relation}".to_owned()
+            ),
+        ]))
+    );
+    // Changing any one query, even one for another warehouse, needs trust again.
+    let changed = settings(&PER_WAREHOUSE.replace("is not null", "is null"));
+    assert_ne!(definition.digest, changed.probe_definitions()[0].digest);
+    // One query for every warehouse keeps the digest it had before queries per
+    // warehouse existed, so its trust holds.
+    let one = settings(ORDERS_HAS_ROWS);
+    assert_eq!(
+        one.probe_definitions()[0].sql,
+        "select count(*) as n from {relation}".into()
+    );
+    assert_eq!(one.probe_definitions()[0].digest, ORDERS_HAS_ROWS_DIGEST);
+}
+
+#[test]
+fn a_probes_table_of_queries_must_name_one() {
+    for (sql, expected) in [
+        (
+            "sql = {}\n",
+            "health.checks[0].sql: name a query for at least one warehouse",
+        ),
+        (
+            "sql = { databricks = \"select count(*) as n from orders\" }\n",
+            "health.checks[0].sql.databricks:",
+        ),
+        (
+            "sql = { \"\" = \"select count(*) as n from {relation}\" }\n",
+            "a warehouse kind can't be empty",
+        ),
+    ] {
+        let toml = [
+            "[[checks]]\nid = \"p\"\nkind = \"probe\"\nselect = { name = [\"orders\"] }\npass = \"n > 0\"\n",
+            sql,
+        ]
+        .concat();
+        let config: HealthConfig = toml::from_str(&toml).unwrap();
+        let error = HealthSettings::from_config(&config)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{sql} => {error}");
+    }
+}
+
 #[tokio::test]
 async fn probe_findings_are_recorded_for_the_dashboard_to_read() {
     let s = settings(ORDERS_HAS_ROWS);
@@ -1377,7 +1546,7 @@ mod running {
             r#"select = { name = ["orders"] }"#,
             r#"select = { name = ["orders", "payments"] }"#,
         ));
-        s.check_probe_sql(&|_| Ok(())).unwrap();
+        s.check_probe_sql(&|_, _| Ok(())).unwrap();
         s.trust_probes(&BTreeSet::from(["orders.has_rows".to_owned()]));
         s
     }
@@ -1415,6 +1584,52 @@ mod running {
             })
             .collect();
         (found, report)
+    }
+
+    #[tokio::test]
+    async fn a_probe_sends_the_query_for_its_warehouse_and_says_which() {
+        const DATABRICKS: &str = "select count_if(id is not null) as n from {relation}";
+        let mut s = settings(PER_WAREHOUSE);
+        s.check_probe_sql(&|_, _| Ok(())).unwrap();
+        s.trust_probes(&BTreeSet::from(["orders.has_rows".to_owned()]));
+        let connected = |s: HealthSettings| {
+            s.with_probe_connection(connect(
+                FakeRelationProbe::new()
+                    .with_relation("model.p.orders", "table", None)
+                    .with_row("model.p.orders", DATABRICKS, [("n", "3")])
+                    .with_row("model.p.orders", SQL, [("n", "0")]),
+                Arc::new(FakeRelationPrivileges::new().read_only("model.p.orders")),
+            ))
+        };
+        let run = |s: &HealthSettings| {
+            let s = s.clone();
+            async move {
+                let scope = CheckScope::new(vec![orders()], Some(clean()));
+                connected(s).run(&scope, CHECK_TIMEOUT).await.badges["model.p.orders"]
+                    .findings
+                    .iter()
+                    .find(|f| f.check == "orders.has_rows")
+                    .cloned()
+                    .unwrap()
+            }
+        };
+        s.choose_probe_sql(&chain(&["databricks"]));
+        let on_databricks = run(&s).await;
+        assert_eq!(on_databricks.status, Status::Pass, "{on_databricks:?}");
+        assert_eq!(on_databricks.evidence["sql"], DATABRICKS);
+        assert_eq!(on_databricks.evidence["sql_for"], "databricks");
+        s.choose_probe_sql(&chain(&["postgres"]));
+        let elsewhere = run(&s).await;
+        assert_eq!(elsewhere.status, Status::Fail, "{elsewhere:?}");
+        assert_eq!(elsewhere.evidence["sql"], SQL);
+        assert_eq!(elsewhere.evidence["sql_for"], "default");
+        // One query for every warehouse says nothing about which it was for.
+        let one = ready().with_probe_connection(connect(
+            warehouse("1"),
+            Arc::new(FakeRelationPrivileges::new().read_only("model.p.orders")),
+        ));
+        let (found, _) = findings(&one).await;
+        assert!(!found["model.p.orders"].evidence.contains_key("sql_for"));
     }
 
     #[tokio::test]
@@ -1560,7 +1775,7 @@ mod running {
             ProbeConnection::without_privileges(Arc::new(warehouse("12")))
                 .allowing_elevated_login(true),
         );
-        s.check_probe_sql(&|_| Ok(())).unwrap();
+        s.check_probe_sql(&|_, _| Ok(())).unwrap();
         let (found, _) = findings(&s).await;
         assert!(
             found["model.p.orders"].reason.contains("not trusted"),

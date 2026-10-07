@@ -1,6 +1,6 @@
 # ADR-0031: Plugins: an in-process registry and out-of-process plugins
 
-- **Status:** Proposed. Phase 2 is built (§7): `Ods`, `Plugins` and `WarehousePlugin` in `ods-cli`, with Databricks registered as a built-in; `[health.plugins.<id>]`; plugins listed in `ods version` and `ods doctor` (`capabilities.plugins`); and `examples/custom-ods`, built in CI. Phase 5 has begun: features are detected (§3c), and links, observed lineage, error patterns and the dialect come from the warehouse plugin (§3a); parents and `[warehouses.<kind>] extends` apply to error patterns and the dialect (§3b). Not built yet: per-warehouse probe SQL (§3b), `ods plugin list`/`show`, DuckDB (5); script checks (3); out-of-process plugins (4).
+- **Status:** Proposed. Phase 2 is built (§7): `Ods`, `Plugins` and `WarehousePlugin` in `ods-cli`, with Databricks registered as a built-in; `[health.plugins.<id>]`; plugins listed in `ods version` and `ods doctor` (`capabilities.plugins`); and `examples/custom-ods`, built in CI. Phase 5 has begun: features are detected (§3c), and links, observed lineage, error patterns and the dialect come from the warehouse plugin (§3a); parents and `[warehouses.<kind>] extends` apply to error patterns and the dialect, and probe checks may give a query per warehouse (§3b). Not built yet: `ods plugin list`/`show`, DuckDB (5); script checks (3); out-of-process plugins (4).
 - **Date:** 2026-10-06
 - **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers), #415
   (the whole warehouse plugin, dispatch, detected features: §3a–§3c)

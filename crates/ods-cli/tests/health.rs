@@ -239,6 +239,64 @@ fn a_probe_that_could_write_is_refused_before_anything_connects() {
 }
 
 #[test]
+fn a_probe_with_queries_per_warehouse_runs_the_projects_and_checks_every_one() {
+    // The fixture project is on DuckDB; this probe has a query for Databricks only.
+    let databricks_only = PROBE.replace(
+        r#"sql = "select count(*) as n from {relation}""#,
+        r#"sql = { databricks = "select count_if(id is not null) as n from {relation}" }"#,
+    );
+    let project = Project::new(&databricks_only);
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    let reviewed = &envelope["result"]["probes"][0];
+    assert_eq!(
+        reviewed["sql"]["databricks"], "select count_if(id is not null) as n from {relation}",
+        "{reviewed:#}"
+    );
+    let (_, envelope) = project.check(&[]);
+    let finding = probe(&envelope);
+    assert_eq!(finding["status"], "unknown", "{finding:#}");
+    assert!(
+        finding["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no query for this warehouse"),
+        "{finding:#}"
+    );
+
+    // A query for another warehouse that could write is refused all the same.
+    project.write(&PROBE.replace(
+        r#"sql = "select count(*) as n from {relation}""#,
+        r#"sql = { databricks = "delete from {relation} where n > 0", default = "select count(*) as n from {relation}" }"#,
+    ));
+    let (code, envelope) = project.check(&[]);
+    assert_eq!(code, 4, "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        message.contains(
+            "health.checks[0].sql.databricks: probe `orders.has_rows` must be one read-only query"
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_probe_in_its_warehouses_own_sql_loads_and_is_checked_once_the_project_is_read() {
+    // Databricks time travel isn't generic SQL: it loads, so it can be reviewed and
+    // trusted, but this DuckDB project can't parse it, so it never runs here.
+    let project = Project::new(&PROBE.replace(
+        "select count(*) as n from {relation}",
+        "select count(*) as n from {relation} version as of 3",
+    ));
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    let (code, envelope) = project.check(&[]);
+    assert_eq!(code, 4, "{envelope:#}");
+    let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(message.contains("duckdb"), "{message}");
+}
+
+#[test]
 fn an_unreadable_trust_store_trusts_nothing_and_is_never_overwritten() {
     let project = Project::new(PROBE);
     std::fs::create_dir_all(project.home.path().join("ods")).unwrap();
