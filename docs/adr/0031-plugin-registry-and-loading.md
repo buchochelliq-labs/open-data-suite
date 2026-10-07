@@ -176,20 +176,30 @@ returns one of the SDK's existing contracts, whose conformance suites a plugin r
   pattern takes precedence over dbt's generic one, and the explanation names the
   catalogue and version that produced it. Patterns specific to one warehouse move into
   its plugin; patterns several warehouses share stay in dbt's catalogue. A plugin
-  catalogue sees the same `ProjectIndex`, so it can name the node, relation and column,
-  and evidence still only confirms what it supports (ADR-0025, "Evidence joins").
+  catalogue implements `ErrorCatalogue` as it is: it classifies an `ErrorSummary` and
+  sees nothing else. Joining a classification with the project (the node, relation and
+  column, from the `ProjectIndex`) stays in the host, for every catalogue and both
+  plugin forms, so evidence confirms only what it supports, the same way whoever
+  classified (ADR-0025, "Evidence joins").
 - **Dialect:** a name the shared SQL parser knows (`SqlDialect::ALL`), checked when the
   plugin is registered: an unknown name refuses the plugin. Without one, ODS maps the
-  warehouse kind as today, and an unknown kind parses as generic SQL. The parser stays
-  one provider; a plugin chooses its dialect, never brings a parser.
+  warehouse kind to a dialect as today, and a kind it can't map stays as today:
+  `ods lineage` refuses it and asks for `--dialect` (exit 2), rather than parse vendor
+  SQL as generic SQL and present the result as exact; the probe read-only check uses
+  generic SQL, which can only refuse more. The parser stays one provider; a plugin
+  chooses its dialect, never brings a parser.
 - **Listing:** `ods version` and `ods doctor` list each capability a plugin offers, so
   "Databricks: source versions, login check, links, observed lineage, errors, dialect"
   is visible, as is what a warehouse lacks.
 - **Out of process (§5):** the handshake's `describe` names the warehouse and the
   capabilities offered, including the dialect. The requests are `link` (relations, in
-  one batch, giving a link or a reason for each), `classify` (error summaries with their
-  `ProjectIndex`) and `observed_lineage` (a path). Their failures are *unknown* as in §5:
-  no link, an unexplained error, no observed lineage.
+  one batch, giving a link or a reason for each), `classify` (error summaries, giving a
+  `Classification` each) and `observed_lineage` (a path). Every request carries the
+  plugin's `WarehouseSettings`, as the in-process methods are given them, with secret
+  references left unresolved (rule 9), so an out-of-process plugin reads the same
+  `[providers.<name>]` settings and never needs them duplicated into its environment.
+  Their failures are *unknown* as in §5: no link, an unexplained error, no observed
+  lineage.
 - **Built-ins:** Databricks offers all six. DuckDB becomes the second built-in, in
   `providers/ods-provider-duckdb`: error patterns recorded from real dbt-duckdb in the
   `real-dbt` CI job, and its dialect. It offers no source versions (DuckDB has no table
@@ -223,7 +233,8 @@ time.
   its own. These answer from the exact plugin or not at all.
 - **Default.** The last step is the warehouse-neutral layer, which is what applies today
   with no plugin: dbt's catalogue (the patterns several warehouses share), the
-  dialect mapped from the warehouse kind or generic SQL, and none of the rest.
+  dialect mapped from the warehouse kind (a kind with none is handled as in §3a), and
+  none of the rest.
 - **Error catalogues in order:** the warehouse's, then each parent's, then dbt's. The
   first `Recognised` wins (§3a).
 - **Listing:** `ods doctor` shows, for each capability, which plugin answers it and
