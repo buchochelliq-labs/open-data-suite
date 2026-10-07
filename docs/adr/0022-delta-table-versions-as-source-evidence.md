@@ -285,7 +285,11 @@ run read every version.
   major version, or one that can't be read, is ignored with a warning.
 - **Who writes:** every command that reads versions (`ods state build`, `run`, and
   their `--dry-run`), right after reading and before dbt runs, whatever happens next.
-  The file is written atomically and replaces only its own scope's entry. It is not
+  The file is written atomically and replaces only its own scope's entry, and only with
+  a reading taken later than the one kept. Times are to the second, so two readings
+  taken in the same second can't be ordered: where they disagree, the source is
+  *unknown* (its readers build); where they agree, the answer is kept. Commands sharing a state database update it
+  one at a time, under an exclusive lock on `<state-db>.versions.json.lock`. It is not
   the store: nothing in it is canonical state, so a failed or partial command that
   writes it can't change what was built (AGENTS.md rule 5).
 - **Who reads:** only the commands that don't connect: `ods state plan`, `ods state
