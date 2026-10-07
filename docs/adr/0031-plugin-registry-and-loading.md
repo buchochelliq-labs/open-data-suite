@@ -2,7 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-10-06
-- **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers)
+- **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers), #415
+  (the whole warehouse plugin, §3a)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -134,6 +135,67 @@ pub trait WarehousePlugin: Send + Sync {
 - Whatever the plugin answers still goes through the existing rules. Inexact versions
   never allow reuse (ADR-0022), and every probe must pass the login check.
 
+### 3a. The whole warehouse plugin (amended 2026-10-07, #415)
+§3 gave a warehouse plugin two capabilities. Everything else ODS knows about one
+warehouse is part of the same plugin, so that supporting a warehouse is one plugin and
+the CLI names none. Like a dbt adapter, a plugin is chosen by the project's warehouse
+kind. Unlike one, it never connects: it uses dbt's connection, or reads what it is
+given. Any warehouse dbt supports works with ODS without a plugin. A plugin only adds
+what ODS can know about that warehouse.
+
+```rust
+pub trait WarehousePlugin: Send + Sync {
+    // §3: origin, warehouse, provides, changes, privileges.
+    fn links(&self, settings: &WarehouseSettings)
+        -> Result<Arc<dyn RelationLinker>, NoRelationLink>;   // "Open in warehouse"
+    fn observed_lineage(&self, export: &Path)
+        -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>>;
+    fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>>;     // warehouse error patterns
+    fn dialect(&self) -> Option<&str>;                        // for column lineage
+}
+```
+
+Every method has a default meaning "not offered", and none needs a new contract: each
+returns one of the SDK's existing contracts, whose conformance suites a plugin runs.
+
+- **Settings** (`WarehouseSettings`): the settings of every `[providers.<name>]` whose
+  `kind` is the plugin's warehouse, by name, as configured. Secret references stay
+  references (rule 9): a plugin is never handed a resolved secret. A plugin may read its
+  warehouse's own environment variables (`DATABRICKS_HOST`), as dbt does, and says which
+  in its docs. Settings the plugin doesn't know are its own error, reported by
+  `ods doctor` under the plugin.
+- **Links:** `Unsupported` without a plugin, as today. A plugin that can't build a link
+  says why (a missing host, two providers configuring different ones), and that reason is
+  what the dashboard shows. The link still passes the capability check (ADR-0006 §3).
+- **Observed lineage** is read from what the user exported (today, Unity Catalog's
+  `system.access.column_lineage`), so `ods lineage compare --observed <file>` works for
+  any warehouse whose plugin reads its export. Reading it live through the probe is a
+  later change of this method, not a new one.
+- **Error explanations:** a plugin's catalogue is consulted first, then dbt's
+  (ADR-0025, "The dbt catalogue"). The first `Recognised` wins, so a warehouse's
+  pattern takes precedence over dbt's generic one, and the explanation names the
+  catalogue and version that produced it. Patterns specific to one warehouse move into
+  its plugin; patterns several warehouses share stay in dbt's catalogue. A plugin
+  catalogue sees the same `ProjectIndex`, so it can name the node, relation and column,
+  and evidence still only confirms what it supports (ADR-0025, "Evidence joins").
+- **Dialect:** a name the shared SQL parser knows (`SqlDialect::ALL`), checked when the
+  plugin is registered: an unknown name refuses the plugin. Without one, ODS maps the
+  warehouse kind as today, and an unknown kind parses as generic SQL. The parser stays
+  one provider; a plugin chooses its dialect, never brings a parser.
+- **Listing:** `ods version` and `ods doctor` list each capability a plugin offers, so
+  "Databricks: source versions, login check, links, observed lineage, errors, dialect"
+  is visible, as is what a warehouse lacks.
+- **Out of process (§5):** the handshake's `describe` names the warehouse and the
+  capabilities offered, including the dialect. The requests are `link` (relations, in
+  one batch, giving a link or a reason for each), `classify` (error summaries with their
+  `ProjectIndex`) and `observed_lineage` (a path). Their failures are *unknown* as in §5:
+  no link, an unexplained error, no observed lineage.
+- **Built-ins:** Databricks offers all six. DuckDB becomes the second built-in, in
+  `providers/ods-provider-duckdb`: error patterns recorded from real dbt-duckdb in the
+  `real-dbt` CI job, and its dialect. It offers no source versions (DuckDB has no table
+  version to read), so `ods state` uses `sources.json` alone, which is what it does today.
+  Snowflake and BigQuery follow as their own issues, each with recorded responses.
+
 ### 4. Health-check plugins and their configuration
 - A registered check runs, as ADR-0030 §5 describes, at its own default severity.
 - **`[health.plugins.<id>]`** takes the same `severity`, `select` and `exclude` as a
@@ -208,13 +270,20 @@ graph LR
 3. **Script checks** (ADR-0030 phase 5), in `ods-provider-process`.
 4. **Out-of-process plugins:** `[plugins.<name>]`, the handshake, and
    `ods plugin test`.
+5. **The whole warehouse plugin** (§3a, #415): `links`, `observed_lineage`, `errors` and
+   `dialect`; Databricks' moved into its plugin with behaviour and tests unchanged, and
+   no Databricks import left in `ods-cli` outside its registration; then DuckDB as the
+   second built-in. This phase doesn't wait for 3 and 4: it is in-process, and the
+   out-of-process requests above arrive with phase 4.
 
 ## Consequences
 - **Positive:**
   - Anyone can add health checks, source-version providers and login checks without
     changing ODS: in Rust, in a custom build, or in any language as an executable.
   - The hard-coded Databricks mappings become ordinary registrations, so supporting a
-    second warehouse means a plugin, not an edit to the CLI.
+    second warehouse means a plugin, not an edit to the CLI. With §3a that covers all
+    of it: links, observed lineage, error explanations and dialect, as well as source
+    versions and the login check.
   - One protocol serves scripts and plugins, and `ods-health` stops starting processes.
 - **Negative / trade-offs:**
   - **API surface:** `ods-cli`'s library API (`Ods`, `Plugins`, `WarehousePlugin`) becomes
@@ -225,6 +294,9 @@ graph LR
     their own credentials, and their own login is what their privilege report covers.
   - **One plugin per warehouse:** two competing providers for the same warehouse can't
     both be registered. A custom build picks one.
+  - **Error catalogues are ordered** (§3a): a warehouse plugin's patterns shadow dbt's
+    for the same message. A wrong plugin pattern hides a right dbt one, so plugin
+    catalogues run the same `error_catalogue` suite, with recorded messages.
 - **Follow-up issues:** the phases in §7. #387's guidance for provider authors and its
   per-warehouse research notes stay in #387.
 
@@ -233,4 +305,6 @@ graph LR
   ADR-0006 (plugin SDK, registries and capabilities), ADR-0019 (versioning), ADR-0022
   (Delta table versions), ADR-0030 (health checks: §4 scripts, §4b trust, §4c login
   checks).
-- #387, #392, #99 (conformance suites), #9 (policy, which may later replace trust).
+- #387, #392, #415, #99 (conformance suites), #9 (policy, which may later replace trust).
+- ADR-0025 (error explanations), ADR-0006 §3 (capabilities), ADR-0008 (column-level
+  lineage, its dialects).
