@@ -2,7 +2,7 @@
 
 How ODS recognises what dbt, and the engines dbt runs on, say when a node or a test
 fails ([ADR-0025](../adr/0025-error-explanations.md)). This page is the dbt error
-catalogue (`ods-provider-dbt::error_catalogue`) at catalogue version **7**. A test
+catalogue (`ods-provider-dbt::error_catalogue`) at catalogue version **8**. A test
 keeps it in step with the code.
 
 A pattern reads only the error's redacted summary: its kind and its first line, with
@@ -33,19 +33,6 @@ test still reaches it with a written message.
 | `dbt-template-unknown-tag` | `template_syntax` | `compilation error` | `unknown tag` | dbt-core's messages | no: from the source named |
 | `dbt-python-model` | `python_exception` | any | `python model failed` | dbt-core's messages | yes |
 | `dbt-test-failed` | `test_failed` | any | `configured to fail if` | dbt-core's messages | yes |
-| `duckdb-values-list-column` | `missing_column` | `binder error` | `does not have a column named` | DuckDB's errors, via dbt-duckdb | yes |
-| `duckdb-referenced-column` | `missing_column` | `binder error` | `referenced column` and `not found` | DuckDB's errors, via dbt-duckdb | yes |
-| `duckdb-table-missing` | `missing_relation` | `catalog error` | `table with name` and `does not exist` | DuckDB's errors, via dbt-duckdb | yes |
-| `duckdb-view-missing` | `missing_relation` | `catalog error` | `view with name` and `does not exist` | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `duckdb-schema-missing` | `missing_schema` | `catalog error` | `schema with name` and `does not exist` | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `duckdb-function-missing` | `missing_function` | `catalog error` | `function with name` and `does not exist` | DuckDB's errors, via dbt-duckdb | yes |
-| `duckdb-conversion` | `type_mismatch` | `conversion error` | (any message) | DuckDB's errors, via dbt-duckdb | yes |
-| `duckdb-constraint` | `constraint_violation` | `constraint error` | (any message) | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `duckdb-dependent-entries` | `dependent_objects` | `dependency error` | `because there are entries that depend on it` | DuckDB's errors, via dbt-duckdb | yes |
-| `duckdb-write-conflict` | `lock_conflict` | `transactioncontext error` | `conflict` | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `duckdb-file-lock` | `lock_conflict` | any | `could not set lock on file` | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `duckdb-permission` | `permission_denied` | `permission error` | (any message) | DuckDB's errors, via dbt-duckdb | no: from the source named |
-| `duckdb-interrupted` | `query_timeout` | `interrupt error` | (any message) | DuckDB's errors, via dbt-duckdb | no: from the source named |
 | `postgres-column-missing` | `missing_column` | `database error` | `column␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
 | `postgres-schema-missing` | `missing_schema` | `database error` | `schema␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
 | `postgres-function-missing` | `missing_function` | `database error` | `function␠` and `does not exist` | PostgreSQL's documented messages | no: from the source named |
@@ -83,11 +70,12 @@ A warehouse's own messages are its plugin's ([ADR-0031](../adr/0031-plugin-regis
 above. On any other project, it is asked after the one above, so a run from before dbt
 named the warehouse, or from before the project moved, is still explained. Either way
 dbt's steps are offered, and the explanation names the catalogue that recognised the
-error. Its patterns read the message only, whatever its kind.
+error.
 
 The built-in Databricks plugin's catalogue (`ods-provider-databricks::error_catalogue`),
-at catalogue version **1**, holds dbt-databricks's own messages (Apache-2.0, 1.12). Each
-is taken from that source, and a test reaches it with a written message:
+at catalogue version **1**, holds dbt-databricks's own messages (Apache-2.0, 1.12). Its
+patterns read the message only, whatever its kind. Each is taken from that source, and a
+test reaches it with a written message:
 
 <!-- databricks-patterns:begin -->
 | Pattern | Symptom | The message holds |
@@ -100,6 +88,31 @@ is taken from that source, and a test reaches it with a written message:
 | `databricks-oauth-required` | `credentials_missing` | `is required when not using access token` |
 | `databricks-client-id-required` | `credentials_missing` | `is required to connect to databricks when` and `is present` |
 <!-- databricks-patterns:end -->
+
+The built-in `DuckDB` plugin's catalogue (`ods-provider-duckdb::error_catalogue`),
+at catalogue version **1**, holds `DuckDB`'s error kinds and messages (MIT), as dbt-duckdb
+reports them. Unlike the Databricks patterns, most need the error's kind (`Binder
+Error`, `Catalog Error`), as above. *Recorded from real dbt*: `yes` when a message from
+the recorded DuckDB runs matches it; otherwise it is from `DuckDB`'s error kinds, and a
+test reaches it with a written message:
+
+<!-- duckdb-patterns:begin -->
+| Pattern | Symptom | Kind | The message holds | Recorded from real dbt |
+|---|---|---|---|---|
+| `duckdb-values-list-column` | `missing_column` | `binder error` | `does not have a column named` | yes |
+| `duckdb-referenced-column` | `missing_column` | `binder error` | `referenced column` and `not found` | yes |
+| `duckdb-table-missing` | `missing_relation` | `catalog error` | `table with name` and `does not exist` | yes |
+| `duckdb-view-missing` | `missing_relation` | `catalog error` | `view with name` and `does not exist` | no: from `DuckDB`'s error kinds |
+| `duckdb-schema-missing` | `missing_schema` | `catalog error` | `schema with name` and `does not exist` | no: from `DuckDB`'s error kinds |
+| `duckdb-function-missing` | `missing_function` | `catalog error` | `function with name` and `does not exist` | yes |
+| `duckdb-conversion` | `type_mismatch` | `conversion error` | (any message) | yes |
+| `duckdb-constraint` | `constraint_violation` | `constraint error` | (any message) | no: from `DuckDB`'s error kinds |
+| `duckdb-dependent-entries` | `dependent_objects` | `dependency error` | `because there are entries that depend on it` | yes |
+| `duckdb-write-conflict` | `lock_conflict` | `transactioncontext error` | `conflict` | no: from `DuckDB`'s error kinds |
+| `duckdb-file-lock` | `lock_conflict` | any | `could not set lock on file` | no: from `DuckDB`'s error kinds |
+| `duckdb-permission` | `permission_denied` | `permission error` | (any message) | no: from `DuckDB`'s error kinds |
+| `duckdb-interrupted` | `query_timeout` | `interrupt error` | (any message) | no: from `DuckDB`'s error kinds |
+<!-- duckdb-patterns:end -->
 
 ## Deliberately not recognised
 - An error that resembles a symptom without being it gets no pattern, or a symptom of

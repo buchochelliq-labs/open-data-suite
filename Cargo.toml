@@ -25,6 +25,7 @@ ods-mcp = { path = "crates/ods-mcp" }
 ods-web = { path = "crates/ods-web" }
 ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
+ods-provider-duckdb = { path = "providers/ods-provider-duckdb" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 ods-store-sqlite = { path = "providers/ods-store-sqlite" }
