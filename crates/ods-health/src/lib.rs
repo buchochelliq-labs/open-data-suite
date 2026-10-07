@@ -827,19 +827,31 @@ impl HealthSettings {
         findings
     }
 
-    /// Checks every probe's SQL with `read_only`, the host's SQL analyzer: a probe runs
-    /// only once its query is known to be one read-only query (ADR-0030 §4a).
+    /// Checks every probe's SQL with `read_only`, the host's SQL analyzer, given the
+    /// warehouse kind each query is for (`None` for a probe's one query or its
+    /// `default`): a probe runs only once each of its queries is known to be one
+    /// read-only query (ADR-0030 §4a; ADR-0031 §3b).
     ///
     /// # Errors
     /// A probe whose SQL isn't one read-only query: a configuration error, before
     /// anything connects.
     pub fn check_probe_sql(
         &mut self,
-        read_only: &dyn Fn(&str) -> Result<(), String>,
+        read_only: &ReadOnlyCheck<'_>,
     ) -> Result<(), HealthConfigError> {
         self.probes
             .iter_mut()
             .try_for_each(|p| p.check_read_only(read_only))
+    }
+
+    /// Picks each probe's query for a project on the first of `chain` (its warehouse
+    /// kind, then the warehouses it is built on, nearest first; empty when it isn't
+    /// known) that the probe gives one for, else the probe's `default` (ADR-0031 §3b). A
+    /// probe with neither is *unknown* ("no query for this warehouse"), never run.
+    pub fn choose_probe_sql(&mut self, chain: &[String]) {
+        for probe in &mut self.probes {
+            probe.choose(chain);
+        }
     }
 
     /// What a trust entry pins for each probe (ADR-0030 §4d).
@@ -1159,7 +1171,7 @@ pub mod record;
 pub mod trust;
 
 pub use coverage::{COVERAGE_MEASURES, CoverageFinding, Measured, Share};
-pub use probe::{ElevatedLogin, ProbeConnection, ProbeDefinition};
+pub use probe::{ElevatedLogin, ProbeConnection, ProbeDefinition, ReadOnlyCheck};
 
 #[cfg(test)]
 mod tests;

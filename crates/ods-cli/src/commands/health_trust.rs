@@ -149,6 +149,9 @@ struct Reviewed {
     /// How it stood before this run.
     standing: Standing,
     sql: String,
+    /// Its queries by warehouse kind, when it gives one per warehouse (ADR-0031 §3b).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    per_warehouse: BTreeMap<String, String>,
     digest: String,
 }
 
@@ -248,6 +251,7 @@ fn reviewed(
             id: d.id.clone(),
             standing: standing.get(&d.id).copied().unwrap_or(Standing::Trusted),
             sql: d.sql.clone(),
+            per_warehouse: d.per_warehouse.clone(),
             digest: d.digest.clone(),
         })
         .collect()

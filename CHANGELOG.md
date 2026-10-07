@@ -36,6 +36,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- A probe check's `sql` may give a query per warehouse kind, with a `default` (#415,
+  ADR-0031 §3b): `sql = { databricks = "…", default = "…" }`. The query for the
+  project's warehouse runs, else one for a warehouse it is built on, else `default`;
+  with none, the probe is *unknown*, never run with a guess. Each query is checked as
+  read-only in its own warehouse's dialect, and trust covers them all. A probe with one
+  query is unchanged and stays trusted. Findings' evidence names the warehouse the query
+  was given for (`sql_for`), and `ods health trust` lists each one (`per_warehouse`).
 - `ods plugin list` and `ods plugin show <name>` (#415, ADR-0031 §3c): the plugins this
   `ods` runs with and what each offers, detected by asking it, in human, plain and
   `--json` forms. `show` gives each feature's contract and version, and a warehouse's
