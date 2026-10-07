@@ -109,32 +109,39 @@ pub(super) fn save(
     if newer_kept {
         return Ok(());
     }
+    let mut saved = Saved {
+        read_at: reading.observed_at,
+        command: command.to_owned(),
+        capabilities: reading
+            .capabilities
+            .iter()
+            .map(|c| c.name().to_owned())
+            .collect(),
+        answers: reading
+            .answers
+            .iter()
+            .filter_map(|(id, answer)| {
+                let answer = match answer {
+                    VersionAnswer::Version(v) => Answer::Version(v.clone()),
+                    VersionAnswer::Unknown(why) => Answer::Unknown(why.clone()),
+                    // An answer this build doesn't know isn't saved: it reads unknown.
+                    _ => return None,
+                };
+                Some((id.clone(), answer))
+            })
+            .collect(),
+    };
+    // Times are to the second: two readings taken in the same second can't be ordered,
+    // so where they disagree neither is believed (AGENTS.md rule 3).
+    if let Some(kept) = file
+        .readings
+        .get(scope)
+        .filter(|kept| kept.read_at.is_some() && kept.read_at == saved.read_at)
+    {
+        tie(&mut saved, kept);
+    }
     file.schema_version = READINGS_VERSION;
-    file.readings.insert(
-        scope.to_owned(),
-        Saved {
-            read_at: reading.observed_at,
-            command: command.to_owned(),
-            capabilities: reading
-                .capabilities
-                .iter()
-                .map(|c| c.name().to_owned())
-                .collect(),
-            answers: reading
-                .answers
-                .iter()
-                .filter_map(|(id, answer)| {
-                    let answer = match answer {
-                        VersionAnswer::Version(v) => Answer::Version(v.clone()),
-                        VersionAnswer::Unknown(why) => Answer::Unknown(why.clone()),
-                        // An answer this build doesn't know isn't saved: it reads unknown.
-                        _ => return None,
-                    };
-                    Some((id.clone(), answer))
-                })
-                .collect(),
-        },
-    );
+    file.readings.insert(scope.to_owned(), saved);
     write(&path, &file).map_err(|e| format!("can't write {}: {e}", path.display()))
 }
 
@@ -190,6 +197,33 @@ enum Unreadable {
     /// It isn't a readings file this ODS understands.
     Damaged(String),
     Io(String),
+}
+
+/// `saved`, merged with `kept`, a reading of the same scope taken in the same second:
+/// a source both answered alike keeps its answer, and any other is unknown.
+fn tie(saved: &mut Saved, kept: &Saved) {
+    let ids: std::collections::BTreeSet<String> = saved
+        .answers
+        .keys()
+        .chain(kept.answers.keys())
+        .cloned()
+        .collect();
+    for id in ids {
+        if saved.answers.get(&id) != kept.answers.get(&id) {
+            saved.answers.insert(
+                id,
+                Answer::Unknown(
+                    "two readings taken in the same second disagree: read the versions again"
+                        .to_owned(),
+                ),
+            );
+        }
+    }
+    for capability in &kept.capabilities {
+        if !saved.capabilities.contains(capability) {
+            saved.capabilities.push(capability.clone());
+        }
+    }
 }
 
 /// An exclusive lock on `<path>.lock`, released when dropped. The lock file stays: it
@@ -325,6 +359,44 @@ mod tests {
         assert_eq!(
             (kept.reading, kept.command.as_str()),
             (reading(300, "8"), "ods state build")
+        );
+    }
+
+    #[test]
+    fn readings_taken_in_the_same_second_keep_only_what_they_agree_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        // Which was taken later can't be told: in either order, a version they disagree
+        // on is unknown, and one they agree on is kept.
+        for (first, second) in [("7", "8"), ("8", "7")] {
+            std::fs::remove_file(path_for(&db)).ok();
+            save(&db, "shop/dev", "ods state build", &reading(100, first)).unwrap();
+            save(
+                &db,
+                "shop/dev",
+                "ods state build --dry-run",
+                &reading(100, second),
+            )
+            .unwrap();
+            let kept = load(&db, "shop/dev", &mut Vec::new()).unwrap().reading;
+            assert!(
+                matches!(
+                    kept.answers.get("source.shop.app.orders"),
+                    Some(VersionAnswer::Unknown(why)) if why.contains("same second")
+                ),
+                "{kept:?}"
+            );
+            assert_eq!(
+                kept.answers.get("source.shop.app.events"),
+                Some(&VersionAnswer::Unknown("not a Delta table".to_owned()))
+            );
+        }
+        // The same answers again change nothing.
+        save(&db, "shop/dev", "ods state build", &reading(200, "9")).unwrap();
+        save(&db, "shop/dev", "ods state build", &reading(200, "9")).unwrap();
+        assert_eq!(
+            load(&db, "shop/dev", &mut Vec::new()).unwrap().reading,
+            reading(200, "9")
         );
     }
 
