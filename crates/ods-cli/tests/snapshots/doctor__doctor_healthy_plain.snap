@@ -75,6 +75,7 @@ Capabilities
     relation_linker.databricks: relation_linker 0.1 for databricks (ods-provider-databricks [ods-version], built in)
     observed_lineage_source.databricks: observed_lineage_source 0.1 for databricks (ods-provider-databricks [ods-version], built in)
     error_catalogue.databricks: error_catalogue 0.5 for databricks (ods-provider-databricks [ods-version], built in)
+    error_catalogue.duckdb: error_catalogue 0.5 for duckdb (ods-provider-duckdb [ods-version], built in)
 
 Connectivity
   [skipped] connectivity.relations: a live check: pass --connect to run it

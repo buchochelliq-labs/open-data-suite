@@ -151,7 +151,10 @@ fn main() -> ExitCode {
 
 - **Registration is strict.** A health check needs a valid id that no other plugin
   check has. A warehouse already served, by a built-in or another plugin, is refused.
-  To replace one, say so with `replacing_warehouse`. A dialect the parser doesn't know
+  To replace one, say so with `replacing_warehouse`: the replacement serves the
+  warehouse alone, so offer again what the built-in did if you want to keep it
+  (`examples/custom-ods` replaces the built-in `duckdb` plugin and keeps its error
+  patterns and dialect from `ods-provider-duckdb`). A dialect the parser doesn't know
   is refused either way.
 - **Visible.** `ods version` and `ods doctor` (`capabilities.plugins`) list every
   plugin, with each contract it was detected to implement and its crate, and say
@@ -179,6 +182,7 @@ error patterns and dialect (ADR-0031 §3b).
 | Warehouse | Source versions | Login check | Links | Observed lineage | Error patterns | Dialect | Built on |
 |---|---|---|---|---|---|---|---|
 | `databricks` | table version from the Delta history | yes | yes | yes | databricks catalogue 1 | databricks | `spark` |
+| `duckdb` | — | — | — | — | duckdb catalogue 1 | duckdb | — |
 <!-- built-in-warehouses:end -->
 
 ## Writing a source-version provider

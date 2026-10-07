@@ -36,6 +36,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- `DuckDB` is the second built-in warehouse plugin (#415, ADR-0031 §3a), in
+  `ods-provider-duckdb`: `DuckDB`'s error patterns, recorded from real dbt-duckdb runs,
+  and the `duckdb` dialect. It offers no source versions (`DuckDB` has no table version
+  to read), so `ods state` reads `sources.json` alone, as before. `ods plugin list`,
+  `ods version` and `ods doctor` list it.
 - A probe check's `sql` may give a query per warehouse kind, with a `default` (#415,
   ADR-0031 §3b): `sql = { databricks = "…", default = "…" }`. The query for the
   project's warehouse runs, else one for a warehouse it is built on, else `default`;
@@ -155,12 +160,15 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   cover is *unknown* for them, never healthy. A new record reloads the page.
 
 ### Changed
-- dbt's error catalogue is at version 7 (#415): dbt-databricks's own messages (unavailable
+- dbt's error catalogue is at version 8 (#415): dbt-databricks's own messages (unavailable
   compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
-  (`databricks` 1). It is asked first on a Databricks project, and after dbt's on any
-  other (a run before dbt names the warehouse, or from before a project moved), so
-  explanations recognise what they did. An explanation names the catalogue whose
-  pattern recognised the error (`databricks` 1 or `dbt` 7).
+  (`databricks` 1), and `DuckDB`'s (`Binder Error`, `Catalog Error`, `Conversion Error`
+  and the rest) the `DuckDB` plugin's (`duckdb` 1). Each is asked first on its own
+  warehouse's project, and after dbt's on any other (a run before dbt names the
+  warehouse, or from before a project moved), so explanations recognise what they did.
+  An explanation names the catalogue whose pattern recognised the error (`databricks`
+  1, `duckdb` 1 or `dbt` 8), and a warehouse's message reads as its adapter's
+  (`dbt-duckdb said:`).
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
   each other. `/roadmap/` redirects to `/ROADMAP/`.
