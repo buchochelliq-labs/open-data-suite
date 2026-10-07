@@ -290,7 +290,12 @@ impl DashboardSource {
     ) -> Dashboard {
         let environment = self.settings.environment.value.clone();
         let ws = match Workspace::load(&self.args, &self.settings, Sources::AsGiven) {
-            Ok(ws) => ws,
+            // The server never connects: the versions the last command that read them
+            // saw (ADR-0022 §7).
+            Ok(mut ws) => {
+                ws.add_saved_reading();
+                ws
+            }
             // The project's files (artifacts, source freshness results) couldn't be
             // read: the store wasn't even opened, so it isn't blamed.
             Err(e) => {

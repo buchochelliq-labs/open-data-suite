@@ -1076,9 +1076,12 @@ each of the project's inputs changed since the nodes reading it were built:
 - **Sources:** the data version now (`max(<loaded_at_field>)` from `sources.json`), when
   it was measured, and the versions its readers were last built from. On Databricks,
   runs read each source's Delta table version first
-  ([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)); the dashboard never
-  connects to the warehouse, so the screen names that version and says it isn't read
-  there. The versions runs read show under *Last recorded*.
+  ([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)). The dashboard never
+  connects to the warehouse: it shows the versions the last command that read them
+  saved ([saved readings](#where-source-versions-come-from)), with when they were read
+  and by which command, and its decisions use them. Without a saved reading it names the
+  table version and says it isn't read there. The versions runs read show under *Last
+  recorded*.
 - **Seeds:** the file's checksum, compared with the one the seed was last built from.
 - **Grades:** each piece of evidence is graded *exact*, *semantic*, *proxy*, *inferred*
   or *unknown*. Only *exact* and *semantic* evidence can let a reader be reused; anything
@@ -1241,8 +1244,18 @@ reason.
 Versions from different origins never compare equal, so the first run after table
 versions become available (or stop being) builds the readers of those sources once.
 Any commit moves a Delta version, including `OPTIMIZE` and `VACUUM`, so maintenance
-also rebuilds readers. `ods state plan` and `ods state explain` don't run dbt, so they
-read no table versions, and say so; `ods state build --dry-run` does. Other adapters read none yet.
+also rebuilds readers. Other adapters read none yet.
+
+**Saved readings** ([ADR-0022 §7](adr/0022-delta-table-versions-as-source-evidence.md)):
+`ods state plan`, `ods state explain` and `ods serve` don't run dbt, so they read no
+table versions themselves. Every command that does (`ods state build` and `run`, and
+their `--dry-run`) saves what it read in `<state-db>.versions.json` (e.g.
+`.ods/state.db.versions.json`), the latest reading for each state scope, and those
+three use it, saying which command read the versions and when. Run
+`ods state build --dry-run` to refresh them without building. A version read before a
+model's last build says nothing about data since, so its readers build until something
+reads the versions again; a reading that failed is saved as failed, and its readers
+build too. The file isn't the state store: deleting it only loses the saved reading.
 
 ### Source tests
 

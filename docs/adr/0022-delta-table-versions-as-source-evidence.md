@@ -1,6 +1,6 @@
 # ADR-0022: Delta table versions as source change evidence, read through dbt
 
-- **Status:** Accepted (2026-10-04)
+- **Status:** Accepted (2026-10-04); amended 2026-10-07 (#388: saved readings, §7)
 - **Date:** 2026-09-29
 - **Issues:** #17 (M1 slice), #16 (the `ChangeProvider` contract); related #15, #126, #230
 - **Deciders:** @n1ckyb
@@ -264,6 +264,43 @@ graph LR
   - A native connection for #15 / #170 if the probe's limits bite. It would be a new
     `ChangeProvider` implementation, chosen by capability, with no planner change.
   - Record the probe's duration per source in run events (#8).
+
+## Amendment (2026-10-07): saved readings (#388)
+
+### Context
+
+`ods serve`, `ods state plan` and `ods state explain` never connect to the warehouse
+(ADR-0009, §5), so they only see the versions in `sources.json`. On a project that
+relies on table versions, they show every source as *unknown*, even just after a dry
+run read every version.
+
+### 7. Saved readings
+
+- **What is saved:** the reading a command takes (§2): when it started, which
+  capabilities its reader has, and each source's answer, a `DataVersion` or why it is
+  unknown. Also which command took it, for people.
+- **Where:** in `<state-db>.versions.json`, beside the store, like the last run
+  (`<state-db>.last-run.json`). It holds the latest reading for each state scope
+  (`<project>/<environment>`), and has a `schema_version` (1.0). A file of a newer
+  major version, or one that can't be read, is ignored with a warning.
+- **Who writes:** every command that reads versions (`ods state build`, `run`, and
+  their `--dry-run`), right after reading and before dbt runs, whatever happens next.
+  The file is written atomically and replaces only its own scope's entry. It is not
+  the store: nothing in it is canonical state, so a failed or partial command that
+  writes it can't change what was built (AGENTS.md rule 5).
+- **Who reads:** only the commands that don't connect: `ods state plan`, `ods state
+  explain` and `ods serve`. They add the saved reading for their scope to the readings
+  they have. Commands that read versions themselves never load it, so a fresh reading
+  is never shadowed by a saved one.
+- **Aging:** none is added. The planner already treats a version observed before a
+  node's last build as saying nothing about data since (§3), and says so. An old
+  reading therefore makes readers build, with that reason; it is never shown as
+  current. Surfaces show when the reading was taken and by which command.
+- **A failed reading is saved too:** its sources are *unknown*, with the reason. The
+  latest reading is what is known now; an older good one isn't kept in its place
+  (AGENTS.md rule 3).
+- **Neutral:** the file holds what any change provider answers. Nothing in it names a
+  warehouse but the versions' own `source` label (e.g. `delta_history`).
 
 ## References
 

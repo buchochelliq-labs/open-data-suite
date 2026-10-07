@@ -3319,7 +3319,8 @@ fn delta_table_versions_decide_reuse_on_databricks() {
     );
     assert_eq!(entry(&changed, "stg_payments")["action"], "reuse");
 
-    // Offline: the plan says it didn't read them.
+    // Offline: the plan reads none, and uses the ones the last build read (#388),
+    // saying which command read them.
     let seen = probes(&project);
     let (code, plan) = project.ods(&["state", "plan"]);
     assert_eq!(code, 0, "{plan:#}");
@@ -3329,7 +3330,11 @@ fn delta_table_versions_decide_reuse_on_databricks() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("table versions weren't read"))
+            .any(|w| {
+                w.as_str()
+                    .unwrap()
+                    .contains("table versions are those `ods state build` read at")
+            })
     };
     assert!(says_so(&plan), "{plan:#}");
     // `ods state explain` plans the same way, and says the same.
@@ -3352,6 +3357,128 @@ fn delta_table_versions_decide_reuse_on_databricks() {
         stderr.contains("dbt show: reading table versions for 2 sources"),
         "{stderr}"
     );
+}
+
+/// The offline plan's entry for `name`, and its warnings.
+fn offline(project: &Project, args: &[&str]) -> Value {
+    let (code, json) = project.ods(args);
+    assert_eq!(code, 0, "{json:#}");
+    json["result"].clone()
+}
+
+/// #388, ADR-0022 §7: the table versions a dry run read are saved, and `ods state plan`
+/// and `explain`, which don't connect, decide with them, saying which command read them
+/// and when. A version read before a model's last build says nothing about data since.
+#[test]
+fn a_dry_runs_table_versions_are_used_by_the_commands_that_dont_connect() {
+    let project = on_databricks("delta-saved");
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "3"),
+            ("raw.payments", "delta", "t-payments", "8"),
+        ],
+    );
+    project.run_ok(&[]);
+    let saved = {
+        let mut name = project.db().into_os_string();
+        name.push(".versions.json");
+        PathBuf::from(name)
+    };
+    assert!(saved.is_file(), "the build saved what it read");
+
+    // Read before that build: says nothing about data since, so its readers build.
+    let plan = offline(&project, &["state", "plan"]);
+    let stale = entry(&plan, "stg_orders");
+    assert_eq!(stale["action"], "build", "{plan:#}");
+    assert!(
+        stale["reasons"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("measured before the last build"),
+        "{stale:#}"
+    );
+
+    // A dry run after the build: the offline plan reuses, on the versions it read.
+    next_second();
+    project.run_ok(&["--dry-run"]);
+    let seen = probes(&project);
+    let plan = offline(&project, &["state", "plan"]);
+    assert_eq!(probes(&project), seen, "the plan reads nothing");
+    for (model, source, version) in [
+        ("stg_orders", ORDERS, "t-orders/3"),
+        ("stg_payments", PAYMENTS, "t-payments/8"),
+    ] {
+        assert_eq!(entry(&plan, model)["action"], "reuse", "{plan:#}");
+        assert_eq!(
+            source_evidence(&plan, model, "source_data_version", source).as_deref(),
+            Some(version)
+        );
+    }
+    let says = |json: &Value| {
+        json["warnings"].as_array().unwrap().iter().any(|w| {
+            w.as_str()
+                .unwrap()
+                .contains("table versions are those `ods state build --dry-run` read at")
+        })
+    };
+    assert!(says(&plan), "{plan:#}");
+    let explained = offline(&project, &["state", "explain", "stg_orders"]);
+    assert!(says(&explained), "{explained:#}");
+    assert_eq!(
+        explained["explanation"]["entry"]["action"], "reuse",
+        "{explained:#}"
+    );
+
+    // A commit the plan can't see until something reads it again.
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "4"),
+            ("raw.payments", "delta", "t-payments", "8"),
+        ],
+    );
+    assert_eq!(
+        entry(&offline(&project, &["state", "plan"]), "stg_orders")["action"],
+        "reuse"
+    );
+    next_second();
+    project.run_ok(&["--dry-run"]);
+    let plan = offline(&project, &["state", "plan"]);
+    let orders = entry(&plan, "stg_orders");
+    assert_eq!(orders["action"], "build", "{plan:#}");
+    assert_eq!(orders["reasons"][0]["code"], "new_upstream_data");
+    assert_eq!(entry(&plan, "stg_payments")["action"], "reuse");
+}
+
+/// #388: a dry run whose probe fails saves that its sources are unknown, so the
+/// offline plan builds their readers; the store is unchanged (AGENTS.md rules 3, 5).
+#[test]
+fn a_failed_reading_is_saved_as_unknown_and_changes_no_state() {
+    let project = on_databricks("delta-saved-fails");
+    workspace(
+        &project,
+        &[
+            ("raw.orders", "delta", "t-orders", "3"),
+            ("raw.payments", "delta", "t-payments", "8"),
+        ],
+    );
+    project.run_ok(&["--no-source-freshness"]);
+    let snapshots = project.history().len();
+    next_second();
+    project.run_ok(&["--dry-run", "--no-source-freshness"]);
+    assert_eq!(
+        entry(&offline(&project, &["state", "plan"]), "stg_orders")["action"],
+        "reuse"
+    );
+    next_second();
+    let failing = project.with("FAKE_DBT_PROBE_FAIL", "1");
+    failing.run_ok(&["--dry-run", "--no-source-freshness"]);
+    let plan = offline(&failing, &["state", "plan"]);
+    let orders = entry(&plan, "stg_orders");
+    assert_eq!(orders["action"], "build", "{plan:#}");
+    assert_eq!(orders["reasons"][0]["code"], "missing_data_evidence");
+    assert_eq!(failing.history().len(), snapshots, "nothing was recorded");
 }
 
 /// ADR-0022 §4: when the probe fails, every source is unknown: the models reading

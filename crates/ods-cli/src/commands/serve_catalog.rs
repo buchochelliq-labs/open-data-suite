@@ -61,6 +61,11 @@ pub(super) fn freshness(ws: &Workspace) -> FreshnessInput {
                 .with_relation(node.and_then(|n| n.relation_name.clone()))
                 .measured_with(measured_with)
                 .read_by_runs(table_versions.clone())
+                .read_saved_by(
+                    ws.saved_reading
+                        .as_ref()
+                        .map(|(_, command)| command.clone()),
+                )
                 .with_version(
                     source.version.clone(),
                     source.observed_at,

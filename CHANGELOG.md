@@ -74,6 +74,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
   it writes; beyond loopback it shows no value, path or check detail.
   `/api/settings` returns the same view model.
+- **Saved table versions** (#388, ADR-0022 §7): `ods state build` and `run` (and their
+  `--dry-run`) save the sources' table versions they read in
+  `<state-db>.versions.json`. `ods state plan`, `ods state explain` and the dashboard,
+  which never connect, now decide with them and say which command read them and when;
+  the Freshness evidence screen shows them as the evidence now. A version read before
+  a model's last build still says nothing about data since, so its readers build until
+  `ods state build --dry-run` reads the versions again.
 
 - Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
   released CLI as a library: a crate of your own adds health checks
