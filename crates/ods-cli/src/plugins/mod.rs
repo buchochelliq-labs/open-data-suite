@@ -7,15 +7,24 @@
 //! the set once, as logging is set up once, for every command to read.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use ods_provider_databricks::{DeltaVersions, UnityCatalog};
-use ods_sdk::Contract;
-use ods_sdk::contracts::changes::{CHANGE_PROVIDER, ChangeProvider};
-use ods_sdk::contracts::health_check::{CheckInfo, HEALTH_CHECK, HealthCheck};
-use ods_sdk::contracts::privileges::{PrivilegedProbe, RELATION_PRIVILEGES};
+use ods_sdk::ProviderError;
+use ods_sdk::contracts::changes::ChangeProvider;
+use ods_sdk::contracts::health_check::{CheckInfo, HealthCheck};
+use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
+use ods_sdk::contracts::privileges::PrivilegedProbe;
 use ods_sdk::contracts::probe::RelationProbe;
+use ods_sdk::contracts::relation_link::{NoRelationLink, RelationLinker};
 use serde::Serialize;
+
+mod databricks;
+mod detect;
+mod settings;
+
+pub use detect::{Detected, Feature};
+pub use settings::WarehouseSettings;
 
 /// The crate a plugin comes from, for people: `ods version` and `ods doctor` name it,
 /// so a custom build never passes for the released one (ADR-0031 §2).
@@ -38,14 +47,15 @@ macro_rules! origin {
     };
 }
 
-/// The providers one warehouse offers, built over the connection the project's own
+/// What ODS knows about one warehouse, built over the connection the project's own
 /// tool already has (for dbt, its executor: ADR-0022 §1). ODS picks the plugin whose
 /// [`warehouse`](Self::warehouse) is the project's warehouse kind, by exact match, here
-/// in the CLI only (rule 1, ADR-0031 §3).
+/// in the CLI only (rule 1, ADR-0031 §3, §3a).
 ///
-/// Every provider method defaults to `None`: a plugin offers only what it has, and
-/// without one ODS behaves as if the warehouse had no plugin (no table versions;
-/// probes need `--allow-elevated-login`).
+/// Every method but the first two is a factory with a default meaning "not offered":
+/// a plugin offers only what it has, and without one ODS behaves as if the warehouse
+/// had no plugin (no table versions; probes need `--allow-elevated-login`; no links).
+/// What a plugin offers is detected by calling them (§3c), never declared.
 pub trait WarehousePlugin: Send + Sync {
     /// Where the plugin comes from.
     fn origin(&self) -> Origin;
@@ -53,11 +63,6 @@ pub trait WarehousePlugin: Send + Sync {
     /// The warehouse kind it serves, as the project names it (for dbt, the manifest's
     /// `adapter_type`, e.g. `snowflake`).
     fn warehouse(&self) -> &str;
-
-    /// The contracts it offers, for listing: [`CHANGE_PROVIDER`] when
-    /// [`changes`](Self::changes) gives one, [`RELATION_PRIVILEGES`] when
-    /// [`privileges`](Self::privileges) does.
-    fn provides(&self) -> Vec<Contract>;
 
     /// Reads sources' data versions through `probe` (ADR-0022).
     fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
@@ -74,6 +79,40 @@ pub trait WarehousePlugin: Send + Sync {
     /// What [`changes`](Self::changes) reads, for people: the Freshness screen says
     /// runs read it. Without one, it says the plugin's warehouse and crate.
     fn versions_read(&self) -> Option<String> {
+        None
+    }
+
+    /// Links from relations to where the warehouse's own UI shows them (#329), built
+    /// from `settings`; or why there are none. A reason other than
+    /// [`NoRelationLink::Unsupported`] means links are offered but can't be built, as
+    /// when a host isn't configured: the reason is what people see.
+    ///
+    /// # Errors
+    /// Why there are no links.
+    fn links(
+        &self,
+        settings: &WarehouseSettings,
+    ) -> Result<Arc<dyn RelationLinker>, NoRelationLink> {
+        let _ = settings;
+        Err(NoRelationLink::Unsupported {
+            warehouse: Some(self.warehouse().to_owned()),
+        })
+    }
+
+    /// Reads the observed lineage the user exported from the warehouse to `export`
+    /// (ADR-0008). `Some` means the plugin reads exports, even if this one can't be read.
+    fn observed_lineage(
+        &self,
+        export: &Path,
+    ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
+        let _ = export;
+        None
+    }
+
+    /// The SQL dialect its SQL is parsed in, as the shared parser names it (e.g.
+    /// `databricks`). Without one, the warehouse kind is mapped as before. A name the
+    /// parser doesn't know refuses the plugin when it is added.
+    fn dialect(&self) -> Option<&str> {
         None
     }
 }
@@ -99,6 +138,18 @@ pub enum PluginError {
         warehouse: String,
         /// Where the registered plugin comes from.
         existing: String,
+    },
+    /// A warehouse plugin names a dialect the SQL parser doesn't know.
+    #[error(
+        "the plugin for the warehouse `{warehouse}` names the SQL dialect `{dialect}`, which isn't one of: {known}"
+    )]
+    UnknownDialect {
+        /// The warehouse kind.
+        warehouse: String,
+        /// The dialect it named.
+        dialect: String,
+        /// The dialects the parser knows.
+        known: String,
     },
     /// The plugin set was installed already.
     #[error("the plugin set is installed once per process, and already was")]
@@ -141,12 +192,13 @@ impl Plugins {
         Self::default()
     }
 
-    /// What the released `ods` has: Databricks' table versions and login check.
+    /// What the released `ods` has: the Databricks plugin.
     pub fn builtin() -> Self {
         let mut plugins = Self::none();
+        let databricks: Arc<dyn WarehousePlugin> = Arc::new(databricks::Databricks);
         plugins
             .warehouses
-            .insert(DATABRICKS.to_owned(), (Arc::new(Databricks), true));
+            .insert(databricks.warehouse().to_owned(), (databricks, true));
         plugins
     }
 
@@ -177,7 +229,9 @@ impl Plugins {
     /// Another plugin serves its warehouse: which one runs must never depend on the
     /// order they were added in. [`replace_warehouse`](Self::replace_warehouse) says so
     /// explicitly.
+    /// Its dialect isn't one the SQL parser knows.
     pub fn add_warehouse(&mut self, plugin: Arc<dyn WarehousePlugin>) -> Result<(), PluginError> {
+        known_dialect(plugin.as_ref())?;
         let warehouse = plugin.warehouse().to_owned();
         if let Some((existing, _)) = self.warehouses.get(&warehouse) {
             let o = existing.origin();
@@ -191,9 +245,17 @@ impl Plugins {
     }
 
     /// Adds a warehouse plugin in place of the one serving its warehouse, if any.
-    pub fn replace_warehouse(&mut self, plugin: Arc<dyn WarehousePlugin>) {
+    ///
+    /// # Errors
+    /// Its dialect isn't one the SQL parser knows.
+    pub fn replace_warehouse(
+        &mut self,
+        plugin: Arc<dyn WarehousePlugin>,
+    ) -> Result<(), PluginError> {
+        known_dialect(plugin.as_ref())?;
         self.warehouses
             .insert(plugin.warehouse().to_owned(), (plugin, false));
+        Ok(())
     }
 
     /// The registered health checks, in the order they were added.
@@ -210,7 +272,7 @@ impl Plugins {
     /// the plugin describes it, or else which plugin reads them.
     pub fn versions_read(&self, warehouse: Option<&str>) -> Option<String> {
         let plugin = self.warehouse(warehouse)?;
-        plugin.provides().contains(&CHANGE_PROVIDER).then(|| {
+        detect::changes(plugin).then(|| {
             plugin.versions_read().unwrap_or_else(|| {
                 let o = plugin.origin();
                 format!(
@@ -225,8 +287,7 @@ impl Plugins {
 
     /// Whether `warehouse` has a source-version provider.
     pub fn has_changes(&self, warehouse: Option<&str>) -> bool {
-        self.warehouse(warehouse)
-            .is_some_and(|p| p.provides().contains(&CHANGE_PROVIDER))
+        self.warehouse(warehouse).is_some_and(detect::changes)
     }
 
     /// `warehouse`'s source-version provider, reading through `probe`.
@@ -247,36 +308,118 @@ impl Plugins {
         self.warehouse(warehouse)?.privileges(probe)
     }
 
-    /// Every plugin, for `ods version` and `ods doctor`: health checks by id, then each
-    /// warehouse's contracts.
-    pub fn listing(&self) -> Vec<Listed> {
-        let mut listed: Vec<Listed> = self
+    /// `warehouse`'s links, built from `settings`, or why there are none.
+    ///
+    /// # Errors
+    /// Why there are no links: no plugin for the warehouse, or the plugin's reason.
+    pub fn links(
+        &self,
+        warehouse: Option<&str>,
+        settings: &WarehouseSettings,
+    ) -> Result<Arc<dyn RelationLinker>, NoRelationLink> {
+        match self.warehouse(warehouse) {
+            Some(plugin) => plugin.links(settings),
+            None => Err(NoRelationLink::Unsupported {
+                warehouse: warehouse.map(str::to_owned),
+            }),
+        }
+    }
+
+    /// A reader for the observed lineage exported to `export`: by `warehouse`'s plugin
+    /// if it reads exports, else by the only plugin that does. `None` when no plugin
+    /// reads exports, or several do and the project's warehouse isn't one of them.
+    pub fn observed_lineage(
+        &self,
+        warehouse: Option<&str>,
+        export: &Path,
+    ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
+        if let Some(found) = self
+            .warehouse(warehouse)
+            .and_then(|p| p.observed_lineage(export))
+        {
+            return Some(found);
+        }
+        let mut readers = self
+            .warehouses
+            .values()
+            .filter(|(p, _)| detect::observed_lineage(p.as_ref()));
+        match (readers.next(), readers.next()) {
+            (Some((only, _)), None) => only.observed_lineage(export),
+            _ => None,
+        }
+    }
+
+    /// The warehouses whose plugins read observed lineage exports.
+    pub fn observed_lineage_readers(&self) -> Vec<&str> {
+        self.warehouses
+            .iter()
+            .filter(|(_, (p, _))| detect::observed_lineage(p.as_ref()))
+            .map(|(w, _)| w.as_str())
+            .collect()
+    }
+
+    /// The SQL dialect for `warehouse`'s SQL: its plugin's, else the warehouse kind
+    /// itself, for the parser to map (`None` when there is neither).
+    pub fn dialect(&self, warehouse: Option<&str>) -> Option<String> {
+        self.warehouse(warehouse)
+            .and_then(|p| p.dialect().map(str::to_owned))
+            .or_else(|| warehouse.map(str::to_owned))
+    }
+
+    /// What every plugin offers, as detected (§3c): health checks by id, then each
+    /// warehouse with its features.
+    pub fn detected(&self) -> Vec<Detected> {
+        let mut checks: Vec<Detected> = self
             .checks
             .iter()
-            .map(|(check, origin, builtin)| Listed {
-                contract: HEALTH_CHECK.name,
-                contract_version: crate::version::dotted(HEALTH_CHECK.version),
-                name: check.describe().id,
-                from: format!("{} {}", origin.name, origin.version),
-                builtin: *builtin,
-            })
+            .map(|(check, origin, builtin)| detect::check(check.as_ref(), *origin, *builtin))
             .collect();
-        listed.sort_by(|a, b| a.name.cmp(&b.name));
-        for (warehouse, (plugin, builtin)) in &self.warehouses {
-            let origin = plugin.origin();
-            let mut contracts = plugin.provides();
-            contracts.sort_by_key(|c| c.name);
-            for contract in contracts {
-                listed.push(Listed {
-                    contract: contract.name,
-                    contract_version: crate::version::dotted(contract.version),
-                    name: warehouse.clone(),
-                    from: format!("{} {}", origin.name, origin.version),
-                    builtin: *builtin,
-                });
-            }
+        checks.sort_by(|a, b| a.name.cmp(&b.name));
+        checks.extend(
+            self.warehouses
+                .values()
+                .map(|(plugin, builtin)| detect::warehouse(plugin.as_ref(), *builtin)),
+        );
+        checks
+    }
+
+    /// Every plugin, for `ods version` and `ods doctor`: health checks by id, then each
+    /// warehouse's contracts, as detected.
+    pub fn listing(&self) -> Vec<Listed> {
+        self.detected()
+            .into_iter()
+            .flat_map(|d| {
+                // A feature that implements no contract (a dialect) isn't a provider.
+                d.features
+                    .into_iter()
+                    .filter_map(|f| f.contract)
+                    .map(move |contract| Listed {
+                        contract: contract.name,
+                        contract_version: crate::version::dotted(contract.version),
+                        name: d.name.clone(),
+                        from: d.from.clone(),
+                        builtin: d.builtin,
+                    })
+            })
+            .collect()
+    }
+}
+
+/// Refuses a plugin whose dialect the SQL parser doesn't know.
+fn known_dialect(plugin: &dyn WarehousePlugin) -> Result<(), PluginError> {
+    match plugin.dialect() {
+        Some(d) if ods_provider_sqlparser::SqlDialect::from_name(d).is_none() => {
+            Err(PluginError::UnknownDialect {
+                warehouse: plugin.warehouse().to_owned(),
+                dialect: d.to_owned(),
+                known: ods_provider_sqlparser::SqlDialect::ALL
+                    .iter()
+                    .map(|d| d.name())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            })
         }
-        listed
+        _ => Ok(()),
     }
 }
 
@@ -297,42 +440,6 @@ pub fn installed() -> &'static Plugins {
     INSTALLED.get_or_init(Plugins::builtin)
 }
 
-/// The warehouse kind dbt calls Databricks.
-const DATABRICKS: &str = "databricks";
-
-/// Databricks: Delta table versions (ADR-0022) and Unity Catalog's login check
-/// (ADR-0030 §4e).
-struct Databricks;
-
-impl WarehousePlugin for Databricks {
-    fn origin(&self) -> Origin {
-        Origin {
-            name: "ods-provider-databricks",
-            version: env!("CARGO_PKG_VERSION"),
-        }
-    }
-
-    fn warehouse(&self) -> &str {
-        DATABRICKS
-    }
-
-    fn provides(&self) -> Vec<Contract> {
-        vec![CHANGE_PROVIDER, RELATION_PRIVILEGES]
-    }
-
-    fn versions_read(&self) -> Option<String> {
-        Some("table version from the Delta history".to_owned())
-    }
-
-    fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
-        Some(Arc::new(DeltaVersions::new(probe)))
-    }
-
-    fn privileges(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn PrivilegedProbe>> {
-        Some(Arc::new(UnityCatalog::new(probe)))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ods_provider_fake::{FakeHealthCheck, FakeRelationProbe};
@@ -348,9 +455,6 @@ mod tests {
         }
         fn warehouse(&self) -> &str {
             self.0
-        }
-        fn provides(&self) -> Vec<Contract> {
-            Vec::new()
         }
     }
 
@@ -371,8 +475,9 @@ mod tests {
             fn warehouse(&self) -> &'static str {
                 "acme"
             }
-            fn provides(&self) -> Vec<Contract> {
-                vec![CHANGE_PROVIDER]
+            fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
+                let _ = probe;
+                Some(Arc::new(ods_provider_fake::FakeChangeProvider::new()))
             }
         }
         let mut plugins = Plugins::none();
@@ -427,8 +532,125 @@ mod tests {
             [
                 ("change_provider", "databricks", true),
                 ("relation_privileges", "databricks", true),
+                ("relation_linker", "databricks", true),
+                ("observed_lineage_source", "databricks", true),
             ]
         );
+        assert_eq!(
+            plugins.dialect(Some("databricks")).as_deref(),
+            Some("databricks")
+        );
+        // Without a plugin, the kind is the dialect's name, for the parser to map.
+        assert_eq!(plugins.dialect(Some("duckdb")).as_deref(), Some("duckdb"));
+        assert_eq!(plugins.dialect(None), None);
+    }
+
+    /// A plugin that offers links (not configured here), a dialect, and maybe a reader
+    /// of observed lineage.
+    struct Acme {
+        dialect: &'static str,
+        reads_exports: bool,
+    }
+
+    impl WarehousePlugin for Acme {
+        fn origin(&self) -> Origin {
+            crate::origin!()
+        }
+        fn warehouse(&self) -> &'static str {
+            "acme"
+        }
+        fn links(
+            &self,
+            _settings: &WarehouseSettings,
+        ) -> Result<Arc<dyn RelationLinker>, NoRelationLink> {
+            Err(NoRelationLink::NotConfigured {
+                setting: "providers.acme.settings.host".to_owned(),
+            })
+        }
+        fn observed_lineage(
+            &self,
+            _export: &Path,
+        ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
+            self.reads_exports
+                .then(|| Err(ProviderError::Other("acme".to_owned())))
+        }
+        fn dialect(&self) -> Option<&str> {
+            Some(self.dialect)
+        }
+    }
+
+    #[test]
+    fn features_are_detected_not_declared() {
+        let mut plugins = Plugins::none();
+        plugins
+            .add_warehouse(Arc::new(Acme {
+                dialect: "snowflake",
+                reads_exports: false,
+            }))
+            .unwrap();
+        let detected = plugins.detected();
+        let acme = &detected[0];
+        let names: Vec<&str> = acme.features.iter().map(|f| f.name).collect();
+        assert_eq!(names, ["links", "dialect"]);
+        // Offered, but not usable as configured: listed, with the reason.
+        assert!(
+            acme.features[0]
+                .unavailable
+                .as_deref()
+                .unwrap()
+                .contains("providers.acme.settings.host")
+        );
+        assert_eq!(acme.features[1].detail.as_deref(), Some("snowflake"));
+        // A dialect isn't a provider: only links are listed as a contract.
+        assert_eq!(
+            plugins
+                .listing()
+                .iter()
+                .map(|l| l.contract)
+                .collect::<Vec<_>>(),
+            ["relation_linker"]
+        );
+        assert_eq!(plugins.dialect(Some("acme")).as_deref(), Some("snowflake"));
+    }
+
+    #[test]
+    fn a_dialect_the_parser_doesnt_know_refuses_the_plugin() {
+        let mut plugins = Plugins::none();
+        let err = plugins
+            .add_warehouse(Arc::new(Acme {
+                dialect: "acmesql",
+                reads_exports: false,
+            }))
+            .unwrap_err();
+        assert!(matches!(err, PluginError::UnknownDialect { .. }), "{err}");
+        assert!(err.to_string().contains("databricks"), "{err}");
+        let replaced = plugins.replace_warehouse(Arc::new(Acme {
+            dialect: "acmesql",
+            reads_exports: false,
+        }));
+        assert!(replaced.is_err());
+    }
+
+    #[test]
+    fn observed_lineage_is_read_by_the_projects_plugin_or_the_only_reader() {
+        let export = Path::new("missing.csv");
+        let mut plugins = Plugins::builtin();
+        // Databricks reads exports, for its projects and, as the only reader, others.
+        for warehouse in [Some("databricks"), Some("duckdb"), None] {
+            assert!(plugins.observed_lineage(warehouse, export).is_some());
+        }
+        assert_eq!(plugins.observed_lineage_readers(), ["databricks"]);
+        // A second reader: each reads its own projects', and no one guesses for others.
+        plugins
+            .add_warehouse(Arc::new(Acme {
+                dialect: "snowflake",
+                reads_exports: true,
+            }))
+            .unwrap();
+        let acme = plugins.observed_lineage(Some("acme"), export).unwrap();
+        assert!(acme.err().unwrap().to_string().contains("acme"));
+        assert!(plugins.observed_lineage(Some("duckdb"), export).is_none());
+        assert_eq!(plugins.observed_lineage_readers(), ["acme", "databricks"]);
     }
 
     #[test]
@@ -440,7 +662,9 @@ mod tests {
         assert!(err.to_string().contains("replacing_warehouse"), "{err}");
         plugins.add_warehouse(Arc::new(Other("duckdb"))).unwrap();
 
-        plugins.replace_warehouse(Arc::new(Other("databricks")));
+        plugins
+            .replace_warehouse(Arc::new(Other("databricks")))
+            .unwrap();
         // The replacement offers nothing, so Databricks now has no table versions.
         assert!(!plugins.has_changes(Some("databricks")));
         assert!(plugins.listing().iter().all(|l| !l.builtin));

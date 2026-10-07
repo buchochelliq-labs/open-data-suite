@@ -20,10 +20,9 @@ use ods_lineage::{
     GraphFilter, Impact, ImpactReason, LineageNode, LineageProject, MemoryCache, NodeKind,
     Stitched, build, diff,
 };
-use ods_provider_databricks::UcColumnLineage;
 use ods_provider_dbt::{ArtifactPreference, Artifacts, ResourceType};
 use ods_provider_sqlparser::{SqlDialect, SqlparserAnalyzer};
-use ods_sdk::contracts::observed_lineage::{ObservedLineage, ObservedLineageSource};
+use ods_sdk::contracts::observed_lineage::ObservedLineage;
 use ods_sdk::contracts::relation_link::RelationLinkFields;
 use ods_sdk::contracts::sql_lineage::SqlLineageAnalyzer;
 use serde::Serialize;
@@ -364,9 +363,13 @@ impl Loaded {
                 "run `dbt compile` (and `dbt docs generate` for warehouse columns) first",
             )
         })?;
+        // `--dialect`, else the warehouse plugin's, else the warehouse kind (ADR-0031
+        // §3a): a kind the parser can't map is refused below, never parsed as generic.
         let dialect_name = dialect
             .map(str::to_owned)
-            .or_else(|| artifacts.manifest.adapter_type.clone())
+            .or_else(|| {
+                crate::plugins::installed().dialect(artifacts.manifest.adapter_type.as_deref())
+            })
             .unwrap_or_else(|| "generic".to_owned());
         let dialect = SqlDialect::from_name(&dialect_name).ok_or_else(|| {
             CliError::new(
@@ -404,7 +407,7 @@ impl Loaded {
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
         let observed = match &options.observed {
             Some(file) => {
-                let lineage = read_observed(file, &analyzer)?;
+                let lineage = read_observed(file, adapter_type.as_deref(), &analyzer)?;
                 let (stitched_graph, stitched) =
                     graph.with_observed(&lineage, options.trust_observed);
                 let unstitched = std::mem::replace(&mut graph, stitched_graph);
@@ -529,12 +532,36 @@ impl Loaded {
 
 /// Reads observed lineage and normalizes its names the way the analyzer normalizes
 /// identifiers, so they match the graph.
-fn read_observed(file: &Path, analyzer: &SqlparserAnalyzer) -> Result<ObservedLineage, CliError> {
+///
+/// The project's warehouse plugin reads the export, or else the only plugin that reads
+/// exports (ADR-0031 §3a).
+fn read_observed(
+    file: &Path,
+    warehouse: Option<&str>,
+    analyzer: &SqlparserAnalyzer,
+) -> Result<ObservedLineage, CliError> {
     let failed = |message: String| {
         CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, message)
             .with_hint("export system.access.column_lineage as CSV or JSON; see `docs/cli.md`")
     };
-    let lineage = UcColumnLineage::from_path(file)
+    let plugins = crate::plugins::installed();
+    let source = plugins.observed_lineage(warehouse, file).ok_or_else(|| {
+        let readers = plugins.observed_lineage_readers();
+        CliError::new(
+            ExitStatus::Usage,
+            codes::LINEAGE_ARTIFACTS,
+            format!(
+                "no plugin reads observed lineage for `{}`",
+                warehouse.unwrap_or("this project's warehouse")
+            ),
+        )
+        .with_hint(if readers.is_empty() {
+            "this `ods` has no plugin that reads observed lineage".to_owned()
+        } else {
+            format!("plugins read exports from: {}", readers.join(", "))
+        })
+    })?;
+    let lineage = source
         .and_then(|source| source.observed_lineage())
         .map_err(|e| failed(e.to_string()))?;
     Ok(lineage.normalized(

@@ -37,9 +37,15 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   released CLI as a library: a crate of your own adds health checks
   (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.
   - **Warehouse plugins:** a `WarehousePlugin` serves one warehouse kind (dbt's
-    `adapter_type`). It gives `ods state` a source-version provider, and probe checks
-    a login check, over dbt's own connection. Databricks is now the built-in plugin,
-    and behaves as before.
+    `adapter_type`). Over dbt's own connection it gives `ods state` a source-version
+    provider and probe checks a login check; from the warehouse's `[providers.<name>]`
+    settings it builds "Open in warehouse" links; it reads observed lineage exports;
+    and it names the SQL dialect column lineage parses in (#415, ADR-0031 §3a). What a
+    plugin offers is detected by calling it, never declared (§3c). Databricks is now
+    the built-in plugin, and behaves as before. `ods version` and `ods doctor` now also
+    list its links and observed lineage. With several plugins that read observed
+    lineage, `--observed` uses the project's warehouse's, and a project on any other
+    warehouse is told which plugins read exports.
   - **Plugin checks:** they run with the others in `ods health check`.
     `[health.plugins.<id>]` sets their `severity` (or `off`), `select` and `exclude`; an
     id that names no plugin check is a configuration error.

@@ -33,6 +33,20 @@ expression: "render(Mode::Json)"
         "name": "databricks",
         "from": "ods-provider-databricks [ods-version]",
         "builtin": true
+      },
+      {
+        "contract": "relation_linker",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "observed_lineage_source",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
       }
     ]
   },

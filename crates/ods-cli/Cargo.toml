@@ -13,6 +13,7 @@ name = "ods"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 ods-config.workspace = true
@@ -46,7 +47,6 @@ tracing-subscriber.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 insta.workspace = true
 proptest.workspace = true
 ods-provider-fake.workspace = true

@@ -13,9 +13,7 @@ use async_trait::async_trait;
 use ods_cli::plugins::{Origin, WarehousePlugin};
 use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
-use ods_sdk::contracts::changes::{
-    CHANGE_PROVIDER, ChangeProvider, RequestedSource, SourceVersion, VersionReport,
-};
+use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion, VersionReport};
 use ods_sdk::contracts::health_check::{
     CheckFinding, CheckInfo, CheckScope, HealthCheck, Severity, Status,
 };
@@ -23,7 +21,7 @@ use ods_sdk::contracts::probe::{
     InvalidProbe, ProbeAnswer, ProbeFilter, ProbeRequest, ProbeStatement, ProbeTarget,
     RelationProbe,
 };
-use ods_sdk::{Contract, Provider, ProviderError, ProviderInfo};
+use ods_sdk::{Provider, ProviderError, ProviderInfo};
 
 /// The provider kind this crate's providers report.
 pub const KIND: &str = "custom-ods";
@@ -201,10 +199,6 @@ impl WarehousePlugin for LoadBatchPlugin {
 
     fn warehouse(&self) -> &str {
         WAREHOUSE
-    }
-
-    fn provides(&self) -> Vec<Contract> {
-        vec![CHANGE_PROVIDER]
     }
 
     fn versions_read(&self) -> Option<String> {
