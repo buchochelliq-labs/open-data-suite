@@ -20,6 +20,7 @@ mod run_stats;
 mod serve;
 mod serve_catalog;
 mod serve_dashboard;
+mod serve_settings;
 mod state;
 mod state_doctor;
 mod state_explain;

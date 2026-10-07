@@ -12,8 +12,9 @@
 //! reuse and what needs attention, see [`dashboard`]), the explorer at `lineage`,
 //! the State pages under `state/` (the plan and why, the runs, see
 //! [`dashboard::state`]), the Catalog at `catalog`, with a page per node (see
-//! [`catalog`]), the Impact simulator at `lineage/impact` (see [`impact`]), and the
-//! About page at `settings/about` (this `ods` and its plugins, see [`about`]).
+//! [`catalog`]), the Impact simulator at `lineage/impact` (see [`impact`]), Settings at
+//! `settings` (the configuration, read-only, see [`settings`]) and its About page at
+//! `settings/about` (this `ods` and its plugins, see [`about`]).
 //!
 //! This crate only presents. It never reads dbt artifacts or the state store, or wires
 //! providers: the caller (a binary) supplies a [`Loader`] that produces a fresh
@@ -40,6 +41,8 @@ mod model_page;
 mod page;
 mod search;
 mod server;
+pub mod settings;
+mod settings_page;
 mod state_pages;
 
 // The Lineage page and its State overlay (#312).

@@ -231,6 +231,113 @@ fn the_about_page_lists_the_plugins_as_ods_plugin_list_does() {
 }
 
 #[test]
+fn the_settings_page_matches_ods_config_explain() {
+    // A password in a connection string: shown nowhere, here or in `ods doctor`.
+    const SENTINEL: &str = "sk_live_SENTINEL_42";
+    let toml = format!(
+        "[providers.dbt]\nkind = \"dbt\"\n[providers.dbt.settings]\ntarget = \"dev\"\n\
+         [providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\n\
+         client_secret = {{ secret = \"env:DATABRICKS_CLIENT_SECRET\" }}\n\
+         [providers.pg]\nkind = \"postgres\"\n[providers.pg.settings]\n\
+         url = \"postgres://ods:{SENTINEL}@db.example.com/ods\"\n"
+    );
+    let home = tempfile::tempdir().unwrap();
+    fs::write(home.path().join("ods.toml"), toml).unwrap();
+    let explain = Command::new(env!("CARGO_BIN_EXE_ods"))
+        .args(["config", "explain", "--json"])
+        .current_dir(home.path())
+        .env_clear()
+        .env("XDG_CONFIG_HOME", home.path())
+        .output()
+        .unwrap();
+    let explain: Value = serde_json::from_slice(&explain.stdout).unwrap();
+    let server = serve_in(home, &fixture(), &[]);
+    let (status, body) = get(&server, "api/settings");
+    assert_eq!(status, 200, "{body}");
+    assert!(!body.contains(SENTINEL), "{body}");
+    let settings: Value = serde_json::from_str(&body).unwrap();
+
+    // Every key, its value and its source, as `ods config explain` gives them (both
+    // ran with `--json`, so `output.format` is set the same way).
+    let expected = explain["result"]["keys"].as_array().unwrap();
+    let entries = settings["entries"].as_array().unwrap();
+    let keys = |rows: &[Value]| -> Vec<String> {
+        rows.iter()
+            .map(|r| r["key"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(keys(entries), keys(expected));
+    for (entry, want) in entries.iter().zip(expected) {
+        let source = &want["source"];
+        let source = match source["layer"].as_str().unwrap() {
+            "file" => format!(
+                "{} file {}",
+                source["kind"].as_str().unwrap(),
+                source["path"].as_str().unwrap()
+            ),
+            "flag" => format!("flag {}", source["flag"].as_str().unwrap()),
+            other => panic!("no source like {other} here"),
+        };
+        assert_eq!(entry["source"], source.as_str(), "{entry}");
+        let value = &want["value"];
+        let shown = entry["value"].as_str().unwrap();
+        match value {
+            Value::String(s) if s.contains(SENTINEL) => {
+                assert!(
+                    shown.ends_with("(credentials, query and options not shown)"),
+                    "{shown}"
+                );
+            }
+            Value::String(s) => assert_eq!(shown, format!("{s:?}")),
+            Value::Object(secret) => {
+                assert_eq!(
+                    shown,
+                    format!("secret({})", secret["secret"].as_str().unwrap())
+                );
+                assert_eq!(entry["secret"], true);
+            }
+            other => panic!("no value like {other} here"),
+        }
+    }
+    // What a run resolves, the providers and the checks that only read.
+    let target = settings["project"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["label"] == "Target")
+        .unwrap();
+    assert_eq!(target["value"], "dev");
+    let providers: Vec<&str> = settings["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(providers, ["dbt", "pg", "uc"]);
+    let checks: Vec<&str> = settings["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        checks.contains(&"config.values") && checks.contains(&"state_store.database"),
+        "{checks:?}"
+    );
+    assert!(
+        !checks
+            .iter()
+            .any(|c| c.starts_with("tools.") || c.starts_with("connectivity.")),
+        "{checks:?}"
+    );
+
+    let (status, page) = get(&server, "settings");
+    assert_eq!(status, 200);
+    assert!(!page.contains(SENTINEL), "{page}");
+    assert!(page.contains("secret(env:DATABRICKS_CLIENT_SECRET)"));
+}
+
+#[test]
 fn a_missing_target_fails_before_listening() {
     let out = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args([

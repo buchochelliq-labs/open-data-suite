@@ -168,6 +168,9 @@ jobs:
       # The About page (ADR-0031 §3c) in Chromium, light and dark.
       - name: About page in a browser
         run: python crates/ods-web/tests/browser/about.py -v
+      # The Settings page (#351) in Chromium, light and dark, with no secret shown.
+      - name: Settings page in a browser
+        run: python crates/ods-web/tests/browser/settings.py -v
 
   # A custom `ods` built from a crate outside the workspace, as a third party's would
   # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary

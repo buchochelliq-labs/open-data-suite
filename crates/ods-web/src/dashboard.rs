@@ -66,6 +66,8 @@ pub struct Dashboard {
     pub health: Arc<ods_health::HealthSettings>,
     /// This `ods` and its plugins, for the About page (ADR-0031 §3c).
     pub about: crate::about::AboutInput,
+    /// The configuration and what it resolves to, for the Settings page (#351).
+    pub settings: crate::settings::SettingsInput,
     /// What the latest health record says about checks the dashboard doesn't run
     /// itself (ADR-0030 §6); `None` when there is no record, or it holds only built-ins.
     health_record: Option<Arc<ods_health::record::Recorded>>,
@@ -96,6 +98,7 @@ impl Dashboard {
             freshness: crate::freshness::FreshnessInput::default(),
             health: Arc::default(),
             about: crate::about::AboutInput::default(),
+            settings: crate::settings::SettingsInput::default(),
             health_record: None,
             journals: journal::JournalSource::default(),
         }
@@ -232,6 +235,13 @@ impl Dashboard {
             );
         }
         how
+    }
+
+    /// Sets the configuration and what it resolves to, for the Settings page (#351).
+    #[must_use]
+    pub fn with_settings(mut self, settings: crate::settings::SettingsInput) -> Self {
+        self.settings = settings;
+        self
     }
 
     /// Sets this `ods` and its plugins, for the About page (ADR-0031 §3c).
@@ -683,7 +693,7 @@ const SECTION_ITEMS: [SectionPages; 4] = [
         "settings",
         &[
             // The read-only configuration (#351).
-            ("configuration", "Configuration", None),
+            ("configuration", "Configuration", Some("settings")),
             ("about", "About", Some("settings/about")),
         ],
     ),
@@ -708,7 +718,7 @@ const SECTIONS: [Section; 9] = [
     ("usage", "Usage", None, None),
     ("ci", "CI · Impact", None, None),
     ("agent", "Agent", None, None),
-    ("settings", "Settings", Some("settings/about"), None),
+    ("settings", "Settings", Some("settings"), None),
 ];
 
 /// Where the state is.

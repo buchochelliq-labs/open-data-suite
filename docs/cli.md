@@ -617,7 +617,9 @@ It listens on loopback by default and then only answers requests for `localhost`
 `127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
 authentication yet (#97): with `--host` anything other than loopback, put it behind a
 proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
-`/api/version` hides local paths and error text (they go to the server log). Responses
+and on loopback with any `--allow-host` (a proxy forwards requests from elsewhere),
+every page and API leaves out local paths, configuration values and error text (they go
+to the server log). Responses
 carry a strict Content-Security-Policy, and nothing is written. `--base-path` accepts
 plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
 
@@ -1098,8 +1100,29 @@ warehouse is marked; when none does, the page says so: ODS still builds through 
 connection, and only knows less about the warehouse. Whether a feature can be used is
 judged with this project's configuration, as a run would use it: one that can't (e.g.
 Databricks' links without a `host`) says why, never with a setting's value.
-`/api/settings/about` returns the same view model. `/settings` leads there until the
-configuration page (#351) is built.
+`/api/settings/about` returns the same view model.
+
+**Settings** (`/settings`, the bottom of the navigation) shows the configuration,
+read-only (#351):
+- **Effective configuration:** every key with its value and source, as
+  `ods config explain` lists them (a test keeps the two in step). A secret is shown as
+  its reference (`secret(env:NAME)`), never resolved, and a value that carries a
+  credential (a connection string's user part, say) is shown without it, as
+  `ods doctor` shows it.
+- **Project and target**, **State store:** what a run resolves the project dir,
+  profile, target, artifacts, dbt program, state database and environment to, and
+  where each came from (a flag, the environment, the configuration or a default).
+- **Secrets:** the secret references only. **Providers:** each `[providers.<name>]`,
+  its kind, and what it can do; a kind a warehouse plugin serves links to About.
+- **Checks:** `ods doctor`'s checks that only read (the configuration, the project's
+  files, the state database read-only, the providers' capabilities). The page runs no
+  dbt and connects to nothing; `ods doctor` adds the tools, the target and, with
+  `--connect`, the warehouse.
+- **Server mode:** identity and access, webhooks and the audit log, shown as planned.
+
+Nothing on the page writes: change the files or the environment. Beyond loopback it
+leaves out every value, path and check detail, and keeps the keys, sources (without
+paths), names and statuses. `/api/settings` returns the same view model.
 
 ## dbt State configuration
 

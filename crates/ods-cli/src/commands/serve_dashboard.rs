@@ -196,6 +196,9 @@ pub(super) struct DashboardSource {
     /// This `ods` and its plugins, for the About page (ADR-0031 §3c). Neither changes
     /// while the server runs, so they are detected once.
     about: ods_web::about::AboutInput,
+    /// The configuration as loaded, for the Settings page (#351): its checks read the
+    /// project and the store again on each reload.
+    config: ods_config::Loaded,
 }
 
 impl DashboardSource {
@@ -208,7 +211,13 @@ impl DashboardSource {
             health: health_settings(config)?,
             warehouses: config.config.warehouses.clone(),
             about: super::plugin::about(crate::plugins::installed(), Some(&config.config)),
+            config: config.clone(),
         })
+    }
+
+    /// The Settings page's facts (#351), read again with each dashboard.
+    fn settings_input(&self) -> ods_web::settings::SettingsInput {
+        super::serve_settings::settings_input(&self.config, &self.settings)
     }
 
     /// Files whose change means new state or a new plan: the database and its
@@ -295,7 +304,8 @@ impl DashboardSource {
                         hint,
                     })
                     .with_modules(modules(false))
-                    .with_about(self.about.clone());
+                    .with_about(self.about.clone())
+                    .with_settings(self.settings_input());
             }
         };
         let ws = Arc::new(ws);
@@ -353,6 +363,7 @@ impl DashboardSource {
             .with_catalog(catalog)
             .with_freshness(freshness)
             .with_about(self.about.clone())
+            .with_settings(self.settings_input())
             .with_health(self.health_for(ws.manifest.adapter_type.as_deref()))
             .with_health_record(health_record.as_ref())
             // The live run view (#322): journals are read even before the store

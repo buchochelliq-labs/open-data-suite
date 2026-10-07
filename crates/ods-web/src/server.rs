@@ -152,6 +152,14 @@ impl ServeOptions {
 
     /// `None` accepts any `Host`: bound beyond loopback with no allow-list, which the
     /// caller has been warned about.
+    /// Whether pages may show local paths, configuration values and error text: only
+    /// when every request comes from this machine, that is, bound to loopback with no
+    /// other `Host` allowed. A name allowed with `--allow-host` is a proxy's, forwarding
+    /// requests from elsewhere.
+    fn details(&self) -> bool {
+        self.addr.ip().is_loopback() && self.allowed_hosts.is_empty()
+    }
+
     fn host_policy(&self) -> Option<Vec<String>> {
         let loopback = self.addr.ip().is_loopback();
         if !loopback && self.allowed_hosts.is_empty() {
@@ -214,8 +222,8 @@ pub(crate) struct AppState {
     snapshot: RwLock<Arc<Snapshot>>,
     pub(crate) generation: AtomicU64,
     last_error: Mutex<Option<String>>,
-    /// Whether `/api/version` may show local paths and error text. Only on loopback:
-    /// beyond it, those go to the server log.
+    /// Whether pages may show local paths, values and error text: on loopback with no
+    /// other host allowed ([`ServeOptions::details`]); else those go to the server log.
     pub(crate) details: bool,
     /// The live run streams open now, and their limits (#322).
     pub(crate) streams: crate::live::Streams,
@@ -243,7 +251,7 @@ fn new_state(snapshot: Snapshot, options: &ServeOptions) -> Shared {
         snapshot: RwLock::new(Arc::new(snapshot)),
         generation: AtomicU64::new(1),
         last_error: Mutex::new(None),
-        details: options.addr.ip().is_loopback(),
+        details: options.details(),
         streams: crate::live::Streams::new(options.streams),
     })
 }
@@ -295,9 +303,12 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         // The About page (ADR-0031 §3c): this `ods` and its plugins.
         .route(&at("/settings/about"), get(about_page))
         .route(&at("/api/settings/about"), get(about_api))
-        .route(&at("/settings"), {
-            let to = at("/settings/about");
-            get(move || async move { Redirect::temporary(&to) })
+        // Settings (#351): the configuration, read-only.
+        .route(&at("/settings"), get(settings_page))
+        .route(&at("/api/settings"), get(settings_api))
+        .route(&at("/settings/"), {
+            let to = at("/settings");
+            get(move || async move { Redirect::permanent(&to) })
         })
         .route(&at("/api/catalog"), get(catalog_routes::api))
         .route(&at("/api/catalog/{id}"), get(catalog_routes::model_api));
@@ -391,6 +402,23 @@ async fn home(State(state): State<Shared>) -> Response {
     })
     .await
     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// `/settings`: the configuration, read-only (#351).
+async fn settings_page(State(state): State<Shared>) -> Html<String> {
+    let generation = state.generation.load(Ordering::SeqCst);
+    let snapshot = state.current();
+    let dashboard = snapshot.dashboard();
+    Html(crate::settings_page::settings_page(
+        &dashboard.shell("settings"),
+        &dashboard.settings(state.details),
+        generation,
+    ))
+}
+
+/// `/api/settings`: the Settings page's view model.
+async fn settings_api(State(state): State<Shared>) -> Json<crate::settings::SettingsView> {
+    Json(state.current().dashboard().settings(state.details))
 }
 
 /// `/settings/about`: this `ods` and the plugins it runs with (ADR-0031 §3c).

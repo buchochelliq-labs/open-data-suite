@@ -431,31 +431,11 @@ impl<'a> Checks<'a> {
         let mut secrets = 0;
         let mut evidence = Vec::new();
         for (key, setting) in self.config.effective_settings() {
-            // Credentials are references by construction (ods-config rejects plaintext);
-            // they are shown as references, never resolved (AGENTS.md rule 9).
-            // Only a table is a reference: serde would also read `["x"]` as one.
-            let secret = match &setting.value {
-                toml::Value::Table(_) => setting.value.clone().try_into::<SecretRef>().ok(),
-                _ => None,
-            };
-            let value = match secret {
-                Some(secret) => {
-                    secrets += 1;
-                    secret.to_string()
-                }
-                None if key.last().is_some_and(|k| is_secret_key(k)) => "(not shown)".to_owned(),
-                None => {
-                    // A value that isn't a credential may still carry one, e.g. a
-                    // connection string `postgres://user:pw@host/db`: shown without
-                    // its user part, query, fragment and options, as the target is.
-                    let (shown, stripped) = without_credentials(&setting.value);
-                    if stripped {
-                        format!("{shown} (credentials, query and options not shown)")
-                    } else {
-                        shown.to_string()
-                    }
-                }
-            };
+            let shown = shown_value(key, &setting.value);
+            if shown.secret {
+                secrets += 1;
+            }
+            let value = shown.text;
             evidence.push(
                 Evidence::new(display_key(key), value).from_source(setting.source.to_string()),
             );
@@ -1147,6 +1127,96 @@ fn unknown_adapter(s: Spec) -> CheckResult {
         "the manifest doesn't name its adapter (`metadata.adapter_type`)",
     )
     .hint("write it again with dbt 1.7 or later: `dbt parse`")
+}
+
+/// A configuration value as ODS shows it anywhere (`ods doctor`, the dashboard's
+/// Settings page).
+pub(super) struct Shown {
+    /// What is shown.
+    pub text: String,
+    /// It is a secret reference.
+    pub secret: bool,
+}
+
+/// `value`, set at `key`, as ODS shows it: a secret as its reference, never resolved
+/// (AGENTS.md rule 9); a key named like a secret that isn't one, not at all; anything
+/// else without the credentials it may carry.
+pub(super) fn shown_value(key: &[String], value: &toml::Value) -> Shown {
+    // Credentials are references by construction (ods-config rejects plaintext).
+    // Only a table is a reference: serde would also read `["x"]` as one.
+    let secret = match value {
+        toml::Value::Table(_) => value.clone().try_into::<SecretRef>().ok(),
+        _ => None,
+    };
+    match secret {
+        Some(secret) => Shown {
+            text: secret.to_string(),
+            secret: true,
+        },
+        None if key.last().is_some_and(|k| is_secret_key(k)) => Shown {
+            text: "(not shown)".to_owned(),
+            secret: false,
+        },
+        None => {
+            // A value that isn't a credential may still carry one, e.g. a connection
+            // string `postgres://user:pw@host/db`: shown without its user part, query,
+            // fragment and options, as the target is.
+            let (shown, stripped) = without_credentials(value);
+            Shown {
+                text: if stripped {
+                    format!("{shown} (credentials, query and options not shown)")
+                } else {
+                    shown.to_string()
+                },
+                secret: false,
+            }
+        }
+    }
+}
+
+/// The checks that only read: the configuration, the project's files and the state
+/// database (read-only). None runs dbt, connects or writes, so the dashboard's Settings
+/// page (#351) runs them on each reload; `ods doctor` runs the rest.
+pub(super) const OFFLINE: [&str; 11] = [
+    "config.load",
+    "config.values",
+    "config.resolution",
+    "project.dbt_project",
+    "project.manifest",
+    "project.name",
+    "project.freshness",
+    "state_store.database",
+    "capabilities.relation_existence",
+    "capabilities.relation_versions",
+    "capabilities.plugins",
+];
+
+/// What the dbt provider, resolved as `settings`, says it can do. Nothing runs.
+pub(super) fn dbt_capabilities(settings: &StateSettings) -> Vec<String> {
+    Checks::executor(settings)
+        .info()
+        .capabilities
+        .iter()
+        .map(|c| c.name().to_owned())
+        .collect()
+}
+
+/// [`OFFLINE`]'s checks, for `config` resolved as `settings`, in display order.
+pub(super) fn offline_checks(config: &Loaded, settings: &StateSettings) -> Vec<CheckResult> {
+    let checks = Checks {
+        config,
+        config_failure: None,
+        settings: Ok(settings.clone()),
+        connect: false,
+        manifest: OnceCell::new(),
+        dbt: OnceCell::new(),
+        target: OnceCell::new(),
+    };
+    SPECS
+        .iter()
+        .filter(|s| OFFLINE.contains(&s.id))
+        .map(|s| checks.check(*s).required(s.required))
+        .collect()
 }
 
 /// `value` with every string in it cleaned by [`strip_credentials`], and whether that
@@ -2094,5 +2164,19 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), SPECS.len());
+    }
+
+    #[test]
+    fn offline_checks_never_run_dbt_or_connect() {
+        for id in OFFLINE {
+            let spec = SPECS
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap_or_else(|| panic!("{id}"));
+            assert!(
+                !matches!(spec.category, C::Tools | C::Target | C::Connectivity),
+                "{id} runs dbt or connects"
+            );
+        }
     }
 }
