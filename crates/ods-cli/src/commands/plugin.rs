@@ -26,23 +26,31 @@ impl Module for PluginCommand {
                             .required(true)
                             .value_name("NAME")
                             .help("A health check's id, or a warehouse kind (e.g. `databricks`)"),
+                    )
+                    .arg(
+                        Arg::new("kind")
+                            .long("kind")
+                            .value_name("KIND")
+                            .value_parser(["warehouse", "health_check"])
+                            .help("Which plugin, when a health check and a warehouse share NAME"),
                     ),
             )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let plugins = crate::plugins::installed();
-        let configured = &ctx.config.config.warehouses;
+        let config = &ctx.config.config;
         match matches.subcommand() {
             Some(("list", _)) => ctx.emit(&PluginList {
-                plugins: views(plugins, configured),
+                plugins: views(plugins, Some(config)),
             }),
             Some(("show", args)) => {
                 let name = args
                     .get_one::<String>("name")
                     .map(String::as_str)
                     .unwrap_or_default();
-                let report = show(plugins, configured, name)?;
+                let kind = args.get_one::<String>("kind").map(String::as_str);
+                let report = show(plugins, Some(config), name, kind)?;
                 ctx.emit(&report)
             }
             _ => unreachable!("clap requires a known subcommand"),
@@ -110,16 +118,21 @@ pub(crate) struct Inherited {
     pub(crate) detail: Option<String>,
 }
 
-/// Every plugin, as detected: health checks by id, then each warehouse.
-pub(crate) fn views(plugins: &Plugins, configured: &Warehouses) -> Vec<PluginView> {
+/// Every plugin, as detected: health checks by id, then each warehouse. With
+/// `config`, whether a feature can be used is judged with its settings and
+/// `[warehouses.<kind>]`, as a run would use them (e.g. Databricks' links with its
+/// configured `host`); without, as detection does, with none.
+pub(crate) fn views(plugins: &Plugins, config: Option<&ods_config::Config>) -> Vec<PluginView> {
     plugins
         .detected()
         .into_iter()
-        .map(|d| view(plugins, configured, d))
+        .map(|d| view(plugins, config, d))
         .collect()
 }
 
-fn view(plugins: &Plugins, configured: &Warehouses, detected: Detected) -> PluginView {
+fn view(plugins: &Plugins, config: Option<&ods_config::Config>, detected: Detected) -> PluginView {
+    let none = Warehouses::new();
+    let configured = config.map_or(&none, |c| &c.warehouses);
     let features = detected
         .features
         .iter()
@@ -128,7 +141,17 @@ fn view(plugins: &Plugins, configured: &Warehouses, detected: Detected) -> Plugi
             contract: f.contract.map(|c| c.name),
             contract_version: f.contract.map(|c| crate::version::dotted(c.version)),
             detail: f.detail.clone(),
-            unavailable: f.unavailable.clone(),
+            unavailable: match (config, f.name) {
+                // Offered: whether it can be built is a matter of this configuration.
+                (Some(config), "links") if detected.kind == PluginKind::Warehouse => plugins
+                    .links(
+                        Some(&detected.name),
+                        &crate::plugins::WarehouseSettings::from_config(config, &detected.name),
+                    )
+                    .err()
+                    .map(|why| why.to_string()),
+                _ => f.unavailable.clone(),
+            },
         })
         .collect();
     let (parents, parents_from, inherited) = if detected.kind == PluginKind::Warehouse {
@@ -201,17 +224,45 @@ fn inherited(plugins: &Plugins, configured: &Warehouses, warehouse: &str) -> Vec
     out
 }
 
-fn show(plugins: &Plugins, configured: &Warehouses, name: &str) -> Result<PluginShow, CliError> {
-    let all = views(plugins, configured);
+fn show(
+    plugins: &Plugins,
+    config: Option<&ods_config::Config>,
+    name: &str,
+    kind: Option<&str>,
+) -> Result<PluginShow, CliError> {
+    let all = views(plugins, config);
     let names: Vec<String> = all.iter().map(|p| p.name.clone()).collect();
-    all.into_iter()
-        .find(|p| p.name == name)
+    let mut found: Vec<PluginView> = all
+        .into_iter()
+        .filter(|p| p.name == name && kind.is_none_or(|k| p.kind.name() == k))
+        .collect();
+    // A health check and a warehouse may share a name: say which.
+    if found.len() > 1 {
+        return Err(CliError::new(
+            ExitStatus::Usage,
+            codes::PLUGIN_UNKNOWN,
+            format!("`{name}` names more than one plugin"),
+        )
+        .with_hint(format!(
+            "say which with --kind: {}",
+            found
+                .iter()
+                .map(|p| format!("`{}`", p.kind.name()))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        )));
+    }
+    found
+        .pop()
         .map(|plugin| PluginShow { plugin })
         .ok_or_else(|| {
             CliError::new(
                 ExitStatus::Usage,
                 codes::PLUGIN_UNKNOWN,
-                format!("no plugin `{name}`"),
+                match kind {
+                    Some(kind) => format!("no {kind} plugin `{name}`"),
+                    None => format!("no plugin `{name}`"),
+                },
             )
             .with_hint(if names.is_empty() {
                 "this ods runs with no plugins".to_owned()
@@ -368,7 +419,7 @@ mod tests {
 
     #[test]
     fn the_released_ods_lists_databricks_and_what_it_offers() {
-        let views = views(&Plugins::builtin(), &Warehouses::new());
+        let views = views(&Plugins::builtin(), None);
         let databricks = views.iter().find(|p| p.name == "databricks").unwrap();
         assert_eq!(databricks.kind, PluginKind::Warehouse);
         assert!(databricks.builtin);
@@ -443,7 +494,7 @@ mod tests {
         let mut table = String::from(
             "| Warehouse | Source versions | Login check | Links | Observed lineage | Error patterns | Dialect | Built on |\n|---|---|---|---|---|---|---|---|\n",
         );
-        for p in views(&Plugins::builtin(), &Warehouses::new())
+        for p in views(&Plugins::builtin(), None)
             .iter()
             .filter(|p| p.kind == PluginKind::Warehouse)
         {
@@ -476,7 +527,10 @@ mod tests {
             "<!-- built-in-warehouses:start (generated; see commands/plugin.rs) -->\n";
         const END: &str = "<!-- built-in-warehouses:end -->";
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/plugins.md");
-        let docs = std::fs::read_to_string(&path).unwrap();
+        // A Windows checkout may give the page CRLF line endings.
+        let docs = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\r\n", "\n");
         let start = docs
             .find(START)
             .expect("docs/plugins.md has the table's start marker")
@@ -491,8 +545,62 @@ mod tests {
     }
 
     #[test]
+    fn a_health_check_and_a_warehouse_that_share_a_name_are_told_apart_by_kind() {
+        let mut plugins = Plugins::builtin();
+        plugins
+            .add_health_check(
+                crate::origin!(),
+                std::sync::Arc::new(ods_provider_fake::FakeHealthCheck::new(
+                    "databricks",
+                    ods_sdk::contracts::health_check::Severity::Warn,
+                )),
+            )
+            .unwrap();
+        let error = show(&plugins, None, "databricks", None).unwrap_err();
+        assert_eq!(error.status, ExitStatus::Usage);
+        assert_eq!(error.message, "`databricks` names more than one plugin");
+        assert!(
+            error.hint.as_deref().is_some_and(|h| h.contains("--kind")),
+            "{error:?}"
+        );
+        let warehouse = show(&plugins, None, "databricks", Some("warehouse")).unwrap();
+        assert_eq!(warehouse.plugin.kind, PluginKind::Warehouse);
+        let check = show(&plugins, None, "databricks", Some("health_check")).unwrap();
+        assert_eq!(check.plugin.kind, PluginKind::HealthCheck);
+        let none = show(
+            &Plugins::builtin(),
+            None,
+            "databricks",
+            Some("health_check"),
+        )
+        .unwrap_err();
+        assert_eq!(none.message, "no health_check plugin `databricks`");
+    }
+
+    #[test]
+    fn links_are_usable_when_the_configuration_has_what_they_need() {
+        let config: ods_config::Config = toml::from_str(
+            "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhost = \"https://dbc-0123.cloud.databricks.com/\"\n",
+        )
+        .unwrap();
+        let links = |config: Option<&ods_config::Config>| {
+            views(&Plugins::builtin(), config)
+                .into_iter()
+                .find(|p| p.name == "databricks")
+                .unwrap()
+                .features
+                .into_iter()
+                .find(|f| f.name == "links")
+                .unwrap()
+        };
+        assert_eq!(links(Some(&config)).unavailable, None);
+        // Without configuration, as detection sees it: offered, but no host.
+        assert!(links(None).unavailable.is_some());
+    }
+
+    #[test]
     fn an_unknown_plugin_is_a_usage_error_naming_the_plugins() {
-        let error = show(&Plugins::builtin(), &Warehouses::new(), "snowflake").unwrap_err();
+        let error = show(&Plugins::builtin(), None, "snowflake", None).unwrap_err();
         assert_eq!(error.status, ExitStatus::Usage);
         assert_eq!(error.code, codes::PLUGIN_UNKNOWN);
         assert_eq!(error.message, "no plugin `snowflake`");
@@ -503,7 +611,7 @@ mod tests {
                 .is_some_and(|h| h.contains("`databricks`")),
             "{error:?}"
         );
-        let none = show(&Plugins::none(), &Warehouses::new(), "x").unwrap_err();
+        let none = show(&Plugins::none(), None, "x", None).unwrap_err();
         assert_eq!(none.hint.as_deref(), Some("this ods runs with no plugins"));
     }
 }

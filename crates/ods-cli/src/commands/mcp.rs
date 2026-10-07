@@ -77,7 +77,8 @@ impl Module for Mcp {
                     .cloned()
                     .unwrap_or_else(|| "auto".into()),
             )
-            .with_state_db(matches.get_one::<String>("state-db").map(PathBuf::from)),
+            .with_state_db(matches.get_one::<String>("state-db").map(PathBuf::from))
+            .with_config(&ctx.config.config),
         );
         // A missing target directory is not fatal: the agent may run `dbt compile`
         // after starting the server. Say so on stderr, which MCP clients log.
