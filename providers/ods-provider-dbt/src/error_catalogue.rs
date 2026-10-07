@@ -593,8 +593,9 @@ impl ErrorCatalogue for DbtErrorCatalogue {
     }
 }
 
-/// The catalogue for a project (ADR-0031 §3a): its warehouse's catalogues first (its
-/// plugin's), then dbt's, then any other warehouse's. A warehouse's own message is
+/// The catalogue for a project (ADR-0031 §3a, §3b): its warehouse's catalogues first (its
+/// plugin's, then those of the warehouses it is built on, nearest first), then dbt's,
+/// then any other warehouse's. A warehouse's own message is
 /// never read by a generic pattern; a message from another warehouse (a run from before
 /// the project moved, or before dbt wrote a manifest that names the warehouse) is still
 /// recognised, after dbt's, as when all patterns were dbt's. Whichever recognises an
@@ -603,7 +604,7 @@ impl ErrorCatalogue for DbtErrorCatalogue {
 #[derive(Clone, Default)]
 pub struct ProjectCatalogue {
     /// The project's warehouse's catalogues, nearest first.
-    warehouse: Option<Arc<dyn ErrorCatalogue>>,
+    warehouse: Vec<Arc<dyn ErrorCatalogue>>,
     /// Every other warehouse's, consulted after dbt's.
     others: Vec<Arc<dyn ErrorCatalogue>>,
 }
@@ -612,16 +613,19 @@ impl std::fmt::Debug for ProjectCatalogue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let names = |c: &Arc<dyn ErrorCatalogue>| c.catalogue().name;
         f.debug_struct("ProjectCatalogue")
-            .field("warehouse", &self.warehouse.as_ref().map(names))
+            .field(
+                "warehouse",
+                &self.warehouse.iter().map(names).collect::<Vec<_>>(),
+            )
             .field("others", &self.others.iter().map(names).collect::<Vec<_>>())
             .finish()
     }
 }
 
 impl ProjectCatalogue {
-    /// `warehouse`'s catalogue, then dbt's, then `others`.
+    /// `warehouse`'s catalogues (nearest first), then dbt's, then `others`.
     pub fn new(
-        warehouse: Option<Arc<dyn ErrorCatalogue>>,
+        warehouse: Vec<Arc<dyn ErrorCatalogue>>,
         others: Vec<Arc<dyn ErrorCatalogue>>,
     ) -> Self {
         Self { warehouse, others }
@@ -1484,7 +1488,7 @@ mod tests {
 
     #[test]
     fn the_warehouse_catalogue_is_asked_first_and_gets_dbts_steps() {
-        let project = ProjectCatalogue::new(Some(Arc::new(Warehouse)), Vec::new());
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)], Vec::new());
         assert_eq!(project.catalogue(), DbtErrorCatalogue.catalogue());
         // A message dbt's own pattern also reads: the warehouse's wins, and is named.
         let summary = node_failure("Runtime Error", "Could not find profile named 'x'");
@@ -1513,7 +1517,7 @@ mod tests {
     #[test]
     fn another_warehouses_catalogue_is_asked_after_dbts() {
         // No warehouse known (no manifest yet), or another warehouse's run.
-        let project = ProjectCatalogue::new(None, vec![Arc::new(Warehouse)]);
+        let project = ProjectCatalogue::new(Vec::new(), vec![Arc::new(Warehouse)]);
         // dbt's own pattern still wins over another warehouse's.
         let profile = node_failure("Runtime Error", "Could not find profile named 'x'");
         assert_eq!(
@@ -1718,7 +1722,7 @@ mod tests {
     fn unavailable_compute_suggests_checking_the_connection() {
         // A warehouse's catalogue recognises its compute; dbt's steps come with it.
         let summary = node_failure("Runtime Error", "Error starting cluster: terminated");
-        let project = ProjectCatalogue::new(Some(Arc::new(Warehouse)), Vec::new());
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)], Vec::new());
         let Classification::Recognised(m) = project.classify(&summary) else {
             panic!()
         };

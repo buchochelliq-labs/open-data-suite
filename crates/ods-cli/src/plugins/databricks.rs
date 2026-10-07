@@ -45,6 +45,11 @@ impl WarehousePlugin for Databricks {
         DATABRICKS
     }
 
+    /// dbt-databricks is built on dbt-spark.
+    fn parents(&self) -> Vec<String> {
+        vec!["spark".to_owned()]
+    }
+
     fn versions_read(&self) -> Option<String> {
         Some("table version from the Delta history".to_owned())
     }

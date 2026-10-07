@@ -110,6 +110,8 @@ pub(super) struct StateSettings {
     /// Whose state is kept.
     pub environment: Setting,
     pub state_db: Setting,
+    /// `[warehouses.<kind>]`, for what a warehouse inherits (ADR-0031 §3b).
+    pub warehouses: crate::plugins::Warehouses,
 }
 
 impl StateSettings {
@@ -192,6 +194,7 @@ impl StateSettings {
             target,
             target_dir,
             environment,
+            warehouses: config.config.warehouses.clone(),
         })
     }
 

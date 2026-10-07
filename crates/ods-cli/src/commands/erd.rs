@@ -808,6 +808,7 @@ fn generate(args: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         preference,
         observed: None,
         trust_observed: false,
+        warehouses: ctx.config.config.warehouses.clone(),
     };
     let erd = project_erd(&target_dir, &load, &options)?;
     let mut report = ErdReport::new(target_dir, format, erd)?;

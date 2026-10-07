@@ -44,7 +44,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
     provider and probe checks a login check; from the warehouse's `[providers.<name>]`
     settings it builds "Open in warehouse" links; it reads observed lineage exports;
     its error catalogue is asked before dbt's when a node fails; and it names the SQL
-    dialect column lineage parses in (#415, ADR-0031 §3a). What a
+    dialect column lineage parses in (#415, ADR-0031 §3a). As dbt's adapter dispatch
+    does, a warehouse inherits error patterns and the dialect from the warehouses it is
+    built on: its plugin's `parents` (Databricks: Spark), or
+    `[warehouses.<kind>] extends` in configuration (§3b). A cycle is a configuration
+    error. What a
     plugin offers is detected by calling it, never declared (§3c). Databricks is now
     the built-in plugin, and behaves as before. `ods version` and `ods doctor` now also
     list its links and observed lineage. With several plugins that read observed

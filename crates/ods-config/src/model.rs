@@ -44,6 +44,23 @@ pub struct Config {
     /// (ADR-0030, #392). Check ids are validated by the health engine that reads them.
     #[serde(default)]
     pub health: HealthConfig,
+    /// What ODS knows about a warehouse kind beyond its plugin, by kind as the project
+    /// names it (for dbt, `adapter_type`): e.g. the warehouses it is built on
+    /// (ADR-0031 §3b).
+    #[serde(default)]
+    pub warehouses: BTreeMap<String, WarehouseConfig>,
+}
+
+/// `[warehouses.<kind>]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct WarehouseConfig {
+    /// The warehouses this one is built on, nearest first, as dbt's adapter dispatch
+    /// searches them: in place of its plugin's own list when set. Only error patterns
+    /// and the SQL dialect are inherited from them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<Vec<String>>,
 }
 
 /// `[project]`.

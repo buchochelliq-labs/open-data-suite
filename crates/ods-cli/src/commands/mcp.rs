@@ -66,7 +66,7 @@ impl Module for Mcp {
         let project = Arc::new(
             Project::new(
                 artifacts_dir(matches, ctx.config)?,
-                LoadOptions::from_args(matches),
+                LoadOptions::from_args(matches).with_warehouses(ctx.config),
                 match matches.get_one::<String>("artifacts").map(String::as_str) {
                     Some("json") => ArtifactPreference::Json,
                     Some("info-schema") => ArtifactPreference::InfoSchema,

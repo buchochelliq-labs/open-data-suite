@@ -42,6 +42,8 @@ pub(super) struct ProjectFiles<'a> {
     /// The manifest dbt wrote last, when `manifest` is `None` because it may not
     /// describe the code that failed: only its names are used, for did-you-mean.
     pub(super) last_manifest: Option<&'a ods_provider_dbt::Manifest>,
+    /// `[warehouses.<kind>]`, for the warehouses the project's is built on.
+    pub(super) warehouses: &'a crate::plugins::Warehouses,
 }
 
 impl ProjectFiles<'_> {
@@ -77,7 +79,7 @@ impl ProjectFiles<'_> {
             .manifest
             .or(self.last_manifest)
             .and_then(|m| m.adapter_type.as_deref());
-        crate::plugins::installed().project_catalogue(warehouse)
+        crate::plugins::installed().project_catalogue(warehouse, self.warehouses)
     }
 
     fn last_index(&self) -> Option<ProjectIndex> {
@@ -247,6 +249,7 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
                     preference: ods_provider_dbt::ArtifactPreference::Auto,
                     observed: None,
                     trust_observed: false,
+                    warehouses: evidence.files.warehouses.clone(),
                 };
                 Loaded::from_dir(evidence.files.target_dir, &options, shared_cache()).ok()
             });
@@ -742,6 +745,7 @@ mod tests {
             target_dir: &real.join("target"),
             manifest: None,
             last_manifest: None,
+            warehouses: &crate::plugins::Warehouses::new(),
         };
         assert_eq!(files.target_name(), "target");
         let files = ProjectFiles {
@@ -749,6 +753,7 @@ mod tests {
             target_dir: &link.join("target"),
             manifest: None,
             last_manifest: None,
+            warehouses: &crate::plugins::Warehouses::new(),
         };
         assert_eq!(files.target_name(), "target");
     }
