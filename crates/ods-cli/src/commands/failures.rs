@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use ods_core::failure::{Confidence, ErrorExplanation, FailedCheck, Text, check_handle};
 use ods_core::state::{ExecutionPlan, StateSnapshot};
-use ods_provider_dbt::error_catalogue::{DbtErrorCatalogue, project_index};
+use ods_provider_dbt::error_catalogue::{ProjectCatalogue, project_index};
 use ods_provider_dbt::events::project_failure;
 use ods_sdk::contracts::error_catalogue::{ErrorCatalogue, ProjectIndex};
 use ods_sdk::contracts::executor::ExecutionReport;
@@ -68,6 +68,16 @@ impl ProjectFiles<'_> {
     pub(super) fn index(&self) -> Option<ProjectIndex> {
         let name = self.target_name();
         self.manifest.map(|m| project_index(m, Some(&name)))
+    }
+
+    /// The error catalogue for the project's warehouse: its plugin's, then dbt's
+    /// (ADR-0031 §3a).
+    pub(super) fn catalogue(&self) -> ProjectCatalogue {
+        let warehouse = self
+            .manifest
+            .or(self.last_manifest)
+            .and_then(|m| m.adapter_type.as_deref());
+        ProjectCatalogue::new(crate::plugins::installed().errors(warehouse))
     }
 
     fn last_index(&self) -> Option<ProjectIndex> {
@@ -205,7 +215,7 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
     if failed.is_empty() && checks.is_empty() {
         return Vec::new();
     }
-    let catalogue = DbtErrorCatalogue::new();
+    let catalogue = evidence.files.catalogue();
     let info = catalogue.catalogue();
     let index = evidence.files.index();
     let history = earlier_runs(evidence.state_db, run);
@@ -288,7 +298,7 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
 /// be found in it.
 pub(super) fn explain_prepare(output: &str, evidence: &Evidence<'_>) -> Option<ErrorExplanation> {
     let failure = project_failure(output)?;
-    let catalogue = DbtErrorCatalogue::new();
+    let catalogue = evidence.files.catalogue();
     let info = catalogue.catalogue();
     let classification = catalogue.classify_project(&failure);
     // dbt writes no manifest when it can't resolve a reference; for did-you-mean, the

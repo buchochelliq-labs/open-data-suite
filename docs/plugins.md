@@ -112,6 +112,9 @@ that runs the released CLI with your plugins added
     unresolved), or the reason there are no links;
   - `observed_lineage`: an `ObservedLineageSource` reading what the user exported
     from the warehouse, for `ods lineage compare --observed`;
+  - `errors`: an `ErrorCatalogue` of the warehouse's own messages, asked before dbt's
+    when a node fails; dbt's steps come with what it recognises
+    ([error patterns](reference/error-patterns.md#warehouse-plugins-patterns));
   - `dialect`: the SQL dialect column lineage parses its SQL in, by the shared
     parser's name for it (a name the parser doesn't know refuses the plugin).
 
@@ -119,7 +122,7 @@ that runs the released CLI with your plugins added
   connection that refuses every statement and with empty settings, and lists what
   comes back. The released `ods` has one built-in warehouse plugin, Databricks: Delta
   table versions, Unity Catalog's login check, Catalog Explorer links, Unity Catalog's
-  column lineage exports and the Databricks dialect.
+  column lineage exports, dbt-databricks's error messages and the Databricks dialect.
 
 ```rust
 // src/main.rs of your crate

@@ -40,7 +40,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
     `adapter_type`). Over dbt's own connection it gives `ods state` a source-version
     provider and probe checks a login check; from the warehouse's `[providers.<name>]`
     settings it builds "Open in warehouse" links; it reads observed lineage exports;
-    and it names the SQL dialect column lineage parses in (#415, ADR-0031 §3a). What a
+    its error catalogue is asked before dbt's when a node fails; and it names the SQL
+    dialect column lineage parses in (#415, ADR-0031 §3a). What a
     plugin offers is detected by calling it, never declared (§3c). Databricks is now
     the built-in plugin, and behaves as before. `ods version` and `ods doctor` now also
     list its links and observed lineage. With several plugins that read observed
@@ -127,6 +128,10 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   cover is *unknown* for them, never healthy. A new record reloads the page.
 
 ### Changed
+- dbt's error catalogue is at version 7 (#415): dbt-databricks's own messages (unavailable
+  compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
+  (`databricks` 1), asked first on a Databricks project. Explanations are unchanged.
+  On a Databricks project the catalogue's version reads `7+databricks 1`.
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
   each other. `/roadmap/` redirects to `/ROADMAP/`.

@@ -12,6 +12,7 @@ use std::sync::{Arc, OnceLock};
 
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::changes::ChangeProvider;
+use ods_sdk::contracts::error_catalogue::ErrorCatalogue;
 use ods_sdk::contracts::health_check::{CheckInfo, HealthCheck};
 use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
 use ods_sdk::contracts::privileges::PrivilegedProbe;
@@ -106,6 +107,13 @@ pub trait WarehousePlugin: Send + Sync {
         export: &Path,
     ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
         let _ = export;
+        None
+    }
+
+    /// Its engine's own error patterns (ADR-0025): consulted before dbt's, which adds
+    /// its steps to what this recognises. Patterns several warehouses share stay in
+    /// dbt's catalogue.
+    fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>> {
         None
     }
 
@@ -364,6 +372,11 @@ impl Plugins {
             .collect()
     }
 
+    /// The error catalogue of `warehouse`'s plugin, if it has one.
+    pub fn errors(&self, warehouse: Option<&str>) -> Option<Arc<dyn ErrorCatalogue>> {
+        self.warehouse(warehouse)?.errors()
+    }
+
     /// The SQL dialect for `warehouse`'s SQL: its plugin's, else the warehouse kind
     /// itself, for the parser to map (`None` when there is neither).
     pub fn dialect(&self, warehouse: Option<&str>) -> Option<String> {
@@ -540,12 +553,18 @@ mod tests {
                 ("relation_privileges", "databricks", true),
                 ("relation_linker", "databricks", true),
                 ("observed_lineage_source", "databricks", true),
+                ("error_catalogue", "databricks", true),
             ]
         );
         assert_eq!(
             plugins.dialect(Some("databricks")).as_deref(),
             Some("databricks")
         );
+        assert_eq!(
+            plugins.errors(Some("databricks")).unwrap().catalogue().name,
+            "databricks"
+        );
+        assert!(plugins.errors(Some("duckdb")).is_none());
         // Without a plugin, the kind is the dialect's name, for the parser to map.
         assert_eq!(plugins.dialect(Some("duckdb")).as_deref(), Some("duckdb"));
         assert_eq!(plugins.dialect(None), None);

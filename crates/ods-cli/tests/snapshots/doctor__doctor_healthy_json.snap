@@ -345,6 +345,10 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           {
             "key": "observed_lineage_source.databricks",
             "value": "observed_lineage_source 0.1 for databricks (ods-provider-databricks [ods-version], built in)"
+          },
+          {
+            "key": "error_catalogue.databricks",
+            "value": "error_catalogue 0.4 for databricks (ods-provider-databricks [ods-version], built in)"
           }
         ]
       },
