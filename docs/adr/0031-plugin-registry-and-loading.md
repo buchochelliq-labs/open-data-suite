@@ -85,7 +85,7 @@ mappings go away.
   ```rust
   fn main() -> std::process::ExitCode {
       ods_cli::Ods::new()                       // the built-in plugins
-          .health_check(Arc::new(PiiTagged))?   // a HealthCheck
+          .health_check(origin!(), Arc::new(PiiTagged))?   // a HealthCheck
           .warehouse(SnowflakeVersions::factory())? // providers for one warehouse
           .run()                                // real args, streams and environment
   }

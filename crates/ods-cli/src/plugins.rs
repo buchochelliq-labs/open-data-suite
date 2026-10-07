@@ -70,6 +70,12 @@ pub trait WarehousePlugin: Send + Sync {
         let _ = probe;
         None
     }
+
+    /// What [`changes`](Self::changes) reads, for people: the Freshness screen says
+    /// runs read it. Without one, it says the plugin's warehouse and crate.
+    fn versions_read(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Why a plugin can't be added.
@@ -102,7 +108,7 @@ pub enum PluginError {
 /// The health checks and warehouse plugins this `ods` runs with.
 #[derive(Clone, Default)]
 pub struct Plugins {
-    checks: Vec<(Arc<dyn HealthCheck>, bool)>,
+    checks: Vec<(Arc<dyn HealthCheck>, Origin, bool)>,
     warehouses: BTreeMap<String, (Arc<dyn WarehousePlugin>, bool)>,
 }
 
@@ -149,15 +155,19 @@ impl Plugins {
     /// # Errors
     /// Its id isn't well formed, or another plugin check has it. A clash with a
     /// built-in or configured check is found when the checks are set up (exit 4).
-    pub fn add_health_check(&mut self, check: Arc<dyn HealthCheck>) -> Result<(), PluginError> {
+    pub fn add_health_check(
+        &mut self,
+        origin: Origin,
+        check: Arc<dyn HealthCheck>,
+    ) -> Result<(), PluginError> {
         let id = check.describe().id;
         if !CheckInfo::valid_id(&id) {
             return Err(PluginError::InvalidId(id));
         }
-        if self.checks.iter().any(|(c, _)| c.describe().id == id) {
+        if self.checks.iter().any(|(c, _, _)| c.describe().id == id) {
             return Err(PluginError::DuplicateCheck(id));
         }
-        self.checks.push((check, false));
+        self.checks.push((check, origin, false));
         Ok(())
     }
 
@@ -188,12 +198,29 @@ impl Plugins {
 
     /// The registered health checks, in the order they were added.
     pub fn health_checks(&self) -> impl Iterator<Item = &Arc<dyn HealthCheck>> {
-        self.checks.iter().map(|(c, _)| c)
+        self.checks.iter().map(|(c, _, _)| c)
     }
 
     /// The plugin serving `warehouse`, if any.
     pub fn warehouse(&self, warehouse: Option<&str>) -> Option<&dyn WarehousePlugin> {
         self.warehouses.get(warehouse?).map(|(p, _)| p.as_ref())
+    }
+
+    /// What runs read as `warehouse`'s source versions, when its plugin gives them: as
+    /// the plugin describes it, or else which plugin reads them.
+    pub fn versions_read(&self, warehouse: Option<&str>) -> Option<String> {
+        let plugin = self.warehouse(warehouse)?;
+        plugin.provides().contains(&CHANGE_PROVIDER).then(|| {
+            plugin.versions_read().unwrap_or_else(|| {
+                let o = plugin.origin();
+                format!(
+                    "data version read by the `{}` plugin ({} {})",
+                    plugin.warehouse(),
+                    o.name,
+                    o.version
+                )
+            })
+        })
     }
 
     /// Whether `warehouse` has a source-version provider.
@@ -226,15 +253,12 @@ impl Plugins {
         let mut listed: Vec<Listed> = self
             .checks
             .iter()
-            .map(|(check, builtin)| {
-                let info = check.info();
-                Listed {
-                    contract: HEALTH_CHECK.name,
-                    contract_version: crate::version::dotted(HEALTH_CHECK.version),
-                    name: check.describe().id,
-                    from: format!("{} {}", info.kind, info.version),
-                    builtin: *builtin,
-                }
+            .map(|(check, origin, builtin)| Listed {
+                contract: HEALTH_CHECK.name,
+                contract_version: crate::version::dotted(HEALTH_CHECK.version),
+                name: check.describe().id,
+                from: format!("{} {}", origin.name, origin.version),
+                builtin: *builtin,
             })
             .collect();
         listed.sort_by(|a, b| a.name.cmp(&b.name));
@@ -296,6 +320,10 @@ impl WarehousePlugin for Databricks {
         vec![CHANGE_PROVIDER, RELATION_PRIVILEGES]
     }
 
+    fn versions_read(&self) -> Option<String> {
+        Some("table version from the Delta history".to_owned())
+    }
+
     fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
         Some(Arc::new(DeltaVersions::new(probe)))
     }
@@ -331,12 +359,61 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_that_doesnt_say_what_it_reads_is_named_instead() {
+        struct Versions;
+        impl WarehousePlugin for Versions {
+            fn origin(&self) -> Origin {
+                Origin {
+                    name: "acme-ods",
+                    version: "1.2.3",
+                }
+            }
+            fn warehouse(&self) -> &'static str {
+                "acme"
+            }
+            fn provides(&self) -> Vec<Contract> {
+                vec![CHANGE_PROVIDER]
+            }
+        }
+        let mut plugins = Plugins::none();
+        plugins.add_warehouse(Arc::new(Versions)).unwrap();
+        // Never another warehouse's wording (e.g. Delta's history).
+        assert_eq!(
+            plugins.versions_read(Some("acme")).as_deref(),
+            Some("data version read by the `acme` plugin (acme-ods 1.2.3)")
+        );
+    }
+
+    #[test]
+    fn a_check_is_listed_with_the_crate_that_registered_it() {
+        let mut plugins = Plugins::none();
+        let origin = Origin {
+            name: "acme-checks",
+            version: "0.4.0",
+        };
+        plugins
+            .add_health_check(
+                origin,
+                Arc::new(FakeHealthCheck::new("owner", Severity::Warn)),
+            )
+            .unwrap();
+        let listed = plugins.listing();
+        assert_eq!(listed[0].name, "owner");
+        assert_eq!(listed[0].from, "acme-checks 0.4.0");
+    }
+
+    #[test]
     fn the_builtins_serve_databricks_and_nothing_else() {
         let plugins = Plugins::builtin();
         assert!(plugins.has_changes(Some("databricks")));
         assert!(plugins.changes(Some("databricks"), probe()).is_some());
         assert!(plugins.privileges(Some("databricks"), probe()).is_some());
+        assert_eq!(
+            plugins.versions_read(Some("databricks")).as_deref(),
+            Some("table version from the Delta history")
+        );
         for other in [None, Some("duckdb"), Some("Databricks")] {
+            assert!(plugins.versions_read(other).is_none());
             assert!(!plugins.has_changes(other));
             assert!(plugins.changes(other, probe()).is_none());
             assert!(plugins.privileges(other, probe()).is_none());
@@ -372,14 +449,21 @@ mod tests {
     #[test]
     fn health_checks_need_a_valid_unique_id() {
         let mut plugins = Plugins::none();
-        let bad =
-            plugins.add_health_check(Arc::new(FakeHealthCheck::new("Owner!", Severity::Warn)));
+        let bad = plugins.add_health_check(
+            crate::origin!(),
+            Arc::new(FakeHealthCheck::new("Owner!", Severity::Warn)),
+        );
         assert_eq!(bad, Err(PluginError::InvalidId("Owner!".to_owned())));
         plugins
-            .add_health_check(Arc::new(FakeHealthCheck::new("owner", Severity::Warn)))
+            .add_health_check(
+                crate::origin!(),
+                Arc::new(FakeHealthCheck::new("owner", Severity::Warn)),
+            )
             .unwrap();
-        let twice =
-            plugins.add_health_check(Arc::new(FakeHealthCheck::new("owner", Severity::Warn)));
+        let twice = plugins.add_health_check(
+            crate::origin!(),
+            Arc::new(FakeHealthCheck::new("owner", Severity::Warn)),
+        );
         assert_eq!(twice, Err(PluginError::DuplicateCheck("owner".to_owned())));
         let listed = &plugins.listing()[0];
         assert_eq!(

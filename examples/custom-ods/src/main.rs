@@ -7,7 +7,7 @@ use custom_ods::{LoadBatchPlugin, OwnerTagged};
 
 fn main() -> ExitCode {
     let ods = ods_cli::Ods::new()
-        .health_check(Arc::new(OwnerTagged))
+        .health_check(ods_cli::origin!(), Arc::new(OwnerTagged))
         .and_then(|ods| ods.warehouse(Arc::new(LoadBatchPlugin)));
     match ods {
         Ok(ods) => ods.run(),

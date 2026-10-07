@@ -117,7 +117,7 @@ use std::sync::Arc;
 
 fn main() -> ExitCode {
     let ods = ods_cli::Ods::new()                         // the released `ods`
-        .health_check(Arc::new(my_checks::OwnerTagged))
+        .health_check(ods_cli::origin!(), Arc::new(my_checks::OwnerTagged))
         .and_then(|ods| ods.warehouse(Arc::new(my_warehouse::Plugin)));
     match ods {
         Ok(ods) => ods.run(),

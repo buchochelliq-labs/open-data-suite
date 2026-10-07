@@ -10,7 +10,7 @@ use ods_sdk::contracts::health_check::HealthCheck;
 use crate::app::{self, Io};
 use crate::commands::default_registry;
 use crate::exit::ExitStatus;
-use crate::plugins::{self, PluginError, Plugins, WarehousePlugin};
+use crate::plugins::{self, Origin, PluginError, Plugins, WarehousePlugin};
 
 /// The `ods` CLI with its plugins. The released binary is `Ods::new().run()`; a custom
 /// build adds health checks and warehouse plugins first:
@@ -19,7 +19,9 @@ use crate::plugins::{self, PluginError, Plugins, WarehousePlugin};
 /// # use std::process::ExitCode;
 /// fn main() -> ExitCode {
 ///     let ods = ods_cli::Ods::new();
-///     // let ods = ods.health_check(Arc::new(MyCheck))?.warehouse(Arc::new(MyWarehouse))?;
+///     // let ods = ods
+///     //     .health_check(ods_cli::origin!(), Arc::new(MyCheck))?
+///     //     .warehouse(Arc::new(MyWarehouse))?;
 ///     ods.run()
 /// }
 /// ```
@@ -43,12 +45,18 @@ impl Ods {
     }
 
     /// Adds a health check, which `ods health check` runs with the others
-    /// (`[health.plugins.<id>]` tunes it).
+    /// (`[health.plugins.<id>]` tunes it). `origin` is the crate it comes from, which
+    /// `ods version` and `ods doctor` name: pass [`origin!()`](crate::origin), written in
+    /// that crate. (A check's `info().kind` is its kind as configured, not its crate.)
     ///
     /// # Errors
     /// Its id isn't valid, or another plugin check has it.
-    pub fn health_check(mut self, check: Arc<dyn HealthCheck>) -> Result<Self, PluginError> {
-        self.plugins.add_health_check(check)?;
+    pub fn health_check(
+        mut self,
+        origin: Origin,
+        check: Arc<dyn HealthCheck>,
+    ) -> Result<Self, PluginError> {
+        self.plugins.add_health_check(origin, check)?;
         Ok(self)
     }
 

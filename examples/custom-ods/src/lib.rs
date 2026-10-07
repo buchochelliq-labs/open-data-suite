@@ -207,6 +207,10 @@ impl WarehousePlugin for LoadBatchPlugin {
         vec![CHANGE_PROVIDER]
     }
 
+    fn versions_read(&self) -> Option<String> {
+        Some("latest load batch, `max(batch_id)`".to_owned())
+    }
+
     fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
         Some(Arc::new(LoadBatches::new(probe)))
     }
