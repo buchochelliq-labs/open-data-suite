@@ -71,6 +71,9 @@ pub struct SourceInput {
     /// from the table's history, which this screen can't: the server never connects to
     /// the warehouse. `None` when the warehouse offers none.
     pub read_by_runs: Option<String>,
+    /// The command whose saved reading gave the versions runs read, e.g. `ods state
+    /// build --dry-run` (ADR-0022 §7); `None` when none was saved.
+    pub read_saved_by: Option<String>,
     /// Its data version now, if anything reports one.
     pub version: Option<DataVersion>,
     /// When `version` was observed.
@@ -89,6 +92,7 @@ impl SourceInput {
             relation: None,
             measured_with: None,
             read_by_runs: None,
+            read_saved_by: None,
             version: None,
             observed_at: None,
             version_evidence: Vec::new(),
@@ -114,6 +118,13 @@ impl SourceInput {
     #[must_use]
     pub fn read_by_runs(mut self, version: Option<String>) -> Self {
         self.read_by_runs = version;
+        self
+    }
+
+    /// Says the versions runs read come from the reading `command` saved.
+    #[must_use]
+    pub fn read_saved_by(mut self, command: Option<String>) -> Self {
+        self.read_saved_by = command;
         self
     }
 
@@ -575,10 +586,14 @@ fn source_view(
                 .filter_map(|e| e.value.as_ref().map(|v| format!("{}: {v}", e.kind))),
         )
         .collect();
-    if let Some(run) = &source.read_by_runs {
-        notes.push(format!(
-            "not read here: this screen doesn't connect to the warehouse, so its decisions don't use the {run}; a run reads it before deciding"
-        ));
+    match (&source.read_by_runs, &source.read_saved_by) {
+        (Some(run), Some(command)) => notes.push(format!(
+            "the {run} `{command}` read, when it started: this screen doesn't connect to the warehouse; a version read before a reader's last build says nothing about data since"
+        )),
+        (Some(run), None) => notes.push(format!(
+            "not read here: this screen doesn't connect to the warehouse, so its decisions don't use the {run}; a run reads it before deciding, and `ods state build --dry-run` reads it for this screen"
+        )),
+        _ => {}
     }
     InputView {
         id: source.id.clone(),

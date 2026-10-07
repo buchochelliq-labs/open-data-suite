@@ -1816,6 +1816,20 @@ impl RunReport {
         let (store, latest) = open_state(&ws, dry_run)?;
         let table_versions =
             super::state_versions::read_table_versions(&mut ws, &executor, &mut warnings)?;
+        // Saved for the commands that don't connect (ADR-0022 §7), whatever happens
+        // next: it is what was read, not state, so it changes nothing that was built.
+        if let Some(reading) = &table_versions {
+            let command = format!(
+                "ods state {}{}",
+                kind.name(),
+                if dry_run && builds { " --dry-run" } else { "" }
+            );
+            if let Err(e) =
+                super::state_readings::save(&ws.state_db, &ws.scope.to_string(), &command, reading)
+            {
+                warnings.push(e);
+            }
+        }
         let (latest, target_changed) = in_target(latest, target.as_ref(), &mut warnings);
         // One clock for the check and the plan, so they agree on what is due.
         let now = Timestamp::now();

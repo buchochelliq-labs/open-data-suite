@@ -27,6 +27,7 @@ mod state_explain;
 mod state_export;
 mod state_failure;
 mod state_plan;
+mod state_readings;
 mod state_retry;
 mod state_run;
 mod state_savings;

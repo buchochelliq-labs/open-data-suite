@@ -195,6 +195,11 @@ pub(super) struct Workspace {
     pub(super) manifest: ods_provider_dbt::Manifest,
     /// What was read about sources' data versions, which the planner picks from.
     pub(super) readings: Vec<VersionReading>,
+    /// The saved reading added by [`Self::add_saved_reading`], if any: when it was read
+    /// and by which command (#388).
+    pub(super) saved_reading: Option<(Option<Timestamp>, String)>,
+    /// What loading the saved reading said, for the plan's notes.
+    pub(super) saved_notes: Vec<String>,
 }
 
 /// `sources.json`'s `max_loaded_at` per source, as a `source_freshness` reading, taken
@@ -302,12 +307,29 @@ impl Workspace {
             scope,
             manifest: artifacts.manifest,
             readings,
+            saved_reading: None,
+            saved_notes: Vec::new(),
         })
     }
 
     /// Adds what another reader found about sources' data versions (e.g. table
     /// versions), and has the planner pick each source's version again from
     /// everything read (ADR-0022 §2).
+    /// Adds the reading the last command that read sources' versions saved for this
+    /// scope (ADR-0022 §7). Only for commands that don't read them: a fresh reading must
+    /// never be shadowed by a saved one.
+    pub(super) fn add_saved_reading(&mut self) {
+        let Some(saved) = super::state_readings::load(
+            &self.state_db,
+            &self.scope.to_string(),
+            &mut self.saved_notes,
+        ) else {
+            return;
+        };
+        self.saved_reading = Some((saved.read_at, saved.command));
+        self.add_reading(saved.reading);
+    }
+
     pub(super) fn add_reading(&mut self, reading: VersionReading) {
         self.readings.push(reading);
         ods_state::choose_source_versions(&mut self.project.sources, &self.readings);
@@ -589,9 +611,17 @@ pub(super) fn plan_latest(
         (latest, _) => (latest, options),
     };
     // Offline, as the relation check is (ADR-0016): it runs no dbt command.
-    if super::state_versions::reads_table_versions(ws) {
-        // `ods state explain` plans through here, so it says the same.
-        notes.push("sources' table versions weren't read: this command doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
+    notes.extend(ws.saved_notes.iter().cloned());
+    // `ods state explain` plans through here, so it says the same.
+    match &ws.saved_reading {
+        Some((at, command)) => notes.push(format!(
+            "sources' table versions are those `{command}` read{}: this command doesn't run dbt; a version read before a model's last build says nothing about data since",
+            at.map(|at| format!(" at {at}")).unwrap_or_default()
+        )),
+        None if super::state_versions::reads_table_versions(ws) => {
+            notes.push("sources' table versions weren't read: this command doesn't run dbt, so their versions come from sources.json only; `ods state build --dry-run` reads them".to_owned());
+        }
+        None => {}
     }
     let (plan, mut warnings) = plan_against(ws, latest.as_ref(), specs, now, options)?;
     warnings.extend(notes);
@@ -606,7 +636,9 @@ pub(super) fn plan_latest(
 impl PlanReport {
     pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
         let settings = StateSettings::resolve(args, config)?;
-        let ws = Workspace::load(args, &settings, Sources::AsGiven)?;
+        let mut ws = Workspace::load(args, &settings, Sources::AsGiven)?;
+        // Offline: the versions the last command that read them saw (ADR-0022 §7).
+        ws.add_saved_reading();
         let now = match args.try_get_one::<String>("now").ok().flatten() {
             Some(at) => Timestamp::parse(at)
                 .map_err(|e| CliError::new(ExitStatus::Usage, codes::STATE_INPUT, e))?,
