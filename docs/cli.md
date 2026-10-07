@@ -226,6 +226,12 @@ format = "json"
     settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
     `target_dir`, all strings; any other key is an error
   - `policy.rules`
+  - `warehouses.<kind>.extends`: the warehouses a warehouse kind (as dbt names it,
+    `adapter_type`) is built on, nearest first, e.g. `extends = ["postgres"]` for an
+    adapter built on dbt-postgres. It replaces the warehouse plugin's own list
+    (Databricks is built on Spark). Only error patterns and the SQL dialect are
+    inherited, never source versions, the login check, links or observed lineage
+    (ADR-0031 §3b). Warehouses that extend each other in a cycle are an error.
 
   Unknown keys are errors.
 - **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`.

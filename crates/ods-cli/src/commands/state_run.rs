@@ -1954,6 +1954,7 @@ impl RunReport {
             target_dir: &ws.target_dir,
             manifest: Some(&ws.manifest),
             last_manifest: None,
+            warehouses: &settings.warehouses,
         };
         if let Some(execution) = &self.execution {
             self.observed.check_names = super::failures::describe_checks(execution, &files);
@@ -2617,6 +2618,7 @@ pub(super) fn failed_before_running<const TEST: bool>(
             target_dir: &target_dir,
             manifest: manifest.as_ref(),
             last_manifest: last_manifest.as_ref(),
+            warehouses: &settings.warehouses,
         },
         plan: None,
         before: None,

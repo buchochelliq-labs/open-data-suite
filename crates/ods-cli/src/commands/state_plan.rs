@@ -1210,6 +1210,7 @@ pub(super) fn explain_history(
             target_dir: &target_dir,
             manifest: ws.as_ref().map(|w| &w.manifest),
             last_manifest: None,
+            warehouses: &settings.warehouses,
         },
         plan: Some(&plan),
         before: before.as_ref(),

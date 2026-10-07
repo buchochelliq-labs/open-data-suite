@@ -306,7 +306,11 @@ impl CheckReport {
         // trusted (ADR-0030 §4d).
         health.pin_probe_connection(&probe_pins(&settings));
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
-        super::serve_dashboard::check_probe_sql(&mut health, ws.manifest.adapter_type.as_deref())?;
+        super::serve_dashboard::check_probe_sql(
+            &mut health,
+            ws.manifest.adapter_type.as_deref(),
+            &config.config.warehouses,
+        )?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
         let allow_elevated_login = args.get_flag("allow-elevated-login");
         if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?

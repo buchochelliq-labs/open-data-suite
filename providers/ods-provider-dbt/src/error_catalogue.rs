@@ -593,13 +593,13 @@ impl ErrorCatalogue for DbtErrorCatalogue {
     }
 }
 
-/// The catalogue for a project: its warehouse plugin's, if it has one, then dbt's
-/// (ADR-0031 §3a). The first that recognises an error wins, so a warehouse's own
-/// message is never read by a generic pattern; either way, dbt's steps are offered,
-/// since dbt is what runs.
+/// The catalogue for a project: its warehouse's catalogues, nearest first (its plugin's,
+/// then the warehouses it is built on: ADR-0031 §3a, §3b), then dbt's. The first that
+/// recognises an error wins, so a warehouse's own message is never read by a generic
+/// pattern; either way, dbt's steps are offered, since dbt is what runs.
 #[derive(Clone, Default)]
 pub struct ProjectCatalogue {
-    warehouse: Option<Arc<dyn ErrorCatalogue>>,
+    warehouse: Vec<Arc<dyn ErrorCatalogue>>,
 }
 
 impl std::fmt::Debug for ProjectCatalogue {
@@ -611,18 +611,19 @@ impl std::fmt::Debug for ProjectCatalogue {
 }
 
 impl ProjectCatalogue {
-    /// dbt's catalogue after `warehouse`'s, if any.
-    pub fn new(warehouse: Option<Arc<dyn ErrorCatalogue>>) -> Self {
+    /// dbt's catalogue after `warehouse`'s, nearest first.
+    pub fn new(warehouse: Vec<Arc<dyn ErrorCatalogue>>) -> Self {
         Self { warehouse }
     }
 
-    /// What the warehouse's catalogue recognises, with dbt's steps.
+    /// What the first warehouse catalogue to recognise the error makes of it, with
+    /// dbt's steps.
     fn warehouse_match(&self, error: &ErrorSummary) -> Option<Classification> {
-        match self.warehouse.as_ref()?.classify(error) {
+        self.warehouse.iter().find_map(|c| match c.classify(error) {
             Classification::Recognised(found) => Some(Classification::Recognised(steps(found))),
-            // Not recognised (or a kind of answer this host doesn't know): dbt's reads it.
+            // Not recognised (or a kind of answer this host doesn't know): the next.
             _ => None,
-        }
+        })
     }
 
     /// As [`DbtErrorCatalogue::classify_project`], after the warehouse's catalogue.
@@ -639,21 +640,16 @@ impl Provider for ProjectCatalogue {
 }
 
 impl ErrorCatalogue for ProjectCatalogue {
-    /// dbt's, with the warehouse catalogue's name and version after it (`7+databricks
+    /// dbt's, with each warehouse catalogue's name and version after it (`7+databricks
     /// 1`), so an explanation says which patterns it came from.
     fn catalogue(&self) -> CatalogueInfo {
         let dbt = DbtErrorCatalogue.catalogue();
-        match &self.warehouse {
-            None => dbt,
-            Some(warehouse) => {
-                let w = warehouse.catalogue();
-                CatalogueInfo::new(
-                    dbt.name,
-                    format!("{}+{} {}", dbt.version, w.name, w.version),
-                    dbt.engine,
-                )
-            }
+        let mut version = dbt.version;
+        for w in &self.warehouse {
+            let w = w.catalogue();
+            version = format!("{version}+{} {}", w.name, w.version);
         }
+        CatalogueInfo::new(dbt.name, version, dbt.engine)
     }
 
     fn classify(&self, error: &ErrorSummary) -> Classification {
@@ -1454,7 +1450,7 @@ mod tests {
 
     #[test]
     fn the_warehouse_catalogue_is_asked_first_and_gets_dbts_steps() {
-        let project = ProjectCatalogue::new(Some(Arc::new(Warehouse)));
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)]);
         assert_eq!(
             project.catalogue().version,
             format!("{CATALOGUE_VERSION}+acme 3")
@@ -1668,7 +1664,7 @@ mod tests {
     fn unavailable_compute_suggests_checking_the_connection() {
         // A warehouse's catalogue recognises its compute; dbt's steps come with it.
         let summary = node_failure("Runtime Error", "Error starting cluster: terminated");
-        let project = ProjectCatalogue::new(Some(Arc::new(Warehouse)));
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)]);
         let Classification::Recognised(m) = project.classify(&summary) else {
             panic!()
         };

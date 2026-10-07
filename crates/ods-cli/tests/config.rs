@@ -104,6 +104,41 @@ fn invalid_config_exits_4_in_the_active_output_mode() {
 }
 
 #[test]
+fn warehouses_that_extend_each_other_are_a_config_error() {
+    let dir = Dir::new();
+    // `databricks` is built on `spark` (its plugin says so); `spark` back on it is a cycle.
+    dir.write(
+        "ods.toml",
+        "[warehouses.spark]\nextends = [\"databricks\"]\n",
+    );
+    let out = ods(&dir, dir.path(), &["version"], &[]);
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warehouses.spark.extends") && stderr.contains("cycle"),
+        "{stderr}"
+    );
+    // An unknown key under a warehouse is an error too, as everywhere (ADR-0005).
+    dir.write(
+        "ods.toml",
+        "[warehouses.materialize]\nextend = [\"postgres\"]\n",
+    );
+    assert_eq!(
+        ods(&dir, dir.path(), &["version"], &[]).status.code(),
+        Some(4)
+    );
+    // Without a cycle, it loads.
+    dir.write(
+        "ods.toml",
+        "[warehouses.materialize]\nextends = [\"postgres\"]\n",
+    );
+    assert_eq!(
+        ods(&dir, dir.path(), &["version"], &[]).status.code(),
+        Some(0)
+    );
+}
+
+#[test]
 fn profiles_are_selected_by_flag_or_environment() {
     let dir = Dir::new();
     dir.write(

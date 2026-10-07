@@ -296,9 +296,18 @@ pub(super) struct LoadOptions {
     pub(super) preference: ArtifactPreference,
     pub(super) observed: Option<PathBuf>,
     pub(super) trust_observed: bool,
+    /// `[warehouses.<kind>]`, for the dialect a warehouse inherits (ADR-0031 §3b).
+    pub(super) warehouses: crate::plugins::Warehouses,
 }
 
 impl LoadOptions {
+    /// With `config`'s `[warehouses.<kind>]`.
+    #[must_use]
+    pub(super) fn with_warehouses(mut self, config: &ods_config::Loaded) -> Self {
+        self.warehouses.clone_from(&config.config.warehouses);
+        self
+    }
+
     /// From the arguments added by [`common_args`].
     pub(super) fn from_args(args: &ArgMatches) -> Self {
         Self {
@@ -306,6 +315,7 @@ impl LoadOptions {
             preference: preference(args),
             observed: args.get_one::<String>("observed").map(PathBuf::from),
             trust_observed: args.get_flag("trust-observed"),
+            warehouses: crate::plugins::Warehouses::new(),
         }
     }
 }
@@ -348,7 +358,8 @@ pub(super) struct Loaded {
 impl Loaded {
     pub(super) fn load(args: &ArgMatches, config: &ods_config::Loaded) -> Result<Self, CliError> {
         let target_dir = artifacts_dir(args, config)?;
-        Self::from_dir(&target_dir, &LoadOptions::from_args(args), shared_cache())
+        let options = LoadOptions::from_args(args).with_warehouses(config);
+        Self::from_dir(&target_dir, &options, shared_cache())
     }
 
     pub(super) fn from_dir(
@@ -368,7 +379,10 @@ impl Loaded {
         let dialect_name = dialect
             .map(str::to_owned)
             .or_else(|| {
-                crate::plugins::installed().dialect(artifacts.manifest.adapter_type.as_deref())
+                crate::plugins::installed().dialect(
+                    artifacts.manifest.adapter_type.as_deref(),
+                    &options.warehouses,
+                )
             })
             .unwrap_or_else(|| "generic".to_owned());
         let dialect = SqlDialect::from_name(&dialect_name).ok_or_else(|| {
@@ -1336,6 +1350,7 @@ impl ImpactReport {
                 preference: ArtifactPreference::Auto,
                 observed: None,
                 trust_observed: false,
+                warehouses: crate::plugins::Warehouses::new(),
             },
             &MemoryCache::default(),
         )?;

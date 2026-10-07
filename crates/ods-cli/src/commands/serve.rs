@@ -73,7 +73,7 @@ impl Module for Serve {
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let target_dir = artifacts_dir(matches, ctx.config)?;
-        let load = LoadOptions::from_args(matches);
+        let load = LoadOptions::from_args(matches).with_warehouses(ctx.config);
         // Shared across reloads so only changed models are re-analyzed.
         let cache = Arc::new(MemoryCache::default());
 

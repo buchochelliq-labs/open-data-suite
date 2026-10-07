@@ -87,7 +87,7 @@ pub(super) fn health_settings_with(
     health.check_plugin_config().map_err(|e| config_error(&e))?;
     // Before any project is read, probes are checked in the generic dialect, so a probe
     // that can write is an error however ODS is started.
-    check_probe_sql(&mut health, None)?;
+    check_probe_sql(&mut health, None, &config.config.warehouses)?;
     Ok(health)
 }
 
@@ -100,11 +100,12 @@ pub(super) fn health_settings_with(
 pub(super) fn check_probe_sql(
     health: &mut ods_health::HealthSettings,
     adapter: Option<&str>,
+    warehouses: &crate::plugins::Warehouses,
 ) -> Result<(), CliError> {
     // The warehouse plugin's dialect, else the kind's; else generic SQL, which can only
     // refuse more (ADR-0031 §3a).
     let dialect = crate::plugins::installed()
-        .dialect(adapter)
+        .dialect(adapter, warehouses)
         .as_deref()
         .and_then(ods_provider_sqlparser::SqlDialect::from_name)
         .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic);
@@ -419,6 +420,7 @@ fn explainer(
         target_dir: &ws.target_dir,
         manifest: Some(&ws.manifest),
         last_manifest: None,
+        warehouses: &settings.warehouses,
     };
     let missing = graph
         .nodes()
@@ -433,7 +435,8 @@ fn explainer(
         .collect();
     let mut explainer = Explainer::new(Arc::new(
         ods_provider_dbt::error_catalogue::ProjectCatalogue::new(
-            crate::plugins::installed().errors(ws.manifest.adapter_type.as_deref()),
+            crate::plugins::installed()
+                .errors(ws.manifest.adapter_type.as_deref(), &settings.warehouses),
         ),
     ))
     .with_missing_columns(missing)
