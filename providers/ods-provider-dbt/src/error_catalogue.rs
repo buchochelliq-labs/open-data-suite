@@ -59,7 +59,7 @@ use crate::{Manifest, ResourceType};
 /// `postgres-invalid-input` and `postgres-connect` need. 6: Delta's violations of a
 /// constraint added to a table whose rows break it, as recorded from Databricks. 7:
 /// dbt-databricks's own messages move to the Databricks plugin's catalogue
-/// ([`ProjectCatalogue`] consults it first, ADR-0031 §3a).
+/// ([`ProjectCatalogue`] consults it first on a Databricks project, ADR-0031 §3a).
 pub const CATALOGUE_VERSION: &str = "7";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly: the message's own,
@@ -593,43 +593,85 @@ impl ErrorCatalogue for DbtErrorCatalogue {
     }
 }
 
-/// The catalogue for a project: its warehouse's catalogues, nearest first (its plugin's,
-/// then the warehouses it is built on: ADR-0031 §3a, §3b), then dbt's. The first that
-/// recognises an error wins, so a warehouse's own message is never read by a generic
-/// pattern; either way, dbt's steps are offered, since dbt is what runs.
+/// The catalogue for a project (ADR-0031 §3a, §3b): its warehouse's catalogues first (its
+/// plugin's, then those of the warehouses it is built on, nearest first), then dbt's,
+/// then any other warehouse's. A warehouse's own message is
+/// never read by a generic pattern; a message from another warehouse (a run from before
+/// the project moved, or before dbt wrote a manifest that names the warehouse) is still
+/// recognised, after dbt's, as when all patterns were dbt's. Whichever recognises an
+/// error, dbt's steps are offered, since dbt is what runs, and the explanation names
+/// the catalogue that recognised it ([`ErrorCatalogue::classify_attributed`]).
 #[derive(Clone, Default)]
 pub struct ProjectCatalogue {
+    /// The project's warehouse's catalogues, nearest first.
     warehouse: Vec<Arc<dyn ErrorCatalogue>>,
+    /// Every other warehouse's, consulted after dbt's.
+    others: Vec<Arc<dyn ErrorCatalogue>>,
 }
 
 impl std::fmt::Debug for ProjectCatalogue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("ProjectCatalogue")
-            .field(&self.catalogue())
+        let names = |c: &Arc<dyn ErrorCatalogue>| c.catalogue().name;
+        f.debug_struct("ProjectCatalogue")
+            .field(
+                "warehouse",
+                &self.warehouse.iter().map(names).collect::<Vec<_>>(),
+            )
+            .field("others", &self.others.iter().map(names).collect::<Vec<_>>())
             .finish()
     }
 }
 
 impl ProjectCatalogue {
-    /// dbt's catalogue after `warehouse`'s, nearest first.
-    pub fn new(warehouse: Vec<Arc<dyn ErrorCatalogue>>) -> Self {
-        Self { warehouse }
+    /// `warehouse`'s catalogues (nearest first), then dbt's, then `others`.
+    pub fn new(
+        warehouse: Vec<Arc<dyn ErrorCatalogue>>,
+        others: Vec<Arc<dyn ErrorCatalogue>>,
+    ) -> Self {
+        Self { warehouse, others }
     }
 
-    /// What the first warehouse catalogue to recognise the error makes of it, with
-    /// dbt's steps.
-    fn warehouse_match(&self, error: &ErrorSummary) -> Option<Classification> {
-        self.warehouse.iter().find_map(|c| match c.classify(error) {
-            Classification::Recognised(found) => Some(Classification::Recognised(steps(found))),
-            // Not recognised (or a kind of answer this host doesn't know): the next.
-            _ => None,
+    /// What the first of `catalogues` to recognise the error makes of it, with dbt's
+    /// steps, and that catalogue.
+    fn first_match<'a>(
+        catalogues: impl IntoIterator<Item = &'a Arc<dyn ErrorCatalogue>>,
+        error: &ErrorSummary,
+    ) -> Option<(Classification, CatalogueInfo)> {
+        catalogues
+            .into_iter()
+            .find_map(|c| match c.classify(error) {
+                Classification::Recognised(found) => {
+                    Some((Classification::Recognised(steps(found)), c.catalogue()))
+                }
+                // Not recognised (or a kind of answer this host doesn't know): the next.
+                _ => None,
+            })
+    }
+
+    /// The warehouse's, then dbt's (`dbt`), then the others', with the catalogue that
+    /// answered.
+    fn attributed(
+        &self,
+        error: &ErrorSummary,
+        dbt: impl FnOnce() -> Classification,
+    ) -> (Classification, CatalogueInfo) {
+        if let Some(found) = Self::first_match(&self.warehouse, error) {
+            return found;
+        }
+        let dbt = dbt();
+        if matches!(dbt, Classification::Recognised(_)) {
+            return (dbt, DbtErrorCatalogue.catalogue());
+        }
+        Self::first_match(&self.others, error)
+            .unwrap_or_else(|| (dbt, DbtErrorCatalogue.catalogue()))
+    }
+
+    /// As [`DbtErrorCatalogue::classify_project`], in this catalogue's order, with the
+    /// catalogue that answered.
+    pub fn classify_project(&self, failure: &ProjectFailure) -> (Classification, CatalogueInfo) {
+        self.attributed(&failure.summary, || {
+            DbtErrorCatalogue.classify_project(failure)
         })
-    }
-
-    /// As [`DbtErrorCatalogue::classify_project`], after the warehouse's catalogue.
-    pub fn classify_project(&self, failure: &ProjectFailure) -> Classification {
-        self.warehouse_match(&failure.summary)
-            .unwrap_or_else(|| DbtErrorCatalogue.classify_project(failure))
     }
 }
 
@@ -640,21 +682,17 @@ impl Provider for ProjectCatalogue {
 }
 
 impl ErrorCatalogue for ProjectCatalogue {
-    /// dbt's, with each warehouse catalogue's name and version after it (`7+databricks
-    /// 1`), so an explanation says which patterns it came from.
+    /// dbt's: the one that answers when nothing recognises an error.
     fn catalogue(&self) -> CatalogueInfo {
-        let dbt = DbtErrorCatalogue.catalogue();
-        let mut version = dbt.version;
-        for w in &self.warehouse {
-            let w = w.catalogue();
-            version = format!("{version}+{} {}", w.name, w.version);
-        }
-        CatalogueInfo::new(dbt.name, version, dbt.engine)
+        DbtErrorCatalogue.catalogue()
     }
 
     fn classify(&self, error: &ErrorSummary) -> Classification {
-        self.warehouse_match(error)
-            .unwrap_or_else(|| DbtErrorCatalogue.classify(error))
+        self.classify_attributed(error).0
+    }
+
+    fn classify_attributed(&self, error: &ErrorSummary) -> (Classification, CatalogueInfo) {
+        self.attributed(error, || DbtErrorCatalogue.classify(error))
     }
 }
 
@@ -1450,30 +1488,50 @@ mod tests {
 
     #[test]
     fn the_warehouse_catalogue_is_asked_first_and_gets_dbts_steps() {
-        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)]);
-        assert_eq!(
-            project.catalogue().version,
-            format!("{CATALOGUE_VERSION}+acme 3")
-        );
-        // A message dbt's own pattern also reads: the warehouse's wins.
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)], Vec::new());
+        assert_eq!(project.catalogue(), DbtErrorCatalogue.catalogue());
+        // A message dbt's own pattern also reads: the warehouse's wins, and is named.
         let summary = node_failure("Runtime Error", "Could not find profile named 'x'");
-        let Classification::Recognised(found) = project.classify(&summary) else {
+        let (Classification::Recognised(found), by) = project.classify_attributed(&summary) else {
             panic!("not recognised")
         };
         assert_eq!(found.id, "acme-compute");
+        assert_eq!((by.name.as_str(), by.version.as_str()), ("acme", "3"));
         assert!(!found.suggestions.is_empty(), "dbt's steps: {found:?}");
-        // What the warehouse doesn't recognise, dbt's catalogue reads as before.
+        // What the warehouse doesn't recognise, dbt's catalogue reads, and is named.
         let other = node_failure(
             "Compilation Error",
             "'x' is undefined. This can happen when calling a macro that does not exist.",
         );
-        assert_eq!(project.classify(&other), DbtErrorCatalogue.classify(&other));
+        let (classified, by) = project.classify_attributed(&other);
+        assert_eq!(classified, DbtErrorCatalogue.classify(&other));
+        assert_eq!(by, DbtErrorCatalogue.catalogue());
         // Without a warehouse catalogue, it is dbt's.
         let plain = ProjectCatalogue::default();
-        assert_eq!(plain.catalogue(), DbtErrorCatalogue.catalogue());
         assert_eq!(
             plain.classify(&summary),
             DbtErrorCatalogue.classify(&summary)
+        );
+    }
+
+    #[test]
+    fn another_warehouses_catalogue_is_asked_after_dbts() {
+        // No warehouse known (no manifest yet), or another warehouse's run.
+        let project = ProjectCatalogue::new(Vec::new(), vec![Arc::new(Warehouse)]);
+        // dbt's own pattern still wins over another warehouse's.
+        let profile = node_failure("Runtime Error", "Could not find profile named 'x'");
+        assert_eq!(
+            project.classify(&profile),
+            DbtErrorCatalogue.classify(&profile)
+        );
+        // What only the other warehouse recognises, it does, and is named.
+        let cluster = node_failure("Runtime Error", "Error starting cluster: terminated");
+        let (Classification::Recognised(found), by) = project.classify_attributed(&cluster) else {
+            panic!("not recognised")
+        };
+        assert_eq!(
+            (found.id.as_str(), by.name.as_str()),
+            ("acme-compute", "acme")
         );
     }
 
@@ -1664,7 +1722,7 @@ mod tests {
     fn unavailable_compute_suggests_checking_the_connection() {
         // A warehouse's catalogue recognises its compute; dbt's steps come with it.
         let summary = node_failure("Runtime Error", "Error starting cluster: terminated");
-        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)]);
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)], Vec::new());
         let Classification::Recognised(m) = project.classify(&summary) else {
             panic!()
         };

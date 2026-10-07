@@ -13,6 +13,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Breaking
+- The `error_catalogue` contract is 0.5 (#415): `ErrorCatalogue::classify_attributed`
+  names the catalogue that recognised an error, for a catalogue that consults others.
+  It has a default, so **what to do:** nothing beyond rebuilding against this SDK.
 - `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
   gains `test_types`, `described` and `constraints` (all default when absent). **What
   to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
@@ -134,8 +137,10 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ### Changed
 - dbt's error catalogue is at version 7 (#415): dbt-databricks's own messages (unavailable
   compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
-  (`databricks` 1), asked first on a Databricks project. Explanations are unchanged.
-  On a Databricks project the catalogue's version reads `7+databricks 1`.
+  (`databricks` 1). It is asked first on a Databricks project, and after dbt's on any
+  other (a run before dbt names the warehouse, or from before a project moved), so
+  explanations recognise what they did. An explanation names the catalogue whose
+  pattern recognised the error (`databricks` 1 or `dbt` 7).
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
   each other. `/roadmap/` redirects to `/ROADMAP/`.

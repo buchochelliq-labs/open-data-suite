@@ -476,6 +476,35 @@ impl Plugins {
             .or_else(|| Some(warehouse.to_owned()))
     }
 
+    /// Every other warehouse plugin's error catalogue, by warehouse: those not on
+    /// `warehouse`'s chain, asked after dbt's, for a run on another warehouse, or
+    /// before dbt names the project's.
+    pub fn other_errors(
+        &self,
+        warehouse: Option<&str>,
+        configured: &Warehouses,
+    ) -> Vec<Arc<dyn ErrorCatalogue>> {
+        let chain = warehouse.map_or_else(Vec::new, |w| self.chain(w, configured));
+        self.warehouses
+            .iter()
+            .filter(|(w, _)| !chain.contains(w))
+            .filter_map(|(_, (p, _))| p.errors())
+            .collect()
+    }
+
+    /// The error catalogue for a project on `warehouse` (ADR-0031 §3a, §3b): its chain's
+    /// catalogues, nearest first, then dbt's, then every other plugin's.
+    pub fn project_catalogue(
+        &self,
+        warehouse: Option<&str>,
+        configured: &Warehouses,
+    ) -> ods_provider_dbt::error_catalogue::ProjectCatalogue {
+        ods_provider_dbt::error_catalogue::ProjectCatalogue::new(
+            self.errors(warehouse, configured),
+            self.other_errors(warehouse, configured),
+        )
+    }
+
     /// What every plugin offers, as detected (§3c): health checks by id, then each
     /// warehouse with its features.
     pub fn detected(&self) -> Vec<Detected> {
@@ -690,6 +719,19 @@ mod tests {
         assert!(
             plugins
                 .errors(Some("duckdb"), &Warehouses::new())
+                .is_empty()
+        );
+        // Another warehouse's project, or one not yet named, still has Databricks' after
+        // dbt's.
+        let none = Warehouses::new();
+        assert_eq!(plugins.other_errors(Some("duckdb"), &none).len(), 1);
+        assert_eq!(plugins.other_errors(None, &none).len(), 1);
+        assert!(plugins.other_errors(Some("databricks"), &none).is_empty());
+        // A warehouse built on Databricks has its patterns on its chain, not after dbt.
+        let on_databricks = extends(&[("acmebricks", &["databricks"])]);
+        assert!(
+            plugins
+                .other_errors(Some("acmebricks"), &on_databricks)
                 .is_empty()
         );
         // Without a plugin, the kind is the dialect's name, for the parser to map.

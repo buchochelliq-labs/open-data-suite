@@ -80,8 +80,10 @@ exceptions are ever named.
 
 A warehouse's own messages are its plugin's ([ADR-0031](../adr/0031-plugin-registry-and-loading.md)
 §3a). On a project on that warehouse, ODS asks the plugin's catalogue first, then the one
-above, and either way offers dbt's steps. Its patterns read the message only, whatever
-its kind.
+above. On any other project, it is asked after the one above, so a run from before dbt
+named the warehouse, or from before the project moved, is still explained. Either way
+dbt's steps are offered, and the explanation names the catalogue that recognised the
+error. Its patterns read the message only, whatever its kind.
 
 The built-in Databricks plugin's catalogue (`ods-provider-databricks::error_catalogue`),
 at catalogue version **1**, holds dbt-databricks's own messages (Apache-2.0, 1.12). Each

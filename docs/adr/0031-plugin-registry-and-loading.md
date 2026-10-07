@@ -172,9 +172,11 @@ returns one of the SDK's existing contracts, whose conformance suites a plugin r
   any warehouse whose plugin reads its export. Reading it live through the probe is a
   later change of this method, not a new one.
 - **Error explanations:** a plugin's catalogue is consulted first, then dbt's
-  (ADR-0025, "The dbt catalogue"). The first `Recognised` wins, so a warehouse's
-  pattern takes precedence over dbt's generic one, and the explanation names the
-  catalogue and version that produced it. Patterns specific to one warehouse move into
+  (ADR-0025, "The dbt catalogue"), then every other warehouse plugin's (for a run
+  before dbt names the warehouse, or from before the project moved). The first
+  `Recognised` wins, so a warehouse's pattern takes precedence over dbt's generic one,
+  and the explanation names the catalogue and version that produced it
+  (`ErrorCatalogue::classify_attributed`, contract 0.5). Patterns specific to one warehouse move into
   its plugin; patterns several warehouses share stay in dbt's catalogue. A plugin
   catalogue implements `ErrorCatalogue` as it is: it classifies an `ErrorSummary` and
   sees nothing else. Joining a classification with the project (the node, relation and
