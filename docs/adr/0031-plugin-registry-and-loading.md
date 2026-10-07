@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-06
 - **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers), #415
-  (the whole warehouse plugin, dispatch, feature manifests: §3a–§3c)
+  (the whole warehouse plugin, dispatch, detected features: §3a–§3c)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -259,58 +259,34 @@ time.
   lineage (ADR-0008) already follow `dispatch:` and adapter changes, and a change of
   adapter changes the fingerprint.
 
-### 3c. Every plugin says what it supports (amended 2026-10-07, #415)
-§3's `provides()` lists contracts by hand, so it can disagree with what the plugin
-does, and it says nothing a person can use: *which* source versions, links to what,
-which errors. A plugin instead declares a **feature manifest**, one value that ODS
-checks, lists and documents from.
+### 3c. What a plugin supports is detected (amended 2026-10-07, #415)
+A plugin doesn't declare its features: a declaration can disagree with what it does.
+ODS asks it instead, and lists what it finds.
 
-```rust
-fn features(&self) -> Features;   // replaces provides()
-
-pub struct Features {             // #[non_exhaustive]; serde, schema_version
-    pub warehouse: Option<String>,        // for a warehouse plugin
-    pub parents: Vec<String>,             // §3b
-    pub features: Vec<Feature>,           // sorted by name
-}
-pub struct Feature {
-    pub name: String,                     // "source_versions", "links", "errors", …
-    pub contract: Contract,               // the SDK contract and version it implements
-    pub capabilities: CapabilitySet,      // ADR-0006's vocabulary, as the provider's info()
-    pub details: BTreeMap<String, Value>, // what a person needs to know, per feature
-    pub inherits: bool,                   // §3b: false for versions, login, links, lineage
-    pub settings: Vec<String>,            // the settings and env vars it reads
-    pub docs: Option<String>,             // where it is explained
-}
-```
-
-- **Details say what "supported" means.** Source versions give their `exactness`
-  (`exact`, `semantic`) and what they cover (`managed_tables`); the login check, the
-  relation kinds it can judge and those it reports *unknown* (`external_tables`); links,
-  what they open; errors, the categories and patterns covered; dialect, its name;
-  observed lineage, the export it reads and whether it is column-level. A health check's
-  manifest is its `CheckInfo` (id, default severity, what it reads, whether it needs the
-  warehouse).
-- **Declared is checked against actual** (rule 3). At registration, ODS builds each
-  declared feature over `ods-provider-fake`'s probe: a feature the plugin declares but
-  doesn't build, or builds but doesn't declare, refuses the plugin, as do an unknown
-  dialect and a contract version the host can't accept. At run time the provider's own
-  `info().capabilities` still decides what is used (ADR-0006 §3). If it offers less than
-  the manifest says, ODS uses less, never more, and `ods doctor` reports the difference.
-- **One manifest, every surface:**
-  - `ods plugin list` (every plugin and its features, one line each) and
-    `ods plugin show <name>` (the whole manifest), in human, plain and `--json` forms;
-  - `ods version` and `ods doctor` (`capabilities.plugins`), with the resolved step of
+- **Detection.** Every method of a warehouse plugin is a factory. ODS calls each one
+  with a detection probe, which refuses every statement (building a provider runs
+  nothing), and the warehouse's settings. A feature is supported when its method
+  returns a provider, or a reason other than "not offered": Databricks' links without a
+  host are supported but not configured, and say why. `provides()` goes away.
+- **What each feature reports** is what the provider already says, with no new fields:
+  its `info()` (kind, version and capabilities, ADR-0006), its contract and version,
+  a catalogue's `CatalogueInfo`, the dialect's name, a health check's `CheckInfo`, and
+  for source versions, what they read (`versions_read`).
+- **Run time is unchanged.** The provider's own capabilities still decide what is used
+  (ADR-0006 §3); detection only lists.
+- **Out of process (§5):** the plugin's answer to `describe` lists the requests it
+  handles and the same information, and `ods plugin test` checks each one it lists.
+- **Shown everywhere from the same detection:**
+  - `ods plugin list` (every plugin, one line each) and `ods plugin show <name>`, in
+    human, plain and `--json` forms;
+  - `ods version` and `ods doctor` (`capabilities.plugins`), with which step answered
     each capability for this project (§3b);
-  - the MCP server's `list_plugins` tool, so an agent can tell what this `ods` can do
-    before asking for it;
-  - the dashboard's About page.
-- **Out of process (§5):** the `describe` handshake's answer *is* the manifest, in its
-  serde form, and `ods plugin test` checks it the same way.
-- **Docs can't drift.** `docs/plugins.md`'s table of built-in warehouses and their
-  features is generated from the built-ins' manifests, and a test fails when it differs.
-- **Forward compatible:** a feature name or detail a host doesn't know is listed as
-  given and otherwise ignored. ODS never uses a feature it doesn't know.
+  - the MCP server's `list_plugins` tool, so an agent can tell what this `ods` can do;
+  - the dashboard's About page;
+  - `docs/plugins.md`'s table of built-in warehouses, generated from it, with a test
+    that fails when the two differ.
+- **Forward compatible:** a request or capability a host doesn't know is listed as
+  given and otherwise ignored.
 
 ### 4. Health-check plugins and their configuration
 - A registered check runs, as ADR-0030 §5 describes, at its own default severity.
@@ -389,8 +365,8 @@ graph LR
 5. **The whole warehouse plugin** (§3a, §3b, #415): `links`, `observed_lineage`,
    `errors` and `dialect`; Databricks' moved into its plugin with behaviour and tests
    unchanged, and no Databricks import left in `ods-cli` outside its registration; then
-   parents, `[warehouses.<kind>] extends` and per-warehouse probe SQL; the feature
-   manifest (§3c) in place of `provides()`, with `ods plugin list` and `ods plugin
+   parents, `[warehouses.<kind>] extends` and per-warehouse probe SQL; features
+   detected (§3c) in place of `provides()`, with `ods plugin list` and `ods plugin
    show`; then DuckDB as the second built-in. This phase doesn't wait for 3 and 4: it is in-process, and the
    out-of-process requests above arrive with phase 4.
 
