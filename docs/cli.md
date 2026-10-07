@@ -1986,7 +1986,7 @@ what to try
   3. Then retry what failed:
     $ ods state retry --failed
 
-dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
+dbt-duckdb said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
 full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 ```
 
@@ -2029,7 +2029,9 @@ full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
   checks are context, since ODS never reads `profiles.yml`. `ods state history --run`
   doesn't run them: the configuration may have changed since the run.
 - **Impact:** the nodes it blocked, and whether their last good builds are kept.
-- **dbt said:** dbt's message, only as the redacted summary kept in the journal.
+- **dbt said:** dbt's message, only as the redacted summary kept in the journal. When
+  a warehouse plugin's catalogue recognised it, it names the adapter instead
+  (`dbt-duckdb said:`), whose message it is.
   Nothing else in an explanation comes from dbt's text: the names in it come from
   ODS's own evidence.
 
