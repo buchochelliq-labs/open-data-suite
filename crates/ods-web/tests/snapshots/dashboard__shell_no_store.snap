@@ -116,11 +116,23 @@ expression: pretty(&body)
       "status": "planned"
     },
     {
-      "href": null,
+      "href": "settings/about",
+      "items": [
+        {
+          "href": null,
+          "key": "configuration",
+          "label": "Configuration"
+        },
+        {
+          "href": "settings/about",
+          "key": "about",
+          "label": "About"
+        }
+      ],
       "key": "settings",
       "label": "Settings",
       "note": null,
-      "status": "planned"
+      "status": "available"
     }
   ],
   "snapshot": null,

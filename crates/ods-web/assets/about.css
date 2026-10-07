@@ -1,0 +1,27 @@
+/* ---- About (ADR-0031 §3c). Rows as on the Settings board's Providers card. */
+.about { padding: 24px; display: flex; flex-direction: column; gap: 16px; max-width: 1100px; }
+.about-head { display: flex; flex-direction: column; gap: 6px; }
+.about-head p { margin: 0; }
+.about .card-head .where { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.about dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 14px; }
+.about dt { color: var(--muted); }
+.about dd { margin: 0; }
+.plugin { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 4px 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+.plugin:first-of-type { border-top: none; padding-top: 4px; }
+.plugin .who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.plugin .name { font-weight: 600; overflow-wrap: anywhere; }
+.plugin .from { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.plugin .what { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 13px; }
+.plugin .offers { display: flex; flex-wrap: wrap; gap: 6px; }
+.plugin .notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; color: var(--heading-muted); }
+.plugin .notes .feat { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.plugin .notes .off { color: var(--warn); }
+.feature { font-family: var(--mono); font-size: 12px; padding: 1px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--active-bg); color: var(--accent-strong); }
+.feature.unusable { background: var(--planned-bg); color: var(--muted); border-style: dashed; border-color: var(--dashed); }
+.feature .ver { color: var(--muted); }
+.this-project { align-self: flex-start; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--active-bg); color: var(--accent-strong); }
+.about .note { font-size: 12px; color: var(--muted); margin: 0; }
+.about .notice { font-size: 13px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--planned-bg); margin: 0; }
+@media (max-width: 720px) {
+  .plugin, .about dl { grid-template-columns: minmax(0, 1fr); }
+}

@@ -193,6 +193,9 @@ pub(super) struct DashboardSource {
     health: ods_health::HealthSettings,
     /// `[warehouses.<kind>]`, for the probe queries a warehouse inherits (ADR-0031 §3b).
     warehouses: crate::plugins::Warehouses,
+    /// This `ods` and its plugins, for the About page (ADR-0031 §3c). Neither changes
+    /// while the server runs, so they are detected once.
+    about: ods_web::about::AboutInput,
 }
 
 impl DashboardSource {
@@ -204,6 +207,7 @@ impl DashboardSource {
             cost: config.config.state.cost.clone(),
             health: health_settings(config)?,
             warehouses: config.config.warehouses.clone(),
+            about: super::plugin::about(crate::plugins::installed(), Some(&config.config)),
         })
     }
 
@@ -290,7 +294,8 @@ impl DashboardSource {
                         error: e.message,
                         hint,
                     })
-                    .with_modules(modules(false));
+                    .with_modules(modules(false))
+                    .with_about(self.about.clone());
             }
         };
         let ws = Arc::new(ws);
@@ -347,6 +352,7 @@ impl DashboardSource {
             .with_modules(modules(recorded))
             .with_catalog(catalog)
             .with_freshness(freshness)
+            .with_about(self.about.clone())
             .with_health(self.health_for(ws.manifest.adapter_type.as_deref()))
             .with_health_record(health_record.as_ref())
             // The live run view (#322): journals are read even before the store
