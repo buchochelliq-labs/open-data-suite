@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-10-06
 - **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers), #415
-  (the whole warehouse plugin, §3a)
+  (the whole warehouse plugin and dispatch, §3a, §3b)
 - **Deciders:** @n1ckyb
 
 ## Context
@@ -196,6 +196,58 @@ returns one of the SDK's existing contracts, whose conformance suites a plugin r
   version to read), so `ods state` uses `sources.json` alone, which is what it does today.
   Snowflake and BigQuery follow as their own issues, each with recorded responses.
 
+### 3b. Dispatch: parent warehouses and a default (amended 2026-10-07, #415)
+dbt's `adapter.dispatch('m')` looks for `<adapter>__m`, then the same macro for each of
+the adapter's parents, in order (`databricks` → `spark`, `redshift` → `postgres`), then
+`default__m`. ODS finds a warehouse's capabilities the same way, one capability at a
+time.
+
+- **Parents.** The manifest names only the adapter (`adapter_type`), not its parents, so
+  a plugin declares its own (`fn parents(&self) -> Vec<String>`), as a dbt adapter
+  declares the adapters it depends on. A project can add or override them for a
+  warehouse that has no plugin, as `dispatch:` in `dbt_project.yml` overrides dbt's
+  search order:
+
+  ```toml
+  [warehouses.materialize]
+  extends = ["postgres"]          # an adapter built on dbt-postgres
+  ```
+
+  A parent that isn't registered is skipped. A cycle is a configuration error.
+- **What inherits.** Only capabilities that describe the engine's surface: **error
+  patterns** (Redshift reports Postgres's messages) and the **dialect**. Capabilities
+  that make a promise about data or access, **source versions** and the **login
+  check**, never inherit (rule 3): Postgres's way of versioning a table, or of reading a
+  login's privileges, says nothing about whether it holds on Redshift. **Links** and
+  **observed lineage** don't inherit either: each warehouse's UI and lineage export are
+  its own. These answer from the exact plugin or not at all.
+- **Default.** The last step is the warehouse-neutral layer, which is what applies today
+  with no plugin: dbt's catalogue (the patterns several warehouses share), the
+  dialect mapped from the warehouse kind or generic SQL, and none of the rest.
+- **Error catalogues in order:** the warehouse's, then each parent's, then dbt's. The
+  first `Recognised` wins (§3a).
+- **Listing:** `ods doctor` shows, for each capability, which plugin answers it and
+  through which step (`databricks`, `postgres (parent)`, `default`), so an inherited
+  answer is never mistaken for a warehouse's own.
+- **Users' probe SQL dispatches too.** A probe check's `sql` may give a query per
+  warehouse kind, with `default`:
+
+  ```toml
+  sql = { databricks = "select count_if(id is null) as n from {relation}",
+          default = "select sum(case when id is null then 1 else 0 end) as n from {relation}" }
+  ```
+
+  The same order picks one: the kind, its parents, then `default`. With none that
+  applies, the probe is *unknown* ("no query for this warehouse"), never run with a
+  guess. Every variant is checked as read-only, in its own warehouse's dialect, when the
+  configuration loads, and trust (ADR-0030 §4b) covers the whole definition, so a
+  variant can't change without trusting it again.
+- **dbt's own dispatch needs nothing new.** A model's dispatched macros are resolved
+  before ODS sees it: the compiled SQL holds the implementation that ran, and dbt lists
+  the macros it reached in `depends_on.macros`. So fingerprints (ADR-0013) and column
+  lineage (ADR-0008) already follow `dispatch:` and adapter changes, and a change of
+  adapter changes the fingerprint.
+
 ### 4. Health-check plugins and their configuration
 - A registered check runs, as ADR-0030 §5 describes, at its own default severity.
 - **`[health.plugins.<id>]`** takes the same `severity`, `select` and `exclude` as a
@@ -270,10 +322,11 @@ graph LR
 3. **Script checks** (ADR-0030 phase 5), in `ods-provider-process`.
 4. **Out-of-process plugins:** `[plugins.<name>]`, the handshake, and
    `ods plugin test`.
-5. **The whole warehouse plugin** (§3a, #415): `links`, `observed_lineage`, `errors` and
-   `dialect`; Databricks' moved into its plugin with behaviour and tests unchanged, and
-   no Databricks import left in `ods-cli` outside its registration; then DuckDB as the
-   second built-in. This phase doesn't wait for 3 and 4: it is in-process, and the
+5. **The whole warehouse plugin** (§3a, §3b, #415): `links`, `observed_lineage`,
+   `errors` and `dialect`; Databricks' moved into its plugin with behaviour and tests
+   unchanged, and no Databricks import left in `ods-cli` outside its registration; then
+   parents, `[warehouses.<kind>] extends` and per-warehouse probe SQL; then DuckDB as
+   the second built-in. This phase doesn't wait for 3 and 4: it is in-process, and the
    out-of-process requests above arrive with phase 4.
 
 ## Consequences
