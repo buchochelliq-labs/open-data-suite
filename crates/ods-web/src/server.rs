@@ -295,9 +295,12 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
         // The About page (ADR-0031 §3c): this `ods` and its plugins.
         .route(&at("/settings/about"), get(about_page))
         .route(&at("/api/settings/about"), get(about_api))
-        .route(&at("/settings"), {
-            let to = at("/settings/about");
-            get(move || async move { Redirect::temporary(&to) })
+        // Settings (#351): the configuration, read-only.
+        .route(&at("/settings"), get(settings_page))
+        .route(&at("/api/settings"), get(settings_api))
+        .route(&at("/settings/"), {
+            let to = at("/settings");
+            get(move || async move { Redirect::permanent(&to) })
         })
         .route(&at("/api/catalog"), get(catalog_routes::api))
         .route(&at("/api/catalog/{id}"), get(catalog_routes::model_api));
@@ -391,6 +394,23 @@ async fn home(State(state): State<Shared>) -> Response {
     })
     .await
     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// `/settings`: the configuration, read-only (#351).
+async fn settings_page(State(state): State<Shared>) -> Html<String> {
+    let generation = state.generation.load(Ordering::SeqCst);
+    let snapshot = state.current();
+    let dashboard = snapshot.dashboard();
+    Html(crate::settings_page::settings_page(
+        &dashboard.shell("settings"),
+        &dashboard.settings(state.details),
+        generation,
+    ))
+}
+
+/// `/api/settings`: the Settings page's view model.
+async fn settings_api(State(state): State<Shared>) -> Json<crate::settings::SettingsView> {
+    Json(state.current().dashboard().settings(state.details))
 }
 
 /// `/settings/about`: this `ods` and the plugins it runs with (ADR-0031 §3c).

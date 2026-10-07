@@ -176,19 +176,13 @@ fn the_page_shows_each_plugin_and_escapes_what_plugins_say() {
         assert!(page.contains(expected), "{expected}\n{page}");
     }
     assert!(!page.contains("No plugin serves"), "databricks is served");
-    // Settings is current, with About its current page and Configuration planned.
+    // Settings is current, with About its current page beside Configuration.
     assert!(
-        page.contains(
-            r#"<a href="../settings/about" aria-current="page" data-section="settings">"#
-        ),
+        page.contains(r#"<a href="../settings" aria-current="page" data-section="settings">"#),
         "{page}"
     );
     assert!(page.contains(r#"data-item="about">About</a>"#));
-    assert!(
-        page.contains(
-            r#"data-item="configuration">Configuration<span class="chip">Planned</span>"#
-        )
-    );
+    assert!(page.contains(r#"<a href="../settings" data-item="configuration">Configuration</a>"#));
 }
 
 #[test]
@@ -208,19 +202,11 @@ fn a_warehouse_no_plugin_serves_still_works_and_says_what_odss_knows_less_about(
 }
 
 #[test]
-fn settings_leads_to_about() {
+fn every_page_links_settings() {
     let addr = start(dashboard("databricks"));
-    let (status, head, _) = get(addr, "/settings");
-    assert_eq!(status, 307);
-    assert!(
-        head.to_ascii_lowercase()
-            .contains("location: /settings/about"),
-        "{head}"
-    );
-    // Every page's navigation links Settings.
     let (_, _, home) = get(addr, "/");
     assert!(
-        home.contains(r#"<a href="settings/about" data-section="settings">"#),
+        home.contains(r#"<a href="settings" data-section="settings">"#),
         "{home}"
     );
 }

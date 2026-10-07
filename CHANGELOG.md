@@ -66,8 +66,14 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   as `ods plugin list`. It names the plugin serving the project's warehouse, or says
   that none does and what ODS then knows less about. A feature the configuration
   can't use says why, never with a setting's value. `/api/settings/about` returns the
-  same view model. Settings in the navigation now leads to it; the configuration page
-  (#351) is still planned.
+  same view model.
+- The dashboard's **Settings** page (`/settings`, #351): the effective configuration
+  as `ods config explain` lists it (secrets as references, credentials in values
+  removed as `ods doctor` removes them), the project, target and state store a run
+  resolves, the configured providers and their capabilities, `ods doctor`'s checks
+  that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
+  it writes; beyond loopback it shows no value, path or check detail.
+  `/api/settings` returns the same view model.
 - Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
   released CLI as a library: a crate of your own adds health checks
   (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.

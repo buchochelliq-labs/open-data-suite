@@ -33,7 +33,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | ERD | **Built** (#64): the diagram with edge evidence, cardinality, scope, missing relationships with their tests, and SVG export |
 | Catalog: freshness evidence | **Built** (#350): sources and seeds, their evidence and grade, what readers were built from, their decisions, and what is downstream |
 | Settings: About | **Built** (#415): this `ods` and its plugins, with what each offers and whether this configuration can use it |
-| Semantic layer, Settings: configuration | Designed (#309, #351) |
+| Settings | **Built** (#351): the configuration, read-only, with secrets as references and `ods doctor`'s checks that only read; Server mode as placeholders |
+| Semantic layer | Designed (#309, #352) |
 | Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
@@ -261,9 +262,11 @@ them as a table.
 
 ### Settings
 
-The configuration view is not built yet (#351). Its **About** page is
-(`/settings/about`, #415): this `ods` and its plugins, from the same detection as
-`ods plugin list`, in rows like the Providers card below.
+**Built** (#351) at `/settings`: the effective configuration as `ods config explain`
+lists it, the project, target and state store a run resolves, secret references,
+providers and their capabilities, and `ods doctor`'s checks that only read, with the
+Server mode placeholders. Its **About** page (`/settings/about`, #415) shows this `ods`
+and its plugins, from the same detection as `ods plugin list`.
 
 ![Settings](images/settings.png)
 
