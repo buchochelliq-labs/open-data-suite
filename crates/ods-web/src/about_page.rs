@@ -80,7 +80,9 @@ fn health_checks(b: &mut String, view: &AboutView) {
 fn row(b: &mut String, plugin: &PluginFacts, serves: bool) {
     let _ = write!(
         b,
-        r#"<div class="plugin" data-plugin="{name}"><div class="who"><span class="name mono">{name}</span><span class="from">{from} · {origin}</span>{this}</div><div class="what"><div class="offers">"#,
+        r#"<div class="plugin" data-plugin="{key}"><div class="who"><span class="name mono">{name}</span><span class="from">{from} · {origin}</span>{this}</div><div class="what"><div class="offers">"#,
+        // A warehouse plugin names its own kind, unchecked: escaped for each context.
+        key = html_escape::encode_double_quoted_attribute(&plugin.name),
         name = text(&plugin.name),
         from = text(&plugin.from),
         origin = if plugin.builtin { "built in" } else { "added" },

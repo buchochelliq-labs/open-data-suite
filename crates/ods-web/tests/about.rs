@@ -49,8 +49,12 @@ fn plugins() -> Vec<PluginFacts> {
     health.contract = Some("health_check".into());
     health.contract_version = Some("0.2".into());
     check.features = vec![health];
-    vec![check, databricks, lakehouse]
+    // A custom plugin's kind is whatever it says.
+    let quoted = PluginFacts::new(QUOTED, PluginKind::Warehouse, "acme-odd 0.1.0", false);
+    vec![check, databricks, lakehouse, quoted]
 }
+
+const QUOTED: &str = r#"odd" onmouseover="alert(1)"#;
 
 fn dashboard(warehouse: &str) -> Dashboard {
     Dashboard::new("shop", "dev")
@@ -113,7 +117,7 @@ fn the_view_splits_warehouses_from_checks_and_names_the_projects_warehouse() {
     assert!(view.warehouse_served);
     let names =
         |plugins: &[PluginFacts]| plugins.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-    assert_eq!(names(&view.warehouses), ["databricks", "lakehouse"]);
+    assert_eq!(names(&view.warehouses), ["databricks", "lakehouse", QUOTED]);
     assert_eq!(names(&view.health_checks), [HOSTILE]);
 
     let view = dashboard("snowflake").about();
@@ -151,6 +155,12 @@ fn the_page_shows_each_plugin_and_escapes_what_plugins_say() {
         "a plugin's name is text, never markup"
     );
     assert!(page.contains("&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;"));
+    // A quote in a warehouse's name can't end the attribute it is put in.
+    assert!(!page.contains(r#"onmouseover="alert(1)""#), "{page}");
+    assert!(
+        page.contains(r#"data-plugin="odd&quot; onmouseover=&quot;alert(1)""#),
+        "{page}"
+    );
     for expected in [
         r#"data-plugin="databricks""#,
         "ods-provider-databricks 0.0.2 · built in",
