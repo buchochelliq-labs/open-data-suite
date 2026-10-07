@@ -13,9 +13,6 @@ ods-core.workspace = true
 ods-sdk.workspace = true
 
 [dev-dependencies]
-# Reads the recorded dbt-duckdb runs as ODS reads real ones, through dbt's own
-# summaries; test-only, so no provider depends on another at run time (ADR-0001).
-ods-provider-dbt.workspace = true
 ods-sdk = { workspace = true, features = ["conformance"] }
 serde_json.workspace = true
 

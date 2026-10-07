@@ -1421,7 +1421,6 @@ name = "ods-provider-duckdb"
 version = "0.0.2"
 dependencies = [
  "ods-core",
- "ods-provider-dbt",
  "ods-sdk",
  "serde_json",
 ]

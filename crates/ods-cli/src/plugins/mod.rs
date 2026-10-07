@@ -738,7 +738,7 @@ mod tests {
         };
         let none = Warehouses::new();
         assert_eq!(catalogues(Some("duckdb"), &none), ["duckdb"]);
-        assert!(catalogues(Some("snowflake"), &none).is_empty());
+        assert_eq!(catalogues(Some("snowflake"), &none), Vec::<String>::new());
         // Another warehouse's project, or one not yet named, still has the others' after
         // dbt's.
         assert_eq!(others(Some("duckdb"), &none), ["databricks"]);
