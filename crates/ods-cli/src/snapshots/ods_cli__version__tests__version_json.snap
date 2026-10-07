@@ -18,7 +18,23 @@ expression: "render(Mode::Json)"
     "output_schema_version": {
       "major": 0,
       "minor": 1
-    }
+    },
+    "plugins": [
+      {
+        "contract": "change_provider",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "relation_privileges",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      }
+    ]
   },
   "diagnostics": []
 }

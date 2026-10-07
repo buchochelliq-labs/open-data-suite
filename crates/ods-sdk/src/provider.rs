@@ -66,6 +66,15 @@ pub trait Provider: Send + Sync {
     fn info(&self) -> ProviderInfo;
 }
 
+/// A shared provider is the provider it shares, so a wrapper generic over a contract
+/// (e.g. a change provider reading through a `RelationProbe`) can take one a plugin was
+/// handed as `Arc<dyn …>` (ADR-0031 §6).
+impl<T: Provider + ?Sized> Provider for std::sync::Arc<T> {
+    fn info(&self) -> ProviderInfo {
+        (**self).info()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

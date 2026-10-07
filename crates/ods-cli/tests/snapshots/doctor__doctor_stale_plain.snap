@@ -5,7 +5,7 @@ expression: project.redact(&plain)
 ODS doctor
 
 verdict: failed
-checks: 12 ok, 1 warning, 0 error, 0 unknown, 2 skipped
+checks: 13 ok, 1 warning, 0 error, 0 unknown, 2 skipped
 options: --strict
 
 Configuration
@@ -71,6 +71,9 @@ Capabilities
   [ok] capabilities.relation_versions: no table versions, and none needed: the project has no sources
     adapter: duckdb (manifest)
     missing_capability: relation_versions
+  [ok] capabilities.plugins: this `ods` has the built-in plugins only
+    change_provider.databricks: change_provider 0.1 for databricks (ods-provider-databricks [ods-version], built in)
+    relation_privileges.databricks: relation_privileges 0.1 for databricks (ods-provider-databricks [ods-version], built in)
 
 Connectivity
   [skipped] connectivity.relations: a live check: pass --connect to run it

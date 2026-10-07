@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use ods_core::SchemaVersion;
 use serde::Serialize;
 
-use crate::contracts::probe::ProbeTarget;
+use crate::contracts::probe::{ProbeTarget, RelationProbe};
 use crate::error::ProviderError;
 use crate::provider::{Contract, Provider};
 
@@ -77,3 +77,11 @@ pub trait RelationPrivileges: Provider {
     /// Returns [`ProviderError`] if nothing could be read.
     async fn privileges(&self, targets: &[ProbeTarget]) -> Result<PrivilegeReport, ProviderError>;
 }
+
+/// One connection that both probes relations and reports what its login may do on them,
+/// so the login a probe check checks is the login the probe runs under (ADR-0030 §4c).
+/// Anything implementing both is one; a host takes it as `Arc<dyn PrivilegedProbe>`
+/// (ADR-0031 §3).
+pub trait PrivilegedProbe: RelationProbe + RelationPrivileges {}
+
+impl<T: RelationProbe + RelationPrivileges + ?Sized> PrivilegedProbe for T {}

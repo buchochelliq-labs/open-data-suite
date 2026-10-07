@@ -306,6 +306,9 @@ pub struct HealthSettings {
     connection: Option<ProbeConnection>,
     coverage: Vec<coverage::Target>,
     plugins: Vec<Plugin>,
+    /// `[health.plugins.<id>]`, by id, its selectors checked: each must name a
+    /// registered check ([`HealthSettings::check_plugin_config`]).
+    plugin_config: BTreeMap<String, (Option<HealthSeverity>, Selector, Selector)>,
     unknown_counts_as: Health,
 }
 
@@ -313,7 +316,16 @@ pub struct HealthSettings {
 #[derive(Clone)]
 struct Plugin {
     check: Arc<dyn HealthCheck>,
-    severity: Severity,
+    /// `None` when `[health.plugins.<id>]` turns it off.
+    severity: Option<Severity>,
+    select: Selector,
+    exclude: Selector,
+}
+
+impl Plugin {
+    fn applies(&self, node: &NodeFacts) -> bool {
+        self.select.matches(node) && (self.exclude.is_empty() || !self.exclude.matches(node))
+    }
 }
 
 /// Runs a registered check on `scope`, adding its finding to each node in `per_node`:
@@ -324,13 +336,43 @@ async fn run_plugin(
     scope: &CheckScope,
     timeout: Duration,
     per_node: &mut BTreeMap<String, Vec<Finding>>,
+    severity: Severity,
 ) -> CheckRun {
     let info = plugin.check.describe();
     let run = CheckRun {
         id: info.id.clone(),
         source: CheckSource::Plugin,
-        severity: plugin.severity,
+        severity,
         about: info.about.clone(),
+    };
+    // The check is asked only about the nodes `[health.plugins.<id>]` selects; the
+    // others are skipped, as a built-in's are.
+    let (selected, skipped): (Vec<&NodeFacts>, Vec<&NodeFacts>) =
+        scope.nodes.iter().partition(|n| plugin.applies(n));
+    for node in skipped {
+        if let Some(findings) = per_node.get_mut(&node.id) {
+            findings.push(Finding {
+                check: info.id.clone(),
+                source: CheckSource::Plugin,
+                status: Status::Skipped,
+                severity,
+                reason: "not selected for this check".to_owned(),
+                evidence: BTreeMap::new(),
+            });
+        }
+    }
+    if selected.is_empty() {
+        return run;
+    }
+    let narrowed;
+    let scope = if selected.len() == scope.nodes.len() {
+        scope
+    } else {
+        narrowed = CheckScope::new(
+            selected.into_iter().cloned().collect(),
+            scope.last_run.clone(),
+        );
+        &narrowed
     };
     let answered = match tokio::time::timeout(timeout, plugin.check.check(scope)).await {
         Ok(Ok(findings)) => Ok(findings),
@@ -385,7 +427,7 @@ async fn run_plugin(
                 check: info.id.clone(),
                 source: CheckSource::Plugin,
                 status,
-                severity: plugin.severity,
+                severity,
                 reason,
                 evidence,
             });
@@ -409,6 +451,10 @@ impl fmt::Debug for HealthSettings {
                     .iter()
                     .map(|p| p.check.describe().id)
                     .collect::<Vec<_>>(),
+            )
+            .field(
+                "plugin_config",
+                &self.plugin_config.keys().collect::<Vec<_>>(),
             )
             .field("unknown_counts_as", &self.unknown_counts_as)
             .finish()
@@ -554,6 +600,22 @@ impl HealthSettings {
             connection: None,
             coverage: coverage::Target::from_config(&config.coverage)?,
             plugins: Vec::new(),
+            plugin_config: config
+                .plugins
+                .iter()
+                .map(|(id, own)| {
+                    let at = format!("health.plugins.{id}");
+                    let select = match &own.select {
+                        Some(select) => Selector::new(select, &format!("{at}.select"))?,
+                        None => Selector::default(),
+                    };
+                    let exclude = match &own.exclude {
+                        Some(exclude) => Selector::new(exclude, &format!("{at}.exclude"))?,
+                        None => Selector::default(),
+                    };
+                    Ok((id.clone(), (own.severity, select, exclude)))
+                })
+                .collect::<Result<_, HealthConfigError>>()?,
             unknown_counts_as: match config.unknown_counts_as {
                 Some(UnknownCountsAs::Warning) => Health::Warning,
                 _ => Health::Unknown,
@@ -579,7 +641,8 @@ impl HealthSettings {
     }
 
     /// Adds a check registered through the `health_check` contract, at its own default
-    /// severity. Its id must be well formed, and no other check's.
+    /// severity, on every node, unless `[health.plugins.<id>]` says otherwise. Its id
+    /// must be well formed, and no other check's.
     ///
     /// # Errors
     /// A malformed id, or one another check already has.
@@ -604,11 +667,55 @@ impl HealthSettings {
                 info.id
             )));
         }
+        let (severity, select, exclude) = match self.plugin_config.get(&info.id) {
+            Some((severity, select, exclude)) => (
+                match severity {
+                    None => Some(info.default_severity),
+                    Some(HealthSeverity::Error) => Some(Severity::Error),
+                    Some(HealthSeverity::Warn) => Some(Severity::Warn),
+                    Some(HealthSeverity::Info) => Some(Severity::Info),
+                    Some(HealthSeverity::Off) => None,
+                },
+                select.clone(),
+                exclude.clone(),
+            ),
+            None => (
+                Some(info.default_severity),
+                Selector::default(),
+                Selector::default(),
+            ),
+        };
         self.plugins.push(Plugin {
-            severity: info.default_severity,
             check,
+            severity,
+            select,
+            exclude,
         });
         Ok(self)
+    }
+
+    /// Checks every `[health.plugins.<id>]` names a registered check, once they are all
+    /// added: a misspelt id must never silently drop a gate (ADR-0031 §4).
+    ///
+    /// # Errors
+    /// A `[health.plugins.<id>]` that no registered check has, naming those that are.
+    pub fn check_plugin_config(&self) -> Result<(), HealthConfigError> {
+        let registered: Vec<String> = self.plugins.iter().map(|p| p.check.describe().id).collect();
+        match self
+            .plugin_config
+            .keys()
+            .find(|id| !registered.contains(id))
+        {
+            None => Ok(()),
+            Some(unknown) => Err(HealthConfigError(format!(
+                "health.plugins.{unknown}: no plugin check is called `{unknown}`; {}",
+                if registered.is_empty() {
+                    "this `ods` has no plugin checks".to_owned()
+                } else {
+                    format!("the plugin checks are {}", registered.join(", "))
+                }
+            ))),
+        }
     }
 
     /// Runs every check, built-in and registered, on `scope`'s nodes. A registered check
@@ -652,7 +759,9 @@ impl HealthSettings {
         checks.extend(self.declared.iter().filter_map(declared::Declared::run));
         checks.extend(self.probes.iter().filter_map(probe::Probe::run));
         for plugin in &self.plugins {
-            checks.push(run_plugin(plugin, scope, timeout, &mut per_node).await);
+            if let Some(severity) = plugin.severity {
+                checks.push(run_plugin(plugin, scope, timeout, &mut per_node, severity).await);
+            }
         }
         HealthReport {
             badges: per_node
@@ -820,7 +929,7 @@ impl HealthSettings {
             parts.push(format!(
                 "{} ({}, plugin): {}",
                 info.id,
-                severity_word(plugin.severity),
+                plugin.severity.map_or("off", severity_word),
                 info.about
             ));
         }

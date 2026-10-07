@@ -1,6 +1,6 @@
 # ADR-0031: Plugins: an in-process registry and out-of-process plugins
 
-- **Status:** Proposed
+- **Status:** Proposed. Phase 2 is built (§7): `Ods`, `Plugins` and `WarehousePlugin` in `ods-cli`, with Databricks registered as a built-in; `[health.plugins.<id>]`; plugins listed in `ods version` and `ods doctor` (`capabilities.plugins`); and `examples/custom-ods`, built in CI. Not built yet: script checks (3), out-of-process plugins (4).
 - **Date:** 2026-10-06
 - **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers)
 - **Deciders:** @n1ckyb

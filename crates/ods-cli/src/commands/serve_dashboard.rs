@@ -59,15 +59,32 @@ pub(super) fn state_args(command: Command) -> Command {
         ))
 }
 
-/// The health checks `[health]` sets up (ADR-0030).
+/// The health checks `[health]` sets up (ADR-0030), with this `ods`'s plugin checks
+/// (ADR-0031 §4).
 ///
 /// # Errors
-/// A check id that isn't a built-in's, or a path glob that isn't valid (exit 4).
+/// A check id that isn't a built-in's, a plugin check whose id another check has, a
+/// `[health.plugins.<id>]` naming no plugin check, or a path glob that isn't valid
+/// (exit 4).
 pub(super) fn health_settings(
     config: &ods_config::Loaded,
 ) -> Result<ods_health::HealthSettings, CliError> {
+    health_settings_with(config, crate::plugins::installed())
+}
+
+/// [`health_settings`] with the plugin checks of `plugins`.
+pub(super) fn health_settings_with(
+    config: &ods_config::Loaded,
+    plugins: &crate::plugins::Plugins,
+) -> Result<ods_health::HealthSettings, CliError> {
     let mut health = ods_health::HealthSettings::from_config(&config.config.health)
         .map_err(|e| config_error(&e))?;
+    for check in plugins.health_checks() {
+        health = health
+            .with_check(check.clone())
+            .map_err(|e| config_error(&e))?;
+    }
+    health.check_plugin_config().map_err(|e| config_error(&e))?;
     // Before any project is read, probes are checked in the generic dialect, so a probe
     // that can write is an error however ODS is started.
     check_probe_sql(&mut health, None)?;

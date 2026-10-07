@@ -573,6 +573,76 @@ mod registered {
         assert!(twice.unwrap_err().to_string().contains("two health checks"));
     }
 
+    fn configured(toml: &str, check: FakeHealthCheck) -> HealthSettings {
+        let config: HealthConfig = toml::from_str(toml).unwrap();
+        let settings = HealthSettings::from_config(&config)
+            .unwrap()
+            .with_check(Arc::new(check))
+            .unwrap();
+        settings.check_plugin_config().unwrap();
+        settings
+    }
+
+    #[tokio::test]
+    async fn plugin_config_sets_the_severity_or_turns_the_check_off() {
+        let check = || FakeHealthCheck::new("owner", Severity::Info).failing("model.p.a");
+        let raised = run(&configured(
+            "[plugins.owner]\nseverity = \"error\"",
+            check(),
+        ))
+        .await;
+        assert_eq!(raised.badges["model.p.a"].health, Health::Failing);
+        assert_eq!(raised.checks.last().unwrap().severity, Severity::Error);
+
+        let off = run(&configured("[plugins.owner]\nseverity = \"off\"", check())).await;
+        assert!(off.checks.iter().all(|c| c.id != "owner"));
+        assert!(
+            off.badges["model.p.a"]
+                .findings
+                .iter()
+                .all(|f| f.source != CheckSource::Plugin)
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_config_selects_what_the_check_is_asked_about() {
+        // The check would fail `b`, but isn't asked about it: `b` is skipped, as a
+        // built-in's unselected node is.
+        let check = FakeHealthCheck::new("owner", Severity::Error).failing("model.p.b");
+        let report = run(&configured(
+            "[plugins.owner]\nselect = { name = [\"a\", \"b\"] }\nexclude = { name = [\"b\"] }",
+            check,
+        ))
+        .await;
+        assert_eq!(plugin_finding(&report, "model.p.a").status, Status::Pass);
+        let b = plugin_finding(&report, "model.p.b");
+        assert_eq!(b.status, Status::Skipped);
+        assert_eq!(b.reason, "not selected for this check");
+        assert_eq!(report.badges["model.p.b"].health, Health::Healthy);
+    }
+
+    #[test]
+    fn plugin_config_must_name_a_registered_check() {
+        let config: HealthConfig = toml::from_str("[plugins.ownr]\nseverity = \"error\"").unwrap();
+        let none = HealthSettings::from_config(&config).unwrap();
+        let err = none.check_plugin_config().unwrap_err().to_string();
+        assert!(
+            err.contains("health.plugins.ownr") && err.contains("no plugin checks"),
+            "{err}"
+        );
+
+        let some = none
+            .with_check(Arc::new(FakeHealthCheck::new("owner", Severity::Warn)))
+            .unwrap();
+        let err = some.check_plugin_config().unwrap_err().to_string();
+        assert!(err.contains("the plugin checks are owner"), "{err}");
+
+        let glob: HealthConfig =
+            toml::from_str("[plugins.owner]\nselect = { path = [\"models/[\"] }").unwrap();
+        let err = HealthSettings::from_config(&glob).unwrap_err().to_string();
+        assert!(err.contains("health.plugins.owner.select.path"), "{err}");
+    }
+
     /// What `ods serve` does with a record: the built-ins live, and the registered
     /// checks' findings from the record (ADR-0030 §6).
     fn recorded(report: HealthReport) -> crate::record::Recorded {

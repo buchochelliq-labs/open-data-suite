@@ -224,6 +224,10 @@ pub struct HealthConfig {
     /// they never borrow the build's own target, which can write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probes: Option<HealthProbesConfig>,
+    /// Checks registered as plugins, by id, e.g. `[health.plugins.pii_tagged]` with
+    /// `severity = "off"` (ADR-0031 §4).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, HealthCheckConfig>,
 }
 
 /// Where probe checks run, `[health.probes]` (ADR-0030 §4c): a dbt target for a
