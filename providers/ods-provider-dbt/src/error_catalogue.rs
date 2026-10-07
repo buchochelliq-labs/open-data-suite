@@ -21,9 +21,10 @@
 //!   `[DELTA_NEW_NOT_NULL_VIOLATION]`, `[DELTA_NEW_CHECK_CONSTRAINT_VIOLATION]`), which
 //!   Databricks reports: the ones its SQL warehouse gave dbt-databricks are recorded in
 //!   `fixtures/dbt/jaffle-ods/artifacts/dbt-databricks-errors` (#349);
-//! - dbt-databricks's own messages (Apache-2.0, 1.12): a cluster that can't be started
-//!   or asked for its state, a connection that can't be made, a command or Python model
-//!   run that timed out, and credentials its profile is missing.
+//!
+//! A warehouse's own messages are its plugin's (ADR-0031 §3a): [`ProjectCatalogue`]
+//! asks the project's warehouse catalogue first, then this one, and gives what either
+//! recognises dbt's steps.
 //!
 //! Anything else is not recognised: the catalogue gives only the category dbt's (or the
 //! adapter's) kind implies, and ODS doesn't guess a cause. Errors close to a symptom
@@ -44,6 +45,7 @@ use ods_sdk::contracts::error_catalogue::{
 };
 use ods_sdk::contracts::run_events::ErrorSummary;
 use ods_sdk::{Provider, ProviderInfo};
+use std::sync::Arc;
 
 use crate::events::ProjectFailure;
 use crate::{Manifest, ResourceType};
@@ -55,8 +57,10 @@ use crate::{Manifest, ResourceType};
 /// missing schemas and SQL functions (`DuckDB`, PostgreSQL, Spark) as their own symptoms;
 /// a pattern's kind may be dbt's header kind ([`ErrorSummary::outer_kind`]), which
 /// `postgres-invalid-input` and `postgres-connect` need. 6: Delta's violations of a
-/// constraint added to a table whose rows break it, as recorded from Databricks.
-pub const CATALOGUE_VERSION: &str = "6";
+/// constraint added to a table whose rows break it, as recorded from Databricks. 7:
+/// dbt-databricks's own messages move to the Databricks plugin's catalogue
+/// ([`ProjectCatalogue`] consults it first on a Databricks project, ADR-0031 §3a).
+pub const CATALOGUE_VERSION: &str = "7";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly: the message's own,
 /// or the one dbt's header gave around it), and phrases its lowercased message must
@@ -388,51 +392,6 @@ const PATTERNS: &[Pattern] = &[
         None,
         &["[delta_concurrent_"],
     ),
-    // dbt-databricks's own messages. Its compute: a cluster or SQL warehouse.
-    p(
-        "databricks-cluster-start",
-        Symptom::WarehouseUnavailable,
-        None,
-        &["error starting cluster"],
-    ),
-    p(
-        "databricks-cluster-status",
-        Symptom::WarehouseUnavailable,
-        None,
-        &["error getting status of cluster"],
-    ),
-    p(
-        "databricks-connection",
-        Symptom::WarehouseUnavailable,
-        None,
-        &["failed to create connection"],
-    ),
-    p(
-        "databricks-command-timeout",
-        Symptom::QueryTimeout,
-        None,
-        &["command execution timed out"],
-    ),
-    p(
-        "databricks-python-timeout",
-        Symptom::QueryTimeout,
-        None,
-        &["python model run timed out"],
-    ),
-    p(
-        "databricks-oauth-required",
-        Symptom::CredentialsMissing,
-        None,
-        &["is required when not using access token"],
-    ),
-    // `The config 'client_id' is required to connect to Databricks when
-    // 'client_secret' is present`, its names removed.
-    p(
-        "databricks-client-id-required",
-        Symptom::CredentialsMissing,
-        None,
-        &["is required to connect to databricks when", "is present"],
-    ),
 ];
 
 /// dbt's error catalogue (see the module docs).
@@ -631,6 +590,109 @@ impl ErrorCatalogue for DbtErrorCatalogue {
                 },
             },
         }
+    }
+}
+
+/// The catalogue for a project (ADR-0031 §3a, §3b): its warehouse's catalogues first (its
+/// plugin's, then those of the warehouses it is built on, nearest first), then dbt's,
+/// then any other warehouse's. A warehouse's own message is
+/// never read by a generic pattern; a message from another warehouse (a run from before
+/// the project moved, or before dbt wrote a manifest that names the warehouse) is still
+/// recognised, after dbt's, as when all patterns were dbt's. Whichever recognises an
+/// error, dbt's steps are offered, since dbt is what runs, and the explanation names
+/// the catalogue that recognised it ([`ErrorCatalogue::classify_attributed`]).
+#[derive(Clone, Default)]
+pub struct ProjectCatalogue {
+    /// The project's warehouse's catalogues, nearest first.
+    warehouse: Vec<Arc<dyn ErrorCatalogue>>,
+    /// Every other warehouse's, consulted after dbt's.
+    others: Vec<Arc<dyn ErrorCatalogue>>,
+}
+
+impl std::fmt::Debug for ProjectCatalogue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = |c: &Arc<dyn ErrorCatalogue>| c.catalogue().name;
+        f.debug_struct("ProjectCatalogue")
+            .field(
+                "warehouse",
+                &self.warehouse.iter().map(names).collect::<Vec<_>>(),
+            )
+            .field("others", &self.others.iter().map(names).collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl ProjectCatalogue {
+    /// `warehouse`'s catalogues (nearest first), then dbt's, then `others`.
+    pub fn new(
+        warehouse: Vec<Arc<dyn ErrorCatalogue>>,
+        others: Vec<Arc<dyn ErrorCatalogue>>,
+    ) -> Self {
+        Self { warehouse, others }
+    }
+
+    /// What the first of `catalogues` to recognise the error makes of it, with dbt's
+    /// steps, and that catalogue.
+    fn first_match<'a>(
+        catalogues: impl IntoIterator<Item = &'a Arc<dyn ErrorCatalogue>>,
+        error: &ErrorSummary,
+    ) -> Option<(Classification, CatalogueInfo)> {
+        catalogues
+            .into_iter()
+            .find_map(|c| match c.classify(error) {
+                Classification::Recognised(found) => {
+                    Some((Classification::Recognised(steps(found)), c.catalogue()))
+                }
+                // Not recognised (or a kind of answer this host doesn't know): the next.
+                _ => None,
+            })
+    }
+
+    /// The warehouse's, then dbt's (`dbt`), then the others', with the catalogue that
+    /// answered.
+    fn attributed(
+        &self,
+        error: &ErrorSummary,
+        dbt: impl FnOnce() -> Classification,
+    ) -> (Classification, CatalogueInfo) {
+        if let Some(found) = Self::first_match(&self.warehouse, error) {
+            return found;
+        }
+        let dbt = dbt();
+        if matches!(dbt, Classification::Recognised(_)) {
+            return (dbt, DbtErrorCatalogue.catalogue());
+        }
+        Self::first_match(&self.others, error)
+            .unwrap_or_else(|| (dbt, DbtErrorCatalogue.catalogue()))
+    }
+
+    /// As [`DbtErrorCatalogue::classify_project`], in this catalogue's order, with the
+    /// catalogue that answered.
+    pub fn classify_project(&self, failure: &ProjectFailure) -> (Classification, CatalogueInfo) {
+        self.attributed(&failure.summary, || {
+            DbtErrorCatalogue.classify_project(failure)
+        })
+    }
+}
+
+impl Provider for ProjectCatalogue {
+    fn info(&self) -> ProviderInfo {
+        DbtErrorCatalogue.info()
+    }
+}
+
+impl ErrorCatalogue for ProjectCatalogue {
+    /// dbt's: the one that answers when nothing recognises an error.
+    fn catalogue(&self) -> CatalogueInfo {
+        DbtErrorCatalogue.catalogue()
+    }
+
+    fn classify(&self, error: &ErrorSummary) -> Classification {
+        self.classify_attributed(error).0
+    }
+
+    fn classify_attributed(&self, error: &ErrorSummary) -> (Classification, CatalogueInfo) {
+        self.attributed(error, || DbtErrorCatalogue.classify(error))
     }
 }
 
@@ -1386,42 +1448,92 @@ mod tests {
             "Database Error",
             "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint positive (amount > 0) violated by row with values: - amount : -1",
         ),
-        (
-            "databricks-cluster-start",
-            "Runtime Error",
-            "Error starting cluster: Cluster 0123-456789-abcdefgh is terminated",
-        ),
-        (
-            "databricks-cluster-status",
-            "Runtime Error",
-            "Error getting status of cluster: Cluster 0123-456789-abcdefgh does not exist",
-        ),
-        (
-            "databricks-connection",
-            "Database Error",
-            "Failed to create connection",
-        ),
-        (
-            "databricks-command-timeout",
-            "Runtime Error",
-            "Command execution timed out",
-        ),
-        (
-            "databricks-python-timeout",
-            "Runtime Error",
-            "Python model run timed out",
-        ),
-        (
-            "databricks-oauth-required",
-            "Runtime Error",
-            "The config `auth_type: oauth` is required when not using access token",
-        ),
-        (
-            "databricks-client-id-required",
-            "Runtime Error",
-            "The config 'client_id' is required to connect to Databricks when 'client_secret' is present",
-        ),
     ];
+
+    /// A warehouse catalogue that recognises one phrase as an unavailable warehouse.
+    struct Warehouse;
+
+    impl Provider for Warehouse {
+        fn info(&self) -> ProviderInfo {
+            ProviderInfo::new(
+                "acme",
+                "acme",
+                "1",
+                CapabilitySet::from_iter([Capability::ErrorExplain]),
+            )
+        }
+    }
+
+    impl ErrorCatalogue for Warehouse {
+        fn catalogue(&self) -> CatalogueInfo {
+            CatalogueInfo::new("acme", "3", "acme")
+        }
+        fn classify(&self, error: &ErrorSummary) -> Classification {
+            let message = error.message().to_ascii_lowercase();
+            if ["could not find profile", "error starting cluster"]
+                .iter()
+                .any(|p| message.contains(p))
+            {
+                Classification::Recognised(PatternMatch::new(
+                    "acme-compute",
+                    Symptom::WarehouseUnavailable,
+                ))
+            } else {
+                Classification::NotRecognised {
+                    category: ErrorCategory::Unknown,
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_warehouse_catalogue_is_asked_first_and_gets_dbts_steps() {
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)], Vec::new());
+        assert_eq!(project.catalogue(), DbtErrorCatalogue.catalogue());
+        // A message dbt's own pattern also reads: the warehouse's wins, and is named.
+        let summary = node_failure("Runtime Error", "Could not find profile named 'x'");
+        let (Classification::Recognised(found), by) = project.classify_attributed(&summary) else {
+            panic!("not recognised")
+        };
+        assert_eq!(found.id, "acme-compute");
+        assert_eq!((by.name.as_str(), by.version.as_str()), ("acme", "3"));
+        assert!(!found.suggestions.is_empty(), "dbt's steps: {found:?}");
+        // What the warehouse doesn't recognise, dbt's catalogue reads, and is named.
+        let other = node_failure(
+            "Compilation Error",
+            "'x' is undefined. This can happen when calling a macro that does not exist.",
+        );
+        let (classified, by) = project.classify_attributed(&other);
+        assert_eq!(classified, DbtErrorCatalogue.classify(&other));
+        assert_eq!(by, DbtErrorCatalogue.catalogue());
+        // Without a warehouse catalogue, it is dbt's.
+        let plain = ProjectCatalogue::default();
+        assert_eq!(
+            plain.classify(&summary),
+            DbtErrorCatalogue.classify(&summary)
+        );
+    }
+
+    #[test]
+    fn another_warehouses_catalogue_is_asked_after_dbts() {
+        // No warehouse known (no manifest yet), or another warehouse's run.
+        let project = ProjectCatalogue::new(Vec::new(), vec![Arc::new(Warehouse)]);
+        // dbt's own pattern still wins over another warehouse's.
+        let profile = node_failure("Runtime Error", "Could not find profile named 'x'");
+        assert_eq!(
+            project.classify(&profile),
+            DbtErrorCatalogue.classify(&profile)
+        );
+        // What only the other warehouse recognises, it does, and is named.
+        let cluster = node_failure("Runtime Error", "Error starting cluster: terminated");
+        let (Classification::Recognised(found), by) = project.classify_attributed(&cluster) else {
+            panic!("not recognised")
+        };
+        assert_eq!(
+            (found.id.as_str(), by.name.as_str()),
+            ("acme-compute", "acme")
+        );
+    }
 
     #[test]
     fn every_pattern_is_reached_by_a_message() {
@@ -1608,8 +1720,10 @@ mod tests {
 
     #[test]
     fn unavailable_compute_suggests_checking_the_connection() {
+        // A warehouse's catalogue recognises its compute; dbt's steps come with it.
         let summary = node_failure("Runtime Error", "Error starting cluster: terminated");
-        let Classification::Recognised(m) = DbtErrorCatalogue.classify(&summary) else {
+        let project = ProjectCatalogue::new(vec![Arc::new(Warehouse)], Vec::new());
+        let Classification::Recognised(m) = project.classify(&summary) else {
             panic!()
         };
         assert_eq!(m.suggestions[0].commands, ["dbt debug"]);

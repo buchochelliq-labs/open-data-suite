@@ -322,6 +322,7 @@ impl TestReport {
             target_dir: &ws.target_dir,
             manifest: Some(&ws.manifest),
             last_manifest: None,
+            warehouses: &settings.warehouses,
         };
         self.observed.check_names = super::failures::describe_checks(execution, &files);
         let Some(run) = &self.observed.run_stats else {

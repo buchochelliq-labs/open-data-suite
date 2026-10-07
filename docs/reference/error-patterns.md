@@ -2,7 +2,7 @@
 
 How ODS recognises what dbt, and the engines dbt runs on, say when a node or a test
 fails ([ADR-0025](../adr/0025-error-explanations.md)). This page is the dbt error
-catalogue (`ods-provider-dbt::error_catalogue`) at catalogue version **6**. A test
+catalogue (`ods-provider-dbt::error_catalogue`) at catalogue version **7**. A test
 keeps it in step with the code.
 
 A pattern reads only the error's redacted summary: its kind and its first line, with
@@ -70,18 +70,36 @@ test still reaches it with a written message.
 | `spark-schema-not-found` | `missing_schema` | any | `[schema_not_found]` | Apache Spark's `error-conditions.json` | no: from the source named |
 | `spark-unresolved-routine` | `missing_function` | any | `[unresolved_routine]` | Apache Spark's `error-conditions.json` | yes |
 | `delta-concurrent-write` | `lock_conflict` | any | `[delta_concurrent_` | Delta Lake's `delta-error-classes.json` | no: from the source named |
-| `databricks-cluster-start` | `warehouse_unavailable` | any | `error starting cluster` | dbt-databricks's source (1.12) | no: from the source named |
-| `databricks-cluster-status` | `warehouse_unavailable` | any | `error getting status of cluster` | dbt-databricks's source (1.12) | no: from the source named |
-| `databricks-connection` | `warehouse_unavailable` | any | `failed to create connection` | dbt-databricks's source (1.12) | no: from the source named |
-| `databricks-command-timeout` | `query_timeout` | any | `command execution timed out` | dbt-databricks's source (1.12) | no: from the source named |
-| `databricks-python-timeout` | `query_timeout` | any | `python model run timed out` | dbt-databricks's source (1.12) | no: from the source named |
-| `databricks-oauth-required` | `credentials_missing` | any | `is required when not using access token` | dbt-databricks's source (1.12) | no: from the source named |
-| `databricks-client-id-required` | `credentials_missing` | any | `is required to connect to databricks when` and `is present` | dbt-databricks's source (1.12) | no: from the source named |
 <!-- patterns:end -->
 
 Besides these, a Python exception's name given as the error's kind (`KeyError: …`)
 is recognised as `python_exception` (`python-exception`). Only Python's built-in
 exceptions are ever named.
+
+## Warehouse plugins' patterns
+
+A warehouse's own messages are its plugin's ([ADR-0031](../adr/0031-plugin-registry-and-loading.md)
+§3a). On a project on that warehouse, ODS asks the plugin's catalogue first, then the one
+above. On any other project, it is asked after the one above, so a run from before dbt
+named the warehouse, or from before the project moved, is still explained. Either way
+dbt's steps are offered, and the explanation names the catalogue that recognised the
+error. Its patterns read the message only, whatever its kind.
+
+The built-in Databricks plugin's catalogue (`ods-provider-databricks::error_catalogue`),
+at catalogue version **1**, holds dbt-databricks's own messages (Apache-2.0, 1.12). Each
+is taken from that source, and a test reaches it with a written message:
+
+<!-- databricks-patterns:begin -->
+| Pattern | Symptom | The message holds |
+|---|---|---|
+| `databricks-cluster-start` | `warehouse_unavailable` | `error starting cluster` |
+| `databricks-cluster-status` | `warehouse_unavailable` | `error getting status of cluster` |
+| `databricks-connection` | `warehouse_unavailable` | `failed to create connection` |
+| `databricks-command-timeout` | `query_timeout` | `command execution timed out` |
+| `databricks-python-timeout` | `query_timeout` | `python model run timed out` |
+| `databricks-oauth-required` | `credentials_missing` | `is required when not using access token` |
+| `databricks-client-id-required` | `credentials_missing` | `is required to connect to databricks when` and `is present` |
+<!-- databricks-patterns:end -->
 
 ## Deliberately not recognised
 - An error that resembles a symptom without being it gets no pattern, or a symptom of

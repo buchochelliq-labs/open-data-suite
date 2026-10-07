@@ -13,7 +13,7 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
   "confidence": "known_pattern",
   "pattern": {
     "catalogue": "dbt",
-    "version": "6",
+    "version": "7",
     "id": "duckdb-values-list-column"
   },
   "headline": "A column this model reads doesn't exist",

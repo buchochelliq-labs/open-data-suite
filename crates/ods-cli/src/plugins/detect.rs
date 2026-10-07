@@ -8,6 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ods_core::CapabilitySet;
 use ods_sdk::contracts::changes::CHANGE_PROVIDER;
+use ods_sdk::contracts::error_catalogue::ERROR_CATALOGUE;
 use ods_sdk::contracts::health_check::{HEALTH_CHECK, HealthCheck};
 use ods_sdk::contracts::observed_lineage::OBSERVED_LINEAGE_SOURCE;
 use ods_sdk::contracts::privileges::RELATION_PRIVILEGES;
@@ -127,6 +128,12 @@ pub(super) fn warehouse(plugin: &dyn WarehousePlugin, builtin: bool) -> Detected
             "observed_lineage",
             Some(OBSERVED_LINEAGE_SOURCE),
         ));
+    }
+    if let Some(errors) = plugin.errors() {
+        let mut feature = Feature::new("errors", Some(ERROR_CATALOGUE));
+        let info = errors.catalogue();
+        feature.detail = Some(format!("{} catalogue {}", info.name, info.version));
+        features.push(feature);
     }
     if let Some(dialect) = plugin.dialect() {
         let mut feature = Feature::new("dialect", None);

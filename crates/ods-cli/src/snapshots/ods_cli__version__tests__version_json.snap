@@ -47,6 +47,13 @@ expression: "render(Mode::Json)"
         "name": "databricks",
         "from": "ods-provider-databricks [ods-version]",
         "builtin": true
+      },
+      {
+        "contract": "error_catalogue",
+        "contract_version": "0.5",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
       }
     ]
   },

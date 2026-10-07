@@ -203,6 +203,7 @@ fn load_config(
     inputs.flags = globals.output.flag_values();
     let loaded = ods_config::load(&inputs).and_then(|loaded| {
         crate::commands::validate_provider_settings(&loaded)?;
+        crate::plugins::validate_warehouses(&loaded)?;
         Ok(loaded)
     });
     match loaded {

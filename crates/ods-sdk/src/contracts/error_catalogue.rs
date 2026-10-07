@@ -47,7 +47,9 @@ pub const ERROR_CATALOGUE: Contract = Contract {
     // (`ErrorSummary::outer_kind`), which a pattern may match on; the symptoms
     // `missing_schema` and `missing_function`, and `warehouse_unavailable`'s category
     // `connection` (#323).
-    version: SchemaVersion::new(0, 4),
+    // 0.5: `ErrorCatalogue::classify_attributed`, which names the catalogue that
+    // recognised an error when a catalogue consults others (ADR-0031 §3a, #415).
+    version: SchemaVersion::new(0, 5),
 };
 
 /// A catalogue's name and version.
@@ -366,4 +368,12 @@ pub trait ErrorCatalogue: Provider {
 
     /// Classifies a failed node's error summary (see the module docs).
     fn classify(&self, error: &ErrorSummary) -> Classification;
+
+    /// [`classify`](Self::classify), with the catalogue whose pattern recognised the
+    /// error, which an explanation names: this one, unless it consults others, as a
+    /// project's catalogue consults its warehouse's (ADR-0031 §3a). When nothing
+    /// recognises it, this catalogue.
+    fn classify_attributed(&self, error: &ErrorSummary) -> (Classification, CatalogueInfo) {
+        (self.classify(error), self.catalogue())
+    }
 }

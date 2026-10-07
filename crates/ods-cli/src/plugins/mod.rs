@@ -12,6 +12,7 @@ use std::sync::{Arc, OnceLock};
 
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::changes::ChangeProvider;
+use ods_sdk::contracts::error_catalogue::ErrorCatalogue;
 use ods_sdk::contracts::health_check::{CheckInfo, HealthCheck};
 use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
 use ods_sdk::contracts::privileges::PrivilegedProbe;
@@ -64,6 +65,14 @@ pub trait WarehousePlugin: Send + Sync {
     /// `adapter_type`, e.g. `snowflake`).
     fn warehouse(&self) -> &str;
 
+    /// The warehouses this one is built on, nearest first, as a dbt adapter names the
+    /// adapters it depends on (Databricks on Spark, Redshift on Postgres). Error
+    /// patterns and the dialect are inherited from them, nothing else (ADR-0031 §3b).
+    /// `[warehouses.<kind>] extends` replaces it.
+    fn parents(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Reads sources' data versions through `probe` (ADR-0022).
     fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
         let _ = probe;
@@ -106,6 +115,13 @@ pub trait WarehousePlugin: Send + Sync {
         export: &Path,
     ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
         let _ = export;
+        None
+    }
+
+    /// Its engine's own error patterns (ADR-0025): consulted before dbt's, which adds
+    /// its steps to what this recognises. Patterns several warehouses share stay in
+    /// dbt's catalogue.
+    fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>> {
         None
     }
 
@@ -155,6 +171,9 @@ pub enum PluginError {
     #[error("the plugin set is installed once per process, and already was")]
     AlreadyInstalled,
 }
+
+/// `[warehouses.<kind>]` as configured (ADR-0031 §3b).
+pub type Warehouses = BTreeMap<String, ods_config::WarehouseConfig>;
 
 /// A reader of observed lineage, or why the export can't be read.
 pub type ObservedReader = Result<Arc<dyn ObservedLineageSource>, ProviderError>;
@@ -364,12 +383,126 @@ impl Plugins {
             .collect()
     }
 
-    /// The SQL dialect for `warehouse`'s SQL: its plugin's, else the warehouse kind
-    /// itself, for the parser to map (`None` when there is neither).
-    pub fn dialect(&self, warehouse: Option<&str>) -> Option<String> {
-        self.warehouse(warehouse)
-            .and_then(|p| p.dialect().map(str::to_owned))
-            .or_else(|| warehouse.map(str::to_owned))
+    /// The warehouses `warehouse` is built on, nearest first: `[warehouses.<kind>]
+    /// extends` when configured, else its plugin's [`parents`](WarehousePlugin::parents).
+    fn parents_of(&self, warehouse: &str, configured: &Warehouses) -> Vec<String> {
+        match configured.get(warehouse).and_then(|w| w.extends.clone()) {
+            Some(extends) => extends,
+            None => self
+                .warehouse(Some(warehouse))
+                .map(WarehousePlugin::parents)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// `warehouse`, then the warehouses it is built on, depth first, each once: the
+    /// order in which its error patterns and dialect are looked for, as dbt's adapter
+    /// dispatch looks for a macro (ADR-0031 §3b).
+    pub fn chain(&self, warehouse: &str, configured: &Warehouses) -> Vec<String> {
+        let mut chain = Vec::new();
+        let mut stack = vec![warehouse.to_owned()];
+        while let Some(kind) = stack.pop() {
+            if chain.contains(&kind) {
+                continue;
+            }
+            let parents = self.parents_of(&kind, configured);
+            chain.push(kind);
+            stack.extend(parents.into_iter().rev());
+        }
+        chain
+    }
+
+    /// A cycle among the warehouses' parents, as `a → b → a`, if there is one: a
+    /// configuration error.
+    pub fn cycle(&self, configured: &Warehouses) -> Option<String> {
+        let mut kinds: Vec<String> = configured.keys().cloned().collect();
+        kinds.extend(self.warehouses.keys().cloned());
+        kinds.sort();
+        kinds.dedup();
+        for start in &kinds {
+            let mut path = vec![start.clone()];
+            if self.cycle_from(&mut path, configured) {
+                return Some(path.join(" → "));
+            }
+        }
+        None
+    }
+
+    /// Whether a path of parents from the end of `path` comes back to a kind on it,
+    /// leaving that path in `path`.
+    fn cycle_from(&self, path: &mut Vec<String>, configured: &Warehouses) -> bool {
+        let last = path.last().cloned().unwrap_or_default();
+        for parent in self.parents_of(&last, configured) {
+            let seen = path.contains(&parent);
+            path.push(parent);
+            if seen || self.cycle_from(path, configured) {
+                return true;
+            }
+            path.pop();
+        }
+        false
+    }
+
+    /// The error catalogues for a project on `warehouse`: its plugin's, then each
+    /// parent's that has one, nearest first.
+    pub fn errors(
+        &self,
+        warehouse: Option<&str>,
+        configured: &Warehouses,
+    ) -> Vec<Arc<dyn ErrorCatalogue>> {
+        warehouse.map_or_else(Vec::new, |w| {
+            self.chain(w, configured)
+                .iter()
+                .filter_map(|kind| self.warehouse(Some(kind))?.errors())
+                .collect()
+        })
+    }
+
+    /// The SQL dialect for `warehouse`'s SQL: the first in its chain that a plugin
+    /// names, else the first kind in it the parser knows, else the warehouse kind
+    /// itself, for the parser to refuse (`None` without a warehouse).
+    pub fn dialect(&self, warehouse: Option<&str>, configured: &Warehouses) -> Option<String> {
+        let warehouse = warehouse?;
+        let chain = self.chain(warehouse, configured);
+        chain
+            .iter()
+            .find_map(|kind| self.warehouse(Some(kind))?.dialect().map(str::to_owned))
+            .or_else(|| {
+                chain
+                    .iter()
+                    .find(|kind| ods_provider_sqlparser::SqlDialect::from_name(kind).is_some())
+                    .cloned()
+            })
+            .or_else(|| Some(warehouse.to_owned()))
+    }
+
+    /// Every other warehouse plugin's error catalogue, by warehouse: those not on
+    /// `warehouse`'s chain, asked after dbt's, for a run on another warehouse, or
+    /// before dbt names the project's.
+    pub fn other_errors(
+        &self,
+        warehouse: Option<&str>,
+        configured: &Warehouses,
+    ) -> Vec<Arc<dyn ErrorCatalogue>> {
+        let chain = warehouse.map_or_else(Vec::new, |w| self.chain(w, configured));
+        self.warehouses
+            .iter()
+            .filter(|(w, _)| !chain.contains(w))
+            .filter_map(|(_, (p, _))| p.errors())
+            .collect()
+    }
+
+    /// The error catalogue for a project on `warehouse` (ADR-0031 §3a, §3b): its chain's
+    /// catalogues, nearest first, then dbt's, then every other plugin's.
+    pub fn project_catalogue(
+        &self,
+        warehouse: Option<&str>,
+        configured: &Warehouses,
+    ) -> ods_provider_dbt::error_catalogue::ProjectCatalogue {
+        ods_provider_dbt::error_catalogue::ProjectCatalogue::new(
+            self.errors(warehouse, configured),
+            self.other_errors(warehouse, configured),
+        )
     }
 
     /// What every plugin offers, as detected (§3c): health checks by id, then each
@@ -409,6 +542,34 @@ impl Plugins {
             })
             .collect()
     }
+}
+
+/// Refuses configuration whose `[warehouses.<kind>] extends` make a cycle, with the
+/// installed plugins' own parents (ADR-0031 §3b): a configuration error (exit 4).
+///
+/// # Errors
+/// The cycle, at the first `extends` on it.
+pub(crate) fn validate_warehouses(
+    config: &ods_config::Loaded,
+) -> Result<(), ods_config::ConfigError> {
+    let warehouses = &config.config.warehouses;
+    let Some(cycle) = installed().cycle(warehouses) else {
+        return Ok(());
+    };
+    let (key, origin) = cycle
+        .split(" → ")
+        .find_map(|kind| {
+            let key = ["warehouses", kind, "extends"].map(str::to_owned).to_vec();
+            config
+                .effective(&key)
+                .map(|s| (format!("warehouses.{kind}.extends"), s.source.clone()))
+        })
+        .unwrap_or_else(|| ("warehouses".to_owned(), ods_config::Source::Default));
+    Err(ods_config::ConfigError::Schema {
+        key,
+        origin: Box::new(origin),
+        message: format!("the warehouses it extends make a cycle: {cycle}"),
+    })
 }
 
 /// Refuses a plugin whose dialect the SQL parser doesn't know.
@@ -540,15 +701,47 @@ mod tests {
                 ("relation_privileges", "databricks", true),
                 ("relation_linker", "databricks", true),
                 ("observed_lineage_source", "databricks", true),
+                ("error_catalogue", "databricks", true),
             ]
         );
         assert_eq!(
-            plugins.dialect(Some("databricks")).as_deref(),
+            plugins
+                .dialect(Some("databricks"), &Warehouses::new())
+                .as_deref(),
             Some("databricks")
         );
+        assert_eq!(
+            plugins.errors(Some("databricks"), &Warehouses::new())[0]
+                .catalogue()
+                .name,
+            "databricks"
+        );
+        assert!(
+            plugins
+                .errors(Some("duckdb"), &Warehouses::new())
+                .is_empty()
+        );
+        // Another warehouse's project, or one not yet named, still has Databricks' after
+        // dbt's.
+        let none = Warehouses::new();
+        assert_eq!(plugins.other_errors(Some("duckdb"), &none).len(), 1);
+        assert_eq!(plugins.other_errors(None, &none).len(), 1);
+        assert!(plugins.other_errors(Some("databricks"), &none).is_empty());
+        // A warehouse built on Databricks has its patterns on its chain, not after dbt.
+        let on_databricks = extends(&[("acmebricks", &["databricks"])]);
+        assert!(
+            plugins
+                .other_errors(Some("acmebricks"), &on_databricks)
+                .is_empty()
+        );
         // Without a plugin, the kind is the dialect's name, for the parser to map.
-        assert_eq!(plugins.dialect(Some("duckdb")).as_deref(), Some("duckdb"));
-        assert_eq!(plugins.dialect(None), None);
+        assert_eq!(
+            plugins
+                .dialect(Some("duckdb"), &Warehouses::new())
+                .as_deref(),
+            Some("duckdb")
+        );
+        assert_eq!(plugins.dialect(None, &Warehouses::new()), None);
     }
 
     /// A plugin that offers links (not configured here), a dialect, and maybe a reader
@@ -616,7 +809,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["relation_linker"]
         );
-        assert_eq!(plugins.dialect(Some("acme")).as_deref(), Some("snowflake"));
+        assert_eq!(
+            plugins.dialect(Some("acme"), &Warehouses::new()).as_deref(),
+            Some("snowflake")
+        );
     }
 
     #[test]
@@ -665,6 +861,116 @@ mod tests {
         );
         assert!(plugins.observed_lineage(Some("duckdb"), export).is_none());
         assert_eq!(plugins.observed_lineage_readers(), ["acme", "databricks"]);
+    }
+
+    fn extends(pairs: &[(&str, &[&str])]) -> Warehouses {
+        pairs
+            .iter()
+            .map(|(kind, parents)| {
+                let mut w = ods_config::WarehouseConfig::default();
+                w.extends = Some(parents.iter().map(|p| (*p).to_owned()).collect());
+                ((*kind).to_owned(), w)
+            })
+            .collect()
+    }
+
+    /// A plugin for `spark`, with error patterns and Spark's dialect.
+    struct Spark;
+
+    impl WarehousePlugin for Spark {
+        fn origin(&self) -> Origin {
+            crate::origin!()
+        }
+        fn warehouse(&self) -> &'static str {
+            "spark"
+        }
+        fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>> {
+            Some(Arc::new(ods_provider_fake::FakeErrorCatalogue::new()))
+        }
+        fn dialect(&self) -> Option<&str> {
+            Some("spark")
+        }
+    }
+
+    #[test]
+    fn a_warehouse_inherits_errors_and_dialect_from_what_it_is_built_on() {
+        let mut plugins = Plugins::builtin();
+        let none = Warehouses::new();
+        assert_eq!(plugins.chain("databricks", &none), ["databricks", "spark"]);
+        // Without a Spark plugin, Databricks has only its own catalogue.
+        assert_eq!(plugins.errors(Some("databricks"), &none).len(), 1);
+        plugins.add_warehouse(Arc::new(Spark)).unwrap();
+        let catalogues: Vec<String> = plugins
+            .errors(Some("databricks"), &none)
+            .iter()
+            .map(|c| c.catalogue().name)
+            .collect();
+        assert_eq!(catalogues.len(), 2);
+        assert_eq!(catalogues[0], "databricks", "nearest first: {catalogues:?}");
+        // Its own dialect wins over its parent's.
+        assert_eq!(
+            plugins.dialect(Some("databricks"), &none).as_deref(),
+            Some("databricks")
+        );
+        // A warehouse with no plugin, configured as built on Spark, takes Spark's.
+        let configured = extends(&[("acmespark", &["spark"])]);
+        assert_eq!(
+            plugins.chain("acmespark", &configured),
+            ["acmespark", "spark"]
+        );
+        assert_eq!(plugins.errors(Some("acmespark"), &configured).len(), 1);
+        assert_eq!(
+            plugins.dialect(Some("acmespark"), &configured).as_deref(),
+            Some("spark")
+        );
+        // With no plugin anywhere, the first kind the parser knows.
+        let on_postgres = extends(&[("materialize", &["postgres"])]);
+        assert_eq!(
+            plugins
+                .dialect(Some("materialize"), &on_postgres)
+                .as_deref(),
+            Some("postgres")
+        );
+        // A kind the parser doesn't know and that extends nothing stays as named.
+        assert_eq!(
+            plugins.dialect(Some("acmedb"), &none).as_deref(),
+            Some("acmedb")
+        );
+        // Configuration replaces a plugin's own parents.
+        let alone = extends(&[("databricks", &[])]);
+        assert_eq!(plugins.chain("databricks", &alone), ["databricks"]);
+        assert_eq!(plugins.errors(Some("databricks"), &alone).len(), 1);
+    }
+
+    #[test]
+    fn only_errors_and_the_dialect_are_inherited() {
+        // Source versions, the login check, links and observed lineage come from the
+        // project's own warehouse's plugin: a child on Databricks gets none of them.
+        let plugins = Plugins::builtin();
+        assert!(!plugins.has_changes(Some("acmebricks")));
+        assert!(plugins.privileges(Some("acmebricks"), probe()).is_none());
+        assert!(matches!(
+            plugins.links(Some("acmebricks"), &WarehouseSettings::empty()),
+            Err(NoRelationLink::Unsupported { .. })
+        ));
+        let configured = extends(&[("acmebricks", &["databricks"])]);
+        assert_eq!(plugins.errors(Some("acmebricks"), &configured).len(), 1);
+    }
+
+    #[test]
+    fn a_cycle_of_parents_is_found() {
+        let plugins = Plugins::builtin();
+        assert_eq!(plugins.cycle(&Warehouses::new()), None);
+        let cycle = plugins
+            .cycle(&extends(&[("spark", &["databricks"])]))
+            .unwrap();
+        assert!(cycle.contains("databricks → spark → databricks"), "{cycle}");
+        assert!(plugins.cycle(&extends(&[("a", &["a"])])).is_some());
+        // A chain still ends when configuration makes one anyway.
+        assert_eq!(
+            plugins.chain("spark", &extends(&[("spark", &["databricks"])])),
+            ["spark", "databricks"]
+        );
     }
 
     #[test]

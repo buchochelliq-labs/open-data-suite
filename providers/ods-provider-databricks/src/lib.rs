@@ -33,11 +33,13 @@
 pub mod catalog_explorer;
 mod column_lineage;
 pub mod delta_versions;
+pub mod error_catalogue;
 pub mod unity_catalog;
 
 pub use catalog_explorer::CatalogExplorer;
 pub use column_lineage::{ExportFormat, UcColumnLineage};
 pub use delta_versions::DeltaVersions;
+pub use error_catalogue::DatabricksErrors;
 pub use unity_catalog::UnityCatalog;
 
 /// The `kind` Databricks providers are registered under in configuration.

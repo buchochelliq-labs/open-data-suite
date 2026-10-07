@@ -1,6 +1,7 @@
 //! The built-in Databricks plugin (ADR-0031 §3, §3a): Delta table versions
 //! (ADR-0022), Unity Catalog's login check (ADR-0030 §4e), Catalog Explorer links
-//! (#329), Unity Catalog's exported column lineage, and the Databricks dialect. The
+//! (#329), Unity Catalog's exported column lineage, dbt-databricks's error messages
+//! (ADR-0025), and the Databricks dialect. The
 //! only place the CLI names Databricks' providers.
 //!
 //! A link is where the manifest says the relation is, not proof it exists (rule 3), and
@@ -9,9 +10,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use ods_provider_databricks::{CatalogExplorer, DeltaVersions, UcColumnLineage, UnityCatalog};
+use ods_provider_databricks::{
+    CatalogExplorer, DatabricksErrors, DeltaVersions, UcColumnLineage, UnityCatalog,
+};
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::changes::ChangeProvider;
+use ods_sdk::contracts::error_catalogue::ErrorCatalogue;
 use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
 use ods_sdk::contracts::privileges::PrivilegedProbe;
 use ods_sdk::contracts::probe::RelationProbe;
@@ -39,6 +43,11 @@ impl WarehousePlugin for Databricks {
 
     fn warehouse(&self) -> &str {
         DATABRICKS
+    }
+
+    /// dbt-databricks is built on dbt-spark.
+    fn parents(&self) -> Vec<String> {
+        vec!["spark".to_owned()]
     }
 
     fn versions_read(&self) -> Option<String> {
@@ -72,6 +81,10 @@ impl WarehousePlugin for Databricks {
             UcColumnLineage::from_path(export)
                 .map(|source| Arc::new(source) as Arc<dyn ObservedLineageSource>),
         )
+    }
+
+    fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>> {
+        Some(Arc::new(DatabricksErrors::new()))
     }
 
     fn dialect(&self) -> Option<&str> {

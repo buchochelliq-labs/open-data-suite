@@ -13,6 +13,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Breaking
+- The `error_catalogue` contract is 0.5 (#415): `ErrorCatalogue::classify_attributed`
+  names the catalogue that recognised an error, for a catalogue that consults others.
+  It has a default, so **what to do:** nothing beyond rebuilding against this SDK.
 - `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
   gains `test_types`, `described` and `constraints` (all default when absent). **What
   to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
@@ -40,7 +43,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
     `adapter_type`). Over dbt's own connection it gives `ods state` a source-version
     provider and probe checks a login check; from the warehouse's `[providers.<name>]`
     settings it builds "Open in warehouse" links; it reads observed lineage exports;
-    and it names the SQL dialect column lineage parses in (#415, ADR-0031 §3a). What a
+    its error catalogue is asked before dbt's when a node fails; and it names the SQL
+    dialect column lineage parses in (#415, ADR-0031 §3a). As dbt's adapter dispatch
+    does, a warehouse inherits error patterns and the dialect from the warehouses it is
+    built on: its plugin's `parents` (Databricks: Spark), or
+    `[warehouses.<kind>] extends` in configuration (§3b). A cycle is a configuration
+    error. What a
     plugin offers is detected by calling it, never declared (§3c). Databricks is now
     the built-in plugin, and behaves as before. `ods version` and `ods doctor` now also
     list its links and observed lineage. With several plugins that read observed
@@ -127,6 +135,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   cover is *unknown* for them, never healthy. A new record reloads the page.
 
 ### Changed
+- dbt's error catalogue is at version 7 (#415): dbt-databricks's own messages (unavailable
+  compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
+  (`databricks` 1). It is asked first on a Databricks project, and after dbt's on any
+  other (a run before dbt names the warehouse, or from before a project moved), so
+  explanations recognise what they did. An explanation names the catalogue whose
+  pattern recognised the error (`databricks` 1 or `dbt` 7).
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
   each other. `/roadmap/` redirects to `/ROADMAP/`.
