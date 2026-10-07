@@ -24,6 +24,7 @@ ods-erd.workspace = true
 ods-lineage.workspace = true
 ods-mcp.workspace = true
 ods-provider-databricks.workspace = true
+ods-provider-duckdb.workspace = true
 ods-provider-dbt.workspace = true
 ods-provider-sqlparser.workspace = true
 ods-sdk.workspace = true

@@ -22,6 +22,7 @@ use serde::Serialize;
 
 mod databricks;
 mod detect;
+mod duckdb;
 mod settings;
 
 pub use detect::{Detected, Feature, PluginKind};
@@ -214,13 +215,16 @@ impl Plugins {
         Self::default()
     }
 
-    /// What the released `ods` has: the Databricks plugin.
+    /// What the released `ods` has: the Databricks and `DuckDB` plugins.
     pub fn builtin() -> Self {
         let mut plugins = Self::none();
-        let databricks: Arc<dyn WarehousePlugin> = Arc::new(databricks::Databricks);
-        plugins
-            .warehouses
-            .insert(databricks.warehouse().to_owned(), (databricks, true));
+        let builtins: [Arc<dyn WarehousePlugin>; 2] =
+            [Arc::new(databricks::Databricks), Arc::new(duckdb::Duckdb)];
+        for plugin in builtins {
+            plugins
+                .warehouses
+                .insert(plugin.warehouse().to_owned(), (plugin, true));
+        }
         plugins
     }
 
@@ -675,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn the_builtins_serve_databricks_and_nothing_else() {
+    fn the_builtins_serve_databricks_and_duckdb_and_nothing_else() {
         let plugins = Plugins::builtin();
         assert!(plugins.has_changes(Some("databricks")));
         assert!(plugins.changes(Some("databricks"), probe()).is_some());
@@ -684,7 +688,8 @@ mod tests {
             plugins.versions_read(Some("databricks")).as_deref(),
             Some("table version from the Delta history")
         );
-        for other in [None, Some("duckdb"), Some("Databricks")] {
+        // `DuckDB` has no table version or login check; a kind without a plugin, none.
+        for other in [None, Some("duckdb"), Some("snowflake"), Some("Databricks")] {
             assert!(plugins.versions_read(other).is_none());
             assert!(!plugins.has_changes(other));
             assert!(plugins.changes(other, probe()).is_none());
@@ -702,6 +707,7 @@ mod tests {
                 ("relation_linker", "databricks", true),
                 ("observed_lineage_source", "databricks", true),
                 ("error_catalogue", "databricks", true),
+                ("error_catalogue", "duckdb", true),
             ]
         );
         assert_eq!(
@@ -716,30 +722,43 @@ mod tests {
                 .name,
             "databricks"
         );
-        assert!(
+        let catalogues = |w: Option<&str>, configured: &Warehouses| {
             plugins
-                .errors(Some("duckdb"), &Warehouses::new())
-                .is_empty()
-        );
-        // Another warehouse's project, or one not yet named, still has Databricks' after
-        // dbt's.
+                .errors(w, configured)
+                .iter()
+                .map(|c| c.catalogue().name)
+                .collect::<Vec<_>>()
+        };
+        let others = |w: Option<&str>, configured: &Warehouses| {
+            plugins
+                .other_errors(w, configured)
+                .iter()
+                .map(|c| c.catalogue().name)
+                .collect::<Vec<_>>()
+        };
         let none = Warehouses::new();
-        assert_eq!(plugins.other_errors(Some("duckdb"), &none).len(), 1);
-        assert_eq!(plugins.other_errors(None, &none).len(), 1);
-        assert!(plugins.other_errors(Some("databricks"), &none).is_empty());
+        assert_eq!(catalogues(Some("duckdb"), &none), ["duckdb"]);
+        assert_eq!(catalogues(Some("snowflake"), &none), Vec::<String>::new());
+        // Another warehouse's project, or one not yet named, still has the others' after
+        // dbt's.
+        assert_eq!(others(Some("duckdb"), &none), ["databricks"]);
+        assert_eq!(others(Some("databricks"), &none), ["duckdb"]);
+        assert_eq!(others(None, &none), ["databricks", "duckdb"]);
         // A warehouse built on Databricks has its patterns on its chain, not after dbt.
         let on_databricks = extends(&[("acmebricks", &["databricks"])]);
-        assert!(
-            plugins
-                .other_errors(Some("acmebricks"), &on_databricks)
-                .is_empty()
+        assert_eq!(
+            catalogues(Some("acmebricks"), &on_databricks),
+            ["databricks"]
+        );
+        assert_eq!(others(Some("acmebricks"), &on_databricks), ["duckdb"]);
+        assert_eq!(
+            plugins.dialect(Some("duckdb"), &none).as_deref(),
+            Some("duckdb")
         );
         // Without a plugin, the kind is the dialect's name, for the parser to map.
         assert_eq!(
-            plugins
-                .dialect(Some("duckdb"), &Warehouses::new())
-                .as_deref(),
-            Some("duckdb")
+            plugins.dialect(Some("postgres"), &none).as_deref(),
+            Some("postgres")
         );
         assert_eq!(plugins.dialect(None, &Warehouses::new()), None);
     }
@@ -980,14 +999,20 @@ mod tests {
             .add_warehouse(Arc::new(Other("databricks")))
             .unwrap_err();
         assert!(err.to_string().contains("replacing_warehouse"), "{err}");
-        plugins.add_warehouse(Arc::new(Other("duckdb"))).unwrap();
+        plugins.add_warehouse(Arc::new(Other("snowflake"))).unwrap();
 
         plugins
             .replace_warehouse(Arc::new(Other("databricks")))
             .unwrap();
         // The replacement offers nothing, so Databricks now has no table versions.
         assert!(!plugins.has_changes(Some("databricks")));
-        assert!(plugins.listing().iter().all(|l| !l.builtin));
+        assert!(
+            plugins
+                .listing()
+                .iter()
+                .filter(|l| l.name == "databricks")
+                .all(|l| !l.builtin)
+        );
     }
 
     #[test]

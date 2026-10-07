@@ -18,5 +18,5 @@ why ODS thinks so
 where: models/marts/customers.sql  reported at line 25 of the code it ran · compiled: target/compiled/jaffle_ods/models/marts/customers.sql
 impact: blocks 3 downstream nodes (customer_segments, customers_snapshot_view, segment_summary were skipped). Their last good builds are kept.
 
-dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
+dbt-duckdb said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
 full text: dbt's log file (logs/dbt.log in the project, unless --log-path)

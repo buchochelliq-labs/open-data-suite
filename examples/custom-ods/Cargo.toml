@@ -20,6 +20,7 @@ path = "src/main.rs"
 async-trait = "0.1"
 ods-cli = { path = "../../crates/ods-cli" }
 ods-core = { path = "../../crates/ods-core" }
+ods-provider-duckdb = { path = "../../providers/ods-provider-duckdb" }
 ods-sdk = { path = "../../crates/ods-sdk" }
 
 [dev-dependencies]

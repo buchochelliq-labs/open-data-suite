@@ -12,8 +12,8 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
   "symptom": "missing_column",
   "confidence": "known_pattern",
   "pattern": {
-    "catalogue": "dbt",
-    "version": "7",
+    "catalogue": "duckdb",
+    "version": "1",
     "id": "duckdb-values-list-column"
   },
   "headline": "A column this model reads doesn't exist",
@@ -55,7 +55,7 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
     ]
   },
   "engine_message": {
-    "engine": "dbt",
+    "engine": "dbt-duckdb",
     "kind": "Binder Error",
     "message": "Binder Error: Values list [value removed] does not have a column named [value removed]",
     "details_at": "dbt's log file (logs/dbt.log in the project, unless --log-path)"

@@ -2,7 +2,8 @@
 //!
 //! - [`OwnerTagged`], a health check: every node says who owns it, with an `owner:` tag.
 //! - [`LoadBatchPlugin`], a warehouse plugin for `duckdb`: a source's data version is the
-//!   latest `batch_id` its loader wrote ([`LoadBatches`]).
+//!   latest `batch_id` its loader wrote ([`LoadBatches`]). It replaces the built-in
+//!   `DuckDB` plugin, and offers the same error patterns and dialect.
 //!
 //! Both are illustrations: copy the shape, not the rules.
 
@@ -14,6 +15,7 @@ use ods_cli::plugins::{Origin, WarehousePlugin};
 use ods_core::state::{DataVersion, Exactness};
 use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion, VersionReport};
+use ods_sdk::contracts::error_catalogue::ErrorCatalogue;
 use ods_sdk::contracts::health_check::{
     CheckFinding, CheckInfo, CheckScope, HealthCheck, Severity, Status,
 };
@@ -188,7 +190,8 @@ impl<P: RelationProbe> ChangeProvider for LoadBatches<P> {
 /// The warehouse kind this plugin serves, as dbt names it.
 pub const WAREHOUSE: &str = "duckdb";
 
-/// `duckdb`'s providers: [`LoadBatches`] over dbt's own connection.
+/// `duckdb`'s providers: [`LoadBatches`] over dbt's own connection, and the built-in
+/// plugin's error patterns and dialect, which a replacement would otherwise drop.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoadBatchPlugin;
 
@@ -207,5 +210,13 @@ impl WarehousePlugin for LoadBatchPlugin {
 
     fn changes(&self, probe: Arc<dyn RelationProbe>) -> Option<Arc<dyn ChangeProvider>> {
         Some(Arc::new(LoadBatches::new(probe)))
+    }
+
+    fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>> {
+        Some(Arc::new(ods_provider_duckdb::DuckdbErrors))
+    }
+
+    fn dialect(&self) -> Option<&str> {
+        Some("duckdb")
     }
 }
