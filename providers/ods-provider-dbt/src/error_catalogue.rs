@@ -7,9 +7,9 @@
 //! - dbt-core's own messages (Apache-2.0), e.g. `'x' is undefined. This can happen when
 //!   calling a macro that does not exist`, `depends on a node named … which was not
 //!   found`, `dbt found N package(s) specified in packages.yml, but only M …`;
-//! - `DuckDB`'s error kinds and messages (MIT), as dbt-duckdb 1.10 reports them: every one
-//!   is recorded from real runs of dbt 1.10, 1.11 and 1.12 in
-//!   `fixtures/dbt/jaffle-ods/artifacts/dbt-<version>-errors`;
+//! - dbt's own messages, as real runs of dbt 1.10, 1.11 and 1.12 on `DuckDB` gave them, in
+//!   `fixtures/dbt/jaffle-ods/artifacts/dbt-<version>-errors` (`DuckDB`'s own messages
+//!   there are the `DuckDB` plugin's, ADR-0031 §3a);
 //! - PostgreSQL's documented messages (`column … does not exist`, `relation … does not
 //!   exist`, `permission denied for …`);
 //! - Apache Spark's public error conditions (Apache-2.0, `error-conditions.json`:
@@ -59,8 +59,9 @@ use crate::{Manifest, ResourceType};
 /// `postgres-invalid-input` and `postgres-connect` need. 6: Delta's violations of a
 /// constraint added to a table whose rows break it, as recorded from Databricks. 7:
 /// dbt-databricks's own messages move to the Databricks plugin's catalogue
-/// ([`ProjectCatalogue`] consults it first on a Databricks project, ADR-0031 §3a).
-pub const CATALOGUE_VERSION: &str = "7";
+/// ([`ProjectCatalogue`] consults it first on a Databricks project, ADR-0031 §3a). 8:
+/// `DuckDB`'s messages move to the `DuckDB` plugin's catalogue, likewise.
+pub const CATALOGUE_VERSION: &str = "8";
 
 /// How a pattern recognises a summary: its kind (lowercased, exactly: the message's own,
 /// or the one dbt's header gave around it), and phrases its lowercased message must
@@ -88,7 +89,8 @@ const fn p(
     }
 }
 
-/// The patterns, most specific first. Messages are lowercase and already redacted:
+/// The patterns, most specific first. A warehouse's own messages are its plugin's
+/// (`DuckDB`'s, Databricks'), not these. Messages are lowercase and already redacted:
 /// quoted names read `[value removed]`, and so do numbers.
 const PATTERNS: &[Pattern] = &[
     // dbt's own compilation and dependency errors.
@@ -161,86 +163,6 @@ const PATTERNS: &[Pattern] = &[
         Symptom::TestFailed,
         None,
         &["configured to fail if"],
-    ),
-    // `DuckDB`, as dbt-duckdb reports it.
-    p(
-        "duckdb-values-list-column",
-        Symptom::MissingColumn,
-        Some("binder error"),
-        &["does not have a column named"],
-    ),
-    p(
-        "duckdb-referenced-column",
-        Symptom::MissingColumn,
-        Some("binder error"),
-        &["referenced column", "not found"],
-    ),
-    p(
-        "duckdb-table-missing",
-        Symptom::MissingRelation,
-        Some("catalog error"),
-        &["table with name", "does not exist"],
-    ),
-    p(
-        "duckdb-view-missing",
-        Symptom::MissingRelation,
-        Some("catalog error"),
-        &["view with name", "does not exist"],
-    ),
-    p(
-        "duckdb-schema-missing",
-        Symptom::MissingSchema,
-        Some("catalog error"),
-        &["schema with name", "does not exist"],
-    ),
-    // Recorded in every `dbt-<version>-errors` (`missing-function`).
-    p(
-        "duckdb-function-missing",
-        Symptom::MissingFunction,
-        Some("catalog error"),
-        &["function with name", "does not exist"],
-    ),
-    p(
-        "duckdb-conversion",
-        Symptom::TypeMismatch,
-        Some("conversion error"),
-        &[],
-    ),
-    p(
-        "duckdb-constraint",
-        Symptom::ConstraintViolation,
-        Some("constraint error"),
-        &[],
-    ),
-    p(
-        "duckdb-dependent-entries",
-        Symptom::DependentObjects,
-        Some("dependency error"),
-        &["because there are entries that depend on it"],
-    ),
-    p(
-        "duckdb-write-conflict",
-        Symptom::LockConflict,
-        Some("transactioncontext error"),
-        &["conflict"],
-    ),
-    p(
-        "duckdb-file-lock",
-        Symptom::LockConflict,
-        None,
-        &["could not set lock on file"],
-    ),
-    p(
-        "duckdb-permission",
-        Symptom::PermissionDenied,
-        Some("permission error"),
-        &[],
-    ),
-    p(
-        "duckdb-interrupted",
-        Symptom::QueryTimeout,
-        Some("interrupt error"),
-        &[],
     ),
     // PostgreSQL's documented messages (and adapters that share them).
     p(
@@ -1026,18 +948,24 @@ mod tests {
     #[test]
     fn every_recorded_dbt_error_classifies_as_expected() {
         let expected = [
-            ("missing-column", Some(Symptom::MissingColumn)),
+            // `DuckDB`'s own message: its plugin's catalogue reads it.
+            ("missing-column", None),
             ("unknown-macro", Some(Symptom::UnknownMacro)),
-            ("unqualified-column", Some(Symptom::MissingColumn)),
-            ("missing-relation", Some(Symptom::MissingRelation)),
+            // `DuckDB`'s own message: its plugin's catalogue reads it.
+            ("unqualified-column", None),
+            // `DuckDB`'s own message: its plugin's catalogue reads it.
+            ("missing-relation", None),
             ("missing-ref", Some(Symptom::MissingRef)),
             ("template-syntax", Some(Symptom::TemplateSyntax)),
-            ("type-mismatch", Some(Symptom::TypeMismatch)),
-            ("missing-function", Some(Symptom::MissingFunction)),
+            // `DuckDB`'s own message: its plugin's catalogue reads it.
+            ("type-mismatch", None),
+            // `DuckDB`'s own message: its plugin's catalogue reads it.
+            ("missing-function", None),
             ("packages-missing", Some(Symptom::PackagesMissing)),
             ("profile-missing", Some(Symptom::ProfileNotFound)),
             ("python-exception", Some(Symptom::PythonException)),
-            ("dependent-objects", Some(Symptom::DependentObjects)),
+            // `DuckDB`'s own message: its plugin's catalogue reads it.
+            ("dependent-objects", None),
             ("test-failure", Some(Symptom::TestFailed)),
             ("accepted-values", Some(Symptom::TestFailed)),
         ];
@@ -1065,8 +993,15 @@ mod tests {
                             "{version} {name}"
                         );
                     }
+                    // The category its kind gives: `DuckDB`'s `Dependency Error` reads as
+                    // dbt's own kind, which its plugin's pattern comes before.
                     (Classification::NotRecognised { category }, None) => {
-                        assert_eq!(*category, ErrorCategory::Database, "{version} {name}");
+                        let want = if name == "dependent-objects" {
+                            ErrorCategory::Dependency
+                        } else {
+                            ErrorCategory::Database
+                        };
+                        assert_eq!(*category, want, "{version} {name}");
                     }
                     _ => panic!("{version} {name}: {summary:?} gave {got:?}"),
                 }
@@ -1284,56 +1219,6 @@ mod tests {
             "Encountered unknown tag 'endfor'.",
         ),
         (
-            "duckdb-values-list-column",
-            "Runtime Error",
-            "Binder Error: Values list \"o\" does not have a column named \"x\"",
-        ),
-        (
-            "duckdb-referenced-column",
-            "Runtime Error",
-            "Binder Error: Referenced column \"x\" not found in FROM clause!",
-        ),
-        (
-            "duckdb-table-missing",
-            "Runtime Error",
-            "Catalog Error: Table with name orders does not exist!",
-        ),
-        (
-            "duckdb-view-missing",
-            "Runtime Error",
-            "Catalog Error: View with name orders does not exist!",
-        ),
-        (
-            "duckdb-conversion",
-            "Runtime Error",
-            "Conversion Error: Could not convert string 'sk_live_SENTINEL_42' to INT32",
-        ),
-        (
-            "duckdb-constraint",
-            "Runtime Error",
-            "Constraint Error: Duplicate key \"id: 1\" violates primary key constraint.",
-        ),
-        (
-            "duckdb-write-conflict",
-            "Runtime Error",
-            "TransactionContext Error: Catalog write-write conflict on create with \"orders\"",
-        ),
-        (
-            "duckdb-file-lock",
-            "Runtime Error",
-            "IO Error: Could not set lock on file \"jaffle.duckdb\": Conflicting lock is held",
-        ),
-        (
-            "duckdb-permission",
-            "Runtime Error",
-            "Permission Error: File system LocalFileSystem has been disabled by configuration",
-        ),
-        (
-            "duckdb-interrupted",
-            "Runtime Error",
-            "INTERRUPT Error: Interrupted!",
-        ),
-        (
             "postgres-statement-timeout",
             "Database Error",
             "canceling statement due to statement timeout",
@@ -1412,11 +1297,6 @@ mod tests {
             "spark-unresolved-routine",
             "Database Error",
             "[UNRESOLVED_ROUTINE] Cannot resolve routine `cents_to_dollars` on search path [`system`.`builtin`, `system`.`session`].",
-        ),
-        (
-            "duckdb-schema-missing",
-            "Runtime Error",
-            "Catalog Error: Schema with name staging does not exist!",
         ),
         (
             "postgres-schema-missing",
@@ -1572,7 +1452,6 @@ mod tests {
     fn source_of(id: &str) -> &'static str {
         match id.split('-').next().unwrap_or_default() {
             "dbt" => "dbt-core's messages",
-            "duckdb" => "DuckDB's errors, via dbt-duckdb",
             "postgres" => "PostgreSQL's documented messages",
             "spark" => "Apache Spark's `error-conditions.json`",
             "delta" => "Delta Lake's `delta-error-classes.json`",
@@ -1928,12 +1807,13 @@ mod tests {
         }
 
         fn samples(&self) -> Vec<Sample> {
+            // `DuckDB`'s own messages are its plugin's: not this catalogue's.
             let names = [
-                ("missing-column", Some(Symptom::MissingColumn)),
+                ("missing-column", None),
                 ("unknown-macro", Some(Symptom::UnknownMacro)),
-                ("type-mismatch", Some(Symptom::TypeMismatch)),
+                ("type-mismatch", None),
                 ("python-exception", Some(Symptom::PythonException)),
-                ("missing-function", Some(Symptom::MissingFunction)),
+                ("missing-function", None),
             ];
             VERSIONS
                 .iter()

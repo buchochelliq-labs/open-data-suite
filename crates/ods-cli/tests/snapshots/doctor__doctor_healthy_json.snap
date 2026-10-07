@@ -349,6 +349,10 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           {
             "key": "error_catalogue.databricks",
             "value": "error_catalogue 0.5 for databricks (ods-provider-databricks [ods-version], built in)"
+          },
+          {
+            "key": "error_catalogue.duckdb",
+            "value": "error_catalogue 0.5 for duckdb (ods-provider-duckdb [ods-version], built in)"
           }
         ]
       },

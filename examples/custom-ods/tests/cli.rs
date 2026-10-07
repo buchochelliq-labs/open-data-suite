@@ -63,8 +63,12 @@ fn it_says_which_plugins_it_added() {
     let check = find("health_check", "custom.owner_tagged");
     assert_eq!(check["builtin"], false);
     assert!(check["from"].as_str().unwrap().starts_with("custom-ods "));
+    // It replaced the built-in `duckdb` plugin, keeping its error patterns.
     let duckdb = find("change_provider", "duckdb");
     assert_eq!(duckdb["builtin"], false);
+    let errors = find("error_catalogue", "duckdb");
+    assert_eq!(errors["builtin"], false);
+    assert!(errors["from"].as_str().unwrap().starts_with("custom-ods "));
     // The built-ins are still there.
     assert_eq!(find("change_provider", "databricks")["builtin"], true);
 }
