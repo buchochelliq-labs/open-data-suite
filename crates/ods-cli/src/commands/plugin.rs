@@ -130,6 +130,54 @@ pub(crate) fn views(plugins: &Plugins, config: Option<&ods_config::Config>) -> V
         .collect()
 }
 
+/// This `ods` and its plugins, for the dashboard's About page (ADR-0031 §3c): the same
+/// views as `ods plugin list`, in `ods-web`'s neutral terms.
+pub(crate) fn about(
+    plugins: &Plugins,
+    config: Option<&ods_config::Config>,
+) -> ods_web::about::AboutInput {
+    use ods_web::about::{FeatureFacts, InheritedFacts, PluginFacts, PluginKind as Kind};
+    let facts = views(plugins, config)
+        .into_iter()
+        .map(|p| {
+            let kind = match p.kind {
+                PluginKind::HealthCheck => Kind::HealthCheck,
+                PluginKind::Warehouse => Kind::Warehouse,
+            };
+            let mut facts = PluginFacts::new(p.name, kind, p.from, p.builtin);
+            facts.parents = p.parents;
+            facts.parents_from = p.parents_from.map(str::to_owned);
+            facts.features = p
+                .features
+                .into_iter()
+                .map(|f| {
+                    let mut feature = FeatureFacts::new(f.name);
+                    feature.contract = f.contract.map(str::to_owned);
+                    feature.contract_version = f.contract_version;
+                    feature.detail = f.detail;
+                    feature.unavailable = f.unavailable;
+                    feature
+                })
+                .collect();
+            facts.inherited = p
+                .inherited
+                .into_iter()
+                .map(|i| {
+                    let mut inherited = InheritedFacts::new(i.feature, i.from);
+                    inherited.detail = i.detail;
+                    inherited
+                })
+                .collect();
+            facts
+        })
+        .collect();
+    ods_web::about::AboutInput::new(
+        env!("CARGO_PKG_VERSION"),
+        crate::version::dotted(ods_sdk::SDK_VERSION),
+        facts,
+    )
+}
+
 fn view(plugins: &Plugins, config: Option<&ods_config::Config>, detected: Detected) -> PluginView {
     let none = Warehouses::new();
     let configured = config.map_or(&none, |c| &c.warehouses);

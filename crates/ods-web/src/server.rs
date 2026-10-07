@@ -292,6 +292,13 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
             let to = at("/catalog");
             get(move || async move { Redirect::permanent(&to) })
         })
+        // The About page (ADR-0031 §3c): this `ods` and its plugins.
+        .route(&at("/settings/about"), get(about_page))
+        .route(&at("/api/settings/about"), get(about_api))
+        .route(&at("/settings"), {
+            let to = at("/settings/about");
+            get(move || async move { Redirect::temporary(&to) })
+        })
         .route(&at("/api/catalog"), get(catalog_routes::api))
         .route(&at("/api/catalog/{id}"), get(catalog_routes::model_api));
     // State pages (#311): the plan and its Why panel, the runs, one run.
@@ -384,6 +391,23 @@ async fn home(State(state): State<Shared>) -> Response {
     })
     .await
     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// `/settings/about`: this `ods` and the plugins it runs with (ADR-0031 §3c).
+async fn about_page(State(state): State<Shared>) -> Html<String> {
+    let generation = state.generation.load(Ordering::SeqCst);
+    let snapshot = state.current();
+    let dashboard = snapshot.dashboard();
+    Html(crate::about_page::about_page(
+        &dashboard.shell("settings"),
+        &dashboard.about(),
+        generation,
+    ))
+}
+
+/// `/api/settings/about`: the About page's view model.
+async fn about_api(State(state): State<Shared>) -> Json<crate::about::AboutView> {
+    Json(state.current().dashboard().about())
 }
 
 async fn shell(State(state): State<Shared>) -> Json<ShellView> {

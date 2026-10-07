@@ -37,7 +37,11 @@ impl Drop for Server {
 }
 
 fn serve(target: &Path, extra: &[&str]) -> Server {
-    let home = tempfile::tempdir().unwrap();
+    serve_in(tempfile::tempdir().unwrap(), target, extra)
+}
+
+/// [`serve`], from `home`, e.g. one holding an `ods.toml`.
+fn serve_in(home: tempfile::TempDir, target: &Path, extra: &[&str]) -> Server {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ods"))
         .args([
             "serve",
@@ -166,6 +170,64 @@ fn reloads_when_the_artifacts_change_and_keeps_serving_on_errors() {
     let (g, _) = wait_for(&|g, e| g == 2 && e.is_null());
     assert_eq!(g, 2);
     drop(server);
+}
+
+#[test]
+fn the_about_page_lists_the_plugins_as_ods_plugin_list_does() {
+    // A Databricks provider whose host carries a user part, as a secret might.
+    const SENTINEL: &str = "sk_live_SENTINEL_42";
+    let home = tempfile::tempdir().unwrap();
+    fs::write(
+        home.path().join("ods.toml"),
+        format!(
+            "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhost = \"https://{SENTINEL}@dbc-0123.cloud.databricks.com/\"\n"
+        ),
+    )
+    .unwrap();
+    let server = serve_in(home, &fixture(), &[]);
+
+    let (status, body) = get(&server, "api/settings/about");
+    assert_eq!(status, 200, "{body}");
+    let about: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(about["ods_version"], env!("CARGO_PKG_VERSION"));
+    // The fixture's project builds on DuckDB, which a built-in plugin serves.
+    assert_eq!(about["warehouse"], "duckdb");
+    assert_eq!(about["warehouse_served"], true);
+    let names: Vec<&str> = about["warehouses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["databricks", "duckdb"], "{about:#}");
+    // Judged with this configuration, as a run uses it: a host with a user part is
+    // refused, and the page says why without the value.
+    let links = about["warehouses"][0]["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "links")
+        .cloned()
+        .unwrap();
+    assert!(
+        links["unavailable"]
+            .as_str()
+            .is_some_and(|why| why.contains("user name or password")),
+        "{links}"
+    );
+
+    let (status, page) = get(&server, "settings/about");
+    assert_eq!(status, 200);
+    assert!(page.contains(r#"data-plugin="databricks""#), "{page}");
+    assert!(
+        page.contains("this project&#x27;s warehouse") || page.contains("this project's warehouse")
+    );
+    assert!(
+        !page.contains(SENTINEL) && !body.contains(SENTINEL),
+        "no setting's value is shown"
+    );
+    // The Settings entry leads to it.
+    assert!(page.contains(r#"href="../settings/about""#), "{page}");
 }
 
 #[test]

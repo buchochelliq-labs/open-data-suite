@@ -12,7 +12,8 @@
 //! reuse and what needs attention, see [`dashboard`]), the explorer at `lineage`,
 //! the State pages under `state/` (the plan and why, the runs, see
 //! [`dashboard::state`]), the Catalog at `catalog`, with a page per node (see
-//! [`catalog`]), and the Impact simulator at `lineage/impact` (see [`impact`]).
+//! [`catalog`]), the Impact simulator at `lineage/impact` (see [`impact`]), and the
+//! About page at `settings/about` (this `ods` and its plugins, see [`about`]).
 //!
 //! This crate only presents. It never reads dbt artifacts or the state store, or wires
 //! providers: the caller (a binary) supplies a [`Loader`] that produces a fresh
@@ -20,6 +21,8 @@
 //! itself is a run's journal (#322), from the directory the binary names, through
 //! ods-sdk's reader, when a Runs or Run page asks.
 
+pub mod about;
+mod about_page;
 pub mod catalog;
 mod catalog_page;
 pub mod dashboard;

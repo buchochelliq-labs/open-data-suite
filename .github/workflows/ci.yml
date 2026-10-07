@@ -165,6 +165,9 @@ jobs:
       # The Freshness evidence screen (#350) in Chromium, light and dark.
       - name: Freshness evidence in a browser
         run: python crates/ods-web/tests/browser/sources.py -v
+      # The About page (ADR-0031 §3c) in Chromium, light and dark.
+      - name: About page in a browser
+        run: python crates/ods-web/tests/browser/about.py -v
 
   # A custom `ods` built from a crate outside the workspace, as a third party's would
   # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary

@@ -61,6 +61,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   (`ODS-E0801`, exit 2) listing the plugins there are. The MCP server's
   `ods_list_plugins` tool answers the same, and `docs/plugins.md` lists the built-in
   warehouses from the same detection (a test keeps them in step).
+- The dashboard's **About** page (`/settings/about`, #415, ADR-0031 §3c): this `ods`'s
+  version and SDK version, and each plugin with what it offers, from the same detection
+  as `ods plugin list`. It names the plugin serving the project's warehouse, or says
+  that none does and what ODS then knows less about. A feature the configuration
+  can't use says why, never with a setting's value. `/api/settings/about` returns the
+  same view model. Settings in the navigation now leads to it; the configuration page
+  (#351) is still planned.
 - Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
   released CLI as a library: a crate of your own adds health checks
   (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.

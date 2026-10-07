@@ -51,7 +51,7 @@ nav.side { width: 224px; flex-shrink: 0; background: var(--surface); border-righ
 .sections a, .sections .planned, .bottom a, .bottom .planned { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 6px; color: var(--fg); white-space: nowrap; }
 .sections svg, .bottom svg { flex-shrink: 0; }
 .sections a:hover, .bottom a:hover { background: var(--line); text-decoration: none; color: var(--fg); }
-.sections a[aria-current="page"] { background: var(--active-bg); color: var(--accent-strong); font-weight: 500; }
+.sections a[aria-current="page"], .bottom a[aria-current="page"] { background: var(--active-bg); color: var(--accent-strong); font-weight: 500; }
 .sections .label, .bottom .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .sections .planned, .bottom .planned { color: var(--heading-muted); cursor: not-allowed; }
 .sections .planned svg, .bottom .planned svg { color: var(--faint); }
@@ -59,13 +59,13 @@ nav.side { width: 224px; flex-shrink: 0; background: var(--surface); border-righ
   color: var(--muted); background: var(--planned-bg); text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.5; }
 /* Tighter in the 224px navigation, so "CI · Impact" fits beside it. */
 .sections .chip, .bottom .chip { padding: 2px 6px; letter-spacing: 0.02em; }
-/* A section's pages, under it while it is current (#311). */
+/* A section's pages, under it while it is current (#311); Settings' too, at the bottom. */
 .subnav { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
-.sections .subnav a, .sections .subnav .planned { height: 32px; padding: 0 10px 0 38px; font-size: 13px; }
-.sections .subnav a[aria-current="page"] { color: var(--accent-strong); font-weight: 500; background: none; }
+.sections .subnav a, .sections .subnav .planned, .bottom .subnav a, .bottom .subnav .planned { height: 32px; padding: 0 10px 0 38px; font-size: 13px; }
+.sections .subnav a[aria-current="page"], .bottom .subnav a[aria-current="page"] { color: var(--accent-strong); font-weight: 500; background: none; }
 /* A planned page's chip: small and not uppercase, so "Freshness evidence" fits (#313). */
-.sections .subnav .planned { gap: 5px; font-size: 12px; }
-.sections .subnav .chip { font-size: 10px; padding: 0 5px; letter-spacing: 0; text-transform: none; font-weight: 500; }
+.sections .subnav .planned, .bottom .subnav .planned { gap: 5px; font-size: 12px; }
+.sections .subnav .chip, .bottom .subnav .chip { font-size: 10px; padding: 0 5px; letter-spacing: 0; text-transform: none; font-weight: 500; }
 .bottom { margin-top: auto; border-top: 1px solid var(--border); padding-top: 12px; }
 .badge-local { font-size: 12px; color: var(--muted); padding: 4px 10px; }
 

@@ -1089,6 +1089,18 @@ The numbers are the plan's: a source's version is the one `ods state explain` sh
 a model reading it. `/api/catalog/sources` returns the same view model, and leaves out
 seeds' file paths beyond loopback.
 
+**About** (`/settings/about`, under Settings) shows this `ods` and the plugins it runs
+with, from the same detection as `ods plugin list`
+([ADR-0031 §3c](adr/0031-plugin-registry-and-loading.md)): its version and SDK version,
+then each warehouse plugin and health-check plugin with where it comes from and what it
+offers (each feature with its contract's version). The plugin serving this project's
+warehouse is marked; when none does, the page says so: ODS still builds through dbt's
+connection, and only knows less about the warehouse. Whether a feature can be used is
+judged with this project's configuration, as a run would use it: one that can't (e.g.
+Databricks' links without a `host`) says why, never with a setting's value.
+`/api/settings/about` returns the same view model. `/settings` leads there until the
+configuration page (#351) is built.
+
 ## dbt State configuration
 
 ODS reads dbt State configuration exactly as you already write it

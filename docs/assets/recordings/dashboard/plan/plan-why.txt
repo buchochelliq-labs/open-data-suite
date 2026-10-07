@@ -23,7 +23,6 @@ PLANNED
 Agent
 PLANNED
 Settings
-PLANNED
 Local · read-only
 State
 /
