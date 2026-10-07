@@ -118,7 +118,8 @@ pub(super) mod codes {
 }
 
 /// Providers `--provider` accepts: those ODS wires in M1.
-pub(super) const PROVIDERS: [&str; 3] = ["dbt", "databricks", "sqlite"];
+/// `plugin` is a warehouse plugin a custom build added (ADR-0031).
+pub(super) const PROVIDERS: [&str; 4] = ["dbt", "databricks", "plugin", "sqlite"];
 
 /// Which checks to run and how to judge them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -165,11 +166,12 @@ const NONE: &[&str] = &[];
 const DBT: &[&str] = &["dbt"];
 const SQLITE: &[&str] = &["sqlite"];
 /// Checks about sources' data versions: they concern the provider that reads them for
-/// the project's adapter (`databricks`), else dbt's `source freshness` (`dbt`).
-const BY_ADAPTER: &[&str] = &["dbt", "databricks"];
+/// the project's adapter (`databricks`, or a custom build's `plugin`), else dbt's
+/// `source freshness` (`dbt`).
+const BY_ADAPTER: &[&str] = &["dbt", "databricks", "plugin"];
 
 /// Every check, in display order within its category.
-const SPECS: [Spec; 15] = [
+const SPECS: [Spec; 16] = [
     spec("config.load", C::Config, NONE, true),
     spec("config.values", C::Config, NONE, false),
     spec("config.resolution", C::Config, NONE, true),
@@ -193,6 +195,7 @@ const SPECS: [Spec; 15] = [
         BY_ADAPTER,
         false,
     ),
+    spec("capabilities.plugins", C::Capabilities, NONE, false),
     spec("connectivity.relations", C::Connectivity, DBT, false),
     spec(
         "connectivity.table_versions",
@@ -279,10 +282,13 @@ impl<'a> Checks<'a> {
     /// from the manifest (offline); `None` if the manifest can't be read.
     fn adapter_provider(&self) -> Option<&'static str> {
         let (_, manifest) = self.manifest_ready().ok()?;
-        Some(if has_change_provider(manifest.adapter_type.as_deref()) {
+        let adapter = manifest.adapter_type.as_deref();
+        Some(if !has_change_provider(adapter) {
+            "dbt"
+        } else if adapter == Some("databricks") {
             "databricks"
         } else {
-            "dbt"
+            "plugin"
         })
     }
 
@@ -301,6 +307,7 @@ impl<'a> Checks<'a> {
             "state_store.database" => self.state_store(s),
             "capabilities.relation_existence" => self.relation_existence(s),
             "capabilities.relation_versions" => self.relation_versions(s),
+            "capabilities.plugins" => Ok(ods_plugins(s, crate::plugins::installed())),
             "connectivity.relations" => self.live_relations(s),
             "connectivity.table_versions" => self.live_versions(s),
             other => unreachable!(
@@ -964,7 +971,7 @@ impl<'a> Checks<'a> {
             ));
         }
         self.dbt_ready(settings)?;
-        Ok(probe_versions(s, &provider, &sources))
+        Ok(probe_versions(s, provider.as_ref(), &sources))
     }
 }
 
@@ -1107,6 +1114,29 @@ fn blocked(s: Spec, dependency: &str) -> CheckResult {
 
 fn not_connected(s: Spec) -> CheckResult {
     CheckResult::skipped(s.id, s.category, "a live check: pass --connect to run it")
+}
+
+/// The plugins this `ods` was built with (ADR-0031 §2): a custom build says so, so it
+/// never passes for the released one.
+fn ods_plugins(s: Spec, plugins: &crate::plugins::Plugins) -> CheckResult {
+    let listed = plugins.listing();
+    let added = listed.iter().filter(|p| !p.builtin).count();
+    let message = match (listed.len(), added) {
+        (0, _) => "this `ods` has no plugins".to_owned(),
+        (_, 0) => "this `ods` has the built-in plugins only".to_owned(),
+        (_, n) => format!(
+            "this is a custom `ods`: {n} of its {} plugins were added to the built-ins",
+            listed.len()
+        ),
+    };
+    listed
+        .iter()
+        .fold(CheckResult::ok(s.id, s.category, message), |result, p| {
+            result.evidence(Evidence::new(
+                format!("{}.{}", p.contract, p.name),
+                crate::version::plugin_line(p),
+            ))
+        })
 }
 
 fn unknown_adapter(s: Spec) -> CheckResult {
@@ -1568,7 +1598,11 @@ mod tests {
         assert_eq!(load.status, CheckStatus::Error);
         assert_eq!(load.code.as_deref(), Some("ODS-E0101"));
         assert!(load.required);
-        for check in checks.iter().filter(|c| c.id != "config.load") {
+        // Which plugins this `ods` has doesn't depend on configuration.
+        for check in checks
+            .iter()
+            .filter(|c| c.id != "config.load" && c.id != "capabilities.plugins")
+        {
             if check.category == C::Connectivity {
                 assert_eq!(check.status, CheckStatus::Skipped, "{check:?}");
             } else {

@@ -166,6 +166,26 @@ jobs:
       - name: Freshness evidence in a browser
         run: python crates/ods-web/tests/browser/sources.py -v
 
+  # A custom `ods` built from a crate outside the workspace, as a third party's would
+  # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary
+  # runs them. Its own workspace, with its own lockfile.
+  custom-ods:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/custom-ods
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/custom-ods
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
   msrv:
     runs-on: ubuntu-latest
     steps:

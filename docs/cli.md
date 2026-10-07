@@ -265,7 +265,7 @@ writes nothing; dbt writes the target check's artifacts under
 ```sh
 ods doctor                        # every offline check
 ods doctor --project              # only the dbt project and its artifacts
-ods doctor --provider databricks  # only the checks about one provider: dbt, databricks or sqlite
+ods doctor --provider databricks  # only the checks about one provider: dbt, databricks, plugin or sqlite
 ods doctor --connect              # also the live checks, through dbt's own connection
 ods doctor --strict --json        # for CI: warnings fail too; one JSON document
 ```
@@ -293,14 +293,15 @@ It takes the options `ods state` commands take to find things (`--project-dir`,
 | `target.identity` | Which target does dbt build in? dbt renders the profile (`dbt compile --inline`), which reads `profiles.yml` but connects to nothing | yes |
 | `state_store.database` | Is the state database sound, and at a schema this ODS can read and write? The same check as `ods state doctor` | yes |
 | `capabilities.relation_existence` | Can a build's relation be checked before it is reused (#230)? | |
-| `capabilities.relation_versions` | Where do sources' data versions come from: the warehouse's table versions (Databricks), `loaded_at_field` through `dbt source freshness`, or nowhere? | |
+| `capabilities.relation_versions` | Where do sources' data versions come from: the warehouse's table versions (Databricks, or a custom build's warehouse plugin), `loaded_at_field` through `dbt source freshness`, or nowhere? | |
+| `capabilities.plugins` | Which plugins does this `ods` have: only the built-ins, or is it a custom build that adds some ([plugins](plugins.md#a-custom-ods-in-process-plugins))? Each is evidence, with its contract and crate | |
 | `connectivity.relations` | With `--connect`: does the relation check (`dbt show`) run? | |
 | `connectivity.table_versions` | With `--connect`, on Databricks: does the table-version probe run? | |
 
 The checks about sources' data versions (`capabilities.relation_versions`,
 `connectivity.table_versions`) concern `databricks` when the manifest's adapter is
-Databricks, whose table versions ODS reads, and `dbt` otherwise; `--provider` picks
-them accordingly.
+Databricks, whose table versions ODS reads, `plugin` when a custom build's warehouse
+plugin reads them, and `dbt` otherwise; `--provider` picks them accordingly.
 
 Each check ends `ok`, `warning`, `error`, `unknown` (it couldn't conclude, e.g. a check
 it depends on failed) or `skipped` (not run by choice, e.g. a live check without
@@ -1446,6 +1447,25 @@ them: it shows what the last `ods health check` recorded, with when.
 The columns `pass` names are kept in each finding's evidence (`row.<column>`), so they
 are written to the health record and shown on the dashboard: don't select a column you
 wouldn't want kept there.
+
+#### Plugin checks
+
+A custom `ods` can add health checks of its own ([plugins](plugins.md#a-custom-ods-in-process-plugins),
+ADR-0031). `ods version` lists them. They run with the other checks, at their own
+default severity, on every node. `[health.plugins.<id>]` tunes one, as
+`[health.builtin.<id>]` tunes a built-in:
+
+```toml
+[health.plugins."custom.owner_tagged"]
+severity = "error"                      # error | warn | info | off
+select = { path = ["models/marts/**"] }
+exclude = { tags = ["experimental"] }
+```
+
+A node the check doesn't select is *skipped* for it. A `[health.plugins.<id>]` that names
+no check this `ods` has is a configuration error (exit 4), naming the checks it does
+have: a misspelt id never silently drops a gate. Like probes, plugin checks run in
+`ods health check`, and the dashboard shows what the last run recorded.
 
 #### Coverage targets
 

@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "providers/*"]
-# Fuzz targets are their own workspace (`fuzz/Cargo.toml`): never built with ODS.
-exclude = ["fuzz"]
+# Fuzz targets (`fuzz/`) and the examples (`examples/*`, a third party's crates,
+# ADR-0031) are their own workspaces: never built with ODS.
+exclude = ["fuzz", "examples"]
 
 [workspace.package]
 version = "0.0.2"

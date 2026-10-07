@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ods_config::DeclaredCheckConfig;
-use ods_sdk::contracts::privileges::{Access, RelationPrivileges};
+use ods_sdk::contracts::privileges::{Access, PrivilegedProbe, RelationPrivileges};
 use ods_sdk::contracts::probe::{
     PLACEHOLDER, ProbeAnswer, ProbeFilter, ProbeRequest, ProbeStatement, ProbeTarget, RelationProbe,
 };
@@ -49,10 +49,7 @@ impl ProbeConnection {
     /// Probes run through `connection`, whose login it also asks about before each
     /// probe (§4c). One object answers both, so the login checked is the login the
     /// query runs under: a check through another connection would prove nothing.
-    pub fn new<C>(connection: Arc<C>) -> Self
-    where
-        C: RelationProbe + RelationPrivileges + 'static,
-    {
+    pub fn new(connection: Arc<dyn PrivilegedProbe>) -> Self {
         Self {
             probe: connection.clone(),
             privileges: Some(connection),

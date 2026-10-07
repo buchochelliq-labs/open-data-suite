@@ -22,10 +22,6 @@ use ods_web::freshness::{FreshnessInput, SourceInput};
 use super::relation_links::Links;
 use super::state_plan::{Workspace, display_name, node_name};
 
-/// What runs read for a source on a warehouse with a change provider: the Delta table
-/// version, from the table's history (ADR-0022).
-const TABLE_VERSION: &str = "table version from the Delta history";
-
 /// The Freshness evidence screen's sources (#350): each one's data version as the
 /// planner is given it, so the screen shows what `ods state explain` does, and how the
 /// project says its new data is measured (`loaded_at_field` or `loaded_at_query`), and
@@ -33,8 +29,9 @@ const TABLE_VERSION: &str = "table version from the Delta history";
 pub(super) fn freshness(ws: &Workspace) -> FreshnessInput {
     // Runs read table versions from the warehouse's history first (ADR-0022), which
     // the dashboard, offline, can't: the screen says so rather than show nothing.
+    // As the warehouse's plugin describes what it reads (ADR-0031 §3).
     let table_versions =
-        super::state_versions::has_change_provider(ws.manifest.adapter_type.as_deref());
+        crate::plugins::installed().versions_read(ws.manifest.adapter_type.as_deref());
     let declared: BTreeMap<&str, &ManifestNode> = ws
         .manifest
         .nodes
@@ -63,7 +60,7 @@ pub(super) fn freshness(ws: &Workspace) -> FreshnessInput {
             SourceInput::new(&source.id, &source.name)
                 .with_relation(node.and_then(|n| n.relation_name.clone()))
                 .measured_with(measured_with)
-                .read_by_runs(table_versions.then(|| TABLE_VERSION.to_owned()))
+                .read_by_runs(table_versions.clone())
                 .with_version(
                     source.version.clone(),
                     source.observed_at,

@@ -1,0 +1,30 @@
+# A custom `ods` with plugins written outside ODS (ADR-0031 §2, #387). It is its own
+# workspace, as a third party's crate would be: it depends on ODS by path here, and by
+# git or registry elsewhere. CI builds it and runs its tests.
+[package]
+name = "custom-ods"
+description = "An example custom `ods` that adds a health check and a warehouse plugin."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "custom-ods"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+ods-cli = { path = "../../crates/ods-cli" }
+ods-core = { path = "../../crates/ods-core" }
+ods-sdk = { path = "../../crates/ods-sdk" }
+
+[dev-dependencies]
+ods-provider-fake = { path = "../../providers/ods-provider-fake" }
+ods-sdk = { path = "../../crates/ods-sdk", features = ["conformance"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros"] }
