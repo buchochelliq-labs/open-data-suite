@@ -72,7 +72,9 @@ pub(super) fn path_for(state_db: &Path) -> PathBuf {
 }
 
 /// Saves `reading`, taken by `command`, as `scope`'s latest. Other scopes' readings are
-/// kept. A file a newer ODS wrote is left alone.
+/// kept, and so is a reading of this scope taken later (a slower probe that finishes
+/// last mustn't replace a newer one). A file a newer ODS wrote is left alone. Commands
+/// sharing a state database update the file one at a time, under a lock beside it.
 ///
 /// # Errors
 /// The file can't be written, or a newer ODS wrote it: the reading isn't saved, and
@@ -84,6 +86,8 @@ pub(super) fn save(
     reading: &VersionReading,
 ) -> Result<(), String> {
     let path = path_for(state_db);
+    // Held until it returns: read, merge and write are one step for every command.
+    let _lock = lock(&path).map_err(|e| format!("can't lock {}: {e}", path.display()))?;
     let mut file = match read(&path) {
         Ok(Some(file)) => file,
         // A file that can't be read is replaced: it holds nothing this ODS can use.
@@ -99,6 +103,12 @@ pub(super) fn save(
         }
         Err(Unreadable::Io(e)) => return Err(format!("can't read {}: {e}", path.display())),
     };
+    let newer_kept = file.readings.get(scope).is_some_and(|kept| {
+        matches!((kept.read_at, reading.observed_at), (Some(kept), Some(this)) if kept > this)
+    });
+    if newer_kept {
+        return Ok(());
+    }
     file.schema_version = READINGS_VERSION;
     file.readings.insert(
         scope.to_owned(),
@@ -180,6 +190,25 @@ enum Unreadable {
     /// It isn't a readings file this ODS understands.
     Damaged(String),
     Io(String),
+}
+
+/// An exclusive lock on `<path>.lock`, released when dropped. The lock file stays: it
+/// holds nothing, and removing it could let two commands lock different files.
+fn lock(path: &Path) -> std::io::Result<std::fs::File> {
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(name))?;
+    file.lock()?;
+    Ok(file)
 }
 
 /// Just a file's version, read before the rest.
@@ -277,6 +306,48 @@ mod tests {
         );
         assert!(load(&db, "other/dev", &mut warnings).is_none());
         assert_eq!(warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_later_reading_is_never_replaced_by_an_earlier_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        save(&db, "shop/dev", "ods state build", &reading(300, "8")).unwrap();
+        // A slower probe, started earlier, finishing last.
+        save(
+            &db,
+            "shop/dev",
+            "ods state build --dry-run",
+            &reading(100, "7"),
+        )
+        .unwrap();
+        let kept = load(&db, "shop/dev", &mut Vec::new()).unwrap();
+        assert_eq!(
+            (kept.reading, kept.command.as_str()),
+            (reading(300, "8"), "ods state build")
+        );
+    }
+
+    #[test]
+    fn commands_saving_at_once_keep_every_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        let scopes: Vec<String> = (0..16).map(|i| format!("shop/env{i}")).collect();
+        std::thread::scope(|s| {
+            for (i, scope) in scopes.iter().enumerate() {
+                let db = &db;
+                s.spawn(move || {
+                    let at = i64::try_from(i).unwrap() + 1;
+                    save(db, scope, "ods state build", &reading(at, &i.to_string())).unwrap();
+                });
+            }
+        });
+        for scope in &scopes {
+            assert!(
+                load(&db, scope, &mut Vec::new()).is_some(),
+                "{scope} was lost"
+            );
+        }
     }
 
     #[test]
