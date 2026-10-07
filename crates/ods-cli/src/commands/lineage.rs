@@ -540,12 +540,8 @@ fn read_observed(
     warehouse: Option<&str>,
     analyzer: &SqlparserAnalyzer,
 ) -> Result<ObservedLineage, CliError> {
-    let failed = |message: String| {
-        CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, message)
-            .with_hint("export system.access.column_lineage as CSV or JSON; see `docs/cli.md`")
-    };
     let plugins = crate::plugins::installed();
-    let source = plugins.observed_lineage(warehouse, file).ok_or_else(|| {
+    let (reader, source) = plugins.observed_lineage(warehouse, file).ok_or_else(|| {
         let readers = plugins.observed_lineage_readers();
         CliError::new(
             ExitStatus::Usage,
@@ -561,9 +557,16 @@ fn read_observed(
             format!("plugins read exports from: {}", readers.join(", "))
         })
     })?;
+    // The hint names the plugin that read the file: its export is the one to check.
     let lineage = source
         .and_then(|source| source.observed_lineage())
-        .map_err(|e| failed(e.to_string()))?;
+        .map_err(|e| {
+            CliError::new(ExitStatus::Failure, codes::LINEAGE_ARTIFACTS, e.to_string())
+                .with_hint(format!(
+                    "`{file}` was read as the `{reader}` plugin's observed lineage export; see `docs/cli.md` for what it reads",
+                    file = file.display()
+                ))
+        })?;
     Ok(lineage.normalized(
         &|relation| {
             analyzer

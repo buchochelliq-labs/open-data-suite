@@ -156,6 +156,9 @@ pub enum PluginError {
     AlreadyInstalled,
 }
 
+/// A reader of observed lineage, or why the export can't be read.
+pub type ObservedReader = Result<Arc<dyn ObservedLineageSource>, ProviderError>;
+
 /// The health checks and warehouse plugins this `ods` runs with.
 #[derive(Clone, Default)]
 pub struct Plugins {
@@ -325,18 +328,21 @@ impl Plugins {
         }
     }
 
-    /// A reader for the observed lineage exported to `export`: by `warehouse`'s plugin
-    /// if it reads exports, else by the only plugin that does. `None` when no plugin
-    /// reads exports, or several do and the project's warehouse isn't one of them.
+    /// A reader for the observed lineage exported to `export`, with the warehouse whose
+    /// plugin reads it: `warehouse`'s plugin if it reads exports, else the only plugin
+    /// that does. `None` when no plugin reads exports, or several do and the project's
+    /// warehouse isn't one of them.
     pub fn observed_lineage(
         &self,
         warehouse: Option<&str>,
         export: &Path,
-    ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
-        if let Some(found) = self
-            .warehouse(warehouse)
-            .and_then(|p| p.observed_lineage(export))
-        {
+    ) -> Option<(String, ObservedReader)> {
+        let read = |plugin: &dyn WarehousePlugin| {
+            plugin
+                .observed_lineage(export)
+                .map(|found| (plugin.warehouse().to_owned(), found))
+        };
+        if let Some(found) = self.warehouse(warehouse).and_then(read) {
             return Some(found);
         }
         let mut readers = self
@@ -344,7 +350,7 @@ impl Plugins {
             .values()
             .filter(|(p, _)| detect::observed_lineage(p.as_ref()));
         match (readers.next(), readers.next()) {
-            (Some((only, _)), None) => only.observed_lineage(export),
+            (Some((only, _)), None) => read(only.as_ref()),
             _ => None,
         }
     }
@@ -647,8 +653,16 @@ mod tests {
                 reads_exports: true,
             }))
             .unwrap();
-        let acme = plugins.observed_lineage(Some("acme"), export).unwrap();
+        let (reader, acme) = plugins.observed_lineage(Some("acme"), export).unwrap();
+        assert_eq!(reader, "acme");
         assert!(acme.err().unwrap().to_string().contains("acme"));
+        assert_eq!(
+            plugins
+                .observed_lineage(Some("databricks"), export)
+                .unwrap()
+                .0,
+            "databricks"
+        );
         assert!(plugins.observed_lineage(Some("duckdb"), export).is_none());
         assert_eq!(plugins.observed_lineage_readers(), ["acme", "databricks"]);
     }
