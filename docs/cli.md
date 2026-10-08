@@ -1094,6 +1094,18 @@ The numbers are the plan's: a source's version is the one `ods state explain` sh
 a model reading it. `/api/catalog/sources` returns the same view model, and leaves out
 seeds' file paths beyond loopback.
 
+**Semantic layer** (`/catalog/semantic`, under Catalog) lists the semantic models and
+metrics the project's `manifest.json` declares, read-only. Each semantic model shows the
+model it is defined on, and its measures, dimensions and entities. Each metric shows:
+- its type;
+- what it is computed from;
+- the dimensions it can be sliced by;
+- the models it depends on, through the metrics it reads.
+
+A project that declares none gets an empty state. It is a placeholder: ODS never queries,
+validates or serves a metric, and lineage doesn't go through metrics yet.
+`/api/catalog/semantic` returns the same view model.
+
 **About** (`/settings/about`, under Settings) shows this `ods` and the plugins it runs
 with, from the same detection as `ods plugin list`
 ([ADR-0031 §3c](adr/0031-plugin-registry-and-loading.md)): its version and SDK version,

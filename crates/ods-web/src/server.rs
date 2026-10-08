@@ -295,6 +295,12 @@ fn router_with_state(state: Shared, options: &ServeOptions) -> Router {
             &at("/api/catalog/sources"),
             get(catalog_routes::sources_api),
         )
+        // The Semantic layer (#352), read-only. No node id is `semantic` either.
+        .route(&at("/catalog/semantic"), get(catalog_routes::semantic_page))
+        .route(
+            &at("/api/catalog/semantic"),
+            get(catalog_routes::semantic_api),
+        )
         .route(&at("/catalog/{id}"), get(catalog_routes::model))
         .route(&at("/catalog/"), {
             let to = at("/catalog");

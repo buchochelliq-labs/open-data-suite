@@ -63,6 +63,8 @@ pub struct Dashboard {
     /// The project's sources and what is known about their data, for the Freshness
     /// evidence screen (#350).
     pub freshness: crate::freshness::FreshnessInput,
+    /// The project's semantic models and metrics, for the Semantic layer page (#352).
+    pub semantic: crate::semantic::SemanticInput,
     /// The health checks as `[health]` configures them (#392, ADR-0030).
     pub health: Arc<ods_health::HealthSettings>,
     /// This `ods` and its plugins, for the About page (ADR-0031 §3c).
@@ -97,6 +99,7 @@ impl Dashboard {
             catalog: crate::catalog::CatalogInput::default(),
             erd: None,
             freshness: crate::freshness::FreshnessInput::default(),
+            semantic: crate::semantic::SemanticInput::default(),
             health: Arc::default(),
             about: crate::about::AboutInput::default(),
             settings: crate::settings::SettingsInput::default(),
@@ -256,6 +259,14 @@ impl Dashboard {
     #[must_use]
     pub fn with_freshness(mut self, freshness: crate::freshness::FreshnessInput) -> Self {
         self.freshness = freshness;
+        self
+    }
+
+    /// Sets the project's semantic models and metrics, for the Semantic layer page
+    /// (#352).
+    #[must_use]
+    pub fn with_semantic(mut self, semantic: crate::semantic::SemanticInput) -> Self {
+        self.semantic = semantic;
         self
     }
 }
@@ -677,8 +688,8 @@ const SECTION_ITEMS: [SectionPages; 4] = [
         &[
             ("models", "Models", Some("catalog")),
             ("freshness", "Freshness evidence", Some("catalog/sources")),
-            // The semantic layer (#309).
-            ("semantic", "Semantic layer", None),
+            // The semantic layer, read-only (#352).
+            ("semantic", "Semantic layer", Some("catalog/semantic")),
         ],
     ),
     (

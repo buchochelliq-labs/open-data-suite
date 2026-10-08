@@ -1,0 +1,81 @@
+version: 2
+
+models:
+  - name: metricflow_time_spine
+    description: One row per day, for metrics over time.
+    time_spine:
+      standard_granularity_column: date_day
+    columns:
+      - name: date_day
+        granularity: day
+
+semantic_models:
+  - name: orders
+    description: One row per order.
+    model: ref('orders')
+    defaults:
+      agg_time_dimension: ordered_at
+    entities:
+      - name: order
+        type: primary
+        expr: order_id
+      - name: customer
+        type: foreign
+        expr: customer_id
+    dimensions:
+      - name: ordered_at
+        type: time
+        type_params:
+          time_granularity: day
+    measures:
+      - name: order_total
+        description: The sum of what was ordered.
+        agg: sum
+        expr: amount
+      - name: order_count
+        agg: count
+        expr: order_id
+
+  - name: customers
+    description: One row per customer, from their first order.
+    model: ref('customers')
+    defaults:
+      agg_time_dimension: first_ordered_at
+    entities:
+      - name: customer
+        type: primary
+        expr: customer_id
+    dimensions:
+      - name: first_ordered_at
+        type: time
+        type_params:
+          time_granularity: day
+    measures:
+      - name: customer_count
+        agg: count_distinct
+        expr: customer_id
+
+metrics:
+  - name: revenue
+    label: Revenue
+    description: What customers ordered, in total.
+    type: simple
+    type_params:
+      measure: order_total
+  - name: orders_placed
+    label: Orders placed
+    type: simple
+    type_params:
+      measure: order_count
+  - name: average_order_value
+    label: Average order value
+    description: Revenue per order.
+    type: ratio
+    type_params:
+      numerator: revenue
+      denominator: orders_placed
+  - name: customers_with_orders
+    label: Customers with orders
+    type: simple
+    type_params:
+      measure: customer_count

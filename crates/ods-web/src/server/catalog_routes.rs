@@ -1,5 +1,5 @@
 //! The Catalog's routes (#313): its page, the model pages, the Freshness evidence screen
-//! (#350), and their JSON API; and the Impact simulator's (#347) and the ERD page's
+//! (#350), the Semantic layer (#352), and their JSON API; and the Impact simulator's (#347) and the ERD page's
 //! (#64). GET only; the same view models back the pages and the API. Pages are built on a blocking thread, as the State pages
 //! are: building one may plan.
 
@@ -148,6 +148,25 @@ pub(super) async fn sources_api(State(state): State<Shared>) -> Response {
         .into_response()
     })
     .await
+}
+
+/// `/catalog/semantic`: the Semantic layer (#352), read-only.
+pub(super) async fn semantic_page(State(state): State<Shared>) -> Html<String> {
+    let generation = state.generation.load(Ordering::SeqCst);
+    let snapshot = state.current();
+    let dashboard = snapshot.dashboard();
+    Html(crate::semantic_page::semantic_page(
+        &dashboard.shell("catalog"),
+        &dashboard.semantic(),
+        generation,
+    ))
+}
+
+/// `/api/catalog/semantic`: the Semantic layer page's view model.
+pub(super) async fn semantic_api(
+    State(state): State<Shared>,
+) -> Json<crate::semantic::SemanticView> {
+    Json(state.current().dashboard().semantic())
 }
 
 /// `/lineage/impact`: the Impact simulator (#347), simulating the query's changes.

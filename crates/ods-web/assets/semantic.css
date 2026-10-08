@@ -1,0 +1,39 @@
+/* ---- Semantic layer (#352). From the Metrics board; colours are the shell's tokens, so
+   light and dark both follow them. */
+.sem { padding: 24px; display: flex; flex-direction: column; gap: 16px; max-width: 1200px; }
+.sem-head { display: flex; flex-direction: column; gap: 6px; }
+.sem-head h1 { display: flex; align-items: center; gap: 10px; }
+.sem-head h1 .chip { margin-left: 0; }
+.sem-head p { margin: 0; }
+.sem-source { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.sem-label { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--heading-muted); }
+.sem-pill { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--active-bg); color: var(--accent-strong); font-weight: 600; }
+.sem-pill.none { border-color: var(--border); background: var(--surface); color: var(--muted); font-weight: 400; }
+.sem-pill.planned { border: 1px dashed var(--dashed); background: var(--planned-bg); color: var(--muted); font-weight: 400; cursor: not-allowed; }
+.sem-notice { margin: 0; font-size: 13px; padding: 10px 12px; border-radius: 6px; border: 1px dashed var(--dashed); background: var(--planned-bg); color: var(--fg); }
+.sem-grid { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 2.2fr); gap: 16px; align-items: start; }
+.sem-models h2, .sem-metrics h2 { font-size: 16px; }
+.sem-model { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 6px; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.sem-model .name { font-size: 15px; font-weight: 600; }
+.sem-model .on { font-size: 12px; color: var(--muted); }
+.sem-model .counts { font-size: 12px; }
+.sem-model dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 4px 10px; margin: 6px 0 0 0; font-size: 12px; }
+.sem-model dt { color: var(--heading-muted); }
+.sem-model dd { margin: 0; min-width: 0; }
+.sem-metrics { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sem-table-wrap { padding: 0; overflow-x: auto; }
+.sem-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sem-table th { text-align: left; font-size: 12px; font-weight: 400; color: var(--heading-muted); padding: 10px 12px; background: var(--planned-bg); }
+.sem-table td { border-top: 1px solid var(--line); padding: 10px 12px; vertical-align: top; overflow-wrap: anywhere; }
+.sem-table .label { display: block; font-size: 12px; color: var(--muted); }
+.sem-kind { font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--planned-bg); color: var(--fg); }
+.sem-metrics .note { font-size: 12px; margin: 0; }
+.sem-empty h2 { font-size: 16px; }
+.sem-empty p { margin: 0; }
+.sem-scope { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; border-style: dashed; }
+.sem-scope h2 { font-size: 15px; margin: 0 0 4px 0; }
+.sem-scope p { margin: 0; font-size: 13px; }
+.sem-scope .btn { flex-shrink: 0; }
+.btn { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--fg); }
+.btn:hover { text-decoration: none; background: var(--line); }
+@media (max-width: 900px) { .sem-grid { grid-template-columns: 1fr; } .sem-scope { flex-direction: column; align-items: flex-start; } }

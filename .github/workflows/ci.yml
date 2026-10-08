@@ -175,6 +175,9 @@ jobs:
       # bars, the critical path, and a bar opening the replay; light and dark.
       - name: Run threads in a browser
         run: python crates/ods-web/tests/browser/threads.py -v
+      # The Semantic layer page (#352) in Chromium, with and without one; light and dark.
+      - name: Semantic layer in a browser
+        run: python crates/ods-web/tests/browser/semantic.py -v
 
   # A custom `ods` built from a crate outside the workspace, as a third party's would
   # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary
