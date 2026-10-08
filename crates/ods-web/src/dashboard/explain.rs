@@ -14,8 +14,10 @@ use std::sync::Arc;
 
 use ods_core::failure::{ErrorExplanation, MissingColumn};
 use ods_core::state::StateSnapshot;
-use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue, ProjectIndex};
-use ods_sdk::contracts::run_events::RunSummary;
+use ods_sdk::contracts::error_catalogue::{
+    CatalogueInfo, Classification, ErrorCatalogue, ProjectIndex,
+};
+use ods_sdk::contracts::run_events::{ErrorSummary, RunSummary};
 use ods_state::{
     FailureFacts, FailureStage, explain_failure, failed_checks, failed_nodes, plan_from_states,
 };
@@ -58,6 +60,20 @@ impl std::fmt::Debug for Explainer {
 }
 
 impl Explainer {
+    /// What the catalogue makes of `error`, with the catalogue that recognised it, which
+    /// the explanation names (ADR-0031 §3a).
+    fn classify(&self, error: Option<&ErrorSummary>) -> (Classification, CatalogueInfo) {
+        match error {
+            Some(error) => self.catalogue.classify_attributed(error),
+            None => (
+                Classification::NotRecognised {
+                    category: ods_core::failure::ErrorCategory::Unknown,
+                },
+                self.catalogue.catalogue(),
+            ),
+        }
+    }
+
     /// Explains with `catalogue`'s patterns.
     pub fn new(catalogue: Arc<dyn ErrorCatalogue>) -> Self {
         Self {
@@ -124,7 +140,6 @@ impl Explainer {
         }
         let parents = |id: &str| self.parents.get(id).cloned().unwrap_or_default();
         let plan = plan_from_states(run, before, after, &parents);
-        let info = self.catalogue.catalogue();
         let project_is_run =
             self.invocation.is_some() && self.invocation.as_deref() == run.run_id.as_deref();
         let mut explained = Explained::default();
@@ -132,12 +147,7 @@ impl Explainer {
             let Some(summary) = run.get(node) else {
                 continue;
             };
-            let classification = match &summary.stats.error {
-                Some(error) => self.catalogue.classify(error),
-                None => Classification::NotRecognised {
-                    category: ods_core::failure::ErrorCategory::Unknown,
-                },
-            };
+            let (classification, info) = self.classify(summary.stats.error.as_ref());
             let mut facts = FailureFacts::new(node, &classification, &info, FailureStage::Run);
             facts.error = summary.stats.error.as_ref();
             facts.stats = Some(&summary.stats);
@@ -154,12 +164,7 @@ impl Explainer {
                 .insert(node.to_owned(), explain_failure(&facts));
         }
         for check in checks {
-            let classification = match &check.error {
-                Some(error) => self.catalogue.classify(error),
-                None => Classification::NotRecognised {
-                    category: ods_core::failure::ErrorCategory::Unknown,
-                },
-            };
+            let (classification, info) = self.classify(check.error.as_ref());
             let mut facts =
                 FailureFacts::new(&check.check, &classification, &info, FailureStage::Run);
             facts.check = Some(check);

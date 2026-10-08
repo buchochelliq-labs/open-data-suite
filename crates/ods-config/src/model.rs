@@ -44,6 +44,23 @@ pub struct Config {
     /// (ADR-0030, #392). Check ids are validated by the health engine that reads them.
     #[serde(default)]
     pub health: HealthConfig,
+    /// What ODS knows about a warehouse kind beyond its plugin, by kind as the project
+    /// names it (for dbt, `adapter_type`): e.g. the warehouses it is built on
+    /// (ADR-0031 §3b).
+    #[serde(default)]
+    pub warehouses: BTreeMap<String, WarehouseConfig>,
+}
+
+/// `[warehouses.<kind>]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct WarehouseConfig {
+    /// The warehouses this one is built on, nearest first, as dbt's adapter dispatch
+    /// searches them: in place of its plugin's own list when set. Only error patterns
+    /// and the SQL dialect are inherited from them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<Vec<String>>,
 }
 
 /// `[project]`.
@@ -224,6 +241,10 @@ pub struct HealthConfig {
     /// they never borrow the build's own target, which can write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probes: Option<HealthProbesConfig>,
+    /// Checks registered as plugins, by id, e.g. `[health.plugins.pii_tagged]` with
+    /// `severity = "off"` (ADR-0031 §4).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, HealthCheckConfig>,
 }
 
 /// Where probe checks run, `[health.probes]` (ADR-0030 §4c): a dbt target for a
@@ -268,9 +289,10 @@ pub struct DeclaredCheckConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub require: Vec<String>,
     /// A probe's one read-only query, with `{relation}` once, e.g.
-    /// `select count(*) as n from {relation}` (ADR-0030 §4a). Probes only.
+    /// `select count(*) as n from {relation}` (ADR-0030 §4a), or one per warehouse kind
+    /// (ADR-0031 §3b). Probes only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sql: Option<String>,
+    pub sql: Option<ProbeSql>,
     /// A probe's pass condition over the columns its query returns, e.g. `n > 0`.
     /// Probes only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -284,6 +306,25 @@ pub struct DeclaredCheckConfig {
     /// Nodes it never checks, even when selected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<HealthSelector>,
+}
+
+/// A probe's query (ADR-0030 §4a): one for every warehouse, or one per warehouse kind
+/// with an optional `default` (ADR-0031 §3b), e.g.
+/// `sql = { databricks = "select count_if(id is null) as n from {relation}", default = "…" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum ProbeSql {
+    /// One query, whatever the warehouse.
+    One(String),
+    /// A query per warehouse kind (dbt's `adapter_type`), and `default` for the rest.
+    PerWarehouse(BTreeMap<String, String>),
+}
+
+impl From<&str> for ProbeSql {
+    fn from(sql: &str) -> Self {
+        Self::One(sql.to_owned())
+    }
 }
 
 /// What a check that couldn't decide makes a node's badge.

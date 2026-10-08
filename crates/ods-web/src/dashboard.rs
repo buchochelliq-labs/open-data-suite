@@ -64,6 +64,10 @@ pub struct Dashboard {
     pub freshness: crate::freshness::FreshnessInput,
     /// The health checks as `[health]` configures them (#392, ADR-0030).
     pub health: Arc<ods_health::HealthSettings>,
+    /// This `ods` and its plugins, for the About page (ADR-0031 §3c).
+    pub about: crate::about::AboutInput,
+    /// The configuration and what it resolves to, for the Settings page (#351).
+    pub settings: crate::settings::SettingsInput,
     /// What the latest health record says about checks the dashboard doesn't run
     /// itself (ADR-0030 §6); `None` when there is no record, or it holds only built-ins.
     health_record: Option<Arc<ods_health::record::Recorded>>,
@@ -93,6 +97,8 @@ impl Dashboard {
             erd: None,
             freshness: crate::freshness::FreshnessInput::default(),
             health: Arc::default(),
+            about: crate::about::AboutInput::default(),
+            settings: crate::settings::SettingsInput::default(),
             health_record: None,
             journals: journal::JournalSource::default(),
         }
@@ -229,6 +235,20 @@ impl Dashboard {
             );
         }
         how
+    }
+
+    /// Sets the configuration and what it resolves to, for the Settings page (#351).
+    #[must_use]
+    pub fn with_settings(mut self, settings: crate::settings::SettingsInput) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Sets this `ods` and its plugins, for the About page (ADR-0031 §3c).
+    #[must_use]
+    pub fn with_about(mut self, about: crate::about::AboutInput) -> Self {
+        self.about = about;
+        self
     }
 
     /// Sets the project's sources, for the Freshness evidence screen (#350).
@@ -643,7 +663,7 @@ type SectionPages = (
 );
 
 /// Each section's pages.
-const SECTION_ITEMS: [SectionPages; 3] = [
+const SECTION_ITEMS: [SectionPages; 4] = [
     (
         "lineage",
         &[
@@ -669,6 +689,14 @@ const SECTION_ITEMS: [SectionPages; 3] = [
             ("policies", "Policies", None),
         ],
     ),
+    (
+        "settings",
+        &[
+            // The read-only configuration (#351).
+            ("configuration", "Configuration", Some("settings")),
+            ("about", "About", Some("settings/about")),
+        ],
+    ),
 ];
 
 /// A section of the design: key, label, href when built, and a note.
@@ -690,7 +718,7 @@ const SECTIONS: [Section; 9] = [
     ("usage", "Usage", None, None),
     ("ci", "CI · Impact", None, None),
     ("agent", "Agent", None, None),
-    ("settings", "Settings", None, None),
+    ("settings", "Settings", Some("settings"), None),
 ];
 
 /// Where the state is.

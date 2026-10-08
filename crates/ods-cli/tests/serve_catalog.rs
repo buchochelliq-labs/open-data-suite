@@ -566,6 +566,110 @@ fn on_databricks_freshness_evidence_names_the_table_version_runs_read() {
     );
 }
 
+/// #388, ADR-0022 §7: with the table versions a dry run saved, the dashboard, which
+/// never connects, shows each source's version as `ods state explain` does, and says
+/// which command read it.
+#[test]
+fn on_databricks_the_saved_table_versions_are_the_evidence_now() {
+    let scratch = tempfile::tempdir().unwrap();
+    let target = scratch.path().join("target");
+    let db = scratch.path().join(".ods/state.db");
+    std::fs::create_dir_all(&target).unwrap();
+    let mut manifest: Value = serde_json::from_slice(
+        &std::fs::read(fixtures(
+            "jaffle-ods/artifacts/dbt-1.10-build/manifest.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    manifest["metadata"]["adapter_type"] = serde_json::json!("databricks");
+    manifest["sources"]["source.jaffle_ods.landing.feed"] = serde_json::json!({
+        "unique_id": "source.jaffle_ods.landing.feed",
+        "resource_type": "source",
+        "name": "feed",
+        "source_name": "landing",
+        "relation_name": "`main`.`landing`.`feed`",
+        "config": {"enabled": true}
+    });
+    manifest["nodes"]["model.jaffle_ods.stg_orders"]["depends_on"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("source.jaffle_ods.landing.feed"));
+    std::fs::write(
+        target.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::copy(
+        fixtures("jaffle-ods/artifacts/dbt-1.10-build/run_results.json"),
+        target.join("run_results.json"),
+    )
+    .unwrap();
+    // A recorded build, so `stg_orders` is planned against what it read.
+    ods_json(&target, &db, &["state", "record"]);
+    // What `ods state build --dry-run` saves for this scope, in its own format.
+    let scope = ods_json(&target, &db, &["state", "plan"])["scope"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let mut saved = db.clone().into_os_string();
+    saved.push(".versions.json");
+    std::fs::write(
+        &saved,
+        serde_json::json!({
+            "schema_version": {"major": 1, "minor": 0},
+            "readings": {scope: {
+                "read_at": "2026-10-07T12:00:00Z",
+                "command": "ods state build --dry-run",
+                "capabilities": ["relation_versions"],
+                "answers": {
+                    "source.jaffle_ods.landing.feed": {"version": {
+                        "value": "t-feed/5", "exactness": "exact", "source": "delta_history"
+                    }}
+                }
+            }}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let explain = ods_json(&target, &db, &["state", "explain", "stg_orders"]);
+    let explained = explain["explanation"]["entry"]["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| {
+            e["kind"] == "source_data_version" && e["subject"] == "source.jaffle_ods.landing.feed"
+        })
+        .unwrap_or_else(|| panic!("{explain:#}"))
+        .clone();
+    assert_eq!(explained["value"], "t-feed/5", "{explain:#}");
+
+    let server = serve(&target, &["--state-db", db.to_str().unwrap()]);
+    let view = json(&server, "api/catalog/sources");
+    let feed = input(&view, "source.jaffle_ods.landing.feed");
+    assert_eq!(feed["evidence"]["value"], explained["value"], "{feed:#}");
+    assert_eq!(feed["evidence"]["grade"], "exact", "{feed:#}");
+    assert_eq!(feed["evidence"]["observed_at"], "2026-10-07T12:00:00Z");
+    let notes: Vec<&str> = feed["evidence"]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("`ods state build --dry-run` read")),
+        "{feed:#}"
+    );
+    assert!(
+        !notes.iter().any(|n| n.starts_with("not read here")),
+        "{feed:#}"
+    );
+}
+
 /// Health and coverage (#354) on the demo project: coverage counted from the manifest
 /// (each checked here against the manifest itself), and without a state store, every
 /// node's health unknown and failures not measured, never 0.

@@ -13,6 +13,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 ## [Unreleased]
 
 ### Breaking
+- The `error_catalogue` contract is 0.5 (#415): `ErrorCatalogue::classify_attributed`
+  names the catalogue that recognised an error, for a catalogue that consults others.
+  It has a default, so **what to do:** nothing beyond rebuilding against this SDK.
 - `SDK_VERSION` is now 0.9 (#392): the `health_check` contract is 0.2, as `NodeFacts`
   gains `test_types`, `described` and `constraints` (all default when absent). **What
   to do:** rebuild out-of-process plugins against SDK 0.9; a check needs no other change.
@@ -33,12 +36,91 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 records: run `ods health check` again after going back to it.
 
 ### Added
+- `DuckDB` is the second built-in warehouse plugin (#415, ADR-0031 §3a), in
+  `ods-provider-duckdb`: `DuckDB`'s error patterns, recorded from real dbt-duckdb runs,
+  and the `duckdb` dialect. It offers no source versions (`DuckDB` has no table version
+  to read), so `ods state` reads `sources.json` alone, as before. `ods plugin list`,
+  `ods version` and `ods doctor` list it.
+- A probe check's `sql` may give a query per warehouse kind, with a `default` (#415,
+  ADR-0031 §3b): `sql = { databricks = "…", default = "…" }`. The query for the
+  project's warehouse runs, else one for a warehouse it is built on, else `default`;
+  with none, the probe is *unknown*, never run with a guess. Each query is checked as
+  read-only in its own warehouse's dialect, and trust covers them all. A probe with one
+  query is unchanged and stays trusted. Findings' evidence names the warehouse the query
+  was given for (`sql_for`); `ods health trust --json` gives `sql` as configured (a
+  string, or a table by warehouse), and the dashboard shows the query for the project's
+  warehouse.
+- A probe's query in its warehouse's own SQL (e.g. Databricks' `version as of`) is no
+  longer refused before the project is read (`ods serve`, `ods health trust`): a query
+  for every warehouse must then be one read-only query in some dialect ODS knows, and
+  `ods health check` checks it in the project's own dialect before it runs.
+- `ods plugin list` and `ods plugin show <name>` (#415, ADR-0031 §3c): the plugins this
+  `ods` runs with and what each offers, detected by asking it, in human, plain and
+  `--json` forms. `show` gives each feature's contract and version, and a warehouse's
+  parents and what it inherits from them. An unknown name is a usage error
+  (`ODS-E0801`, exit 2) listing the plugins there are. The MCP server's
+  `ods_list_plugins` tool answers the same, and `docs/plugins.md` lists the built-in
+  warehouses from the same detection (a test keeps them in step).
+- The dashboard's **About** page (`/settings/about`, #415, ADR-0031 §3c): this `ods`'s
+  version and SDK version, and each plugin with what it offers, from the same detection
+  as `ods plugin list`. It names the plugin serving the project's warehouse, or says
+  that none does and what ODS then knows less about. A feature the configuration
+  can't use says why, never with a setting's value. `/api/settings/about` returns the
+  same view model.
+- The dashboard's **Settings** page (`/settings`, #351): the effective configuration
+  as `ods config explain` lists it (secrets as references, credentials in values
+  removed as `ods doctor` removes them), the project, target and state store a run
+  resolves, the configured providers and their capabilities, `ods doctor`'s checks
+  that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
+  it writes; beyond loopback it shows no value, path or check detail.
+  `/api/settings` returns the same view model.
+- **Saved table versions** (#388, ADR-0022 §7): `ods state build` and `run` (and their
+  `--dry-run`) save the sources' table versions they read in
+  `<state-db>.versions.json`. `ods state plan`, `ods state explain` and the dashboard,
+  which never connect, now decide with them and say which command read them and when;
+  the Freshness evidence screen shows them as the evidence now. A version read before
+  a model's last build still says nothing about data since, so its readers build until
+  `ods state build --dry-run` reads the versions again.
+
+- Plugins in a custom `ods` (#392 phase 6, #387, ADR-0031). `ods_cli::Ods` is the
+  released CLI as a library: a crate of your own adds health checks
+  (`Ods::health_check`) and warehouse plugins (`Ods::warehouse`) and runs it.
+  - **Warehouse plugins:** a `WarehousePlugin` serves one warehouse kind (dbt's
+    `adapter_type`). Over dbt's own connection it gives `ods state` a source-version
+    provider and probe checks a login check; from the warehouse's `[providers.<name>]`
+    settings it builds "Open in warehouse" links; it reads observed lineage exports;
+    its error catalogue is asked before dbt's when a node fails; and it names the SQL
+    dialect column lineage parses in (#415, ADR-0031 §3a). As dbt's adapter dispatch
+    does, a warehouse inherits error patterns and the dialect from the warehouses it is
+    built on: its plugin's `parents` (Databricks: Spark), or
+    `[warehouses.<kind>] extends` in configuration (§3b). A cycle is a configuration
+    error. What a
+    plugin offers is detected by calling it, never declared (§3c). Databricks is now
+    the built-in plugin, and behaves as before. `ods version` and `ods doctor` now also
+    list its links and observed lineage. With several plugins that read observed
+    lineage, `--observed` uses the project's warehouse's, and a project on any other
+    warehouse is told which plugins read exports.
+  - **Plugin checks:** they run with the others in `ods health check`.
+    `[health.plugins.<id>]` sets their `severity` (or `off`), `select` and `exclude`; an
+    id that names no plugin check is a configuration error.
+  - **Visibility:** `ods version` (`plugins` in `--json`) and `ods doctor`
+    (`capabilities.plugins`) list every plugin, saying which are built in.
+    `ods doctor --provider plugin` selects the checks about a custom build's warehouse
+    plugin.
+  - **SDK:** `PrivilegedProbe`, one object that probes and reports its login's
+    privileges, and `Provider` and `RelationProbe` for `Arc<T>`, so a plugin can wrap
+    the connection it is given.
+
+  `examples/custom-ods` is a complete custom `ods`, with a health check and a
+  source-version provider that pass their conformance suites. `docs/plugins.md` shows
+  how to write one.
 - Probe checks on Databricks check their login in Unity Catalog (#392, ADR-0030 §4e):
   `ods health check` reads `system.information_schema` through the probe target's own
   connection and runs a probe only on a managed table, view or materialized view whose
   login (or its groups) owns none of the relation, schema, catalog or metastore, holds
-  nothing on them or the metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and
-  `USE SCHEMA`, and isn't a workspace admin; anything it can't read, and any external
+  nothing on them beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` (nor on
+  the metastore beyond the default `USE MARKETPLACE ASSETS`), and isn't a workspace
+  admin; anything it can't read, and any external
   table, is *unknown*. Known limits (e.g. account admins aren't visible) and how they
   will be fixed are listed in ADR-0030 §4e. The Databricks provider has `UnityCatalog`,
   a `relation_probe` that also reports `relation_privileges`.
@@ -99,11 +181,25 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   cover is *unknown* for them, never healthy. A new record reloads the page.
 
 ### Changed
+- dbt's error catalogue is at version 8 (#415): dbt-databricks's own messages (unavailable
+  compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
+  (`databricks` 1), and `DuckDB`'s (`Binder Error`, `Catalog Error`, `Conversion Error`
+  and the rest) the `DuckDB` plugin's (`duckdb` 1). Each is asked first on its own
+  warehouse's project, and after dbt's on any other (a run before dbt names the
+  warehouse, or from before a project moved), so explanations recognise what they did.
+  An explanation names the catalogue whose pattern recognised the error (`databricks`
+  1, `duckdb` 1 or `dbt` 8), and a warehouse's message reads as its adapter's
+  (`dbt-duckdb said:`).
 - The docs site has one roadmap page, `/ROADMAP/` ("Roadmap" in the navigation), in place
   of "Overview" (`/roadmap/`) and "Full plan" (`/ROADMAP/`), which had become copies of
   each other. `/roadmap/` redirects to `/ROADMAP/`.
 - The README, the docs' Home and Install pages and the roadmap say v0.0.2 is released;
   the install commands use `0.0.2` as the example version.
+
+### Fixed
+- `ods serve` bound to loopback but behind a proxy (`--allow-host`) no longer shows
+  local paths, configuration values or error text: requests may come from elsewhere,
+  so every page treats it as beyond loopback (#351).
 
 ## [0.0.2] - 2026-10-06
 

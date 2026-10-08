@@ -114,10 +114,11 @@ fn every_tool_answers_from_the_fixture() {
             tool("ods_test_gaps", &json!({})),
             tool("ods_list_opaque", &json!({})),
             tool("ods_compare_observed", &json!({"observed_file": observed})),
+            tool("ods_list_plugins", &json!({})),
         ],
     );
     let tools = r[0]["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 14);
+    assert_eq!(tools.len(), 15);
     assert!(
         tools
             .iter()
@@ -160,6 +161,20 @@ fn every_tool_answers_from_the_fixture() {
     assert_eq!(opaque[0]["name"], "customer_segments", "the Python model");
     assert_eq!(opaque[0]["reads"], json!(["jaffle_ods.main.customers"]));
     assert_eq!(structured(&r[11])["comparison"]["missing"], 1);
+    // What this `ods` can do: the built-in Databricks plugin, as `ods plugin list` has it.
+    let plugins = structured(&r[12])["plugins"].as_array().unwrap().clone();
+    let databricks = plugins.iter().find(|p| p["name"] == "databricks").unwrap();
+    assert_eq!(databricks["kind"], "warehouse");
+    assert_eq!(databricks["builtin"], true);
+    assert_eq!(databricks["parents"], json!(["spark"]));
+    assert!(
+        databricks["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "errors" && f["contract"] == "error_catalogue"),
+        "{databricks:#}"
+    );
 }
 
 #[test]

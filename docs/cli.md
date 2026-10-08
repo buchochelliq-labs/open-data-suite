@@ -28,6 +28,7 @@ codes).
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the read-only dashboard, the lineage explorer and their JSON API, see [below](#the-dashboard) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
+| `ods plugin list\|show` | available (preview): the plugins this `ods` runs with and what each offers, see [below](#ods-plugin) |
 | `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
@@ -134,6 +135,7 @@ meanings get new numbers.
 | `ODS-E0701` | `ods health check`: a check at severity `error` failed, or, with `--strict`, couldn't decide (exit status 5). |
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
+| `ODS-E0801` | `ods plugin show` names a plugin this `ods` doesn't run with, or a name several plugins share without `--kind` (exit status 2). The hint lists the plugins, or the kinds to choose from. |
 | `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
 | `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
@@ -226,6 +228,12 @@ format = "json"
     settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
     `target_dir`, all strings; any other key is an error
   - `policy.rules`
+  - `warehouses.<kind>.extends`: the warehouses a warehouse kind (as dbt names it,
+    `adapter_type`) is built on, nearest first, e.g. `extends = ["postgres"]` for an
+    adapter built on dbt-postgres. It replaces the warehouse plugin's own list
+    (Databricks is built on Spark). Only error patterns and the SQL dialect are
+    inherited, never source versions, the login check, links or observed lineage
+    (ADR-0031 §3b). Warehouses that extend each other in a cycle are an error.
 
   Unknown keys are errors.
 - **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`.
@@ -247,6 +255,27 @@ providers.warehouse.settings.token  secret(env:DATABRICKS_TOKEN)  project file .
 
 Configuration errors exit with status 4.
 
+## `ods plugin`
+
+`ods plugin list` names every plugin this `ods` runs with, one line each, and
+`ods plugin show <name>` shows one: each thing it offers, with the SDK contract and
+version it implements and what it reads, and for a warehouse, the warehouses it is built
+on and what it inherits from them (error patterns and the dialect, ADR-0031 §3b).
+What a plugin offers is found by asking it, never as it declares (ADR-0031 §3c): each
+feature's factory is called with a connection that refuses every statement, so listing
+runs nothing and connects to nothing. Whether a feature it offers can be used is judged
+with this project's configuration, as a run would use it: one that can't says why (e.g.
+Databricks' links without a `host`). A health check and a warehouse may share a name;
+`--kind warehouse` or `--kind health_check` says which to show.
+
+`--json` gives each plugin's `name`, `kind` (`warehouse` or `health_check`), `from`,
+`builtin`, `features` (`name`, `contract`, `contract_version`, `detail`, `unavailable`)
+and, for a warehouse, `parents`, `parents_from` (`plugin`, or `configuration` when
+`[warehouses.<kind>] extends` sets them) and `inherited`. The MCP tool
+`ods_list_plugins` answers the same. A warehouse without a plugin works too, with dbt's
+error patterns and the dialect of its kind; it just isn't listed. The built-in
+warehouses are in [Writing a provider](plugins.md#built-in-warehouses).
+
 ## `ods doctor`
 
 `ods doctor` checks that ODS can work in the current project and environment, and says
@@ -265,7 +294,7 @@ writes nothing; dbt writes the target check's artifacts under
 ```sh
 ods doctor                        # every offline check
 ods doctor --project              # only the dbt project and its artifacts
-ods doctor --provider databricks  # only the checks about one provider: dbt, databricks or sqlite
+ods doctor --provider databricks  # only the checks about one provider: dbt, databricks, plugin or sqlite
 ods doctor --connect              # also the live checks, through dbt's own connection
 ods doctor --strict --json        # for CI: warnings fail too; one JSON document
 ```
@@ -293,14 +322,15 @@ It takes the options `ods state` commands take to find things (`--project-dir`,
 | `target.identity` | Which target does dbt build in? dbt renders the profile (`dbt compile --inline`), which reads `profiles.yml` but connects to nothing | yes |
 | `state_store.database` | Is the state database sound, and at a schema this ODS can read and write? The same check as `ods state doctor` | yes |
 | `capabilities.relation_existence` | Can a build's relation be checked before it is reused (#230)? | |
-| `capabilities.relation_versions` | Where do sources' data versions come from: the warehouse's table versions (Databricks), `loaded_at_field` through `dbt source freshness`, or nowhere? | |
+| `capabilities.relation_versions` | Where do sources' data versions come from: the warehouse's table versions (Databricks, or a custom build's warehouse plugin), `loaded_at_field` through `dbt source freshness`, or nowhere? | |
+| `capabilities.plugins` | Which plugins does this `ods` have: only the built-ins, or is it a custom build that adds some ([plugins](plugins.md#a-custom-ods-in-process-plugins))? Each is evidence, with its contract and crate | |
 | `connectivity.relations` | With `--connect`: does the relation check (`dbt show`) run? | |
 | `connectivity.table_versions` | With `--connect`, on Databricks: does the table-version probe run? | |
 
 The checks about sources' data versions (`capabilities.relation_versions`,
 `connectivity.table_versions`) concern `databricks` when the manifest's adapter is
-Databricks, whose table versions ODS reads, and `dbt` otherwise; `--provider` picks
-them accordingly.
+Databricks, whose table versions ODS reads, `plugin` when a custom build's warehouse
+plugin reads them, and `dbt` otherwise; `--provider` picks them accordingly.
 
 Each check ends `ok`, `warning`, `error`, `unknown` (it couldn't conclude, e.g. a check
 it depends on failed) or `skipped` (not run by choice, e.g. a live check without
@@ -587,7 +617,9 @@ It listens on loopback by default and then only answers requests for `localhost`
 `127.0.0.1` or `[::1]`, which is designed to mitigate DNS-rebinding attacks from web pages. There is no
 authentication yet (#97): with `--host` anything other than loopback, put it behind a
 proxy that has some, and name the proxy's host with `--allow-host`. Beyond loopback,
-`/api/version` hides local paths and error text (they go to the server log). Responses
+and on loopback with any `--allow-host` (a proxy forwards requests from elsewhere),
+every page and API leaves out local paths, configuration values and error text (they go
+to the server log). Responses
 carry a strict Content-Security-Policy, and nothing is written. `--base-path` accepts
 plain path segments only (letters, digits, `-`, `.`, `_`, `~`).
 
@@ -1044,9 +1076,12 @@ each of the project's inputs changed since the nodes reading it were built:
 - **Sources:** the data version now (`max(<loaded_at_field>)` from `sources.json`), when
   it was measured, and the versions its readers were last built from. On Databricks,
   runs read each source's Delta table version first
-  ([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)); the dashboard never
-  connects to the warehouse, so the screen names that version and says it isn't read
-  there. The versions runs read show under *Last recorded*.
+  ([ADR-0022](adr/0022-delta-table-versions-as-source-evidence.md)). The dashboard never
+  connects to the warehouse: it shows the versions the last command that read them
+  saved ([saved readings](#where-source-versions-come-from)), with when they were read
+  and by which command, and its decisions use them. Without a saved reading it names the
+  table version and says it isn't read there. The versions runs read show under *Last
+  recorded*.
 - **Seeds:** the file's checksum, compared with the one the seed was last built from.
 - **Grades:** each piece of evidence is graded *exact*, *semantic*, *proxy*, *inferred*
   or *unknown*. Only *exact* and *semantic* evidence can let a reader be reused; anything
@@ -1058,6 +1093,39 @@ each of the project's inputs changed since the nodes reading it were built:
 The numbers are the plan's: a source's version is the one `ods state explain` shows for
 a model reading it. `/api/catalog/sources` returns the same view model, and leaves out
 seeds' file paths beyond loopback.
+
+**About** (`/settings/about`, under Settings) shows this `ods` and the plugins it runs
+with, from the same detection as `ods plugin list`
+([ADR-0031 §3c](adr/0031-plugin-registry-and-loading.md)): its version and SDK version,
+then each warehouse plugin and health-check plugin with where it comes from and what it
+offers (each feature with its contract's version). The plugin serving this project's
+warehouse is marked; when none does, the page says so: ODS still builds through dbt's
+connection, and only knows less about the warehouse. Whether a feature can be used is
+judged with this project's configuration, as a run would use it: one that can't (e.g.
+Databricks' links without a `host`) says why, never with a setting's value.
+`/api/settings/about` returns the same view model.
+
+**Settings** (`/settings`, the bottom of the navigation) shows the configuration,
+read-only (#351):
+- **Effective configuration:** every key with its value and source, as
+  `ods config explain` lists them (a test keeps the two in step). A secret is shown as
+  its reference (`secret(env:NAME)`), never resolved, and a value that carries a
+  credential (a connection string's user part, say) is shown without it, as
+  `ods doctor` shows it.
+- **Project and target**, **State store:** what a run resolves the project dir,
+  profile, target, artifacts, dbt program, state database and environment to, and
+  where each came from (a flag, the environment, the configuration or a default).
+- **Secrets:** the secret references only. **Providers:** each `[providers.<name>]`,
+  its kind, and what it can do; a kind a warehouse plugin serves links to About.
+- **Checks:** `ods doctor`'s checks that only read (the configuration, the project's
+  files, the state database read-only, the providers' capabilities). The page runs no
+  dbt and connects to nothing; `ods doctor` adds the tools, the target and, with
+  `--connect`, the warehouse.
+- **Server mode:** identity and access, webhooks and the audit log, shown as planned.
+
+Nothing on the page writes: change the files or the environment. Beyond loopback it
+leaves out every value, path and check detail, and keeps the keys, sources (without
+paths), names and statuses. `/api/settings` returns the same view model.
 
 ## dbt State configuration
 
@@ -1176,8 +1244,18 @@ reason.
 Versions from different origins never compare equal, so the first run after table
 versions become available (or stop being) builds the readers of those sources once.
 Any commit moves a Delta version, including `OPTIMIZE` and `VACUUM`, so maintenance
-also rebuilds readers. `ods state plan` and `ods state explain` don't run dbt, so they
-read no table versions, and say so; `ods state build --dry-run` does. Other adapters read none yet.
+also rebuilds readers. Other adapters read none yet.
+
+**Saved readings** ([ADR-0022 §7](adr/0022-delta-table-versions-as-source-evidence.md)):
+`ods state plan`, `ods state explain` and `ods serve` don't run dbt, so they read no
+table versions themselves. Every command that does (`ods state build` and `run`, and
+their `--dry-run`) saves what it read in `<state-db>.versions.json` (e.g.
+`.ods/state.db.versions.json`), the latest reading for each state scope, and those
+three use it, saying which command read the versions and when. Run
+`ods state build --dry-run` to refresh them without building. A version read before a
+model's last build says nothing about data since, so its readers build until something
+reads the versions again; a reading that failed is saved as failed, and its readers
+build too. The file isn't the state store: deleting it only loses the saved reading.
 
 ### Source tests
 
@@ -1378,6 +1456,25 @@ guard stopped it, never a pass:
   statements, a write hidden in a CTE) is a configuration error before anything connects
   (exit 4, `ODS-E0102`), in `ods health check` and `ods serve` alike. It is checked with
   the SQL analyzer lineage uses, in the project's dialect.
+
+`sql` may instead give a query per warehouse kind (dbt's adapter type), with an
+optional `default` for any other, when a check needs SQL a warehouse spells its own way:
+
+```toml
+sql = { databricks = "select count_if(id is null) as n from {relation}",
+        default = "select sum(case when id is null then 1 else 0 end) as n from {relation}" }
+```
+
+The query that runs is the one for the project's warehouse, else for a warehouse it is
+built on (its plugin's parents, or `[warehouses.<kind>] extends`), else `default`, as
+error patterns are found ([ADR-0031 §3b](adr/0031-plugin-registry-and-loading.md)).
+With none of these, the probe is *unknown* ("no query for this warehouse"), never run
+with a guess. Every query is checked as read-only when the configuration loads: one
+given for a warehouse in that warehouse's dialect; one for every warehouse (or
+`default`), before the project is read, as one read-only query in some dialect ODS
+knows (a write is refused in every dialect), then by `ods health check` in the
+project's own dialect before it runs. Trust covers every query, so changing any one
+needs `ods health trust` again. A probe with one query keeps its trust.
 - **Trust.** A probe a project's `ods.toml` (or `ods.local.toml`) defines runs only once
   you have trusted that exact definition for that project with
   [`ods health trust`](#ods-health-trust). Probes in your own `config.toml` need no trust.
@@ -1398,8 +1495,9 @@ Reporting what a login may do is a provider capability (`relation_privileges`). 
 Databricks, ODS reads it from Unity Catalog's `system.information_schema`, through the
 probe target's own connection: a probe runs when the relation is a managed table, a
 view or a materialized view, and the login (or a group it is in) owns neither the
-relation, its schema, its catalog nor the metastore, holds nothing on them or on the
-metastore beyond `SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA`, and isn't in the
+relation, its schema, its catalog nor the metastore, holds nothing on them beyond
+`SELECT`, `BROWSE`, `USE CATALOG` and `USE SCHEMA` (nor on the metastore beyond the
+default `USE MARKETPLACE ASSETS`), and isn't in the
 workspace's `admins` group. Anything it can't read is *unknown*, and so is an external
 table, whose files its storage location could let the login write. Known limits, with
 how they will be fixed, are in
@@ -1445,6 +1543,25 @@ them: it shows what the last `ods health check` recorded, with when.
 The columns `pass` names are kept in each finding's evidence (`row.<column>`), so they
 are written to the health record and shown on the dashboard: don't select a column you
 wouldn't want kept there.
+
+#### Plugin checks
+
+A custom `ods` can add health checks of its own ([plugins](plugins.md#a-custom-ods-in-process-plugins),
+ADR-0031). `ods version` lists them. They run with the other checks, at their own
+default severity, on every node. `[health.plugins.<id>]` tunes one, as
+`[health.builtin.<id>]` tunes a built-in:
+
+```toml
+[health.plugins."custom.owner_tagged"]
+severity = "error"                      # error | warn | info | off
+select = { path = ["models/marts/**"] }
+exclude = { tags = ["experimental"] }
+```
+
+A node the check doesn't select is *skipped* for it. A `[health.plugins.<id>]` that names
+no check this `ods` has is a configuration error (exit 4), naming the checks it does
+have: a misspelt id never silently drops a gate. Like probes, plugin checks run in
+`ods health check`, and the dashboard shows what the last run recorded.
 
 #### Coverage targets
 
@@ -1919,7 +2036,7 @@ what to try
   3. Then retry what failed:
     $ ods state retry --failed
 
-dbt said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
+dbt-duckdb said: Binder Error: Values list [value removed] does not have a column named [value removed]  Literal values and SQL removed.
 full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
 ```
 
@@ -1962,7 +2079,9 @@ full text: dbt's log file (logs/dbt.log in the project, unless --log-path)
   checks are context, since ODS never reads `profiles.yml`. `ods state history --run`
   doesn't run them: the configuration may have changed since the run.
 - **Impact:** the nodes it blocked, and whether their last good builds are kept.
-- **dbt said:** dbt's message, only as the redacted summary kept in the journal.
+- **dbt said:** dbt's message, only as the redacted summary kept in the journal. When
+  a warehouse plugin's catalogue recognised it, it names the adapter instead
+  (`dbt-duckdb said:`), whose message it is.
   Nothing else in an explanation comes from dbt's text: the names in it come from
   ODS's own evidence.
 
@@ -2481,6 +2600,7 @@ The JSON form works for Cursor (`.cursor/mcp.json`), VS Code (`.vscode/mcp.json`
 | Tool | Answers |
 |---|---|
 | `ods_project_summary` | dbt version, counts, lineage coverage, whether dbt State is used |
+| `ods_list_plugins` | the plugins this `ods` runs with and what each offers, as [`ods plugin list`](#ods-plugin) gives them |
 | `ods_search` | models and columns by name |
 | `ods_get_node` | where each column of a model comes from |
 | `ods_lineage` | the column-level graph around models or columns (JSON or Mermaid) |

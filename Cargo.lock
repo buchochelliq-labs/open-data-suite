@@ -1274,6 +1274,7 @@ dependencies = [
  "ods-mcp",
  "ods-provider-databricks",
  "ods-provider-dbt",
+ "ods-provider-duckdb",
  "ods-provider-fake",
  "ods-provider-sqlparser",
  "ods-sdk",
@@ -1413,6 +1414,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "ods-provider-duckdb"
+version = "0.0.2"
+dependencies = [
+ "ods-core",
+ "ods-sdk",
+ "serde_json",
 ]
 
 [[package]]

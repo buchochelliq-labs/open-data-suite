@@ -66,7 +66,7 @@ impl Module for Mcp {
         let project = Arc::new(
             Project::new(
                 artifacts_dir(matches, ctx.config)?,
-                LoadOptions::from_args(matches),
+                LoadOptions::from_args(matches).with_warehouses(ctx.config),
                 match matches.get_one::<String>("artifacts").map(String::as_str) {
                     Some("json") => ArtifactPreference::Json,
                     Some("info-schema") => ArtifactPreference::InfoSchema,
@@ -77,7 +77,8 @@ impl Module for Mcp {
                     .cloned()
                     .unwrap_or_else(|| "auto".into()),
             )
-            .with_state_db(matches.get_one::<String>("state-db").map(PathBuf::from)),
+            .with_state_db(matches.get_one::<String>("state-db").map(PathBuf::from))
+            .with_config(&ctx.config.config),
         );
         // A missing target directory is not fatal: the agent may run `dbt compile`
         // after starting the server. Say so on stderr, which MCP clients log.

@@ -16,7 +16,6 @@ use ods_health::{
     CheckRun, CheckSource, CoverageFinding, Finding, Health, HealthBadge, HealthReport, Severity,
 };
 use ods_health::{ElevatedLogin, HEALTHS, LastFailures, ProbeConnection, Status};
-use ods_provider_databricks::UnityCatalog;
 use ods_provider_dbt::executor::DbtExecutor;
 use ods_sdk::contracts::state_store::StateStore;
 use ods_store_sqlite::SqliteStateStore;
@@ -154,13 +153,19 @@ fn probe_pins(settings: &StateSettings) -> BTreeMap<String, String> {
     .collect()
 }
 
-/// The probe connection for the dbt adapter `adapter_type`: on Databricks, Unity
-/// Catalog reports what the login may do, through the same dbt connection; elsewhere
-/// nothing can, so every probe needs `--allow-elevated-login` (ADR-0030 §4c).
-fn connection_for(adapter_type: Option<&str>, executor: DbtExecutor) -> ProbeConnection {
-    match adapter_type {
-        Some("databricks") => ProbeConnection::new(Arc::new(UnityCatalog::new(executor))),
-        _ => ProbeConnection::without_privileges(Arc::new(executor)),
+/// The probe connection for the dbt adapter `adapter_type`: the warehouse plugin's
+/// login check (on Databricks, Unity Catalog), through the same dbt connection; without
+/// one, nothing reports what the login may do, so every probe needs
+/// `--allow-elevated-login` (ADR-0030 §4c, ADR-0031 §3).
+fn connection_for(
+    plugins: &crate::plugins::Plugins,
+    adapter_type: Option<&str>,
+    executor: DbtExecutor,
+) -> ProbeConnection {
+    let probe: Arc<dyn ods_sdk::contracts::probe::RelationProbe> = Arc::new(executor);
+    match plugins.privileges(adapter_type, probe.clone()) {
+        Some(checked) => ProbeConnection::new(checked),
+        None => ProbeConnection::without_privileges(probe),
     }
 }
 
@@ -209,9 +214,13 @@ fn probe_connection(
         .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
         .collect();
     Ok(Some(
-        connection_for(manifest.adapter_type.as_deref(), executor)
-            .labelled(label)
-            .expecting(relations),
+        connection_for(
+            crate::plugins::installed(),
+            manifest.adapter_type.as_deref(),
+            executor,
+        )
+        .labelled(label)
+        .expecting(relations),
     ))
 }
 
@@ -297,7 +306,11 @@ impl CheckReport {
         // trusted (ADR-0030 §4d).
         health.pin_probe_connection(&probe_pins(&settings));
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
-        super::serve_dashboard::check_probe_sql(&mut health, ws.manifest.adapter_type.as_deref())?;
+        super::serve_dashboard::check_probe_sql(
+            &mut health,
+            ws.manifest.adapter_type.as_deref(),
+            &config.config.warehouses,
+        )?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
         let allow_elevated_login = args.get_flag("allow-elevated-login");
         if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
@@ -677,6 +690,7 @@ fn unmatched_warning(ids: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use ods_core::Capability;
+    use ods_provider_databricks::UnityCatalog;
     use ods_sdk::Provider as _;
 
     use super::*;
@@ -684,9 +698,13 @@ mod tests {
     #[test]
     fn only_databricks_probes_report_what_their_login_may_do() {
         let executor = || DbtExecutor::new("dbt", "target");
-        let uc = format!("{:?}", connection_for(Some("databricks"), executor()));
+        let plugins = crate::plugins::Plugins::builtin();
+        let uc = format!(
+            "{:?}",
+            connection_for(&plugins, Some("databricks"), executor())
+        );
         assert!(uc.contains("privileges: Some"), "{uc}");
-        let other = format!("{:?}", connection_for(Some("duckdb"), executor()));
+        let other = format!("{:?}", connection_for(&plugins, Some("duckdb"), executor()));
         assert!(other.contains("privileges: None"), "{other}");
         assert!(
             UnityCatalog::new(executor())

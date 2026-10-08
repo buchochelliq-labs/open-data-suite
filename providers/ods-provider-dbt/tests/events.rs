@@ -348,7 +348,7 @@ fn a_log_without_node_events_is_not_live() {
 /// in what dbt printed.
 #[test]
 fn real_failures_are_summarised_and_recognised() {
-    use ods_core::failure::Symptom;
+    use ods_core::failure::{ErrorCategory, Symptom};
     use ods_provider_dbt::error_catalogue::DbtErrorCatalogue;
     use ods_provider_dbt::events::project_failure;
     use ods_sdk::contracts::error_catalogue::{Classification, ErrorCatalogue};
@@ -385,10 +385,14 @@ fn real_failures_are_summarised_and_recognised() {
         let line = if version == "1.10" { 25 } else { 24 };
         assert_eq!(error.line(), Some(line), "{version}");
         assert!(!error.message().contains("first_name"), "{error:?}");
-        assert!(matches!(
+        // `DuckDB`'s own message is its plugin's to recognise (ADR-0031 §3a); dbt's
+        // catalogue gives the category its kind implies.
+        assert_eq!(
             DbtErrorCatalogue.classify(error),
-            Classification::Recognised(m) if m.symptom == Symptom::MissingColumn
-        ));
+            Classification::NotRecognised {
+                category: ErrorCategory::Database
+            }
+        );
 
         // `dbt compile` stopped at the undefined macro: what people were shown holds it.
         let log = std::fs::read_to_string(fixture(&format!(

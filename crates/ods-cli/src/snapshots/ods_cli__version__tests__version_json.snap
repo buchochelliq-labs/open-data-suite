@@ -18,7 +18,51 @@ expression: "render(Mode::Json)"
     "output_schema_version": {
       "major": 0,
       "minor": 1
-    }
+    },
+    "plugins": [
+      {
+        "contract": "change_provider",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "relation_privileges",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "relation_linker",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "observed_lineage_source",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "error_catalogue",
+        "contract_version": "0.5",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
+        "contract": "error_catalogue",
+        "contract_version": "0.5",
+        "name": "duckdb",
+        "from": "ods-provider-duckdb [ods-version]",
+        "builtin": true
+      }
+    ]
   },
   "diagnostics": []
 }

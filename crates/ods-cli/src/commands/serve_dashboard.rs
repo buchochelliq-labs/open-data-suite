@@ -59,37 +59,117 @@ pub(super) fn state_args(command: Command) -> Command {
         ))
 }
 
-/// The health checks `[health]` sets up (ADR-0030).
+/// The health checks `[health]` sets up (ADR-0030), with this `ods`'s plugin checks
+/// (ADR-0031 §4).
 ///
 /// # Errors
-/// A check id that isn't a built-in's, or a path glob that isn't valid (exit 4).
+/// A check id that isn't a built-in's, a plugin check whose id another check has, a
+/// `[health.plugins.<id>]` naming no plugin check, or a path glob that isn't valid
+/// (exit 4).
 pub(super) fn health_settings(
     config: &ods_config::Loaded,
 ) -> Result<ods_health::HealthSettings, CliError> {
+    health_settings_with(config, crate::plugins::installed())
+}
+
+/// [`health_settings`] with the plugin checks of `plugins`.
+pub(super) fn health_settings_with(
+    config: &ods_config::Loaded,
+    plugins: &crate::plugins::Plugins,
+) -> Result<ods_health::HealthSettings, CliError> {
     let mut health = ods_health::HealthSettings::from_config(&config.config.health)
         .map_err(|e| config_error(&e))?;
-    // Before any project is read, probes are checked in the generic dialect, so a probe
-    // that can write is an error however ODS is started.
-    check_probe_sql(&mut health, None)?;
+    for check in plugins.health_checks() {
+        health = health
+            .with_check(check.clone())
+            .map_err(|e| config_error(&e))?;
+    }
+    health.check_plugin_config().map_err(|e| config_error(&e))?;
+    // Before any project is read, so a probe that can write is an error however ODS is
+    // started.
+    check_probe_sql_before_project(&mut health, &config.config.warehouses)?;
     Ok(health)
 }
 
-/// Checks every probe's SQL is one read-only query in the dialect of `adapter` (the
-/// project's warehouse type, if known), with the SQL analyzer lineage uses (ADR-0030
-/// §4a).
+/// Checks every probe's SQL before the project's warehouse is known: a query given for
+/// a warehouse in that warehouse's dialect, and any other (a probe's one query, or its
+/// `default`) as one read-only query in some dialect the parser knows, since a
+/// statement that can write is refused in every dialect. Valid SQL in the project's own
+/// dialect is never refused for want of it; [`check_probe_sql`] checks it in that
+/// dialect once the project is read, before a probe can run (ADR-0030 §4a).
+///
+/// # Errors
+/// A probe that isn't one read-only query in any dialect (exit 4).
+fn check_probe_sql_before_project(
+    health: &mut ods_health::HealthSettings,
+    warehouses: &crate::plugins::Warehouses,
+) -> Result<(), CliError> {
+    use ods_provider_sqlparser::{SqlDialect, read_only_query};
+    let plugins = crate::plugins::installed();
+    health
+        .check_probe_sql(&|kind, sql| match kind {
+            Some(kind) => read_only_query(warehouse_dialect(plugins, Some(kind), warehouses), sql),
+            None => read_only_query(SqlDialect::Generic, sql).or_else(|generic| {
+                SqlDialect::ALL
+                    .iter()
+                    .any(|d| read_only_query(*d, sql).is_ok())
+                    .then_some(())
+                    .ok_or(generic)
+            }),
+        })
+        .map_err(|e| config_error(&e))
+}
+
+/// A warehouse's dialect: its plugin's (or a parent's), else the kind's; else generic
+/// SQL, which can only refuse more (ADR-0031 §3a, §3b).
+fn warehouse_dialect(
+    plugins: &crate::plugins::Plugins,
+    kind: Option<&str>,
+    warehouses: &crate::plugins::Warehouses,
+) -> ods_provider_sqlparser::SqlDialect {
+    plugins
+        .dialect(kind, warehouses)
+        .as_deref()
+        .and_then(ods_provider_sqlparser::SqlDialect::from_name)
+        .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic)
+}
+
+/// Picks each probe's query for a project on `adapter` (ADR-0031 §3b).
+pub(super) fn choose_probe_sql(
+    health: &mut ods_health::HealthSettings,
+    adapter: Option<&str>,
+    warehouses: &crate::plugins::Warehouses,
+) {
+    let plugins = crate::plugins::installed();
+    health.choose_probe_sql(&adapter.map_or_else(Vec::new, |w| plugins.chain(w, warehouses)));
+}
+
+/// Checks every probe's SQL is one read-only query, with the SQL analyzer lineage uses
+/// (ADR-0030 §4a): a query given for a warehouse in that warehouse's dialect, else in
+/// that of `adapter` (the project's warehouse type, if known). Then picks each probe's
+/// query for `adapter` (ADR-0031 §3b).
 ///
 /// # Errors
 /// A probe that isn't one read-only query (exit 4).
 pub(super) fn check_probe_sql(
     health: &mut ods_health::HealthSettings,
     adapter: Option<&str>,
+    warehouses: &crate::plugins::Warehouses,
 ) -> Result<(), CliError> {
-    let dialect = adapter
-        .and_then(ods_provider_sqlparser::SqlDialect::from_name)
-        .unwrap_or(ods_provider_sqlparser::SqlDialect::Generic);
+    let plugins = crate::plugins::installed();
+    // A query given for one warehouse is read as that warehouse's; one for every
+    // warehouse, as the project's.
     health
-        .check_probe_sql(&|sql| ods_provider_sqlparser::read_only_query(dialect, sql))
-        .map_err(|e| config_error(&e))
+        .check_probe_sql(&|kind, sql| {
+            ods_provider_sqlparser::read_only_query(
+                warehouse_dialect(plugins, kind.or(adapter), warehouses),
+                sql,
+            )
+        })
+        .map_err(|e| config_error(&e))?;
+    // The query for this project's warehouse, by the same order as its error patterns.
+    choose_probe_sql(health, adapter, warehouses);
+    Ok(())
 }
 
 fn config_error(e: &ods_health::HealthConfigError) -> CliError {
@@ -111,6 +191,14 @@ pub(super) struct DashboardSource {
     /// The health checks as `[health]` configures them (#392); a mistake there is a
     /// configuration error when the server starts, not a badge.
     health: ods_health::HealthSettings,
+    /// `[warehouses.<kind>]`, for the probe queries a warehouse inherits (ADR-0031 §3b).
+    warehouses: crate::plugins::Warehouses,
+    /// This `ods` and its plugins, for the About page (ADR-0031 §3c). Neither changes
+    /// while the server runs, so they are detected once.
+    about: ods_web::about::AboutInput,
+    /// The configuration as loaded, for the Settings page (#351): its checks read the
+    /// project and the store again on each reload.
+    config: ods_config::Loaded,
 }
 
 impl DashboardSource {
@@ -121,7 +209,15 @@ impl DashboardSource {
             links: LinkSettings::read(config),
             cost: config.config.state.cost.clone(),
             health: health_settings(config)?,
+            warehouses: config.config.warehouses.clone(),
+            about: super::plugin::about(crate::plugins::installed(), Some(&config.config)),
+            config: config.clone(),
         })
+    }
+
+    /// The Settings page's facts (#351), read again with each dashboard.
+    fn settings_input(&self) -> ods_web::settings::SettingsInput {
+        super::serve_settings::settings_input(&self.config, &self.settings)
     }
 
     /// Files whose change means new state or a new plan: the database and its
@@ -177,6 +273,14 @@ impl DashboardSource {
         Snapshot::new(document, loaded.graph.clone(), source).with_dashboard(dashboard)
     }
 
+    /// The health checks as they apply to a project on `adapter`: each probe with the
+    /// query `ods health check` runs there (ADR-0031 §3b).
+    fn health_for(&self, adapter: Option<&str>) -> ods_health::HealthSettings {
+        let mut health = self.health.clone();
+        choose_probe_sql(&mut health, adapter, &self.warehouses);
+        health
+    }
+
     /// Never fails: what can't be read is shown as such.
     fn dashboard(
         &self,
@@ -186,7 +290,12 @@ impl DashboardSource {
     ) -> Dashboard {
         let environment = self.settings.environment.value.clone();
         let ws = match Workspace::load(&self.args, &self.settings, Sources::AsGiven) {
-            Ok(ws) => ws,
+            // The server never connects: the versions the last command that read them
+            // saw (ADR-0022 §7).
+            Ok(mut ws) => {
+                ws.add_saved_reading();
+                ws
+            }
             // The project's files (artifacts, source freshness results) couldn't be
             // read: the store wasn't even opened, so it isn't blamed.
             Err(e) => {
@@ -199,7 +308,9 @@ impl DashboardSource {
                         error: e.message,
                         hint,
                     })
-                    .with_modules(modules(false));
+                    .with_modules(modules(false))
+                    .with_about(self.about.clone())
+                    .with_settings(self.settings_input());
             }
         };
         let ws = Arc::new(ws);
@@ -256,7 +367,9 @@ impl DashboardSource {
             .with_modules(modules(recorded))
             .with_catalog(catalog)
             .with_freshness(freshness)
-            .with_health(self.health.clone())
+            .with_about(self.about.clone())
+            .with_settings(self.settings_input())
+            .with_health(self.health_for(ws.manifest.adapter_type.as_deref()))
             .with_health_record(health_record.as_ref())
             // The live run view (#322): journals are read even before the store
             // exists, since a first run writes its journal before its first snapshot.
@@ -398,6 +511,7 @@ fn explainer(
         target_dir: &ws.target_dir,
         manifest: Some(&ws.manifest),
         last_manifest: None,
+        warehouses: &settings.warehouses,
     };
     let missing = graph
         .nodes()
@@ -411,7 +525,8 @@ fn explainer(
         .map(|n| (n.id.clone(), n.parents.clone()))
         .collect();
     let mut explainer = Explainer::new(Arc::new(
-        ods_provider_dbt::error_catalogue::DbtErrorCatalogue::new(),
+        crate::plugins::installed()
+            .project_catalogue(ws.manifest.adapter_type.as_deref(), &settings.warehouses),
     ))
     .with_missing_columns(missing)
     .with_parents(parents)
@@ -511,4 +626,65 @@ fn modules(recorded: bool) -> Vec<ModuleStatus> {
         ModuleStatus::new("ERD", ModuleState::Available, Some("ods erd".to_owned())),
         ModuleStatus::new("Usage", ModuleState::Planned, None),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn health(sql: &str) -> ods_health::HealthSettings {
+        let config: ods_config::HealthConfig = toml::from_str(&format!(
+            "[[checks]]\nid = \"orders.has_rows\"\nkind = \"probe\"\nselect = {{ name = [\"orders\"] }}\n{sql}\npass = \"n > 0\"\n"
+        ))
+        .unwrap();
+        ods_health::HealthSettings::from_config(&config).unwrap()
+    }
+
+    #[test]
+    fn before_the_project_is_read_a_query_valid_in_some_dialect_isnt_refused() {
+        let none = crate::plugins::Warehouses::new();
+        // Databricks time travel: not generic SQL, but valid on the project's warehouse.
+        let mut time_travel =
+            health(r#"sql = "select count(*) as n from {relation} version as of 3""#);
+        assert!(check_probe_sql_before_project(&mut time_travel, &none).is_ok());
+        // Once the project is read, it is checked in its own dialect.
+        assert!(check_probe_sql(&mut time_travel, Some("databricks"), &none).is_ok());
+        let error = check_probe_sql(&mut time_travel, Some("duckdb"), &none).unwrap_err();
+        assert!(error.message.contains("duckdb"), "{}", error.message);
+        // A write is refused in every dialect, so before any project is read too.
+        let mut write = health(r#"sql = "delete from {relation} where n > 0""#);
+        let error = check_probe_sql_before_project(&mut write, &none).unwrap_err();
+        assert!(error.message.contains("DELETE"), "{}", error.message);
+        // A query for a named warehouse is read in that warehouse's dialect already.
+        let mut named = health(
+            r#"sql = { duckdb = "select count(*) as n from {relation} version as of 3", default = "select count(*) as n from {relation}" }"#,
+        );
+        let error = check_probe_sql_before_project(&mut named, &none).unwrap_err();
+        assert!(
+            error.message.contains("health.checks[0].sql.duckdb"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn the_dashboard_shows_the_query_for_the_projects_warehouse() {
+        let none = crate::plugins::Warehouses::new();
+        let mut health = health(
+            r#"sql = { databricks = "select count_if(id is not null) as n from {relation}", default = "select count(*) as n from {relation}" }"#,
+        );
+        check_probe_sql_before_project(&mut health, &none).unwrap();
+        // As `ods serve` loads it, before the manifest names the warehouse.
+        assert!(
+            health.how(true).contains("count(*)"),
+            "{}",
+            health.how(true)
+        );
+        choose_probe_sql(&mut health, Some("databricks"), &none);
+        assert!(
+            health.how(true).contains("count_if"),
+            "{}",
+            health.how(true)
+        );
+    }
 }

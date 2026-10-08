@@ -391,6 +391,18 @@ pub trait RelationProbe: Provider {
     ) -> Result<ProbeReport, ProviderError>;
 }
 
+/// A shared probe is the probe it shares (see [`Provider`]'s impl for `Arc`).
+#[async_trait]
+impl<T: RelationProbe + ?Sized> RelationProbe for std::sync::Arc<T> {
+    async fn probe(
+        &self,
+        request: &ProbeRequest,
+        targets: &[ProbeTarget],
+    ) -> Result<ProbeReport, ProviderError> {
+        (**self).probe(request, targets).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -19,7 +19,6 @@ PLANNED
 Agent
 PLANNED
 Settings
-PLANNED
 Local · read-only
 jaffle_ods
 /

@@ -1,14 +1,14 @@
 //! Sources' data versions from the warehouse (#17, ADR-0022).
 //!
-//! The CLI only wires: it maps the dbt adapter to a change provider, built over the dbt
-//! executor's relation probe, asks it about every source of the project, and hands the
-//! answers to the planner, which picks each source's version (`ods_state::
-//! choose_source_versions`). Only this module names a warehouse.
+//! The CLI only wires: the warehouse plugin for the dbt adapter (ADR-0031 §3) gives a
+//! change provider, built over the dbt executor's relation probe; this asks it about
+//! every source of the project, and hands the answers to the planner, which picks each
+//! source's version (`ods_state::choose_source_versions`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use ods_core::state::Timestamp;
-use ods_provider_databricks::DeltaVersions;
 use ods_provider_dbt::executor::DbtExecutor;
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource, SourceVersion};
 use ods_state::{VersionAnswer, VersionReading};
@@ -16,18 +16,19 @@ use ods_state::{VersionAnswer, VersionReading};
 use super::state_plan::{Workspace, block_on};
 use crate::exit::CliError;
 
-/// Whether the dbt adapter `adapter_type` has a change provider.
+/// Whether the dbt adapter `adapter_type` has a change provider: its warehouse plugin
+/// reads table versions (on Databricks, Delta's), through dbt's own connection
+/// (ADR-0022 §1, ADR-0031 §3).
 pub(super) fn has_change_provider(adapter_type: Option<&str>) -> bool {
-    // Delta table versions, read through dbt's own connection (ADR-0022 §1).
-    adapter_type == Some("databricks")
+    crate::plugins::installed().has_changes(adapter_type)
 }
 
 /// The change provider for the dbt adapter `adapter_type`, if it has one.
 pub(super) fn change_provider(
     adapter_type: Option<&str>,
     executor: &DbtExecutor,
-) -> Option<DeltaVersions<DbtExecutor>> {
-    has_change_provider(adapter_type).then(|| DeltaVersions::new(executor.clone()))
+) -> Option<Arc<dyn ChangeProvider>> {
+    crate::plugins::installed().changes(adapter_type, Arc::new(executor.clone()))
 }
 
 /// Whether the commands that run dbt read table versions for this project, so
@@ -60,7 +61,7 @@ pub(super) fn read_table_versions(
         .iter()
         .map(|s| RequestedSource::new(s.id.clone(), s.name.clone()))
         .collect();
-    let reading = versions(&provider, &sources, warnings)?;
+    let reading = versions(provider.as_ref(), &sources, warnings)?;
     ws.add_reading(reading.clone());
     Ok(Some(reading))
 }

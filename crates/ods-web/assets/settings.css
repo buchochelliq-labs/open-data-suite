@@ -1,0 +1,47 @@
+/* ---- Settings (#351). From the Settings board. */
+.settings { padding: 24px; display: flex; flex-direction: column; gap: 16px; max-width: 1200px; }
+.settings-head { display: flex; flex-direction: column; gap: 6px; }
+.settings-head p { margin: 0; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.settings .card-head .where { font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: right; }
+.settings .card-head h2 { display: flex; align-items: center; gap: 8px; }
+.settings .card-head h2 .chip { margin-left: 0; }
+.settings dl { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px 16px; margin: 0; font-size: 14px; }
+.settings dt { color: var(--muted); }
+.settings dd { margin: 0; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.settings .key { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.settings .note { font-size: 12px; color: var(--muted); margin: 0; }
+.settings .notice { font-size: 13px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--planned-bg); margin: 0; }
+.settings .notice.bad { border-color: var(--bad); }
+.secret { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--planned-bg); font-size: 13px; overflow-wrap: anywhere; }
+.provider { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 4px 16px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.provider:first-of-type { border-top: none; padding-top: 0; }
+.provider > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.provider .name { font-weight: 600; overflow-wrap: anywhere; }
+.provider .caps { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.cap { font-family: var(--mono); font-size: 12px; padding: 1px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--active-bg); color: var(--accent-strong); }
+.settings-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.settings-table th { text-align: left; font-size: 12px; font-weight: 400; color: var(--heading-muted); padding: 0 8px 8px; }
+.settings-table td { border-top: 1px solid var(--line); padding: 8px; vertical-align: top; overflow-wrap: anywhere; }
+.settings-table th:first-child, .settings-table td:first-child { width: 38%; padding-left: 0; }
+.settings-table th:last-child, .settings-table td:last-child { width: 26%; color: var(--heading-muted); }
+.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.checks li { display: grid; grid-template-columns: 80px 240px minmax(0, 1fr); gap: 2px 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; align-items: baseline; }
+.checks li:first-child { border-top: none; }
+.checks .msg, .checks .hint { grid-column: 3; overflow-wrap: anywhere; }
+.checks .hint { color: var(--muted); font-size: 12px; }
+.status { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.status.ok { color: var(--ok); }
+.status.warning { color: var(--warn); }
+.status.error { color: var(--bad); }
+.status.unknown, .status.skipped { color: var(--muted); }
+.planned-card { border-style: dashed; border-color: var(--dashed); background: transparent; }
+.planned-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.planned-item { border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--surface); }
+.planned-item h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.planned-item p { margin: 0; font-size: 13px; }
+@media (max-width: 900px) {
+  .settings-grid, .planned-grid { grid-template-columns: minmax(0, 1fr); }
+  .checks li { grid-template-columns: 80px minmax(0, 1fr); }
+  .checks .msg, .checks .hint { grid-column: 2; }
+}
