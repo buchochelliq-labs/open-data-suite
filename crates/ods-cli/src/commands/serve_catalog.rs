@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use ods_provider_dbt::fingerprint::checks_digest;
-use ods_provider_dbt::{Catalog, Manifest, ManifestNode, ResourceType};
+use ods_provider_dbt::{ArtifactSource, Catalog, Manifest, ManifestNode, ResourceType};
 use ods_sdk::contracts::state_store::{SnapshotSummary, StoredSnapshot};
 use ods_web::catalog::{
     CatalogColumn, CatalogInput, CatalogNode, CatalogTest, ColumnSource, LastBuild, TestKind,
@@ -87,6 +87,13 @@ pub(super) fn freshness(ws: &Workspace) -> FreshnessInput {
 /// manifest declares, from its public fields only (AGENTS rule 8). Definitions, never
 /// values: nothing here queries.
 pub(super) fn semantic(manifest: &Manifest) -> SemanticInput {
+    // The Information Schema has no semantic layer: it can't say there is none.
+    if manifest.source == ArtifactSource::InfoSchema {
+        return SemanticInput::unavailable(
+            "dbt Information Schema (Parquet)",
+            "The Information Schema doesn't record semantic models or metrics, so it can't say whether the project declares any. With manifest.json in the target directory they are listed here.",
+        );
+    }
     let fields = |fs: &[ods_provider_dbt::SemanticField]| -> Vec<SemanticField> {
         fs.iter()
             .map(|f| {
@@ -130,7 +137,16 @@ pub(super) fn semantic(manifest: &Manifest) -> SemanticInput {
             metric
         })
         .collect();
-    SemanticInput::new("dbt manifest (manifest.json)", models, metrics)
+    SemanticInput::new("dbt manifest (manifest.json)", models, metrics).with_unreadable(
+        manifest
+            .semantic_unreadable
+            .iter()
+            .map(|(id, why)| {
+                tracing::warn!(id, why, "dashboard: a semantic-layer entry can't be read");
+                id.clone()
+            })
+            .collect(),
+    )
 }
 
 /// How layers are worked out, for people: derived, so it says so.
@@ -513,6 +529,35 @@ mod tests {
         let none = semantic(&manifest(|_| {}));
         assert!(none.models.is_empty() && none.metrics.is_empty());
         assert!(none.source.is_some(), "read, and empty: not unreadable");
+        assert_eq!(none.unavailable, None);
+        // An entry that can't be read is named, never dropped silently.
+        let broken = semantic(&manifest(|json| {
+            json["metrics"] = serde_json::json!({
+                "metric.jaffle_ods.broken": {"unique_id": "metric.jaffle_ods.broken", "name": 42}
+            });
+        }));
+        assert_eq!(broken.unreadable, ["metric.jaffle_ods.broken"]);
+    }
+
+    #[test]
+    fn the_information_schema_cant_say_whether_there_is_a_semantic_layer() {
+        let v2 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-2.0");
+        let parquet = ods_provider_dbt::Artifacts::load_with(
+            &v2,
+            ods_provider_dbt::ArtifactPreference::InfoSchema,
+        )
+        .unwrap()
+        .manifest;
+        let input = semantic(&parquet);
+        assert!(input.models.is_empty() && input.metrics.is_empty());
+        assert!(
+            input
+                .unavailable
+                .as_deref()
+                .is_some_and(|why| why.contains("doesn't record semantic models")),
+            "{input:?}"
+        );
     }
 
     #[test]

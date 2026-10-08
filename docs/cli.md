@@ -1102,7 +1102,10 @@ model it is defined on, and its measures, dimensions and entities. Each metric s
 - the dimensions it can be sliced by;
 - the models it depends on, through the metrics it reads.
 
-A project that declares none gets an empty state. It is a placeholder: ODS never queries,
+A project that declares none gets an empty state. The Information Schema (Parquet)
+records no semantic layer, so read from it the page says the definitions aren't available
+rather than that there are none. A definition whose entry can't be read is named on the
+page and left out, never fatal to the project. It is a placeholder: ODS never queries,
 validates or serves a metric, and lineage doesn't go through metrics yet.
 `/api/catalog/semantic` returns the same view model.
 

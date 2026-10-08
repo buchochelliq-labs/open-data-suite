@@ -115,7 +115,9 @@ As built:
 - **Metrics:** a table of each metric's type, what it is computed from (its measure, a
   ratio's two metrics, a derived metric's expression), the dimensions of the semantic
   models it reaches through the metrics it reads, and the models those are defined on.
-- **No semantic layer:** a project that declares none gets an empty state.
+- **No semantic layer:** a project that declares none gets an empty state. Artifacts
+  that can't record one (the Information Schema) say the definitions aren't available
+  there; an entry that can't be read is named, and the rest are still listed.
 - **Source:** the definitions come from `manifest.json`'s public `semantic_models` and
   `metrics`. They reach the page as neutral facts the binary hands over, as the Catalog's
   nodes do. A separate SDK contract for semantic sources waits for a second build tool.

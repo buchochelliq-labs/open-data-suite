@@ -192,3 +192,36 @@ fn the_api_serves_the_view() {
     );
     assert_eq!(json["metrics"][1]["id"], "metric.shop.per_customer");
 }
+
+#[test]
+fn artifacts_without_a_semantic_layer_say_so_and_unreadable_entries_are_named() {
+    // A format that can't record one: not "declares none".
+    let unavailable = SemanticInput::unavailable(
+        "a format without one",
+        "These artifacts don't record semantic models or metrics.",
+    );
+    let addr = start(dashboard(unavailable));
+    let (_, page) = get(addr, "/catalog/semantic");
+    assert!(
+        page.contains("Not available from these artifacts"),
+        "{page}"
+    );
+    assert!(page.contains("These artifacts don't record semantic models or metrics."));
+    assert!(!page.contains("This project declares no semantic models"));
+    assert!(page.contains(r#"<span class="sem-pill none">a format without one</span>"#));
+
+    // An entry that couldn't be read is named beside the rest.
+    let addr = start(dashboard(
+        input().with_unreadable(vec![format!("metric.shop.{HOSTILE}")]),
+    ));
+    let (_, page) = get(addr, "/catalog/semantic");
+    assert!(!page.contains(HOSTILE));
+    assert!(
+        page.contains("1 definition couldn't be read, so the lists below leave it out:"),
+        "{page}"
+    );
+    assert!(page.contains(r#"<tr data-metric="metric.shop.revenue">"#));
+    let (_, body) = get(addr, "/api/catalog/semantic");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["unreadable"][0], format!("metric.shop.{HOSTILE}"));
+}

@@ -23,6 +23,7 @@ pub(crate) fn semantic_page(shell: &ShellView, view: &SemanticView, generation: 
     b.push_str(r#"<div class="sem"><div class="sem-head"><h1>Semantic layer <span class="chip">Planned</span></h1><p class="muted">Semantic models and metrics, as the project declares them.</p></div>"#);
     source_row(&mut b, view);
     b.push_str(r#"<p class="sem-notice" role="note"><strong>Read-only placeholder.</strong> ODS lists what the project declares and the models each is defined on. It doesn't query, validate or serve metrics, and lineage doesn't go through metrics yet.</p>"#);
+    unreadable(&mut b, &view.unreadable);
     if view.models.is_empty() && view.metrics.is_empty() {
         empty(&mut b, view);
     } else {
@@ -57,7 +58,11 @@ fn source_row(b: &mut String, view: &SemanticView) {
     let _ = write!(
         b,
         r#"<div class="sem-source"><span class="sem-label">Source</span><span class="sem-pill{class}">{source}</span><span class="sem-pill planned" aria-disabled="true">other build tools (planned)</span></div>"#,
-        class = if view.source.is_some() { "" } else { " none" },
+        class = if view.source.is_some() && view.unavailable.is_none() {
+            ""
+        } else {
+            " none"
+        },
         source = text(
             view.source
                 .as_deref()
@@ -67,15 +72,45 @@ fn source_row(b: &mut String, view: &SemanticView) {
 }
 
 fn empty(b: &mut String, view: &SemanticView) {
-    let why = if view.source.is_some() {
-        "This project declares no semantic models or metrics. When it does, they are listed here with the models each is defined on."
-    } else {
-        "Nothing could be read, so nothing is listed: the server log says why."
+    // Only artifacts that can declare a semantic layer, read whole, say there is none.
+    let (title, why) = match (&view.unavailable, &view.source) {
+        (Some(why), _) => ("Not available from these artifacts", why.as_str()),
+        (None, None) => (
+            "Not available",
+            "Nothing could be read, so nothing is listed: the server log says why.",
+        ),
+        (None, Some(_)) if !view.unreadable.is_empty() => (
+            "Nothing readable",
+            "Every definition the project declares is listed above as unreadable.",
+        ),
+        (None, Some(_)) => (
+            "No semantic layer",
+            "This project declares no semantic models or metrics. When it does, they are listed here with the models each is defined on.",
+        ),
     };
     let _ = write!(
         b,
-        r#"<section class="card sem-empty" aria-label="No semantic layer"><h2>No semantic layer</h2><p class="muted">{}</p></section>"#,
-        text(why)
+        r#"<section class="card sem-empty" aria-label="{t}"><h2>{t}</h2><p class="muted">{w}</p></section>"#,
+        t = text(title),
+        w = text(why)
+    );
+}
+
+/// The definitions left out because their entries couldn't be read.
+fn unreadable(b: &mut String, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let names: Vec<String> = ids
+        .iter()
+        .map(|id| format!(r#"<span class="mono">{}</span>"#, text(id)))
+        .collect();
+    let _ = write!(
+        b,
+        r#"<p class="sem-notice bad" role="alert">{} couldn't be read, so the lists below leave {} out: {}.</p>"#,
+        text(&count(ids.len(), "definition")),
+        if ids.len() == 1 { "it" } else { "them" },
+        names.join(", "),
     );
 }
 

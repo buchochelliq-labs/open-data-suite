@@ -22,6 +22,13 @@ pub struct SemanticInput {
     /// Where the definitions were read from, for people; `None` when nothing could be
     /// read.
     pub source: Option<String>,
+    /// Why the project's artifacts can't say whether it declares a semantic layer, e.g.
+    /// a format without one; `None` when they can. Nothing is listed then, and the page
+    /// says why rather than claim the project declares none (AGENTS rule 3).
+    pub unavailable: Option<String>,
+    /// Definitions whose entry couldn't be read, by id, sorted: left out of the lists,
+    /// and named on the page so the lists aren't taken as complete.
+    pub unreadable: Vec<String>,
     /// The semantic models, sorted by id.
     pub models: Vec<SemanticModelInput>,
     /// The metrics, sorted by id.
@@ -39,9 +46,28 @@ impl SemanticInput {
         metrics.sort_by(|a, b| a.id.cmp(&b.id));
         Self {
             source: Some(source.into()),
+            unavailable: None,
+            unreadable: Vec::new(),
             models,
             metrics,
         }
+    }
+
+    /// Nothing can be read from `source`, for the reason `why`.
+    pub fn unavailable(source: impl Into<String>, why: impl Into<String>) -> Self {
+        Self {
+            source: Some(source.into()),
+            unavailable: Some(why.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Notes the definitions `ids` whose entries couldn't be read.
+    #[must_use]
+    pub fn with_unreadable(mut self, mut ids: Vec<String>) -> Self {
+        ids.sort();
+        self.unreadable = ids;
+        self
     }
 }
 
@@ -155,6 +181,12 @@ pub struct SemanticView {
     pub schema_version: u32,
     /// Where the definitions were read from, for people.
     pub source: Option<String>,
+    /// Why nothing could be read from it, when nothing could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
+    /// Definitions that couldn't be read, by id: the lists are incomplete without them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<String>,
     /// The semantic models.
     pub models: Vec<SemanticModelView>,
     /// The metrics.
@@ -239,6 +271,8 @@ impl Dashboard {
         SemanticView {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             source: input.source.clone(),
+            unavailable: input.unavailable.clone(),
+            unreadable: input.unreadable.clone(),
             models: input
                 .models
                 .iter()

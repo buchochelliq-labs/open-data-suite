@@ -401,3 +401,52 @@ fn the_semantic_layer_is_read_and_a_project_without_one_has_none() {
     assert_eq!(without.semantic_models, []);
     assert_eq!(without.metrics, []);
 }
+
+#[test]
+fn a_null_list_reads_as_empty_and_an_unreadable_entry_never_breaks_the_manifest() {
+    let path = target().join("manifest.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // The schema allows `null` for these lists.
+    json["metrics"] = serde_json::json!({
+        "metric.jaffle_ods.revenue": {
+            "unique_id": "metric.jaffle_ods.revenue",
+            "name": "revenue",
+            "type": "simple",
+            "type_params": {"measure": {"name": "order_total"}, "metrics": null,
+                            "input_measures": [{"name": "order_total"}]},
+            "depends_on": {"nodes": ["semantic_model.jaffle_ods.orders"], "macros": []}
+        },
+        // Not a metric ODS can read: reported, the rest still read.
+        "metric.jaffle_ods.broken": {"unique_id": "metric.jaffle_ods.broken", "name": 42}
+    });
+    json["semantic_models"] = serde_json::json!({
+        "semantic_model.jaffle_ods.orders": {
+            "unique_id": "semantic_model.jaffle_ods.orders",
+            "name": "orders",
+            "entities": null,
+            "measures": [{"name": "order_total", "agg": "sum"}],
+            "dimensions": null,
+            "depends_on": {"nodes": ["model.jaffle_ods.orders"], "macros": []}
+        }
+    });
+    let manifest = Manifest::parse(&path, &json.to_string()).unwrap();
+    assert_eq!(manifest.metrics.len(), 1);
+    assert_eq!(manifest.metrics[0].input_metrics, Vec::<String>::new());
+    assert_eq!(manifest.metrics[0].input_measures, ["order_total"]);
+    assert_eq!(manifest.semantic_models[0].entities, []);
+    assert_eq!(manifest.semantic_models[0].measures.len(), 1);
+    let unreadable: Vec<&str> = manifest
+        .semantic_unreadable
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(unreadable, ["metric.jaffle_ods.broken"]);
+    // Nodes are read as ever.
+    assert!(
+        manifest
+            .nodes
+            .iter()
+            .any(|n| n.unique_id == "model.jaffle_ods.orders")
+    );
+}
