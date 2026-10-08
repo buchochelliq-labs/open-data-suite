@@ -221,6 +221,10 @@ pub(crate) fn read(dir: &Path, version: u32) -> Result<(Manifest, Option<Catalog
         source: ArtifactSource::InfoSchema,
         nodes,
         unit_tests: Vec::new(),
+        // The Information Schema has no semantic layer.
+        semantic_models: Vec::new(),
+        metrics: Vec::new(),
+        semantic_unreadable: Vec::new(),
     };
     Ok((manifest, catalog))
 }

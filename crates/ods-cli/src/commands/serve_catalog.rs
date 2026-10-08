@@ -11,13 +11,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use ods_provider_dbt::fingerprint::checks_digest;
-use ods_provider_dbt::{Catalog, Manifest, ManifestNode, ResourceType};
+use ods_provider_dbt::{ArtifactSource, Catalog, Manifest, ManifestNode, ResourceType};
 use ods_sdk::contracts::state_store::{SnapshotSummary, StoredSnapshot};
 use ods_web::catalog::{
     CatalogColumn, CatalogInput, CatalogNode, CatalogTest, ColumnSource, LastBuild, TestKind,
     TypeSource,
 };
 use ods_web::freshness::{FreshnessInput, SourceInput};
+use ods_web::semantic::{MetricInput, SemanticField, SemanticInput, SemanticModelInput};
 
 use super::relation_links::Links;
 use super::state_plan::{Workspace, display_name, node_name};
@@ -79,6 +80,72 @@ pub(super) fn freshness(ws: &Workspace) -> FreshnessInput {
             .as_ref()
             .and_then(|f| f.file_name())
             .map(|f| f.to_string_lossy().into_owned()),
+    )
+}
+
+/// The Semantic layer page's definitions (#352): the semantic models and metrics the
+/// manifest declares, from its public fields only (AGENTS rule 8). Definitions, never
+/// values: nothing here queries.
+pub(super) fn semantic(manifest: &Manifest) -> SemanticInput {
+    // The Information Schema has no semantic layer: it can't say there is none.
+    if manifest.source == ArtifactSource::InfoSchema {
+        return SemanticInput::unavailable(
+            "dbt Information Schema (Parquet)",
+            "The Information Schema doesn't record semantic models or metrics, so it can't say whether the project declares any. With manifest.json in the target directory they are listed here.",
+        );
+    }
+    let fields = |fs: &[ods_provider_dbt::SemanticField]| -> Vec<SemanticField> {
+        fs.iter()
+            .map(|f| {
+                let mut field = SemanticField::new(&f.name, f.kind.clone());
+                field.description.clone_from(&f.description);
+                field
+            })
+            .collect()
+    };
+    let models = manifest
+        .semantic_models
+        .iter()
+        .map(|m| {
+            let mut model = SemanticModelInput::new(&m.unique_id, &m.name);
+            model.label.clone_from(&m.label);
+            model.description.clone_from(&m.description);
+            model.defined_on.clone_from(&m.depends_on);
+            model.entities = fields(&m.entities);
+            model.measures = fields(&m.measures);
+            model.dimensions = fields(&m.dimensions);
+            model
+        })
+        .collect();
+    let metrics = manifest
+        .metrics
+        .iter()
+        .map(|m| {
+            let mut metric = MetricInput::new(&m.unique_id, &m.name);
+            metric.label.clone_from(&m.label);
+            metric.description.clone_from(&m.description);
+            metric.kind.clone_from(&m.kind);
+            // A ratio of two metrics, a derived metric's expression, else its measures.
+            metric.computed_from = if let Some((numerator, denominator)) = &m.ratio {
+                Some(format!("{numerator} / {denominator}"))
+            } else if m.expr.is_some() {
+                m.expr.clone()
+            } else {
+                (!m.input_measures.is_empty()).then(|| m.input_measures.join(", "))
+            };
+            metric.reads.clone_from(&m.depends_on);
+            metric
+        })
+        .collect();
+    SemanticInput::new("dbt manifest (manifest.json)", models, metrics).with_unreadable(
+        manifest
+            .semantic_unreadable
+            .iter()
+            .map(|(id, why)| {
+                tracing::warn!(id, why, "dashboard: a semantic-layer entry can't be read");
+                id.clone()
+            })
+            .collect(),
     )
 }
 
@@ -384,6 +451,113 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         edit(&mut json);
         Manifest::parse(&path, &json.to_string()).unwrap()
+    }
+
+    #[test]
+    fn the_semantic_layer_is_handed_over_as_declared_and_none_is_empty() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/dbt/jaffle-metrics/artifacts/dbt-1.10/manifest.json");
+        let input = semantic(&Manifest::read(&path).unwrap());
+        assert_eq!(
+            input.source.as_deref(),
+            Some("dbt manifest (manifest.json)")
+        );
+        let models: Vec<(&str, &[String])> = input
+            .models
+            .iter()
+            .map(|m| (m.name.as_str(), m.defined_on.as_slice()))
+            .collect();
+        assert_eq!(
+            models,
+            [
+                (
+                    "customers",
+                    &["model.jaffle_metrics.customers".to_owned()][..]
+                ),
+                ("orders", &["model.jaffle_metrics.orders".to_owned()][..])
+            ]
+        );
+        let computed: Vec<(&str, Option<&str>, Option<&str>)> = input
+            .metrics
+            .iter()
+            .map(|m| {
+                (
+                    m.name.as_str(),
+                    m.kind.as_deref(),
+                    m.computed_from.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            computed,
+            [
+                (
+                    "average_order_value",
+                    Some("ratio"),
+                    Some("revenue / orders_placed")
+                ),
+                (
+                    "customers_with_orders",
+                    Some("simple"),
+                    Some("customer_count")
+                ),
+                ("orders_placed", Some("simple"), Some("order_count")),
+                ("revenue", Some("simple"), Some("order_total")),
+            ]
+        );
+        // A derived metric shows its expression.
+        let derived = semantic(&manifest(|json| {
+            json["metrics"] = serde_json::json!({
+                "metric.jaffle_ods.net": {
+                    "unique_id": "metric.jaffle_ods.net",
+                    "name": "net",
+                    "type": "derived",
+                    "type_params": {
+                        "expr": "revenue - refunds",
+                        "metrics": [{"name": "revenue"}, {"name": "refunds"}],
+                        "input_measures": [{"name": "order_total"}, {"name": "refund_total"}]
+                    },
+                    "depends_on": {"nodes": ["metric.jaffle_ods.revenue"]}
+                }
+            });
+        }));
+        assert_eq!(
+            derived.metrics[0].computed_from.as_deref(),
+            Some("revenue - refunds")
+        );
+        // The demo project declares none.
+        let none = semantic(&manifest(|_| {}));
+        assert!(none.models.is_empty() && none.metrics.is_empty());
+        assert!(none.source.is_some(), "read, and empty: not unreadable");
+        assert_eq!(none.unavailable, None);
+        // An entry that can't be read is named, never dropped silently.
+        let broken = semantic(&manifest(|json| {
+            json["metrics"] = serde_json::json!({
+                "metric.jaffle_ods.broken": {"unique_id": "metric.jaffle_ods.broken", "name": 42}
+            });
+        }));
+        assert_eq!(broken.unreadable, ["metric.jaffle_ods.broken"]);
+    }
+
+    #[test]
+    fn the_information_schema_cant_say_whether_there_is_a_semantic_layer() {
+        let v2 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/dbt/jaffle-ods/artifacts/dbt-2.0");
+        let parquet = ods_provider_dbt::Artifacts::load_with(
+            &v2,
+            ods_provider_dbt::ArtifactPreference::InfoSchema,
+        )
+        .unwrap()
+        .manifest;
+        let input = semantic(&parquet);
+        assert!(input.models.is_empty() && input.metrics.is_empty());
+        assert!(
+            input
+                .unavailable
+                .as_deref()
+                .is_some_and(|why| why.contains("doesn't record semantic models")),
+            "{input:?}"
+        );
     }
 
     #[test]

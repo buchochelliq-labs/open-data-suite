@@ -34,7 +34,7 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | Catalog: freshness evidence | **Built** (#350): sources and seeds, their evidence and grade, what readers were built from, their decisions, and what is downstream |
 | Settings: About | **Built** (#415): this `ods` and its plugins, with what each offers and whether this configuration can use it |
 | Settings | **Built** (#351): the configuration, read-only, with secrets as references and `ods doctor`'s checks that only read; Server mode as placeholders |
-| Semantic layer | Designed (#309, #352) |
+| Semantic layer | **Built** (#352) as the board's read-only placeholder: the semantic models and metrics the manifest declares, and an empty state without them |
 | Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
@@ -97,7 +97,8 @@ reading it.
 
 ### Catalog: semantic layer (placeholder)
 
-Not built yet (#309).
+**Built** (#352) at `/catalog/semantic`, as the placeholder the board designs: it lists
+what the project declares and says it does nothing more yet.
 
 ![Semantic layer](images/metrics.png)
 
@@ -105,9 +106,22 @@ Not built yet (#309).
 - **Source picker:** "dbt semantic manifest" is the first source; other build tools
   are greyed as planned.
 
-The read goes through a generic semantic-source contract, so another build tool can
-plug in the way warehouses do. ODS reads definitions only; it never serves or queries
-metrics.
+ODS reads definitions only; it never serves or queries metrics.
+
+As built:
+- **Semantic models:** each with the model it is defined on (linked when the Catalog has
+  it), its description, and its measures (with their aggregation), dimensions (with
+  their type) and entities.
+- **Metrics:** a table of each metric's type, what it is computed from (its measure, a
+  ratio's two metrics, a derived metric's expression), the dimensions of the semantic
+  models it reaches through the metrics it reads, and the models those are defined on.
+- **No semantic layer:** a project that declares none gets an empty state. Artifacts
+  that can't record one (the Information Schema) say the definitions aren't available
+  there; an entry that can't be read is named, and the rest are still listed.
+- **Source:** the definitions come from `manifest.json`'s public `semantic_models` and
+  `metrics`. They reach the page as neutral facts the binary hands over, as the Catalog's
+  nodes do. A separate SDK contract for semantic sources waits for a second build tool.
+- **Not yet:** no query, no validation, and no lineage or impact through metrics.
 
 ### Lineage: State overlay
 

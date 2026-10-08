@@ -262,6 +262,100 @@ struct RawManifest {
     /// dbt 1.8+. Kept whole: their fixtures are their definition.
     #[serde(default)]
     unit_tests: BTreeMap<String, serde_json::Value>,
+    /// dbt 1.6+: the semantic layer's models and metrics. Kept whole and read one by
+    /// one, so an entry ODS can't read is reported, never fatal to the manifest.
+    #[serde(default)]
+    semantic_models: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    metrics: BTreeMap<String, serde_json::Value>,
+}
+
+/// A list the schema allows to be `null`: read as empty.
+fn nullable_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// `config.enabled`, the only config the semantic layer's entries are read for.
+#[derive(Debug, Default, Deserialize)]
+struct RawEnabled {
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+/// An entity, measure or dimension of a semantic model: its kind is the entity's or
+/// dimension's `type`, or the measure's `agg`.
+#[derive(Debug, Deserialize)]
+struct RawSemanticField {
+    name: String,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    agg: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSemanticModel {
+    unique_id: String,
+    name: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    depends_on: Option<RawDependsOn>,
+    #[serde(default, deserialize_with = "nullable_list")]
+    entities: Vec<RawSemanticField>,
+    #[serde(default, deserialize_with = "nullable_list")]
+    measures: Vec<RawSemanticField>,
+    #[serde(default, deserialize_with = "nullable_list")]
+    dimensions: Vec<RawSemanticField>,
+    #[serde(default)]
+    config: Option<RawEnabled>,
+}
+
+/// A measure or metric a metric reads, by name.
+#[derive(Debug, Deserialize)]
+struct RawInput {
+    name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawMetricParams {
+    #[serde(default, deserialize_with = "nullable_list")]
+    input_measures: Vec<RawInput>,
+    #[serde(default)]
+    numerator: Option<RawInput>,
+    #[serde(default)]
+    denominator: Option<RawInput>,
+    #[serde(default)]
+    expr: Option<String>,
+    #[serde(default, deserialize_with = "nullable_list")]
+    metrics: Vec<RawInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawMetric {
+    unique_id: String,
+    name: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    type_params: Option<RawMetricParams>,
+    #[serde(default)]
+    depends_on: Option<RawDependsOn>,
+    #[serde(default)]
+    config: Option<RawEnabled>,
 }
 
 /// A node from the manifest (model, seed, snapshot, source, test, …).
@@ -475,6 +569,73 @@ pub struct Manifest {
     pub nodes: Vec<ManifestNode>,
     /// Enabled unit tests (dbt 1.8+), sorted by id.
     pub unit_tests: Vec<DbtUnitTest>,
+    /// Enabled semantic models (dbt 1.6+), sorted by id.
+    pub semantic_models: Vec<DbtSemanticModel>,
+    /// Enabled metrics (dbt 1.6+), sorted by id.
+    pub metrics: Vec<DbtMetric>,
+    /// Semantic models and metrics whose entry couldn't be read, by id, each with why:
+    /// left out of the lists above, never guessed at.
+    pub semantic_unreadable: Vec<(String, String)>,
+}
+
+/// A semantic model: the entities, measures and dimensions declared on a model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtSemanticModel {
+    /// dbt's `unique_id`, e.g. `semantic_model.jaffle.orders`.
+    pub unique_id: String,
+    /// Its name.
+    pub name: String,
+    /// Its label, if declared.
+    pub label: Option<String>,
+    /// Its description, if declared.
+    pub description: Option<String>,
+    /// The nodes it is defined on, from `depends_on.nodes`.
+    pub depends_on: Vec<String>,
+    /// Its entities; `kind` is the entity's type (`primary`, `foreign`, …).
+    pub entities: Vec<SemanticField>,
+    /// Its measures; `kind` is the aggregation (`sum`, `count`, …).
+    pub measures: Vec<SemanticField>,
+    /// Its dimensions; `kind` is the dimension's type (`time`, `categorical`).
+    pub dimensions: Vec<SemanticField>,
+}
+
+/// An entity, measure or dimension of a semantic model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SemanticField {
+    /// Its name.
+    pub name: String,
+    /// What kind it is, as the manifest says; `None` when it doesn't.
+    pub kind: Option<String>,
+    /// Its description, if declared.
+    pub description: Option<String>,
+}
+
+/// A metric, as declared: what it is computed from, never a value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DbtMetric {
+    /// dbt's `unique_id`, e.g. `metric.jaffle.revenue`.
+    pub unique_id: String,
+    /// Its name.
+    pub name: String,
+    /// Its label, if declared.
+    pub label: Option<String>,
+    /// Its description, if declared.
+    pub description: Option<String>,
+    /// Its type: `simple`, `ratio`, `derived`, `cumulative`, `conversion`.
+    pub kind: Option<String>,
+    /// The measures it reads, by name (`type_params.input_measures`).
+    pub input_measures: Vec<String>,
+    /// A ratio's numerator and denominator metrics, by name.
+    pub ratio: Option<(String, String)>,
+    /// A derived metric's expression.
+    pub expr: Option<String>,
+    /// The metrics a derived metric reads, by name.
+    pub input_metrics: Vec<String>,
+    /// The semantic models and metrics it reads, from `depends_on.nodes`.
+    pub depends_on: Vec<String>,
 }
 
 /// A unit test: fixed inputs and the rows a model must produce from them.
@@ -729,6 +890,16 @@ impl Manifest {
                 (node.unique_id.clone(), node)
             })
             .collect::<BTreeMap<_, _>>();
+        let mut semantic_unreadable = Vec::new();
+        let semantic_models = read_each(raw.semantic_models, &mut semantic_unreadable)
+            .filter(|m: &RawSemanticModel| enabled(m.config.as_ref()))
+            .map(semantic_model)
+            .collect();
+        let metrics = read_each(raw.metrics, &mut semantic_unreadable)
+            .filter(|m: &RawMetric| enabled(m.config.as_ref()))
+            .map(metric)
+            .collect();
+        semantic_unreadable.sort();
         Ok(Self {
             schema_version,
             source: ArtifactSource::ManifestJson,
@@ -771,7 +942,80 @@ impl Manifest {
                     definition,
                 })
                 .collect(),
+            semantic_models,
+            metrics,
+            semantic_unreadable,
         })
+    }
+}
+
+/// Each entry of `entries` read as a `T`; one that can't be is added to `unreadable`,
+/// with why, and left out.
+fn read_each<T: serde::de::DeserializeOwned>(
+    entries: BTreeMap<String, serde_json::Value>,
+    unreadable: &mut Vec<(String, String)>,
+) -> impl Iterator<Item = T> {
+    entries
+        .into_iter()
+        .filter_map(move |(id, entry)| match serde_json::from_value(entry) {
+            Ok(read) => Some(read),
+            Err(e) => {
+                unreadable.push((id, e.to_string()));
+                None
+            }
+        })
+}
+
+/// Whether a semantic-layer entry is enabled: unless its config says otherwise.
+fn enabled(config: Option<&RawEnabled>) -> bool {
+    config.and_then(|c| c.enabled) != Some(false)
+}
+
+/// Blank text is no text.
+fn declared(text: Option<String>) -> Option<String> {
+    text.filter(|t| !t.trim().is_empty())
+}
+
+fn semantic_fields(fields: Vec<RawSemanticField>) -> Vec<SemanticField> {
+    fields
+        .into_iter()
+        .map(|f| SemanticField {
+            name: f.name,
+            kind: f.kind.or(f.agg),
+            description: declared(f.description),
+        })
+        .collect()
+}
+
+fn semantic_model(m: RawSemanticModel) -> DbtSemanticModel {
+    DbtSemanticModel {
+        unique_id: m.unique_id,
+        name: m.name,
+        label: declared(m.label),
+        description: declared(m.description),
+        depends_on: m.depends_on.map(|d| d.nodes).unwrap_or_default(),
+        entities: semantic_fields(m.entities),
+        measures: semantic_fields(m.measures),
+        dimensions: semantic_fields(m.dimensions),
+    }
+}
+
+fn metric(m: RawMetric) -> DbtMetric {
+    let params = m.type_params.unwrap_or_default();
+    DbtMetric {
+        unique_id: m.unique_id,
+        name: m.name,
+        label: declared(m.label),
+        description: declared(m.description),
+        kind: m.kind,
+        input_measures: params.input_measures.into_iter().map(|i| i.name).collect(),
+        ratio: params
+            .numerator
+            .zip(params.denominator)
+            .map(|(n, d)| (n.name, d.name)),
+        expr: declared(params.expr),
+        input_metrics: params.metrics.into_iter().map(|i| i.name).collect(),
+        depends_on: m.depends_on.map(|d| d.nodes).unwrap_or_default(),
     }
 }
 

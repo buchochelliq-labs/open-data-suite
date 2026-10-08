@@ -74,6 +74,16 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
   it writes; beyond loopback it shows no value, path or check detail.
   `/api/settings` returns the same view model.
+- The dashboard's **Semantic layer** page (`/catalog/semantic`, #352), a read-only
+  placeholder. It lists the semantic models and metrics `manifest.json` declares:
+  - each semantic model's model, measures, dimensions and entities;
+  - each metric's type, what it is computed from, its dimensions, and the models it
+    depends on.
+
+  A project without a semantic layer gets an empty state. Artifacts that can't record a
+  semantic layer (the Information Schema) say so instead, and a definition that can't be
+  read is named rather than dropped. Nothing is queried or validated.
+  `/api/catalog/semantic` returns the same view model.
 - The Run page's **Threads** tab (`/state/runs/<run>?tab=threads`, #355): the run by
   thread, a bar per node coloured by outcome and the idle stretches between them, with
   the critical path (the chain of dependencies that set the run's length) outlined and

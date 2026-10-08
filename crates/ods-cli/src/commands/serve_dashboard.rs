@@ -346,6 +346,8 @@ impl DashboardSource {
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, links);
         // The Freshness evidence screen (#350): the sources as the planner sees them.
         let freshness = super::serve_catalog::freshness(&ws);
+        // The Semantic layer (#352): definitions only.
+        let semantic = super::serve_catalog::semantic(&ws.manifest);
         let recorded = matches!(&state, StateInput::Recorded(r) if !r.runs.is_empty());
         // The checks `ods health check` ran that the dashboard doesn't run itself
         // (ADR-0030 §6), from the newest record for this scope.
@@ -367,6 +369,7 @@ impl DashboardSource {
             .with_modules(modules(recorded))
             .with_catalog(catalog)
             .with_freshness(freshness)
+            .with_semantic(semantic)
             .with_about(self.about.clone())
             .with_settings(self.settings_input())
             .with_health(self.health_for(ws.manifest.adapter_type.as_deref()))
