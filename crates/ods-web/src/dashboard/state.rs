@@ -899,6 +899,8 @@ pub struct RunPageView {
     /// Each node the run ran, with its stats, from its journal (#322); empty without
     /// one.
     pub nodes: Vec<NodeStatsView>,
+    /// The run by thread, with its critical path (#355), from its journal.
+    pub threads: super::threads::ThreadsView,
     /// Failed tests, explained, that are under none of [`nodes`](Self::nodes): the
     /// engine didn't say what they check, or they check nodes the run didn't run
     /// (#323). Each is keyed by its check's handle, never its id.
@@ -2208,6 +2210,33 @@ impl Dashboard {
                 &b.node,
             ))
         });
+        let threads = {
+            let stats = journal.as_ref().map(|j| j.stats());
+            // What the run recorded, for a node it built; else, for a run that recorded
+            // no snapshot (a failed one), or a node its snapshot kept from an earlier
+            // build (one that failed in it), what the project says now (inferred).
+            let project: BTreeMap<&str, &Vec<String>> = self
+                .catalog
+                .nodes
+                .iter()
+                .map(|n| (n.id.as_str(), &n.depends_on))
+                .collect();
+            let parents = |id: &str| -> (Vec<String>, bool) {
+                match snapshot.and_then(|s| s.nodes.get(id).filter(|n| n.run_id == s.run_id)) {
+                    Some(n) => (n.parents.keys().cloned().collect(), true),
+                    None => (
+                        project.get(id).map(|d| (*d).clone()).unwrap_or_default(),
+                        false,
+                    ),
+                }
+            };
+            super::threads::threads(
+                &nodes,
+                &parents,
+                stats.as_ref().and_then(|s| s.duration_ms),
+                stats.as_ref().is_some_and(|s| s.live),
+            )
+        };
         let built_why = snapshot
             .map(|s| self.built_why(&timeline, s, previous, &names))
             .unwrap_or_default();
@@ -2245,6 +2274,7 @@ impl Dashboard {
             started_at: journal.as_ref().and_then(|j| j.started()),
             timeline,
             nodes,
+            threads,
             failed_tests,
             built: built_why,
             last_run,
