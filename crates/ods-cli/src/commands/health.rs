@@ -57,7 +57,7 @@ impl Module for HealthCommand {
             Some(("trust", args)) => {
                 let mut health = super::serve_dashboard::health_settings(ctx.config)?;
                 let settings = StateSettings::resolve(args, ctx.config)?;
-                health.pin_probe_connection(&probe_pins(&settings));
+                pin_checks(&mut health, &settings);
                 let report = super::health_trust::TrustReport::build(args, ctx.config, &health)?;
                 ctx.emit(&report)
             }
@@ -81,7 +81,7 @@ fn check_command() -> Command {
         Arg::new("allow-scripts")
             .long("allow-scripts")
             .action(ArgAction::SetTrue)
-            .help("Trust this project's probe checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
+            .help("Trust this project's probe and script checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
     )
     .arg(
         Arg::new("allow-elevated-login")
@@ -134,6 +134,26 @@ fn write_record(
     })
 }
 
+/// Pins in each probe's and script's trust digest what decides where it runs and what
+/// it runs, as far as a project can change it (ADR-0030 §4d): for probes, the dbt
+/// settings configuration sets; for scripts, a configured project directory and the
+/// files each command names in it.
+fn pin_checks(health: &mut ods_health::HealthSettings, settings: &StateSettings) {
+    let pins = probe_pins(settings);
+    health.pin_probe_connection(&pins);
+    let script_pins = pins
+        .into_iter()
+        .filter(|(key, _)| key == "dbt.project_dir")
+        .collect();
+    health.pin_scripts(&script_root(settings), &script_pins);
+}
+
+/// Where scripts run: the dbt project's directory, absolute.
+fn script_root(settings: &StateSettings) -> PathBuf {
+    let dir = super::failures::project_dir(settings);
+    std::path::absolute(&dir).unwrap_or(dir)
+}
+
 /// The dbt settings that decide where probes connect and that configuration set (so a
 /// project can): the program, the project and profiles directories and the profile.
 /// They are pinned in each probe's trust digest. Flags and `DBT_*` variables are the
@@ -167,6 +187,45 @@ fn connection_for(
         Some(checked) => ProbeConnection::new(checked),
         None => ProbeConnection::without_privileges(probe),
     }
+}
+
+/// Gives each script in `health` its process: its command, started in the dbt project's
+/// directory, with the artifacts it may read as absolute paths.
+fn run_scripts_here(
+    health: &mut ods_health::HealthSettings,
+    settings: &StateSettings,
+    ws: &Workspace,
+) -> Result<(), CliError> {
+    let scripts = health.script_definitions();
+    if scripts.is_empty() {
+        return Ok(());
+    }
+    let absolute =
+        |path: &std::path::Path| std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    let root = script_root(settings);
+    let target = absolute(&ws.target_dir);
+    let mut artifacts: BTreeMap<String, String> = ["manifest", "run_results", "catalog"]
+        .into_iter()
+        .map(|name| (name, target.join(format!("{name}.json"))))
+        .chain(ws.sources_file.iter().map(|f| ("sources", absolute(f))))
+        .filter(|(_, path)| path.is_file())
+        .map(|(name, path)| (name.to_owned(), path.display().to_string()))
+        .collect();
+    artifacts.insert("target_dir".to_owned(), target.display().to_string());
+    for script in scripts {
+        let check = ods_provider_process::ScriptCheck::new(
+            &script.id,
+            script.command.clone(),
+            &root,
+            script.timeout,
+        )
+        .with_params(script.params.clone())
+        .with_artifacts(artifacts.clone());
+        health
+            .run_script_with(&script.id, Arc::new(check))
+            .map_err(|e| CliError::new(ExitStatus::Config, codes::HEALTH_CONFIG, e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
@@ -302,9 +361,9 @@ impl CheckReport {
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
-        // Where probes connect, as far as configuration decides it, is part of what is
-        // trusted (ADR-0030 §4d).
-        health.pin_probe_connection(&probe_pins(&settings));
+        // Where probes connect and scripts run, and the files scripts run, are part of
+        // what is trusted (ADR-0030 §4d).
+        pin_checks(&mut health, &settings);
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
         super::serve_dashboard::check_probe_sql(
             &mut health,
@@ -312,6 +371,9 @@ impl CheckReport {
             &config.config.warehouses,
         )?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
+        // Scripts run here and only here, each as a process in the project's root
+        // (ADR-0030 §4; ADR-0031 §6): the dashboard reads their findings from the record.
+        run_scripts_here(&mut health, &settings, &ws)?;
         let allow_elevated_login = args.get_flag("allow-elevated-login");
         if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
         {
@@ -492,6 +554,8 @@ fn source(source: CheckSource) -> &'static str {
     match source {
         CheckSource::Builtin => "built-in",
         CheckSource::Declarative => "declared",
+        CheckSource::Probe => "probe",
+        CheckSource::Script => "script",
         _ => "plugin",
     }
 }

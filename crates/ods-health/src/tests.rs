@@ -896,7 +896,7 @@ fn a_misdeclared_check_is_a_configuration_error() {
         ),
         (
             one("id = \"a\"\nkind = \"script\"\nrequire = [\"tests\"]"),
-            "aren't supported yet",
+            "health.checks[0].require: a script has a `command`, not `require`",
         ),
         (
             one("id = \"a\"\nkind = \"magic\"\nrequire = [\"tests\"]"),
@@ -1980,5 +1980,339 @@ mod running {
             "elsewhere".to_owned(),
         )]));
         assert_ne!(s.probe_definitions()[0].digest, pinned);
+    }
+}
+
+// -------------------------------------------------------------------------- scripts
+
+mod scripts {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use ods_provider_fake::{FakeHealthCheck, Misbehaviour};
+
+    use super::*;
+    use crate::trust::{Standing, TrustStore};
+
+    /// A script on the nodes tagged `pii`.
+    const PII: &str = r#"[[checks]]
+id = "acme.pii"
+kind = "script"
+command = ["python", "checks/pii.py"]
+select = { tags = ["pii"] }
+"#;
+
+    fn nodes() -> Vec<NodeFacts> {
+        let mut a = model("model.p.a", 1);
+        a.build = Some(passed());
+        a.tags = vec!["pii".to_owned()];
+        let mut b = model("model.p.b", 1);
+        b.build = Some(passed());
+        b.tags = vec!["pii".to_owned()];
+        let mut c = model("model.p.c", 1);
+        c.build = Some(passed());
+        vec![a, b, c]
+    }
+
+    fn scope() -> CheckScope {
+        CheckScope::new(nodes(), Some(clean()))
+    }
+
+    fn script_finding<'a>(report: &'a HealthReport, node: &str) -> &'a Finding {
+        report.badges[node]
+            .findings
+            .iter()
+            .find(|f| f.check == "acme.pii")
+            .unwrap()
+    }
+
+    fn trusted(toml: &str) -> HealthSettings {
+        let mut s = settings(toml);
+        s.trust_checks(&BTreeSet::from(["acme.pii".to_owned()]));
+        s
+    }
+
+    #[test]
+    fn a_script_is_read_with_its_command_timeout_and_parameters() {
+        let s = settings(&format!("{PII}timeout = \"30s\"\nparams = {{ min = 2 }}\n"));
+        let definitions = s.script_definitions();
+        assert_eq!(definitions.len(), 1);
+        let script = &definitions[0];
+        assert_eq!(script.id, "acme.pii");
+        assert_eq!(script.command, ["python", "checks/pii.py"]);
+        assert_eq!(script.timeout, Duration::from_secs(30));
+        assert_eq!(script.params["min"], 2);
+        assert!(script.digest.starts_with("sha256:"));
+        assert_eq!(
+            settings(PII).script_definitions()[0].timeout,
+            SCRIPT_TIMEOUT
+        );
+        // It is among the definitions that need trust.
+        let definitions_to_trust = s.trust_definitions();
+        let pinned: Vec<&str> = definitions_to_trust.iter().map(Pinned::id).collect();
+        assert_eq!(pinned, ["acme.pii"]);
+        assert!(
+            s.how(true)
+                .contains("acme.pii (warn, script): runs `python checks/pii.py`")
+        );
+    }
+
+    #[test]
+    fn a_misdeclared_script_is_a_configuration_error() {
+        let err = |toml: &str| {
+            HealthSettings::from_config(&toml::from_str(toml).unwrap())
+                .unwrap_err()
+                .to_string()
+        };
+        let base = "[[checks]]\nid = \"acme.pii\"\n";
+        for (toml, expected) in [
+            (
+                format!("{base}kind = \"script\"\n"),
+                "health.checks[0].command: a script needs its program",
+            ),
+            (
+                format!("{base}kind = \"script\"\ncommand = [\" \"]\n"),
+                "health.checks[0].command: a script needs its program",
+            ),
+            (
+                format!("{PII}timeout = \"soon\"\n"),
+                "health.checks[0].timeout: `soon` isn't a duration",
+            ),
+            (
+                format!("{PII}timeout = \"0s\"\n"),
+                "must be more than 0 and at most 1h",
+            ),
+            (
+                format!("{PII}timeout = \"2h\"\n"),
+                "must be more than 0 and at most 1h",
+            ),
+            (
+                format!("{PII}sql = \"select 1\"\n"),
+                "only a `kind = \"probe\"` check has `sql`",
+            ),
+            (
+                format!("{base}require = [\"tests\"]\ncommand = [\"x\"]\n"),
+                "only a `kind = \"script\"` check has `command`",
+            ),
+            (
+                format!(
+                    "{base}kind = \"probe\"\nsql = \"select count(*) as n from {{relation}}\"\npass = \"n > 0\"\nselect = {{ name = [\"orders\"] }}\ntimeout = \"5s\"\n"
+                ),
+                "only a `kind = \"script\"` check has `timeout`",
+            ),
+        ] {
+            let message = err(&toml);
+            assert!(message.contains(expected), "{toml}\n=> {message}");
+        }
+    }
+
+    #[test]
+    fn the_digest_covers_what_runs_and_on_what_only() {
+        let digest = |toml: &str| settings(toml).script_definitions()[0].digest.clone();
+        let base = digest(PII);
+        assert_ne!(digest(&PII.replace("pii.py", "other.py")), base);
+        assert_ne!(digest(&PII.replace("[\"pii\"]", "[\"pci\"]")), base);
+        assert_ne!(
+            digest(&format!("{PII}exclude = {{ name = [\"a\"] }}\n")),
+            base
+        );
+        // Changing how severe, how long or its parameters runs nothing new.
+        assert_eq!(digest(&format!("{PII}severity = \"error\"\n")), base);
+        assert_eq!(digest(&format!("{PII}timeout = \"5s\"\n")), base);
+        assert_eq!(digest(&format!("{PII}params = {{ min = 3 }}\n")), base);
+    }
+
+    #[test]
+    fn pinning_covers_the_files_the_command_names_in_the_project_and_where_it_runs() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("checks")).unwrap();
+        let script = project.path().join("checks/pii.py");
+        std::fs::write(&script, "print('v1')").unwrap();
+        let elsewhere = outside.path().join("lib.py");
+        std::fs::write(&elsewhere, "v1").unwrap();
+        let toml = PII.replace(
+            r#"["python", "checks/pii.py"]"#,
+            &format!("['python', 'checks/pii.py', '{}']", elsewhere.display()),
+        );
+        let digest = |settings: &BTreeMap<String, String>| {
+            let mut s = super::settings(&toml);
+            s.pin_scripts(project.path(), settings);
+            s.script_definitions()[0].digest.clone()
+        };
+        let none = BTreeMap::new();
+        let base = digest(&none);
+        assert_ne!(base, super::settings(&toml).script_definitions()[0].digest);
+        assert_eq!(digest(&none), base, "the same files pin the same digest");
+
+        // A file outside the project isn't the project's to change, so isn't pinned.
+        std::fs::write(&elsewhere, "v2").unwrap();
+        assert_eq!(digest(&none), base);
+
+        // A changed script, or a configured working directory, needs trust again.
+        std::fs::write(&script, "print('v2')").unwrap();
+        let changed = digest(&none);
+        assert_ne!(changed, base);
+        let dir = BTreeMap::from([("dbt.project_dir".to_owned(), "elsewhere".to_owned())]);
+        assert_ne!(digest(&dir), changed);
+
+        // A file that appears where the command named nothing is new too.
+        std::fs::remove_file(&script).unwrap();
+        let missing = digest(&none);
+        std::fs::write(&script, "print('v3')").unwrap();
+        assert_ne!(digest(&none), missing);
+    }
+
+    #[tokio::test]
+    async fn an_untrusted_script_never_runs_and_is_unknown_where_it_applies() {
+        let mut s = settings(PII);
+        let runner = FakeHealthCheck::new("acme.pii", Severity::Warn);
+        s.run_script_with("acme.pii", Arc::new(runner)).unwrap();
+        let report = s.run(&scope(), CHECK_TIMEOUT).await;
+        let finding = script_finding(&report, "model.p.a");
+        assert_eq!(finding.status, Status::Unknown);
+        assert_eq!(finding.source, CheckSource::Script);
+        assert!(
+            finding.reason.contains("not trusted for this project"),
+            "{}",
+            finding.reason
+        );
+        assert!(finding.reason.contains("ods health trust"));
+        assert_eq!(script_finding(&report, "model.p.c").status, Status::Skipped);
+        let run = report.checks.iter().find(|c| c.id == "acme.pii").unwrap();
+        assert_eq!(run.source, CheckSource::Script);
+    }
+
+    #[tokio::test]
+    async fn a_trusted_script_without_a_runner_is_unknown_never_a_pass() {
+        let report = trusted(PII).run(&scope(), CHECK_TIMEOUT).await;
+        let finding = script_finding(&report, "model.p.b");
+        assert_eq!(finding.status, Status::Unknown);
+        assert!(
+            finding.reason.contains("scripts run in `ods health check`"),
+            "{}",
+            finding.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn a_trusted_script_runs_on_what_it_selects() {
+        let mut s = trusted(&format!("{PII}severity = \"error\"\n"));
+        s.run_script_with(
+            "acme.pii",
+            Arc::new(FakeHealthCheck::new("acme.pii", Severity::Warn).failing("model.p.a")),
+        )
+        .unwrap();
+        let report = s.run(&scope(), CHECK_TIMEOUT).await;
+        let a = script_finding(&report, "model.p.a");
+        assert_eq!(
+            (a.status, a.severity, a.source),
+            (Status::Fail, Severity::Error, CheckSource::Script)
+        );
+        assert_eq!(script_finding(&report, "model.p.b").status, Status::Pass);
+        assert_eq!(script_finding(&report, "model.p.c").status, Status::Skipped);
+        assert_eq!(report.badges["model.p.a"].health, Health::Failing);
+        let run = report.checks.iter().find(|c| c.id == "acme.pii").unwrap();
+        assert_eq!(run.about, "runs `python checks/pii.py`");
+    }
+
+    #[tokio::test]
+    async fn a_script_that_fails_or_answers_a_stranger_is_unknown_for_everything() {
+        for how in [Misbehaviour::Fails, Misbehaviour::AnswersAStranger] {
+            let mut s = trusted(PII);
+            s.run_script_with(
+                "acme.pii",
+                Arc::new(FakeHealthCheck::new("acme.pii", Severity::Warn).misbehaving(how)),
+            )
+            .unwrap();
+            let report = s.run(&scope(), CHECK_TIMEOUT).await;
+            for node in ["model.p.a", "model.p.b"] {
+                assert_eq!(
+                    script_finding(&report, node).status,
+                    Status::Unknown,
+                    "{how:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_runner_must_be_for_a_configured_script_and_ids_stay_unique() {
+        let mut s = settings(PII);
+        let other = Arc::new(FakeHealthCheck::new("acme.other", Severity::Warn));
+        assert!(
+            s.run_script_with("acme.other", other.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("no script check")
+        );
+        assert!(
+            s.run_script_with("acme.pii", other)
+                .unwrap_err()
+                .to_string()
+                .contains("describes itself as `acme.other`")
+        );
+        let clash = settings(PII)
+            .with_check(Arc::new(FakeHealthCheck::new("acme.pii", Severity::Warn)))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            clash.contains("two health checks are called `acme.pii`"),
+            "{clash}"
+        );
+    }
+
+    #[tokio::test]
+    async fn script_findings_are_recorded_and_read_back_never_run_live() {
+        let mut s = trusted(PII);
+        s.run_script_with(
+            "acme.pii",
+            Arc::new(FakeHealthCheck::new("acme.pii", Severity::Warn).failing("model.p.a")),
+        )
+        .unwrap();
+        let report = s.run(&scope(), CHECK_TIMEOUT).await;
+        let record = crate::record::HealthRecord::new("p/dev", at("2026-10-06T09:00:00Z"), report);
+        let json = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            json["schema_version"],
+            serde_json::json!({"major": 1, "minor": 2})
+        );
+        let recorded = crate::record::Recorded::of(&record);
+        let node = &nodes()[0];
+        // The dashboard, which never runs scripts, shows the recorded finding.
+        let badge = settings(PII).evaluate_with(node, Some(&clean()), Some(&recorded));
+        let finding = badge
+            .findings
+            .iter()
+            .find(|f| f.check == "acme.pii")
+            .unwrap();
+        assert_eq!(
+            (finding.status, finding.source),
+            (Status::Fail, CheckSource::Script)
+        );
+        assert!(!CheckSource::Script.is_live());
+    }
+
+    #[test]
+    fn probes_and_scripts_are_trusted_together_in_one_entry() {
+        let probe = r#"[[checks]]
+id = "orders.has_rows"
+kind = "probe"
+sql = "select count(*) as n from {relation}"
+pass = "n > 0"
+select = { name = ["orders"] }
+"#;
+        let s = settings(&format!("{probe}{PII}"));
+        let definitions = s.trust_definitions();
+        assert!(matches!(definitions[0], CheckDefinition::Probe(_)));
+        assert!(matches!(definitions[1], CheckDefinition::Script(_)));
+        let mut store = TrustStore::default();
+        store.trust("/p", &definitions, at("2026-10-06T09:00:00Z"));
+        assert_eq!(store.trusted("/p", &definitions).len(), 2);
+        // A changed command is untrusted again; the probe stays trusted.
+        let changed = settings(&format!("{probe}{}", PII.replace("pii.py", "pii2.py")));
+        let standing = store.standing("/p", &changed.trust_definitions());
+        assert_eq!(standing["acme.pii"], Standing::Changed);
+        assert_eq!(standing["orders.has_rows"], Standing::Trusted);
     }
 }

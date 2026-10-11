@@ -26,6 +26,8 @@ ods-mcp.workspace = true
 ods-provider-databricks.workspace = true
 ods-provider-duckdb.workspace = true
 ods-provider-dbt.workspace = true
+# Runs script checks as processes (ADR-0031 §6).
+ods-provider-process.workspace = true
 ods-provider-sqlparser.workspace = true
 ods-sdk.workspace = true
 ods-state.workspace = true
@@ -52,6 +54,12 @@ insta.workspace = true
 proptest.workspace = true
 ods-provider-fake.workspace = true
 serde_json.workspace = true
+
+# Its binary is also the script it checks with (`--ods-script-fixture`), so it has its
+# own `main`.
+[[test]]
+name = "health_scripts"
+harness = false
 
 [lints]
 workspace = true

@@ -18,7 +18,7 @@ codes).
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
 | `ods health check` | available (preview): run the health checks `[health]` configures and gate CI on them, see [below](#ods-health-check) |
-| `ods health trust` | available (preview): review this project's probe checks and trust them to run, see [below](#ods-health-trust) |
+| `ods health trust` | available (preview): review this project's probe and script checks and trust them to run, see [below](#ods-health-trust) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -1559,6 +1559,78 @@ The columns `pass` names are kept in each finding's evidence (`row.<column>`), s
 are written to the health record and shown on the dashboard: don't select a column you
 wouldn't want kept there.
 
+#### Script checks
+
+A script check runs a program you name, for the checks no declaration or query can
+express ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §4):
+
+```toml
+[[health.checks]]
+id = "pii.columns_tagged"
+kind = "script"
+command = ["python", "checks/pii.py"]   # its program, then its arguments; no shell
+select = { path = ["models/marts/**"] } # every node when not set
+params = { tag = "pii" }                # optional: passed on as given
+timeout = "2m"                          # optional: default 60s, at most 1h
+severity = "error"
+```
+
+`ods health check` starts the command (its first item as the program, never through a
+shell, so nothing in it is expanded) in the dbt project's directory, with your
+environment, as `dbt` would be started; ODS adds no credential and no secret (what
+the script prints is its own: its last line on stderr is quoted in its findings when it
+fails, so don't let it print a credential from that environment). It writes
+one JSON request to the program's stdin and reads one JSON answer from its stdout, the
+*script protocol* (`ods_sdk::protocol`, version 1.0):
+
+```json
+{"protocol": {"major": 1, "minor": 0}, "request": "check",
+ "check": {"id": "pii.columns_tagged", "params": {"tag": "pii"}},
+ "scope": {"nodes": [{"id": "model.shop.orders", "name": "orders", "resource_type": "model",
+                      "path": "models/marts/orders.sql", "tags": ["finance"], "tests": 2,
+                      "described": true, "constraints": 0}]},
+ "artifacts": {"manifest": "/abs/path/target/manifest.json", "target_dir": "/abs/path/target"}}
+```
+
+`scope.nodes` are the nodes the check selects, with what ODS knows of each (the same
+facts every check gets: its tags, path, tests, constraints, when it was built, …), and
+`artifacts` gives the absolute paths of the dbt artifacts there are (`manifest`,
+`run_results`, `catalog`, `sources`, and `target_dir`), for a script that needs more.
+The answer gives one finding per node, with a `status` (`pass`, `fail`, `unknown`), a
+`reason` for people, and optional `evidence` (string keys and values):
+
+```json
+{"protocol": {"major": 1, "minor": 0},
+ "findings": [{"node": "model.shop.orders", "status": "fail",
+               "reason": "email isn't tagged pii", "evidence": {"columns": "email"}}]}
+```
+
+What the program writes to stderr is logged (`--verbose`). A script runs only once you
+have trusted it, and until then every node it selects is *unknown*, never a pass. So is
+every node when it fails, saying why:
+- **Trust.** A script a project's `ods.toml` (or `ods.local.toml`) defines runs only once
+  you have trusted it for that project with [`ods health trust`](#ods-health-trust):
+  its `command`, `select` and `exclude`, a `project_dir` configuration sets, and the
+  content of every file its command names inside the project (e.g. `checks/pii.py`).
+  A commit that changes any of them makes it untrusted again; changing its `params`,
+  `timeout` or `severity` doesn't. Trust pins those files only, not what they import or
+  read in turn, so keep a script's code in the files its command names, or review what
+  it loads. Scripts in your own `config.toml` need no trust, even where the project sets
+  `[health.probes]` (which makes your probes need it); a relative path there runs
+  that file in whichever project you check, so name your own scripts by absolute path.
+- **Failing safe.** A command that can't start, exits non-zero (the finding quotes its
+  last line on stderr, up to 300 characters), runs past its `timeout` (it is then
+  stopped, with every process it started: it runs in a process group, a job object on
+  Windows, of its own; a script ends when every process it started has), writes more than 64 MiB to stdout, or answers with anything but the
+  protocol's JSON in major version 1, makes every node it was asked about *unknown*. So does an answer about a node it wasn't asked about. A node it
+  doesn't answer, or answers twice, is *unknown*.
+
+A `command` that is missing or empty, a `timeout` that isn't a duration (`"30s"`,
+`"2m"`) or is over an hour, `params` that aren't a table, or `require`, `sql` or `pass`
+on a script, is a configuration error (exit 4, `ODS-E0102`); `command`, `timeout` and
+`params` on any other kind of check are too. Scripts run in `ods health check` only: the
+dashboard never starts one, and shows what the last run recorded, with when.
+
 #### Plugin checks
 
 A custom `ods` can add health checks of its own ([plugins](plugins.md#a-custom-ods-in-process-plugins),
@@ -1605,16 +1677,17 @@ so it never reads past a target it misses. A measure that doesn't exist, or a ta
 outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
 `ODS-E0102`).
 
-Scripts and plugins come in later phases of #392.
+Out-of-process plugins come in a later phase of #392.
 
 ### ods health trust
 
-`ods health trust` lists the probe checks this project defines, with their SQL and
-whether each is new, changed or already trusted, then trusts them as they are now:
+`ods health trust` lists the probe and script checks this project defines, with each
+probe's SQL and each script's command, and whether each is new, changed or already
+trusted, then trusts them as they are now:
 
 ```sh
-ods health trust            # review and trust this project's probes
-ods health trust --revoke   # forget them: its probes won't run
+ods health trust            # review and trust this project's probes and scripts
+ods health trust --revoke   # forget them: they won't run
 ```
 
 - **Where trust is kept:** `trust.json` in your own configuration directory, beside your
@@ -1625,7 +1698,9 @@ ods health trust --revoke   # forget them: its probes won't run
   dbt settings configuration gives (`program`, `project_dir`, `profiles_dir`, `profile`;
   flags and `DBT_*` variables are yours, so they aren't pinned).
   Changing any of them makes the probe untrusted again; changing its `pass` or
-  `severity` doesn't. Probes in your own `config.toml` need trust too when a project
+  `severity` doesn't. A script's digest covers its `command`, `select` and `exclude`,
+  a configured `project_dir`, and the content of the files its command names inside the
+  project. Probes in your own `config.toml` need trust too when a project
   file sets `[health.probes]`: a repository can't point them at another target.
 - **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
   defined is no longer trusted. Cloning a repository never trusts anything.
@@ -1644,15 +1719,16 @@ health gate ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §
 ods health check                  # exit 5 when a check at severity error fails
 ods health check --strict --json  # also when one couldn't decide; one JSON document
 ods health check --no-record      # don't keep the findings
-ods health check --allow-scripts  # trust this project's probes as they are now, this run only
+ods health check --allow-scripts  # trust this project's probes and scripts as they are now, this run only
 ods health check --allow-elevated-login  # run probes whose login can do more than read: your risk
 ```
 
 It takes the options `ods state` commands take to find the project and the state store
 (`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …) and to call dbt
 (`--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars`, `--dbt-output`), and reads them
-only: no database is created or migrated, and dbt runs only for
-[probe checks](#probe-checks), on `[health.probes]`'s target.
+only: no database is created or migrated, dbt runs only for
+[probe checks](#probe-checks), on `[health.probes]`'s target, and
+[script checks](#script-checks) are the only other programs it starts.
 
 | Outcome | Exit |
 |---|---|

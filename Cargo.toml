@@ -27,6 +27,7 @@ ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-duckdb = { path = "providers/ods-provider-duckdb" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
+ods-provider-process = { path = "providers/ods-provider-process" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 ods-store-sqlite = { path = "providers/ods-store-sqlite" }
 ods-state = { path = "crates/ods-state" }
@@ -49,6 +50,11 @@ futures-util = { version = "0.3", default-features = false }
 libc = "0.2"
 # Hex encoding of digests.
 hex = "0.4"
+# Durations people write in configuration (`timeout = "30s"`); MIT/Apache-2.0.
+humantime = "2"
+# Runs a script check in a process group (a job object on Windows) of its own, so a
+# timeout stops what it started too (#392). MIT/Apache-2.0.
+process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 insta = "1"
 # Builds the dashboard's URL query strings (MIT/Apache-2.0; already used by axum).
 form_urlencoded = "1"

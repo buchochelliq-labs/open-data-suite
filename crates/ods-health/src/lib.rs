@@ -42,6 +42,9 @@ pub enum CheckSource {
     Probe,
     /// A check registered through the `health_check` contract: a plugin.
     Plugin,
+    /// A script declared in `[[health.checks]]`: a command run over the script
+    /// protocol (ADR-0030 §4).
+    Script,
 }
 
 impl CheckSource {
@@ -303,6 +306,7 @@ pub struct HealthSettings {
     checks: Vec<Configured>,
     declared: Vec<declared::Declared>,
     probes: Vec<probe::Probe>,
+    scripts: Vec<script::Script>,
     connection: Option<ProbeConnection>,
     coverage: Vec<coverage::Target>,
     plugins: Vec<Plugin>,
@@ -328,32 +332,35 @@ impl Plugin {
     }
 }
 
-/// Runs a registered check on `scope`, adding its finding to each node in `per_node`:
-/// *unknown* for every node when it errs, takes longer than `timeout` or answers about a
-/// node outside the scope, and for a node it leaves unanswered or answers twice.
-async fn run_plugin(
-    plugin: &Plugin,
+/// Runs `check`, a plugin's or a script's (`source`), on the nodes of `scope` it
+/// `applies` to, adding its finding to each node in `per_node`: *unknown* for every
+/// node when it errs, takes longer than `timeout` or answers about a node outside the
+/// scope, and for a node it leaves unanswered or answers twice.
+async fn run_registered(
+    check: &dyn HealthCheck,
+    applies: &dyn Fn(&NodeFacts) -> bool,
+    source: CheckSource,
     scope: &CheckScope,
     timeout: Duration,
     per_node: &mut BTreeMap<String, Vec<Finding>>,
     severity: Severity,
 ) -> CheckRun {
-    let info = plugin.check.describe();
+    let info = check.describe();
     let run = CheckRun {
         id: info.id.clone(),
-        source: CheckSource::Plugin,
+        source,
         severity,
         about: info.about.clone(),
     };
-    // The check is asked only about the nodes `[health.plugins.<id>]` selects; the
-    // others are skipped, as a built-in's are.
+    // The check is asked only about the nodes it is configured for; the others are
+    // skipped, as a built-in's are.
     let (selected, skipped): (Vec<&NodeFacts>, Vec<&NodeFacts>) =
-        scope.nodes.iter().partition(|n| plugin.applies(n));
+        scope.nodes.iter().partition(|n| applies(n));
     for node in skipped {
         if let Some(findings) = per_node.get_mut(&node.id) {
             findings.push(Finding {
                 check: info.id.clone(),
-                source: CheckSource::Plugin,
+                source,
                 status: Status::Skipped,
                 severity,
                 reason: "not selected for this check".to_owned(),
@@ -374,7 +381,7 @@ async fn run_plugin(
         );
         &narrowed
     };
-    let answered = match tokio::time::timeout(timeout, plugin.check.check(scope)).await {
+    let answered = match tokio::time::timeout(timeout, check.check(scope)).await {
         Ok(Ok(findings)) => Ok(findings),
         Ok(Err(e)) => Err(format!("the check couldn't run: {e}")),
         Err(_) => Err(format!(
@@ -425,7 +432,7 @@ async fn run_plugin(
         if let Some(findings) = per_node.get_mut(&node.id) {
             findings.push(Finding {
                 check: info.id.clone(),
-                source: CheckSource::Plugin,
+                source,
                 status,
                 severity,
                 reason,
@@ -442,6 +449,7 @@ impl fmt::Debug for HealthSettings {
             .field("checks", &self.checks)
             .field("declared", &self.declared)
             .field("probes", &self.probes)
+            .field("scripts", &self.scripts)
             .field("connection", &self.connection)
             .field("coverage", &self.coverage)
             .field(
@@ -471,6 +479,9 @@ fn severity_word(severity: Severity) -> &'static str {
 
 /// How long a registered check may take before its findings are unknown.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long past a script's own timeout the engine waits for its runner to give up.
+const SCRIPT_GRACE: Duration = Duration::from_secs(5);
 
 /// Every node's health after a run of every check: built-in and registered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -597,6 +608,7 @@ impl HealthSettings {
             checks,
             declared: configured.declared,
             probes: configured.probes,
+            scripts: configured.scripts,
             connection: None,
             coverage: coverage::Target::from_config(&config.coverage)?,
             plugins: Vec::new(),
@@ -657,6 +669,7 @@ impl HealthSettings {
         let taken = BUILTINS.iter().any(|b| b.id() == info.id)
             || self.declared.iter().any(|d| d.id == info.id)
             || self.probes.iter().any(|p| p.id == info.id)
+            || self.scripts.iter().any(|s| s.id == info.id)
             || self
                 .plugins
                 .iter()
@@ -760,7 +773,50 @@ impl HealthSettings {
         checks.extend(self.probes.iter().filter_map(probe::Probe::run));
         for plugin in &self.plugins {
             if let Some(severity) = plugin.severity {
-                checks.push(run_plugin(plugin, scope, timeout, &mut per_node, severity).await);
+                checks.push(
+                    run_registered(
+                        plugin.check.as_ref(),
+                        &|n| plugin.applies(n),
+                        CheckSource::Plugin,
+                        scope,
+                        timeout,
+                        &mut per_node,
+                        severity,
+                    )
+                    .await,
+                );
+            }
+        }
+        // Scripts, each with its own timeout: the host's runner stops the process at
+        // it, and the engine gives up a little after, should the runner not.
+        for script in &self.scripts {
+            let Some(severity) = script.severity else {
+                continue;
+            };
+            match (script.held(), script.runner.as_ref()) {
+                (None, Some(runner)) => {
+                    let mut run = run_registered(
+                        runner.as_ref(),
+                        &|n| script.applies(n),
+                        CheckSource::Script,
+                        scope,
+                        script.timeout + SCRIPT_GRACE,
+                        &mut per_node,
+                        severity,
+                    )
+                    .await;
+                    run.about = script.about();
+                    checks.push(run);
+                }
+                (why, _) => {
+                    let why = why.unwrap_or_default();
+                    for node in &scope.nodes {
+                        if let Some(findings) = per_node.get_mut(&node.id) {
+                            findings.push(script.finding(severity, node, &why));
+                        }
+                    }
+                    checks.extend(script.run());
+                }
             }
         }
         HealthReport {
@@ -859,6 +915,54 @@ impl HealthSettings {
         self.probes.iter().map(probe::Probe::definition).collect()
     }
 
+    /// What a host needs to run each script, and a trust entry pins for it (ADR-0030
+    /// §4, §4b).
+    pub fn script_definitions(&self) -> Vec<ScriptDefinition> {
+        self.scripts
+            .iter()
+            .map(script::Script::definition)
+            .collect()
+    }
+
+    /// What a trust entry pins for each check that needs trust: the probes, then the
+    /// scripts (ADR-0030 §4b).
+    pub fn trust_definitions(&self) -> Vec<CheckDefinition> {
+        self.probe_definitions()
+            .into_iter()
+            .map(CheckDefinition::Probe)
+            .chain(
+                self.script_definitions()
+                    .into_iter()
+                    .map(CheckDefinition::Script),
+            )
+            .collect()
+    }
+
+    /// Runs the script `id` with `runner`, the host's process for it (ADR-0031 §6): a
+    /// script with none never runs, and is *unknown* where it applies.
+    ///
+    /// # Errors
+    /// No script is called `id`, or `runner` describes itself as another check.
+    pub fn run_script_with(
+        &mut self,
+        id: &str,
+        runner: Arc<dyn HealthCheck>,
+    ) -> Result<(), HealthConfigError> {
+        let described = runner.describe().id;
+        if described != id {
+            return Err(HealthConfigError(format!(
+                "the runner for script `{id}` describes itself as `{described}`"
+            )));
+        }
+        let script = self
+            .scripts
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or_else(|| HealthConfigError(format!("no script check is called `{id}`")))?;
+        script.runner = Some(runner);
+        Ok(())
+    }
+
     /// Adds `connection`, the host's settings that decide where probes run and that a
     /// project can set, to each probe's trust digest (ADR-0030 §4d): changing them needs
     /// trust again.
@@ -868,11 +972,30 @@ impl HealthSettings {
         }
     }
 
+    /// Adds to each script's trust digest where it runs and what it runs (ADR-0030
+    /// §4d): `settings`, the host's that a project can set (e.g. a configured working
+    /// directory), and the content of every file its command names inside `root`, the
+    /// directory it runs in. Changing any of them needs trust again.
+    pub fn pin_scripts(&mut self, root: &std::path::Path, settings: &BTreeMap<String, String>) {
+        for script in &mut self.scripts {
+            script.pin(root, settings);
+        }
+    }
+
     /// Marks the probes whose ids are in `trusted` as trusted for this project, and the
     /// rest as not (ADR-0030 §4b).
     pub fn trust_probes(&mut self, trusted: &BTreeSet<String>) {
         for probe in &mut self.probes {
             probe.set_trusted(trusted.contains(&probe.id));
+        }
+    }
+
+    /// Marks the probes and scripts whose ids are in `trusted` as trusted for this
+    /// project, and the rest as not (ADR-0030 §4b).
+    pub fn trust_checks(&mut self, trusted: &BTreeSet<String>) {
+        self.trust_probes(trusted);
+        for script in &mut self.scripts {
+            script.set_trusted(trusted.contains(&script.id));
         }
     }
 
@@ -934,6 +1057,14 @@ impl HealthSettings {
                 probe.id,
                 probe.severity.map_or("off", severity_word),
                 probe.about()
+            ));
+        }
+        for script in &self.scripts {
+            parts.push(format!(
+                "{} ({}, script): {}",
+                script.id,
+                script.severity.map_or("off", severity_word),
+                script.about()
             ));
         }
         for plugin in &self.plugins {
@@ -1168,10 +1299,13 @@ mod declared;
 mod pass;
 mod probe;
 pub mod record;
+mod script;
 pub mod trust;
 
 pub use coverage::{COVERAGE_MEASURES, CoverageFinding, Measured, Share};
 pub use probe::{ElevatedLogin, ProbeConnection, ProbeDefinition, ReadOnlyCheck};
+pub use script::{SCRIPT_TIMEOUT, ScriptDefinition};
+pub use trust::{CheckDefinition, Pinned};
 
 #[cfg(test)]
 mod tests;

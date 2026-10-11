@@ -1,4 +1,4 @@
-//! The trust store (ADR-0030 §4b, §4d): which of a project's probe (and, later, script)
+//! The trust store (ADR-0030 §4b, §4d): which of a project's probe and script
 //! definitions the user has reviewed and allowed to run. A repository's `ods.toml` can
 //! name queries and commands, and cloning it mustn't be enough to run them, so each
 //! project's definitions are trusted one by one, by digest: a changed definition is
@@ -15,7 +15,58 @@ use ods_core::SchemaVersion;
 use ods_core::state::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::ProbeDefinition;
+use crate::{ProbeDefinition, ScriptDefinition};
+
+/// A definition a trust entry can pin: its check's id, and the digest of what it runs.
+pub trait Pinned {
+    /// The check's id.
+    fn id(&self) -> &str;
+    /// `sha256:` and the digest of what decides what runs and where.
+    fn digest(&self) -> &str;
+}
+
+impl Pinned for ProbeDefinition {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+impl Pinned for ScriptDefinition {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+/// A probe's or a script's definition: every check that needs trust (ADR-0030 §4b).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum CheckDefinition {
+    /// A probe: a read-only query.
+    Probe(ProbeDefinition),
+    /// A script: a command.
+    Script(ScriptDefinition),
+}
+
+impl Pinned for CheckDefinition {
+    fn id(&self) -> &str {
+        match self {
+            Self::Probe(d) => d.id(),
+            Self::Script(d) => d.id(),
+        }
+    }
+    fn digest(&self) -> &str {
+        match self {
+            Self::Probe(d) => d.digest(),
+            Self::Script(d) => d.digest(),
+        }
+    }
+}
 
 /// The trust store's format version.
 pub const TRUST_STORE_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
@@ -163,27 +214,23 @@ impl TrustStore {
     }
 
     /// How each of `definitions` stands for the project at `root`.
-    pub fn standing(
-        &self,
-        root: &str,
-        definitions: &[ProbeDefinition],
-    ) -> BTreeMap<String, Standing> {
+    pub fn standing<D: Pinned>(&self, root: &str, definitions: &[D]) -> BTreeMap<String, Standing> {
         let entry = self.projects.get(root);
         definitions
             .iter()
             .map(|d| {
-                let standing = match entry.and_then(|e| e.checks.get(&d.id)) {
-                    Some(digest) if *digest == d.digest => Standing::Trusted,
+                let standing = match entry.and_then(|e| e.checks.get(d.id())) {
+                    Some(digest) if digest == d.digest() => Standing::Trusted,
                     Some(_) => Standing::Changed,
                     None => Standing::New,
                 };
-                (d.id.clone(), standing)
+                (d.id().to_owned(), standing)
             })
             .collect()
     }
 
     /// The ids of `definitions` trusted as they are now for the project at `root`.
-    pub fn trusted(&self, root: &str, definitions: &[ProbeDefinition]) -> BTreeSet<String> {
+    pub fn trusted<D: Pinned>(&self, root: &str, definitions: &[D]) -> BTreeSet<String> {
         self.standing(root, definitions)
             .into_iter()
             .filter(|(_, s)| *s == Standing::Trusted)
@@ -193,14 +240,14 @@ impl TrustStore {
 
     /// Trusts `definitions` as they are now for the project at `root`, replacing what it
     /// trusted before: a definition no longer configured is no longer trusted.
-    pub fn trust(&mut self, root: &str, definitions: &[ProbeDefinition], at: Timestamp) {
+    pub fn trust<D: Pinned>(&mut self, root: &str, definitions: &[D], at: Timestamp) {
         self.projects.insert(
             root.to_owned(),
             ProjectTrust {
                 trusted_at: at,
                 checks: definitions
                     .iter()
-                    .map(|d| (d.id.clone(), d.digest.clone()))
+                    .map(|d| (d.id().to_owned(), d.digest().to_owned()))
                     .collect(),
             },
         );
