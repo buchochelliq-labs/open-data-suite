@@ -24,7 +24,7 @@
 
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::contracts::probe::{ProbeTarget, RelationProbe};
 use crate::error::ProviderError;
@@ -37,7 +37,7 @@ pub const RELATION_PRIVILEGES: Contract = Contract {
 };
 
 /// What the login may do on one target's relation and its containers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Access {
@@ -51,7 +51,7 @@ pub enum Access {
 }
 
 /// What [`RelationPrivileges::privileges`] found.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct PrivilegeReport {

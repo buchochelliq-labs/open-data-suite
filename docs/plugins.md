@@ -219,8 +219,10 @@ A plugin can also be a program, in any language, that the released `ods` starts 
 talks to over its stdin and stdout ([ADR-0031](adr/0031-plugin-registry-and-loading.md)
 §5). A project or user declares it with `[plugins.<name>]`
 ([docs/cli.md](cli.md#out-of-process-plugins)). It offers health checks
-(`health_check`), and a warehouse's source versions (`change_provider`). Links,
-observed lineage and error patterns for a warehouse are in-process only for now.
+(`health_check`), and for one warehouse: source versions (`change_provider`), links
+(`relation_linker`), error explanations (`error_catalogue`), observed lineage
+(`observed_lineage_source`), probes (`relation_probe`) and what the login it probes with
+may do (`relation_privileges`), and the warehouse's SQL `dialect`.
 
 Every call starts the program once, writes one JSON request to its stdin and reads one
 JSON answer from its stdout, as script checks do: the envelope carries the protocol
@@ -286,6 +288,31 @@ A source left out is *unknown*. An answer about a source it wasn't asked about, 
 about one twice, makes every source in the call *unknown*. An out-of-process plugin
 can't use dbt's connection: it connects with its own credentials, from its own
 environment.
+
+The warehouse requests ([ADR-0031](adr/0031-plugin-registry-and-loading.md) §3d) each
+carry the same `settings`, and are answered in one call:
+
+| Request | Asked | Answer |
+|---|---|---|
+| `link` | `relations`: every relation of the project, as dbt renders it | `links`: `{"relation", "link": {"url", "label"}}` or `{"relation", "no_link": {"reason", …}}` each |
+| `classify` | `errors`: failed nodes' `ErrorSummary`s (values already removed) | `classifications`: one `Classification` each, in order |
+| `observed_lineage` | `export`: an absolute path the user named | `lineage`: the `ObservedLineage` it read, or exit non-zero |
+| `probe` | `probe` (a `ProbeRequest`) and `targets` (`ProbeTarget`s, each with the relation the build made) | `targets`: `{"id", "answer": {"rows": […]} \| {"skipped": why} \| {"unknown": why}}` each |
+| `privileges` | `targets` | `login`, and `targets`: `{"id", "access": "read_only" \| {"elevated": […]} \| {"unknown": why}}` each |
+
+`describe` names the `dialect` (a name the shared parser knows) and, for
+`error_catalogue`, its `catalogue` (`{"name", "version", "engine"}`).
+`relation_privileges` needs `relation_probe`: only the connection that probes can say
+what its login may do. A link must be an `https://` URL with a label and no user part
+or fragment; anything else, a relation it doesn't answer about, or a failed call is no
+link. An error it doesn't recognise, or a failed call, is left to dbt's catalogue. A
+probe or privilege answer about a target it wasn't asked about, or about one twice,
+makes the whole call *unknown*.
+
+ODS asks for links and explanations from the commands that run plugins, and keeps the
+answers for the dashboard and MCP, which never start one. So a plugin is asked about
+everything at once, and only when something changed: every relation when a command
+reads the project, each error once.
 
 **Testing it:** `ods plugin test <name>` runs the SDK's suites against the plugin as ODS
 calls it: `health_check` for each check, over fixture nodes, and `changes` over the

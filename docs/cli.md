@@ -295,10 +295,28 @@ timeout = "30s"                            # each call; default 60s, at most 1h
 
 ODS first asks it to describe itself, then calls it as each command needs: its health
 checks run in `ods health check` with the other checks, and tuned the same way
-(`[health.plugins.<id>]`, see [Plugin checks](#plugin-checks)); a warehouse it serves
-gives `ods state compile|run|seed|snapshot|build` its sources' data versions, as a
-built-in warehouse plugin does. [Writing a provider](plugins.md#out-of-process-plugins)
-describes the protocol.
+(`[health.plugins.<id>]`, see [Plugin checks](#plugin-checks)). For a warehouse it
+serves (the project's, as dbt names it), it can give what a built-in warehouse plugin
+gives ([ADR-0031](adr/0031-plugin-registry-and-loading.md) §3d):
+- **source versions**, for `ods state compile|run|seed|snapshot|build`;
+- **"Open in warehouse" links**, asked for every relation of the project by `ods state`
+  (except `--dry-run`), `ods health check` and `ods lineage`;
+- **error explanations**, asked for the errors of a run that failed by `ods state` and
+  `ods state explain-failure`, before dbt's own;
+- **observed lineage**, read from the export `ods lineage compare --observed` names;
+- **the SQL dialect** column lineage reads the project in;
+- **probes**, over its own connection, with `[health.probes] plugin` (see
+  [Probe checks](#probe-checks)).
+
+[Writing a provider](plugins.md#out-of-process-plugins) describes the protocol.
+
+- **The dashboard and MCP never start a plugin** (ADR-0009). The commands that run one
+  keep its links and explanations beside the state store,
+  `<state db>.plugins/<scope digest>.json` (the newest 500 explanations), and the
+  dashboard and the MCP tools read them from there: what they show is as of the last
+  command that ran the plugin. Before any has, there are no links, saying why, and dbt
+  explains errors. The dashboard reads the plugin's dialect from there too, so run
+  `ods health check` or `ods state build` once before `ods serve` on such a project.
 
 - **Where it runs:** in the directory of the project's `ods.toml` (else the current
   one), with your environment. ODS hands it no credential and no resolved secret: a
@@ -319,6 +337,8 @@ describes the protocol.
   `sources.json` alone. A call that fails, times out or answers about something it
   wasn't asked about makes everything in that call *unknown*: a check's nodes, or the
   sources asked about.
+- **Links are checked:** a link a plugin gives must be an `https://` URL with a label
+  and no user part or fragment, or the relation has none, saying why: a page shows it.
 - **Listing:** `ods plugin list` lists each declared plugin under `declared`, with the
   contracts it describes, or why it doesn't run, and its checks and warehouse with the
   other plugins (`from` is `<its name> (plugins.<name>) <its version>`). Listing asks
@@ -327,14 +347,25 @@ describes the protocol.
   with: they never start a declared plugin.
 
 `ods plugin test <name>` runs the SDK's conformance suites against `[plugins.<name>]`,
-as a subprocess, for each contract it describes: each of its health checks over fixture
-nodes, and its source versions over the sources you name, two it can read with
-`--source` and one it can't with `--unreadable`. Without two sources, that suite is
-skipped and says so. Changing a source's data is beyond a read-only test, so that case
-is always skipped. A failing case exits 5 (`ODS-E0803`), naming it:
+as a subprocess, for each contract it describes, with its warehouse's settings as a run
+sends them:
+- its health checks, over fixture nodes;
+- its source versions, over the sources you name, two it can read with `--source` and
+  one it can't with `--unreadable` (changing a source's data is beyond a read-only test,
+  so that case is always skipped);
+- its links, over three-part relation names quoted with `--quote` (default `"`);
+- its error explanations, over the samples in `--errors FILE`, a JSON list of
+  `{"message": …, "expected": <symptom or null>}`;
+- its observed lineage, reading `--export FILE` (and refusing `--malformed FILE`);
+- not its probes: they need relations in a live warehouse, which
+  `ods health check` with `[health.probes] plugin` has.
+
+A suite without what it needs is skipped and says so. A failing case exits 5
+(`ODS-E0803`), naming it:
 
 ```sh
-ods plugin test acme --source source.shop.raw.orders --source source.shop.raw.customers
+ods plugin test acme --source source.shop.raw.orders --source source.shop.raw.customers \
+  --errors samples.json --export lineage.csv
 ```
 
 ## `ods doctor`
@@ -1566,6 +1597,18 @@ needs `ods health trust` again. A probe with one query keeps its trust.
 [health.probes]
 target = "health_readonly"   # a target in profiles.yml whose login can only read
 profile = "jaffle"           # optional: when not the project's (or --dbt-profile's)
+```
+
+Or, in place of `target` and `profile`, through an
+[out-of-process plugin](#out-of-process-plugins) that serves the project's warehouse,
+over its own connection: it runs the probes, and reports what the login it runs them
+under may do, so the login checked is the login probed (ADR-0031 §3d). A plugin that
+doesn't report that has every probe refused, as below, unless `--allow-elevated-login`.
+`plugin` is pinned in each probe's trust, as `target` is:
+
+```toml
+[health.probes]
+plugin = "acme"              # a [plugins.<name>] that implements relation_probe
 ```
 
 Reporting what a login may do is a provider capability (`relation_privileges`). On

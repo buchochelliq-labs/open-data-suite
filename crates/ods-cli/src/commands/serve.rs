@@ -73,15 +73,18 @@ impl Module for Serve {
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
         let target_dir = artifacts_dir(matches, ctx.config)?;
-        let load = LoadOptions::from_args(matches).with_warehouses(ctx.config);
+        let mut load = LoadOptions::from_args(matches).with_warehouses(ctx.config);
         // Shared across reloads so only changed models are re-analyzed.
         let cache = Arc::new(MemoryCache::default());
 
+        let source = Arc::new(DashboardSource::new(matches, ctx.config)?);
+        // A declared warehouse plugin's dialect, as recorded: the server never starts
+        // one (ADR-0031 §3d).
+        load.plugins = source.dialect_plugins();
         // Load once up front so a bad target directory is a normal CLI error, not a
         // server that never starts. The server then takes this snapshot as its first.
         let first = Loaded::from_dir(&target_dir, &load, &cache)?;
         let summary = Summary::of(&first);
-        let source = Arc::new(DashboardSource::new(matches, ctx.config)?);
         let initial = Mutex::new(Some(
             source.snapshot(&first, target_dir.display().to_string()),
         ));

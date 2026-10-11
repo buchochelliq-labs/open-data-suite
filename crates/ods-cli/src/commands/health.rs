@@ -206,27 +206,38 @@ fn check_artifacts(ws: &Workspace) -> BTreeMap<String, String> {
     artifacts
 }
 
-/// The health checks with every out-of-process plugin's, which run here and only here,
-/// as each describes them (ADR-0031 §5); `None` when none is declared. One that can't
-/// run fails the command: which checks it would have run is unknown, so nothing else
-/// can stand in for them (AGENTS rule 3).
-fn with_plugin_checks(
+/// The project's plugins, with every out-of-process plugin as it describes itself
+/// (ADR-0031 §5): its checks run here and only here, and its warehouse's links are
+/// asked for now, and kept beside the state store when `keep` names where (§3d).
+/// `None` when none is declared. One that can't run fails the command: which checks it
+/// would have run is unknown, so nothing else can stand in for them (AGENTS rule 3).
+fn with_plugins(
     args: &ArgMatches,
     config: &Loaded,
     artifacts: &BTreeMap<String, String>,
-) -> Result<Option<ods_health::HealthSettings>, CliError> {
-    if config.config.plugins.is_empty() {
-        return Ok(None);
-    }
-    let declared = block_on(super::plugin_process::with_declared(
+    keep: Option<(&std::path::Path, &str)>,
+    manifest: &ods_provider_dbt::Manifest,
+) -> Result<Option<super::plugin_process::ProjectPlugins>, CliError> {
+    let Some(mut project) = super::plugin_process::for_project(
         config,
         args.get_flag("allow-scripts"),
         artifacts,
-    ))??;
-    if let Some(held) = declared.held.first() {
+        keep,
+    )?
+    else {
+        return Ok(None);
+    };
+    if let Some(held) = project.declared().held.first() {
         return Err(held.error());
     }
-    super::serve_dashboard::health_settings_with(config, &declared.plugins).map(Some)
+    block_on(project.ask_links(
+        manifest.adapter_type.as_deref(),
+        &super::plugin_process::manifest_relations(manifest),
+    ))?;
+    for warning in project.warnings.drain(..) {
+        tracing::warn!("{warning}");
+    }
+    Ok(Some(project))
 }
 
 /// Gives each script in `health` its process: its command, started in the dbt project's
@@ -270,6 +281,7 @@ fn probe_connection(
     settings: &StateSettings,
     health: &ods_health::HealthSettings,
     manifest: &ods_provider_dbt::Manifest,
+    project: Option<&super::plugin_process::ProjectPlugins>,
 ) -> Result<Option<ProbeConnection>, CliError> {
     if health.probe_definitions().is_empty() {
         return Ok(None);
@@ -277,6 +289,9 @@ fn probe_connection(
     let Some(probes) = config.config.health.probes.as_ref() else {
         return Ok(None);
     };
+    if let Some(plugin) = probes.plugin.as_deref() {
+        return plugin_probes(probes, plugin, manifest, project).map(Some);
+    }
     let Some(target) = probes.target.as_deref() else {
         return Ok(None);
     };
@@ -310,6 +325,46 @@ fn probe_connection(
         .labelled(label)
         .expecting(relations),
     ))
+}
+
+/// Probes through the plugin `plugin`, over its own connection (ADR-0031 §3d): its
+/// `privileges` report what the login it probes with may do, so the login checked is
+/// the login probed; without it, every probe needs `--allow-elevated-login`.
+///
+/// # Errors
+/// `target` or `profile` is set too, or the plugin doesn't run here, serves another
+/// warehouse, or doesn't probe (exit 4).
+fn plugin_probes(
+    probes: &ods_config::HealthProbesConfig,
+    plugin: &str,
+    manifest: &ods_provider_dbt::Manifest,
+    project: Option<&super::plugin_process::ProjectPlugins>,
+) -> Result<ProbeConnection, CliError> {
+    let config_error =
+        |message: String| CliError::new(ExitStatus::Config, codes::HEALTH_CONFIG, message);
+    if probes.target.is_some() || probes.profile.is_some() {
+        return Err(config_error(
+            "health.probes: `plugin` and `target` (or `profile`) are two places for probes to run; set one".to_owned(),
+        ));
+    }
+    let probe = project
+        .ok_or_else(|| format!("no `[plugins.{plugin}]` is declared"))
+        .and_then(|p| p.probe(plugin, manifest.adapter_type.as_deref()))
+        .map_err(|why| config_error(format!("health.probes.plugin: {why}")))?;
+    let relations = manifest
+        .nodes
+        .iter()
+        .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
+        .collect();
+    let probe = Arc::new(probe);
+    let connection = if probe.reports_privileges() {
+        ProbeConnection::new(probe)
+    } else {
+        ProbeConnection::without_privileges(probe)
+    };
+    Ok(connection
+        .labelled(format!("plugin `{plugin}`"))
+        .expecting(relations))
 }
 
 /// One node that isn't healthy, or every node in JSON.
@@ -358,6 +413,10 @@ pub(super) struct CheckReport {
 }
 
 impl CheckReport {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one check, in order: the project, its plugins, the checks, probes, the record"
+    )]
     pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
         let mut health = super::serve_dashboard::health_settings(config)?;
         let strict = args.get_flag("strict");
@@ -384,21 +443,26 @@ impl CheckReport {
         };
         let last_builds =
             super::serve_catalog::last_builds(latest.as_ref(), &runs_index, &ws.manifest);
+        let artifacts = check_artifacts(&ws);
+        // Out-of-process plugins: their checks, and their warehouse's links, asked now and
+        // kept for the dashboard unless `--no-record` (ADR-0031 §5, §3d).
+        let keep = (!args.get_flag("no-record")).then_some((ws.state_db.as_path(), scope.as_str()));
+        let project = with_plugins(args, config, &artifacts, keep, &ws.manifest)?;
+        if let Some(project) = &project {
+            health = super::serve_dashboard::health_settings_with(config, project.plugins())?;
+        }
         let links = Links::new(
             ws.manifest.adapter_type.as_deref(),
-            &LinkSettings::read(config),
+            &LinkSettings::read(config).with_plugins(project.as_ref().map(|p| p.plugins().clone())),
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
-        let artifacts = check_artifacts(&ws);
-        if let Some(with_plugins) = with_plugin_checks(args, config, &artifacts)? {
-            health = with_plugins;
-        }
         // Where probes connect and scripts run, and the files scripts run, are part of
         // what is trusted (ADR-0030 §4d).
         pin_checks(&mut health, &settings);
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
-        super::serve_dashboard::check_probe_sql(
+        super::serve_dashboard::check_probe_sql_with(
+            super::plugin_process::plugins_of(project.as_ref()),
             &mut health,
             ws.manifest.adapter_type.as_deref(),
             &config.config.warehouses,
@@ -408,8 +472,14 @@ impl CheckReport {
         // (ADR-0030 §4; ADR-0031 §6): the dashboard reads their findings from the record.
         run_scripts_here(&mut health, &settings, &artifacts)?;
         let allow_elevated_login = args.get_flag("allow-elevated-login");
-        if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
-        {
+        if let Some(connection) = probe_connection(
+            args,
+            config,
+            &settings,
+            &health,
+            &ws.manifest,
+            project.as_ref(),
+        )? {
             health = health
                 .with_probe_connection(connection.allowing_elevated_login(allow_elevated_login));
         }

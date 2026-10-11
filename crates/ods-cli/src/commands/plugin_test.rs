@@ -8,8 +8,18 @@
 //!   `--unreadable` for one it can't, with its warehouse's settings, as a run sends
 //!   them. Changing data isn't something a test of a
 //!   read-only plugin can do, so that case is always skipped.
+//! - **`relation_linker`:** over three-part relation names quoted with `--quote`, asked
+//!   in one call as a run asks, with and without its warehouse's settings.
+//! - **`error_catalogue`:** over the samples in `--errors` (a JSON list of
+//!   `{"message", "expected"}`, `expected` a symptom or null), each classified by the
+//!   plugin as it is asked.
+//! - **`observed_lineage_source`:** over the export `--export` (and `--malformed`, one
+//!   it must refuse).
+//! - **`relation_probe`, `relation_privileges`:** not here: they need relations in a
+//!   live warehouse. `ods health check` with `[health.probes] plugin` runs them.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -56,6 +66,31 @@ pub(super) fn command() -> Command {
                 .long("unreadable")
                 .value_name("ID")
                 .help("A source that exists but whose version it can't read"),
+        )
+        .arg(
+            Arg::new("quote")
+                .long("quote")
+                .value_name("CHAR")
+                .default_value("\"")
+                .help("How its warehouse quotes identifiers, for the link suite's relations"),
+        )
+        .arg(
+            Arg::new("errors")
+                .long("errors")
+                .value_name("FILE")
+                .help("Error samples for its catalogue: a JSON list of {\"message\", \"expected\"}"),
+        )
+        .arg(
+            Arg::new("export")
+                .long("export")
+                .value_name("FILE")
+                .help("An export of its warehouse's lineage, for its observed lineage"),
+        )
+        .arg(
+            Arg::new("malformed")
+                .long("malformed")
+                .value_name("FILE")
+                .help("A file it must refuse to read as an export"),
         )
         .arg(
             Arg::new("allow-scripts")
@@ -142,7 +177,16 @@ impl TestReport {
             .map(|id| requested(id))
             .collect();
         let unreadable = args.get_one::<String>("unreadable").map(|id| requested(id));
-        block_on(run(config, plugin, sources, unreadable))?
+        let inputs = WarehouseInputs {
+            quote: args
+                .get_one::<String>("quote")
+                .and_then(|q| q.chars().next())
+                .unwrap_or('"'),
+            errors: args.get_one::<String>("errors").map(PathBuf::from),
+            export: args.get_one::<String>("export").map(PathBuf::from),
+            malformed: args.get_one::<String>("malformed").map(PathBuf::from),
+        };
+        block_on(run(config, plugin, sources, unreadable, inputs))?
     }
 
     /// The error to exit with when a case failed (exit 5).
@@ -182,6 +226,7 @@ async fn run(
     plugin: Declared,
     sources: Vec<RequestedSource>,
     unreadable: Option<RequestedSource>,
+    inputs: WarehouseInputs,
 ) -> Result<TestReport, CliError> {
     let process = Arc::new(PluginProcess::new(
         &plugin.name,
@@ -233,6 +278,13 @@ async fn run(
         };
         suites.push(result(CHANGE_PROVIDER.name, None, outcome));
     }
+    let settings = described
+        .answer
+        .warehouse
+        .as_deref()
+        .map(|w| super::plugin_process::warehouse_settings(config, w))
+        .unwrap_or_default();
+    suites.extend(warehouse_suites(&process, &described, &settings, inputs).await);
     Ok(TestReport {
         plugin: plugin.name,
         command: plugin.command,
@@ -424,5 +476,346 @@ impl Present for TestReport {
             });
         }
         ViewNode::Group(blocks)
+    }
+}
+
+/// What the warehouse suites are run over, from the command line.
+struct WarehouseInputs {
+    quote: char,
+    errors: Option<PathBuf>,
+    export: Option<PathBuf>,
+    malformed: Option<PathBuf>,
+}
+
+/// Runs `future` to its end from synchronous code, on a thread of its own with its own
+/// runtime: the link, catalogue and lineage contracts are synchronous, and the suites
+/// run them inside a runtime.
+fn blocking<T: Send>(future: impl std::future::Future<Output = T> + Send) -> T {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime.block_on(future),
+                    Err(e) => panic!("no runtime to call the plugin with: {e}"),
+                }
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+/// The suites of the warehouse contracts `described` implements (ADR-0031 §3d), with
+/// `settings` as a run sends them.
+async fn warehouse_suites(
+    process: &Arc<PluginProcess>,
+    described: &ods_provider_process::Described,
+    settings: &BTreeMap<String, serde_json::Value>,
+    inputs: WarehouseInputs,
+) -> Vec<SuiteResult> {
+    use ods_sdk::contracts::error_catalogue::ERROR_CATALOGUE;
+    use ods_sdk::contracts::observed_lineage::OBSERVED_LINEAGE_SOURCE;
+    use ods_sdk::contracts::privileges::RELATION_PRIVILEGES;
+    use ods_sdk::contracts::probe::RELATION_PROBE;
+    use ods_sdk::contracts::relation_link::RELATION_LINKER;
+
+    let skipped = |why: &str| {
+        Ok(Report {
+            passed: Vec::new(),
+            skipped: vec![("every case", why.to_owned())],
+        })
+    };
+    let mut suites = Vec::new();
+    if described.provides(&RELATION_LINKER) {
+        let harness = Linking::ask(process, settings, inputs.quote).await;
+        let outcome = match harness {
+            Ok(harness) => {
+                caught(async move { ods_sdk::conformance::relation_link::run(&harness) }).await
+            }
+            Err(e) => Err(format!("its `link` call failed: {e}")),
+        };
+        suites.push(result(RELATION_LINKER.name, None, outcome));
+    }
+    if described.provides(&ERROR_CATALOGUE) {
+        let outcome = match (&inputs.errors, &described.answer.catalogue) {
+            (None, _) => skipped("give error samples with --errors"),
+            (Some(_), None) => Err("it names no catalogue".to_owned()),
+            (Some(file), Some(info)) => match samples(file) {
+                Ok(samples) => {
+                    let harness = Classifying {
+                        catalogue: LiveCatalogue {
+                            process: process.clone(),
+                            info: info.clone(),
+                        },
+                        samples,
+                    };
+                    caught(async move { ods_sdk::conformance::error_catalogue::run(&harness) })
+                        .await
+                }
+                Err(e) => Err(e),
+            },
+        };
+        suites.push(result(ERROR_CATALOGUE.name, None, outcome));
+    }
+    if described.provides(&OBSERVED_LINEAGE_SOURCE) {
+        let outcome = match &inputs.export {
+            None => skipped("give an export of its warehouse's lineage with --export"),
+            Some(export) => {
+                let harness = Reading {
+                    source: Arc::new(LiveLineage::new(process, settings, export)),
+                    malformed: inputs.malformed.as_ref().map(|m| {
+                        Arc::new(LiveLineage::new(process, settings, m))
+                            as Arc<dyn ods_sdk::contracts::observed_lineage::ObservedLineageSource>
+                    }),
+                };
+                caught(async move { ods_sdk::conformance::observed_lineage::run(&harness) }).await
+            }
+        };
+        suites.push(result(OBSERVED_LINEAGE_SOURCE.name, None, outcome));
+    }
+    for contract in [RELATION_PROBE, RELATION_PRIVILEGES] {
+        if described.provides(&contract) {
+            suites.push(result(
+                contract.name,
+                None,
+                skipped("it needs relations in a live warehouse: `ods health check` with `[health.probes] plugin` runs it"),
+            ));
+        }
+    }
+    suites
+}
+
+/// The link suite's relations, quoted with `quote`: three parts, as most warehouses
+/// name a table.
+struct Linking {
+    quote: char,
+    linker: Arc<dyn ods_sdk::contracts::relation_link::RelationLinker>,
+    unconfigured: Arc<dyn ods_sdk::contracts::relation_link::RelationLinker>,
+}
+
+impl Linking {
+    fn relation(&self, parts: &[&str]) -> String {
+        let q = self.quote;
+        parts
+            .iter()
+            .map(|p| format!("{q}{p}{q}"))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    fn every(quote: char) -> Vec<String> {
+        use ods_sdk::conformance::relation_link::RelationLinkHarness as _;
+        let probe = Self {
+            quote,
+            linker: Arc::new(ods_provider_process::AnsweredLinker::new(
+                "",
+                BTreeMap::new(),
+            )),
+            unconfigured: Arc::new(ods_provider_process::AnsweredLinker::new(
+                "",
+                BTreeMap::new(),
+            )),
+        };
+        let mut all = vec![probe.qualified(), probe.under_qualified(), probe.awkward()];
+        all.extend(probe.malformed());
+        all
+    }
+
+    /// Asks the plugin, in one call each, for the links of every relation the suite
+    /// uses, with and without its settings, as a run asks.
+    async fn ask(
+        process: &Arc<PluginProcess>,
+        settings: &BTreeMap<String, serde_json::Value>,
+        quote: char,
+    ) -> Result<Self, ods_sdk::ProviderError> {
+        let relations = Self::every(quote);
+        let linker = process.links(&relations, settings.clone()).await?;
+        let unconfigured = process.links(&relations, BTreeMap::new()).await?;
+        Ok(Self {
+            quote,
+            linker: Arc::new(ods_provider_process::AnsweredLinker::new(
+                process.name(),
+                linker,
+            )),
+            unconfigured: Arc::new(ods_provider_process::AnsweredLinker::new(
+                process.name(),
+                unconfigured,
+            )),
+        })
+    }
+}
+
+impl ods_sdk::conformance::relation_link::RelationLinkHarness for Linking {
+    fn linker(&self) -> Arc<dyn ods_sdk::contracts::relation_link::RelationLinker> {
+        self.linker.clone()
+    }
+    fn unconfigured(&self) -> Option<Arc<dyn ods_sdk::contracts::relation_link::RelationLinker>> {
+        Some(self.unconfigured.clone())
+    }
+    fn qualified(&self) -> String {
+        self.relation(&["ods_conformance", "main", "orders"])
+    }
+    fn under_qualified(&self) -> String {
+        self.relation(&["main", "orders"])
+    }
+    fn awkward(&self) -> String {
+        self.relation(&["ods conformance", "ma?in", "or#d/e%rs"])
+    }
+    fn malformed(&self) -> Vec<String> {
+        vec![
+            self.relation(&["ods_conformance", "main", "."]),
+            self.relation(&["ods_conformance", "main", ".."]),
+            self.relation(&["ods_conformance", "main", ""]),
+            format!("{}x", self.relation(&["ods_conformance", "main", "orders"])),
+            // Whitespace inside an unquoted name.
+            "ods_conformance.main.ord ers".to_owned(),
+        ]
+    }
+}
+
+/// An error sample, as `--errors` gives it.
+#[derive(serde::Deserialize)]
+struct SampleFields {
+    message: String,
+    #[serde(default)]
+    expected: Option<ods_core::failure::Symptom>,
+    #[serde(default)]
+    sentinel: Option<String>,
+}
+
+/// The samples in `file`.
+fn samples(
+    file: &std::path::Path,
+) -> Result<Vec<ods_sdk::conformance::error_catalogue::Sample>, String> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| format!("{} can't be read: {e}", file.display()))?;
+    let fields: Vec<SampleFields> = serde_json::from_str(&text)
+        .map_err(|e| format!("{} isn't a JSON list of samples: {e}", file.display()))?;
+    fields
+        .into_iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let summary = ods_sdk::contracts::run_events::ErrorSummary::from_message(&f.message)
+                .ok_or_else(|| format!("sample {i} has no message"))?;
+            let mut sample = ods_sdk::conformance::error_catalogue::Sample {
+                // A suite names its cases by `&'static str`; this command runs once.
+                name: Box::leak(format!("--errors sample {i}").into_boxed_str()),
+                summary,
+                expected: f.expected,
+                sentinel: None,
+            };
+            sample.sentinel = f.sentinel.map(|s| &*Box::leak(s.into_boxed_str()));
+            Ok(sample)
+        })
+        .collect()
+}
+
+/// A plugin's catalogue, asked about each error as the suite classifies it.
+struct LiveCatalogue {
+    process: Arc<PluginProcess>,
+    info: ods_sdk::contracts::error_catalogue::CatalogueInfo,
+}
+
+impl ods_sdk::Provider for LiveCatalogue {
+    fn info(&self) -> ods_sdk::ProviderInfo {
+        ods_sdk::ProviderInfo::new(
+            ods_provider_process::KIND,
+            self.process.name(),
+            env!("CARGO_PKG_VERSION"),
+            ods_core::CapabilitySet::from([ods_core::Capability::ErrorExplain]),
+        )
+    }
+}
+
+impl ods_sdk::contracts::error_catalogue::ErrorCatalogue for LiveCatalogue {
+    fn catalogue(&self) -> ods_sdk::contracts::error_catalogue::CatalogueInfo {
+        self.info.clone()
+    }
+
+    fn classify(
+        &self,
+        error: &ods_sdk::contracts::run_events::ErrorSummary,
+    ) -> ods_sdk::contracts::error_catalogue::Classification {
+        let asked = std::slice::from_ref(error);
+        match blocking(self.process.classify(asked)) {
+            Ok(mut classifications) => classifications.remove(0),
+            Err(e) => panic!("its `classify` call failed: {e}"),
+        }
+    }
+}
+
+struct Classifying {
+    catalogue: LiveCatalogue,
+    samples: Vec<ods_sdk::conformance::error_catalogue::Sample>,
+}
+
+impl ods_sdk::conformance::error_catalogue::ErrorCatalogueHarness for Classifying {
+    fn catalogue(&self) -> &dyn ods_sdk::contracts::error_catalogue::ErrorCatalogue {
+        &self.catalogue
+    }
+    fn samples(&self) -> Vec<ods_sdk::conformance::error_catalogue::Sample> {
+        self.samples.clone()
+    }
+}
+
+/// A plugin reading an export, asked each time the suite reads it.
+struct LiveLineage {
+    process: Arc<PluginProcess>,
+    settings: BTreeMap<String, serde_json::Value>,
+    export: String,
+}
+
+impl LiveLineage {
+    fn new(
+        process: &Arc<PluginProcess>,
+        settings: &BTreeMap<String, serde_json::Value>,
+        export: &std::path::Path,
+    ) -> Self {
+        let export = std::path::absolute(export).unwrap_or_else(|_| export.to_owned());
+        Self {
+            process: process.clone(),
+            settings: settings.clone(),
+            export: export.display().to_string(),
+        }
+    }
+}
+
+impl ods_sdk::Provider for LiveLineage {
+    fn info(&self) -> ods_sdk::ProviderInfo {
+        ods_sdk::ProviderInfo::new(
+            ods_provider_process::KIND,
+            self.process.name(),
+            env!("CARGO_PKG_VERSION"),
+            ods_core::CapabilitySet::new(),
+        )
+    }
+}
+
+impl ods_sdk::contracts::observed_lineage::ObservedLineageSource for LiveLineage {
+    fn observed_lineage(
+        &self,
+    ) -> Result<ods_sdk::contracts::observed_lineage::ObservedLineage, ods_sdk::ProviderError> {
+        blocking(
+            self.process
+                .observed_lineage(&self.export, self.settings.clone()),
+        )
+    }
+}
+
+struct Reading {
+    source: Arc<dyn ods_sdk::contracts::observed_lineage::ObservedLineageSource>,
+    malformed: Option<Arc<dyn ods_sdk::contracts::observed_lineage::ObservedLineageSource>>,
+}
+
+impl ods_sdk::conformance::observed_lineage::ObservedLineageHarness for Reading {
+    fn source(&self) -> Arc<dyn ods_sdk::contracts::observed_lineage::ObservedLineageSource> {
+        self.source.clone()
+    }
+    fn malformed(
+        &self,
+    ) -> Option<Arc<dyn ods_sdk::contracts::observed_lineage::ObservedLineageSource>> {
+        self.malformed.clone()
     }
 }

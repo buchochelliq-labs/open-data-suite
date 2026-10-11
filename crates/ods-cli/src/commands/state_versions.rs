@@ -200,6 +200,12 @@ mod tests {
                 warehouse: "acme_db".to_owned(),
                 changes: Some(Arc::new(FakeChangeProvider::new().with_source("a"))),
                 versions_read: None,
+                dialect: None,
+                offers_links: false,
+                links: None,
+                errors: None,
+                lineage: None,
+                plugin: "acme".to_owned(),
             }))
             .unwrap();
         assert!(change_provider_in(&plugins, Some("acme_db"), &executor).is_some());

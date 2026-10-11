@@ -115,24 +115,28 @@ fn error_text(error: &CliError) -> String {
 /// tool error.
 fn run_cli(args: &[String]) -> ToolOutput {
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    run(
-        &super::default_registry(),
-        std::iter::once("ods".to_owned())
-            .chain(args.iter().cloned())
-            .chain(std::iter::once("--json".to_owned())),
-        &mut Io {
-            out: &mut out,
-            err: &mut err,
-            stdout_is_terminal: false,
-            stderr_is_terminal: false,
-            ods_log: None,
-            no_color: true,
-            dumb_terminal: true,
-            cwd: None,
-            env: Vec::new(),
-            invalid_env: Vec::new(),
-        },
-    );
+    // The MCP server never starts a process (ADR-0009): a declared plugin answers only
+    // from what a command that ran it recorded (ADR-0031 §3d).
+    super::plugin_process::without_processes(|| {
+        run(
+            &super::default_registry(),
+            std::iter::once("ods".to_owned())
+                .chain(args.iter().cloned())
+                .chain(std::iter::once("--json".to_owned())),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                stdout_is_terminal: false,
+                stderr_is_terminal: false,
+                ods_log: None,
+                no_color: true,
+                dumb_terminal: true,
+                cwd: None,
+                env: Vec::new(),
+                invalid_env: Vec::new(),
+            },
+        );
+    });
     let envelope: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
     if envelope["result"].is_object() {
         return ToolOutput::Json(envelope["result"].clone());

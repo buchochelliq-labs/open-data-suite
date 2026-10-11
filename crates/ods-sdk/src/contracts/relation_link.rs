@@ -101,6 +101,15 @@ pub enum NoRelationLink {
     },
     /// The node builds no relation (e.g. it is inlined into its readers).
     NoRelation,
+    /// An out-of-process plugin gave no usable link: its call failed, it didn't answer
+    /// about the relation, its answer isn't a safe link, or no command that runs it
+    /// has recorded one yet (ADR-0031 §3d).
+    NotAnswered {
+        /// The plugin, as its `[plugins.<name>]` names it.
+        plugin: String,
+        /// Why.
+        why: String,
+    },
 }
 
 impl fmt::Display for NoRelationLink {
@@ -135,6 +144,9 @@ impl fmt::Display for NoRelationLink {
                 "no warehouse link: the `{provider}` provider doesn't offer links"
             ),
             Self::NoRelation => f.write_str("no warehouse link: it builds no relation"),
+            Self::NotAnswered { plugin, why } => {
+                write!(f, "no warehouse link from the `{plugin}` plugin: {why}")
+            }
         }
     }
 }

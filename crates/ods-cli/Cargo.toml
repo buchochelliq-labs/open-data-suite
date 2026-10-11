@@ -71,6 +71,11 @@ harness = false
 name = "plugin_process"
 harness = false
 
+# And here, the out-of-process warehouse plugin it tests (`--ods-warehouse-fixture`).
+[[test]]
+name = "plugin_warehouse"
+harness = false
+
 [lints]
 workspace = true
 

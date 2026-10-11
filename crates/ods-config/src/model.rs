@@ -277,6 +277,10 @@ pub struct HealthProbesConfig {
     /// The dbt profile it is in, when not the project's (or `--dbt-profile`'s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// In place of `target`: a `[plugins.<name>]` that runs the probes over its own
+    /// connection and reports what that login may do (ADR-0031 §3d).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 /// A coverage target, e.g. `[health.coverage.tests]` (ADR-0030 §3).

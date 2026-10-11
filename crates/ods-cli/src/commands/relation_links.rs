@@ -18,6 +18,9 @@ use crate::plugins::{Plugins, WarehouseSettings};
 #[derive(Clone)]
 pub(super) struct LinkSettings {
     config: ods_config::Config,
+    /// The plugins links come from, when not the installed ones: with a declared
+    /// plugin's, live or as recorded (ADR-0031 §3d).
+    plugins: Option<Plugins>,
 }
 
 impl fmt::Debug for LinkSettings {
@@ -34,7 +37,15 @@ impl LinkSettings {
     pub(super) fn read(config: &ods_config::Loaded) -> Self {
         Self {
             config: config.config.clone(),
+            plugins: None,
         }
+    }
+
+    /// The same settings, with links from `plugins`.
+    #[must_use]
+    pub(super) fn with_plugins(mut self, plugins: Option<Plugins>) -> Self {
+        self.plugins = plugins;
+        self
     }
 
     /// What the plugin for `warehouse` reads.
@@ -54,7 +65,10 @@ impl Links {
     /// Links for a project whose manifest names `adapter_type` as its warehouse.
     pub(super) fn new(adapter_type: Option<&str>, settings: &LinkSettings) -> Self {
         Self::with(
-            crate::plugins::installed(),
+            settings
+                .plugins
+                .as_ref()
+                .unwrap_or_else(|| crate::plugins::installed()),
             adapter_type,
             &settings.for_warehouse(adapter_type),
         )
@@ -166,7 +180,10 @@ mod tests {
     fn settings_name_providers_never_their_values() {
         let config: ods_config::Config =
             toml::from_str(&UC.replace("https://", "https://me:secret@")).unwrap();
-        let settings = LinkSettings { config };
+        let settings = LinkSettings {
+            config,
+            plugins: None,
+        };
         assert!(!format!("{settings:?}").contains("secret"), "{settings:?}");
     }
 }

@@ -61,7 +61,13 @@ use serde::{Deserialize, Serialize};
 use ods_core::SchemaVersion;
 
 use crate::contracts::changes::{RequestedSource, SourceVersion};
+use crate::contracts::error_catalogue::{CatalogueInfo, Classification};
 use crate::contracts::health_check::{CheckFinding, CheckInfo, CheckScope};
+use crate::contracts::observed_lineage::ObservedLineage;
+use crate::contracts::privileges::Access;
+use crate::contracts::probe::{ProbeAnswer, ProbeRequest, ProbeTarget};
+use crate::contracts::relation_link::{NoRelationLink, RelationLink};
+use crate::contracts::run_events::ErrorSummary;
 
 /// A protocol version: a host refuses an answer whose major it doesn't speak.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +248,13 @@ pub struct DescribeResponse {
     /// planner chooses among readings. Names a host doesn't know are ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// The SQL dialect of its warehouse, by the shared parser's name for it (e.g.
+    /// `snowflake`), for column lineage (ADR-0031 §3a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<String>,
+    /// Its error catalogue's name and version, when it implements `error_catalogue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalogue: Option<CatalogueInfo>,
 }
 
 impl DescribeResponse {
@@ -257,6 +270,8 @@ impl DescribeResponse {
             warehouse: None,
             versions_read: None,
             capabilities: Vec::new(),
+            dialect: None,
+            catalogue: None,
         }
     }
 
@@ -341,6 +356,347 @@ impl VersionsResponse {
         Self {
             protocol: PROTOCOL,
             sources,
+        }
+    }
+}
+
+/// The settings of every `[providers.<name>]` of a plugin's warehouse kind, by name, as
+/// configured: a secret stays a reference, never resolved (AGENTS rule 9).
+pub type WarehouseSettings = BTreeMap<String, serde_json::Value>;
+
+/// Asks a plugin for the links to `relations`, named as the project's artifacts render
+/// them (`relation_linker`, ADR-0031 §3d).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct LinkRequest {
+    /// [`PROTOCOL`] when a host writes it.
+    pub protocol: ProtocolVersion,
+    /// Always `link`.
+    pub request: String,
+    /// The relations, each once.
+    pub relations: Vec<String>,
+    /// Its warehouse's settings.
+    #[serde(default)]
+    pub settings: WarehouseSettings,
+}
+
+impl LinkRequest {
+    /// A request, in this SDK's protocol, for `relations`' links.
+    pub fn new(relations: Vec<String>, settings: WarehouseSettings) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            request: "link".to_owned(),
+            relations,
+            settings,
+        }
+    }
+}
+
+/// One relation's link, or why it has none: `{"relation": …, "link": {"url", "label"}}`
+/// or `{"relation": …, "no_link": {"reason": …}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct LinkAnswer {
+    /// The relation, as asked.
+    pub relation: String,
+    /// Its link, or why there is none.
+    #[serde(flatten)]
+    pub outcome: LinkOutcome,
+}
+
+/// A link, or why there is none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum LinkOutcome {
+    /// The link.
+    Link(RelationLink),
+    /// Why there is none.
+    NoLink(NoRelationLink),
+}
+
+impl LinkAnswer {
+    /// `relation`'s answer.
+    pub fn new(relation: impl Into<String>, outcome: Result<RelationLink, NoRelationLink>) -> Self {
+        Self {
+            relation: relation.into(),
+            outcome: match outcome {
+                Ok(link) => LinkOutcome::Link(link),
+                Err(why) => LinkOutcome::NoLink(why),
+            },
+        }
+    }
+}
+
+/// A plugin's answer to [`LinkRequest`]: every relation asked about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct LinkResponse {
+    /// The protocol the answer is in.
+    pub protocol: ProtocolVersion,
+    /// Each relation's answer.
+    pub links: Vec<LinkAnswer>,
+}
+
+impl LinkResponse {
+    /// An answer, in this SDK's protocol, of `links`.
+    pub fn new(links: Vec<LinkAnswer>) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            links,
+        }
+    }
+}
+
+/// Asks a plugin to classify failed nodes' errors, in one batch (`error_catalogue`).
+/// Each is an [`ErrorSummary`], whose values are already removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ClassifyRequest {
+    /// [`PROTOCOL`] when a host writes it.
+    pub protocol: ProtocolVersion,
+    /// Always `classify`.
+    pub request: String,
+    /// The errors.
+    pub errors: Vec<ErrorSummary>,
+}
+
+impl ClassifyRequest {
+    /// A request, in this SDK's protocol, to classify `errors`.
+    pub fn new(errors: Vec<ErrorSummary>) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            request: "classify".to_owned(),
+            errors,
+        }
+    }
+}
+
+/// A plugin's answer to [`ClassifyRequest`]: one classification per error, in request
+/// order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ClassifyResponse {
+    /// The protocol the answer is in.
+    pub protocol: ProtocolVersion,
+    /// Each error's classification.
+    pub classifications: Vec<Classification>,
+}
+
+impl ClassifyResponse {
+    /// An answer, in this SDK's protocol, of `classifications`.
+    pub fn new(classifications: Vec<Classification>) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            classifications,
+        }
+    }
+}
+
+/// Asks a plugin to read the lineage the user exported from its warehouse
+/// (`observed_lineage_source`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ObservedLineageRequest {
+    /// [`PROTOCOL`] when a host writes it.
+    pub protocol: ProtocolVersion,
+    /// Always `observed_lineage`.
+    pub request: String,
+    /// The export, as an absolute path.
+    pub export: String,
+    /// Its warehouse's settings.
+    #[serde(default)]
+    pub settings: WarehouseSettings,
+}
+
+impl ObservedLineageRequest {
+    /// A request, in this SDK's protocol, to read `export`.
+    pub fn new(export: impl Into<String>, settings: WarehouseSettings) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            request: "observed_lineage".to_owned(),
+            export: export.into(),
+            settings,
+        }
+    }
+}
+
+/// A plugin's answer to [`ObservedLineageRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ObservedLineageResponse {
+    /// The protocol the answer is in.
+    pub protocol: ProtocolVersion,
+    /// What it read.
+    pub lineage: ObservedLineage,
+}
+
+impl ObservedLineageResponse {
+    /// An answer, in this SDK's protocol, of `lineage`.
+    pub fn new(lineage: ObservedLineage) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            lineage,
+        }
+    }
+}
+
+/// Asks a plugin to run read-only statements against `targets`' relations, over its own
+/// connection (`relation_probe`, ADR-0031 §3d).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ProbeCall {
+    /// [`PROTOCOL`] when a host writes it.
+    pub protocol: ProtocolVersion,
+    /// Always `probe`.
+    pub request: String,
+    /// What to run, against which relations.
+    pub probe: ProbeRequest,
+    /// The nodes, each with the relation the build made: probe nothing else.
+    pub targets: Vec<ProbeTarget>,
+    /// Its warehouse's settings.
+    #[serde(default)]
+    pub settings: WarehouseSettings,
+}
+
+impl ProbeCall {
+    /// A request, in this SDK's protocol, to run `probe` against `targets`.
+    pub fn new(
+        probe: ProbeRequest,
+        targets: Vec<ProbeTarget>,
+        settings: WarehouseSettings,
+    ) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            request: "probe".to_owned(),
+            probe,
+            targets,
+            settings,
+        }
+    }
+}
+
+/// What probing one target found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ProbeTargetAnswer {
+    /// The target's id, as asked.
+    pub id: String,
+    /// Its rows, or why it has none.
+    pub answer: ProbeAnswer,
+}
+
+impl ProbeTargetAnswer {
+    /// `id`'s answer.
+    pub fn new(id: impl Into<String>, answer: ProbeAnswer) -> Self {
+        Self {
+            id: id.into(),
+            answer,
+        }
+    }
+}
+
+/// A plugin's answer to [`ProbeCall`]: every target asked about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct ProbeResponse {
+    /// The protocol the answer is in.
+    pub protocol: ProtocolVersion,
+    /// Each target's answer.
+    pub targets: Vec<ProbeTargetAnswer>,
+}
+
+impl ProbeResponse {
+    /// An answer, in this SDK's protocol, of `targets`.
+    pub fn new(targets: Vec<ProbeTargetAnswer>) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            targets,
+        }
+    }
+}
+
+/// Asks a plugin what the login its probes run under may do on `targets`' relations
+/// (`relation_privileges`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct PrivilegesRequest {
+    /// [`PROTOCOL`] when a host writes it.
+    pub protocol: ProtocolVersion,
+    /// Always `privileges`.
+    pub request: String,
+    /// The nodes.
+    pub targets: Vec<ProbeTarget>,
+    /// Its warehouse's settings.
+    #[serde(default)]
+    pub settings: WarehouseSettings,
+}
+
+impl PrivilegesRequest {
+    /// A request, in this SDK's protocol, for the login's access to `targets`.
+    pub fn new(targets: Vec<ProbeTarget>, settings: WarehouseSettings) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            request: "privileges".to_owned(),
+            targets,
+            settings,
+        }
+    }
+}
+
+/// What the login may do on one target's relation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct AccessAnswer {
+    /// The target's id, as asked.
+    pub id: String,
+    /// What the login may do.
+    pub access: Access,
+}
+
+impl AccessAnswer {
+    /// `id`'s answer.
+    pub fn new(id: impl Into<String>, access: Access) -> Self {
+        Self {
+            id: id.into(),
+            access,
+        }
+    }
+}
+
+/// A plugin's answer to [`PrivilegesRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct PrivilegesResponse {
+    /// The protocol the answer is in.
+    pub protocol: ProtocolVersion,
+    /// The login, as the warehouse names it, when known.
+    #[serde(default)]
+    pub login: Option<String>,
+    /// Each target's answer.
+    pub targets: Vec<AccessAnswer>,
+}
+
+impl PrivilegesResponse {
+    /// An answer, in this SDK's protocol, for `login`, of `targets`.
+    pub fn new(login: Option<String>, targets: Vec<AccessAnswer>) -> Self {
+        Self {
+            protocol: PROTOCOL,
+            login,
+            targets,
         }
     }
 }
@@ -453,5 +809,79 @@ mod tests {
         );
         let back: VersionsResponse = serde_json::from_value(json).unwrap();
         assert_eq!(back, answer);
+    }
+
+    #[test]
+    fn warehouse_requests_have_the_documented_shape() {
+        use crate::contracts::probe::{ProbeFilter, ProbeStatement};
+
+        let links = LinkResponse::new(vec![
+            LinkAnswer::new(
+                "\"db\".\"main\".\"orders\"",
+                Ok(RelationLink::new(
+                    "https://acme.example/t/orders",
+                    "Open in Acme",
+                )),
+            ),
+            LinkAnswer::new(
+                "orders",
+                Err(NoRelationLink::NotConfigured {
+                    setting: "account".to_owned(),
+                }),
+            ),
+        ]);
+        let json = serde_json::to_value(&links).unwrap();
+        assert_eq!(
+            json["links"][0]["link"]["url"],
+            "https://acme.example/t/orders"
+        );
+        assert_eq!(json["links"][1]["no_link"]["reason"], "not_configured");
+        assert_eq!(serde_json::from_value::<LinkResponse>(json).unwrap(), links);
+
+        // A probe as a plugin reads it: checked as when built, so a statement that
+        // doesn't name its relation is refused.
+        let probe = ProbeRequest::new(
+            ProbeFilter::kinds(["table"]).unwrap(),
+            vec![ProbeStatement::new("select count(*) as n from {relation}", ["n"]).unwrap()],
+        )
+        .unwrap();
+        let call = ProbeCall::new(
+            probe,
+            vec![ProbeTarget::new("model.shop.orders", "orders").expecting("db.main.orders")],
+            WarehouseSettings::new(),
+        );
+        let json = serde_json::to_value(&call).unwrap();
+        assert_eq!(json["request"], "probe");
+        assert_eq!(json["targets"][0]["relation"], "db.main.orders");
+        assert_eq!(
+            serde_json::from_value::<ProbeCall>(json.clone()).unwrap(),
+            call
+        );
+        let mut bad = json;
+        bad["probe"]["statements"][0]["template"] = "delete from orders".into();
+        assert!(serde_json::from_value::<ProbeCall>(bad).is_err());
+
+        let answer: ProbeResponse = serde_json::from_str(
+            r#"{"protocol": {"major": 1, "minor": 0},
+                "targets": [{"id": "model.shop.orders", "answer": {"rows": [{"n": "3"}]}},
+                            {"id": "model.shop.items", "answer": {"unknown": "no such table"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            answer.targets[1].answer,
+            ProbeAnswer::Unknown("no such table".to_owned())
+        );
+        let access: PrivilegesResponse = serde_json::from_str(
+            r#"{"protocol": {"major": 1, "minor": 0}, "login": "health_ro",
+                "targets": [{"id": "model.shop.orders", "access": "read_only"},
+                            {"id": "model.shop.items", "access": {"elevated": ["MODIFY"]}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(access.login.as_deref(), Some("health_ro"));
+        assert_eq!(access.targets[0].access, Access::ReadOnly);
+        assert_eq!(
+            access.targets[1].access,
+            Access::Elevated(vec!["MODIFY".to_owned()])
+        );
     }
 }
