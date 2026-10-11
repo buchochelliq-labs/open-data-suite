@@ -44,7 +44,7 @@ mod plugin;
 mod warehouse;
 
 pub use plugin::{Described, PluginCheck, PluginProcess, PluginVersions};
-pub use warehouse::{AnsweredCatalogue, AnsweredLineage, AnsweredLinker, PluginProbe};
+pub use warehouse::{AnsweredCatalogue, AnsweredLineage, AnsweredLinker, Links, PluginProbe};
 
 /// The provider kind.
 pub const KIND: &str = "process";

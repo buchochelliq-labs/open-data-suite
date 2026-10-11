@@ -17,7 +17,7 @@ use ods_config::{FileKind, Loaded, Source};
 use ods_core::state::Timestamp;
 use ods_health::Pinned;
 use ods_health::trust::TrustStore;
-use ods_provider_process::{AnsweredCatalogue, AnsweredLinker, Described, PluginProcess};
+use ods_provider_process::{AnsweredCatalogue, AnsweredLinker, Described, Links, PluginProcess};
 use ods_sdk::contracts::changes::ChangeProvider;
 use ods_sdk::contracts::error_catalogue::{CatalogueInfo, ERROR_CATALOGUE};
 use ods_sdk::contracts::health_check::CheckInfo;
@@ -408,7 +408,7 @@ fn warehouse_of(plugin: &Running, record: Option<&PluginRecord>) -> Option<Proce
     let warehouse = plugin.warehouse()?;
     let described = &plugin.described;
     let answer = &described.answer;
-    let record = record.filter(|r| r.plugin == plugin.declared.name && r.warehouse == warehouse);
+    let record = record.filter(|r| answered_by(r, plugin));
     Some(ProcessWarehouse {
         origin: origin_of(&plugin.declared.name, &answer.name, &answer.version),
         warehouse: warehouse.to_owned(),
@@ -430,6 +430,21 @@ fn warehouse_of(plugin: &Running, record: Option<&PluginRecord>) -> Option<Proce
             .then(|| (plugin.process.clone(), plugin.settings.clone())),
         plugin: plugin.declared.name.clone(),
     })
+}
+
+/// Whether `record` holds what `plugin`, as it describes itself now, answered: the same
+/// declaration, warehouse, name, version and catalogue. An upgraded plugin's earlier
+/// answers aren't its answers.
+fn answered_by(record: &PluginRecord, plugin: &Running) -> bool {
+    record.plugin == plugin.declared.name && describes(record, &plugin.described.answer)
+}
+
+/// Whether `record` was written by a plugin that described itself as `answer` does.
+fn describes(record: &PluginRecord, answer: &ods_sdk::protocol::DescribeResponse) -> bool {
+    Some(record.warehouse.as_str()) == answer.warehouse.as_deref()
+        && record.name == answer.name
+        && record.version == answer.version
+        && record.catalogue == answer.catalogue
 }
 
 /// The links `record` holds, once a command has asked for them.
@@ -509,6 +524,9 @@ pub(super) struct ProjectPlugins {
     record_at: Option<(PathBuf, String)>,
     /// The record, as last read or written.
     record: Option<PluginRecord>,
+    /// Why the links of this command's call are none, by plugin, when its call failed:
+    /// served for this command only, never kept over the last links it gave.
+    failed_links: Option<(String, Links)>,
     /// What didn't work, for the command's warnings.
     pub(super) warnings: Vec<String>,
 }
@@ -533,6 +551,7 @@ impl ProjectPlugins {
             names: config.config.plugins.keys().cloned().collect(),
             record_at: None,
             record: None,
+            failed_links: None,
         };
         if let Some((state_db, scope)) = state {
             this.attach(state_db, scope);
@@ -604,9 +623,15 @@ impl ProjectPlugins {
     fn rebuild(&mut self) {
         let mut plugins = self.base.clone();
         for plugin in &self.declared.running {
-            if let Some(warehouse) = warehouse_of(plugin, self.record.as_ref())
-                && let Err(e) = plugins.replace_warehouse(Arc::new(warehouse))
+            let Some(mut warehouse) = warehouse_of(plugin, self.record.as_ref()) else {
+                continue;
+            };
+            if let Some((name, failed)) = &self.failed_links
+                && *name == plugin.declared.name
             {
+                warehouse.links = Some(Arc::new(AnsweredLinker::new(name.clone(), failed.clone())));
+            }
+            if let Err(e) = plugins.replace_warehouse(Arc::new(warehouse)) {
                 tracing::warn!(plugin = %plugin.declared.name, "{e}");
             }
         }
@@ -628,7 +653,7 @@ impl ProjectPlugins {
         let warehouse = plugin.warehouse()?;
         let answer = &plugin.described.answer;
         let mut record = match &self.record {
-            Some(r) if r.plugin == plugin.declared.name && r.warehouse == warehouse => r.clone(),
+            Some(r) if answered_by(r, plugin) => r.clone(),
             _ => PluginRecord::new(
                 self.record_at
                     .as_ref()
@@ -684,16 +709,22 @@ impl ProjectPlugins {
                     "the plugin `{}` gave no links: {e}",
                     plugin.declared.name
                 ));
+                // No link for this command, saying why; the links it gave last stay
+                // kept for the dashboard, as a failed call says nothing about them.
                 let why = NoRelationLink::NotAnswered {
                     plugin: plugin.declared.name.clone(),
                     why: format!("its call failed: {e}"),
                 };
-                relations
+                let failed = relations
                     .iter()
                     .map(|r| (r.clone(), Err(why.clone())))
-                    .collect()
+                    .collect();
+                self.failed_links = Some((plugin.declared.name.clone(), failed));
+                self.rebuild();
+                return;
             }
         };
+        self.failed_links = None;
         record.links = links
             .into_iter()
             .map(|(relation, link)| {
@@ -903,5 +934,27 @@ mod tests {
             "{:?}",
             project.declared().held
         );
+    }
+
+    /// An upgraded plugin's earlier answers aren't its answers: its classifications
+    /// are asked again, not read from a record another version wrote.
+    #[test]
+    fn a_record_is_a_plugins_only_while_it_describes_itself_the_same() {
+        use ods_sdk::contracts::error_catalogue::CatalogueInfo;
+        let mut answer = ods_sdk::protocol::DescribeResponse::new("acme", "1.2.0");
+        answer.warehouse = Some("acme_db".to_owned());
+        answer.catalogue = Some(CatalogueInfo::new("acme", "7", "Acme"));
+        let mut record = PluginRecord::new("s", "acme", ("acme", "1.2.0"), "acme_db");
+        record.catalogue = answer.catalogue.clone();
+        assert!(describes(&record, &answer));
+        let mut upgraded = answer.clone();
+        upgraded.version = "1.3.0".to_owned();
+        assert!(!describes(&record, &upgraded));
+        let mut new_patterns = answer.clone();
+        new_patterns.catalogue = Some(CatalogueInfo::new("acme", "8", "Acme"));
+        assert!(!describes(&record, &new_patterns));
+        let mut elsewhere = answer;
+        elsewhere.warehouse = Some("other_db".to_owned());
+        assert!(!describes(&record, &elsewhere));
     }
 }

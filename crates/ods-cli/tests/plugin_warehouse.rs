@@ -64,7 +64,7 @@ fn link_for(relation: &str, configured: bool) -> Result<RelationLink, NoRelation
     clippy::too_many_lines,
     reason = "one pretend plugin: an arm per request, read in one place"
 )]
-fn fixture() {
+fn fixture(mode: &str) {
     let mut input = Vec::new();
     std::io::stdin().read_to_end(&mut input).unwrap();
     let request: Value = serde_json::from_slice(&input).unwrap();
@@ -96,6 +96,10 @@ fn fixture() {
             out(serde_json::to_vec(&answer).unwrap());
         }
         "link" => {
+            if mode == "links-fail" {
+                eprintln!("the warehouse is down");
+                std::process::exit(1);
+            }
             let request: LinkRequest = serde_json::from_value(request).unwrap();
             let configured = request.settings.values().any(|s| s["account"] == "acme");
             let links = request
@@ -179,11 +183,12 @@ fn fixture() {
     }
 }
 
-/// The plugin's declaration, with its warehouse's settings and probes through it.
-fn ods_toml() -> String {
+/// The plugin's declaration, playing `mode`, with its warehouse's settings and probes
+/// through it.
+fn ods_toml(mode: &str) -> String {
     let me = std::env::current_exe().unwrap().display().to_string();
     format!(
-        "[plugins.acme]\ncommand = ['{me}', '{FIXTURE}']\n\n\
+        "[plugins.acme]\ncommand = ['{me}', '{FIXTURE}', '{mode}']\n\n\
          [providers.warehouse]\nkind = \"acme_db\"\nsettings = {{ account = \"acme\" }}\n\n\
          [health.probes]\nplugin = \"acme\"\n\n\
          [[health.checks]]\nid = \"acme.rows\"\nkind = \"probe\"\n\
@@ -217,7 +222,7 @@ impl Project {
             );
             std::fs::write(target.join(file), text).unwrap();
         }
-        std::fs::write(project.dir.path().join("ods.toml"), ods_toml()).unwrap();
+        std::fs::write(project.dir.path().join("ods.toml"), ods_toml("good")).unwrap();
         project
     }
 
@@ -313,6 +318,27 @@ fn health_check_asks_for_links_and_probes_over_the_plugins_connection() {
         "https://acme.example/explore/jaffle_ods/main/orders",
         "{record:#}"
     );
+
+    // A later call that fails says nothing about those links: they stay kept.
+    std::fs::write(project.dir.path().join("ods.toml"), ods_toml("links-fail")).unwrap();
+    let (code, envelope) = project.ods(&[
+        "health",
+        "check",
+        "--allow-scripts",
+        "--target-dir",
+        target.to_str().unwrap(),
+        "--state-db",
+        db.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{envelope:#}");
+    assert!(project.ran().iter().any(|r| r == "link"));
+    let kept: Value = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .map(|e| serde_json::from_slice(&std::fs::read(e.path()).unwrap()).unwrap())
+        .unwrap();
+    assert_eq!(kept["links"], record["links"], "{kept:#}");
 }
 
 /// GET `path` relative to `url`: (status, body).
@@ -453,7 +479,7 @@ fn plugin_test_runs_the_warehouse_suites() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some(FIXTURE) {
-        fixture();
+        fixture(args.get(2).map_or("good", String::as_str));
         return;
     }
     // The test harness's own flags (e.g. `--quiet`, a name filter) are ignored: every
