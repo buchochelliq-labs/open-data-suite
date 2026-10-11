@@ -168,7 +168,7 @@ a.st-tab:hover { text-decoration: none; color: var(--fg); }
 .st-snap.bad { color: var(--pill-bad); }
 .st-glyph { width: 18px; height: 18px; border-radius: 50%; color: var(--bg); flex-shrink: 0; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .st-glyph.ok { background: var(--ok); } .st-glyph.bad { background: var(--bad); }
-.st-glyph.rec { border: 2px dashed var(--dashed); }
+.st-glyph.rec { border: 2px dashed var(--faint); }
 .st-num { min-width: 22px; text-align: center; font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 999px; font-variant-numeric: tabular-nums; }
 .st-num.built { background: var(--pill-build-bg); color: var(--pill-build); }
 .st-num.kept { background: var(--planned-bg); color: var(--fg); border: 1px solid var(--border); }

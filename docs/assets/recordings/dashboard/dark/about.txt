@@ -1,0 +1,65 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Configuration
+About
+Local · read-only
+Settings
+/
+About
+snapshot 3 ·
+<when>
+About
+This ods and the plugins it runs with, as ods plugin list shows them. Plugins are built in; a custom ods adds its own. Nothing here connects to a warehouse.
+This ods
+ods version
+Version
+<version>
+Plugin SDK
+0.9
+Dashboard API
+1
+This project's warehouse
+duckdb
+Warehouse plugins
+ods plugin list
+databricks
+ods-provider-databricks <version> · built in
+source_versions 0.1
+login_check 0.1
+links 0.1
+observed_lineage 0.1
+errors 0.5
+dialect
+source_versions table version from the Delta history
+links not usable here: no warehouse link: `providers.databricks.settings.host` (kind "databricks") or `DATABRICKS_HOST` isn't configured
+errors databricks catalogue 1
+dialect databricks
+Built on spark (named by the plugin)
+duckdb
+ods-provider-duckdb <version> · built in
+this project's warehouse
+errors 0.5
+dialect
+errors duckdb catalogue 1
+dialect duckdb
+A warehouse plugin never connects: it adds what ODS can know about a warehouse the project already reaches. Features that can't be used with this configuration say why.
+Health-check plugins
+[health.plugins.<id>]
+None. The built-in checks are configured under [health]; a custom ods can add its own.
