@@ -213,6 +213,91 @@ answers, which models can be reused ([ADR-0022](adr/0022-delta-table-versions-as
   rows for your statements, and have `commit` change them.
   `examples/custom-ods/tests/conformance.rs` does this for its `LoadBatches`.
 
+## Out-of-process plugins
+
+A plugin can also be a program, in any language, that the released `ods` starts and
+talks to over its stdin and stdout ([ADR-0031](adr/0031-plugin-registry-and-loading.md)
+§5). A project or user declares it with `[plugins.<name>]`
+([docs/cli.md](cli.md#out-of-process-plugins)). It offers health checks
+(`health_check`), and a warehouse's source versions (`change_provider`). Links,
+observed lineage and error patterns for a warehouse are in-process only for now.
+
+Every call starts the program once, writes one JSON request to its stdin and reads one
+JSON answer from its stdout, as script checks do: the envelope carries the protocol
+version, and an answer in another major is refused. The types are in `ods_sdk::protocol`,
+so a Rust plugin can use them as they are. What it writes to stderr is logged. Each call
+is bounded by the plugin's `timeout`; it is then stopped, with every process it started.
+
+**`describe`**, sent first:
+
+```json
+{"protocol": {"major": 1, "minor": 0}, "request": "describe"}
+```
+
+The answer names the plugin and each contract it implements, with the contract version
+it was built against (`ods_sdk::contracts::health_check::HEALTH_CHECK.version`, …), its
+checks, and the warehouse kind it serves (as dbt names it, `adapter_type`):
+
+```json
+{"protocol": {"major": 1, "minor": 0}, "name": "acme", "version": "1.2.0",
+ "provides": [{"contract": "health_check", "version": {"major": 0, "minor": 2}},
+              {"contract": "change_provider", "version": {"major": 0, "minor": 1}}],
+ "checks": [{"id": "acme.pii_tagged", "about": "PII columns are tagged",
+             "default_severity": "warn"}],
+ "warehouse": "snowflake", "versions_read": "Snowflake table versions",
+ "capabilities": ["relation_versions"]}
+```
+
+A contract version the host can't accept (before 1.0, any other minor) refuses the
+plugin, naming both. Checks without `health_check`, a check listed twice, or
+`change_provider` without a `warehouse` refuse it too. So does `change_provider`
+whose `capabilities` name neither `relation_versions` (a table's own version) nor
+`source_freshness` (its last load): `ods state` chooses among readings by the kind of
+version they are, so one that doesn't say would be read and never used. A contract the host doesn't know
+is listed and otherwise ignored, so a plugin can offer more than an older `ods` uses.
+A warehouse another plugin already serves (e.g. a built-in) is a configuration error.
+
+**`check`**, for each of its checks, is the [script protocol](cli.md#script-checks)'s
+request, with the check's id and no `params`: answer one finding per node in `scope`,
+and none for any other.
+
+**`versions`** asks for sources' current data versions, in one batch, with the
+`settings` of each `[providers.<name>]` of the plugin's warehouse kind, by name (secret references stay
+references: resolve them yourself, from your own environment):
+
+```json
+{"protocol": {"major": 1, "minor": 0}, "request": "versions",
+ "sources": [{"id": "source.shop.raw.orders", "name": "raw.orders"}],
+ "settings": {"warehouse": {"account": "acme", "password": {"secret": "env:SF_PASSWORD"}}}}
+```
+
+Answer each source with a `version` (graded as in
+[Writing a source-version provider](#writing-a-source-version-provider)) or `unknown`
+and why:
+
+```json
+{"protocol": {"major": 1, "minor": 0},
+ "sources": [{"id": "source.shop.raw.orders",
+              "version": {"value": "01HZX…", "exactness": "exact", "source": "acme"}},
+             {"id": "source.shop.raw.events", "unknown": "a view has no version"}]}
+```
+
+A source left out is *unknown*. An answer about a source it wasn't asked about, or
+about one twice, makes every source in the call *unknown*. An out-of-process plugin
+can't use dbt's connection: it connects with its own credentials, from its own
+environment.
+
+**Testing it:** `ods plugin test <name>` runs the SDK's suites against the plugin as ODS
+calls it: `health_check` for each check, over fixture nodes, and `changes` over the
+sources you give with `--source` (two it can read) and `--unreadable` (one it can't).
+Run it before publishing, and in your plugin's CI:
+
+```sh
+ods plugin test acme --allow-scripts \
+  --source source.shop.raw.orders --source source.shop.raw.customers \
+  --unreadable source.shop.raw.events_view
+```
+
 ## In CI
 
 A job that runs the suites on every push:

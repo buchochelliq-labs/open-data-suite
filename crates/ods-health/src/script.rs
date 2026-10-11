@@ -43,6 +43,32 @@ pub struct ScriptDefinition {
     pub digest: String,
 }
 
+/// The content digest of each file `command` names inside `root`, where it runs, by
+/// `file:<item>`: what a trust entry pins besides the command itself (ADR-0030 §4d),
+/// so a commit that changes `checks/pii.py` makes `["python", "checks/pii.py"]`
+/// untrusted again. A file that can't be read is pinned as such: once readable, it is
+/// new. What those files load in turn isn't pinned.
+pub fn command_files(command: &[String], root: &Path) -> BTreeMap<String, String> {
+    let mut pins = BTreeMap::new();
+    let Ok(inside) = std::fs::canonicalize(root) else {
+        return pins;
+    };
+    for item in command {
+        let Ok(path) = std::fs::canonicalize(root.join(item)) else {
+            continue;
+        };
+        if !path.starts_with(&inside) || !path.is_file() {
+            continue;
+        }
+        let content = std::fs::read(&path).map_or_else(
+            |_| "unreadable".to_owned(),
+            |bytes| format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
+        );
+        pins.insert(format!("file:{item}"), content);
+    }
+    pins
+}
+
 /// A script check, as configured.
 #[derive(Clone)]
 pub(crate) struct Script {
@@ -188,22 +214,7 @@ impl Script {
     /// untrusted again. What those files load in turn isn't pinned.
     pub(crate) fn pin(&mut self, root: &Path, settings: &BTreeMap<String, String>) {
         let mut pins = settings.clone();
-        if let Ok(inside) = std::fs::canonicalize(root) {
-            for item in &self.command {
-                let Ok(path) = std::fs::canonicalize(root.join(item)) else {
-                    continue;
-                };
-                if !path.starts_with(&inside) || !path.is_file() {
-                    continue;
-                }
-                // A file that can't be read is pinned as such: once readable, it is new.
-                let content = std::fs::read(&path).map_or_else(
-                    |_| "unreadable".to_owned(),
-                    |bytes| format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
-                );
-                pins.insert(format!("file:{item}"), content);
-            }
-        }
+        pins.extend(command_files(&self.command, root));
         let mut bytes = self.digested.clone();
         if !pins.is_empty() {
             bytes.push(b'\n');

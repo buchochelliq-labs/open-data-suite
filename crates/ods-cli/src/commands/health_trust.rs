@@ -8,15 +8,17 @@
 //! `config.toml` need no trust: the user wrote them.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use ods_config::{FileKind, Loaded, Source};
 use ods_core::state::Timestamp;
 use ods_health::trust::{self, Standing, TrustStore};
-use ods_health::{CheckDefinition, HealthSettings, Pinned as _, ProbeDefinition, ScriptDefinition};
+use ods_health::{CheckDefinition, HealthSettings, Pinned, ProbeDefinition, ScriptDefinition};
 use serde::Serialize;
 
+use super::plugin_process::{Declaration, Declared};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::present::{Level, Present, Span, Tone, ViewNode};
 
@@ -101,7 +103,7 @@ fn file_path(source: &Source) -> PathBuf {
 }
 
 /// Where the trust store is: beside the user's own `config.toml`.
-fn store_path(config: &Loaded) -> Option<PathBuf> {
+pub(super) fn store_path(config: &Loaded) -> Option<PathBuf> {
     config
         .files
         .iter()
@@ -201,6 +203,45 @@ pub(super) struct TrustReport {
     probes: Vec<Reviewed>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     scripts: Vec<ReviewedScript>,
+    /// The out-of-process plugins the project declares (ADR-0031 §5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    plugins: Vec<ReviewedPlugin>,
+}
+
+/// One out-of-process plugin, as `ods health trust` shows it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct ReviewedPlugin {
+    name: String,
+    /// How it stood before this run.
+    standing: Standing,
+    /// Its command: its program, then its arguments.
+    command: Vec<String>,
+    digest: String,
+}
+
+/// What a trust entry records of a definition: its id and digest.
+struct Entry {
+    id: String,
+    digest: String,
+}
+
+impl Pinned for Entry {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+impl Entry {
+    fn of(d: &impl Pinned) -> Self {
+        Self {
+            id: d.id().to_owned(),
+            digest: d.digest().to_owned(),
+        }
+    }
 }
 
 impl TrustReport {
@@ -220,10 +261,26 @@ impl TrustReport {
             definitions.retain(|d| !matches!(d, CheckDefinition::Script(_)));
             scripts.clear();
         }
+        // Plugins a project declares; the user's own need no trust, and aren't shown.
+        let plugins: Vec<Declared> = super::plugin_process::declared(config)?
+            .into_iter()
+            .filter(|p| p.project.is_some())
+            .collect();
         let revoke = args.get_flag("revoke");
-        let (file, root) = match Origin::of(config) {
-            Origin::Project { file, root } => (file, root),
-            origin => {
+        // Each directory trust is kept for, with what is trusted under it: the checks'
+        // file's, then each plugin's (usually the same: the project's).
+        let mut roots: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
+        let first_plugin = plugins.first().and_then(|p| p.project.clone());
+        let (file, root) = match (Origin::of(config), first_plugin) {
+            (Origin::Project { file, root }, _) => {
+                roots
+                    .entry(root.clone())
+                    .or_default()
+                    .extend(definitions.iter().map(Entry::of));
+                (file, root)
+            }
+            (_, Some(Declaration { file, root })) => (file, root),
+            (origin, None) => {
                 let defined_in = match origin {
                     Origin::User(path) => Some(path),
                     _ => None,
@@ -240,36 +297,34 @@ impl TrustReport {
                     outcome,
                     probes: reviewed(&probes, &BTreeMap::new()),
                     scripts: reviewed_scripts(&scripts, &BTreeMap::new()),
+                    plugins: Vec::new(),
                 });
             }
         };
-        let store_path = store_path(config).ok_or_else(|| {
-            error(
-                "there is no user configuration directory to keep trust in".to_owned(),
-                "set XDG_CONFIG_HOME or HOME (APPDATA on Windows)",
-            )
-        })?;
-        // A store that can't be read is never overwritten: it may trust other projects.
-        let mut store = TrustStore::read(&store_path).map_err(|e| {
-            error(
-                e.to_string(),
-                "fix or move the file aside; nothing was changed",
-            )
-        })?;
-        let standing = store.standing(&root, &definitions);
-        let outcome = if revoke {
-            store.revoke(&root);
-            "revoked"
-        } else if definitions.is_empty() {
-            "nothing"
-        } else {
-            store.trust(&root, &definitions, Timestamp::now());
-            "trusted"
-        };
-        if outcome != "nothing" {
-            store
-                .write(&store_path)
-                .map_err(|e| error(e.to_string(), "nothing was changed"))?;
+        if !matches!(Origin::of(config), Origin::Project { .. }) {
+            // Only plugins need trust: the checks are the user's own, or there are none.
+            definitions.clear();
+        }
+        for plugin in &plugins {
+            if let Some(declaration) = &plugin.project {
+                roots
+                    .entry(declaration.root.clone())
+                    .or_default()
+                    .push(Entry::of(plugin));
+            }
+        }
+        let (store_path, standing, outcome) = record(config, &roots, &root, revoke)?;
+        if definitions.is_empty() {
+            // Shown only when they are what this run trusted.
+            return Ok(Self {
+                project: Some(root),
+                defined_in: Some(file),
+                store: Some(store_path),
+                outcome,
+                probes: Vec::new(),
+                scripts: Vec::new(),
+                plugins: reviewed_plugins(&plugins, &standing),
+            });
         }
         Ok(Self {
             project: Some(root),
@@ -278,8 +333,71 @@ impl TrustReport {
             outcome,
             probes: reviewed(&probes, &standing),
             scripts: reviewed_scripts(&scripts, &standing),
+            plugins: reviewed_plugins(&plugins, &standing),
         })
     }
+}
+
+/// Records `roots`' entries in the trust store, or forgets them (and `root`) with
+/// `revoke`: where the store is, how each entry stood before, and the outcome.
+fn record(
+    config: &Loaded,
+    roots: &BTreeMap<String, Vec<Entry>>,
+    root: &String,
+    revoke: bool,
+) -> Result<(PathBuf, BTreeMap<String, Standing>, &'static str), CliError> {
+    let store_path = store_path(config).ok_or_else(|| {
+        error(
+            "there is no user configuration directory to keep trust in".to_owned(),
+            "set XDG_CONFIG_HOME or HOME (APPDATA on Windows)",
+        )
+    })?;
+    // A store that can't be read is never overwritten: it may trust other projects.
+    let mut store = TrustStore::read(&store_path).map_err(|e| {
+        error(
+            e.to_string(),
+            "fix or move the file aside; nothing was changed",
+        )
+    })?;
+    let standing: BTreeMap<String, Standing> = roots
+        .iter()
+        .flat_map(|(root, entries)| store.standing(root, entries))
+        .collect();
+    let outcome = if revoke {
+        for root in roots.keys().chain([root]) {
+            store.revoke(root);
+        }
+        "revoked"
+    } else if roots.values().all(Vec::is_empty) {
+        "nothing"
+    } else {
+        let now = Timestamp::now();
+        for (root, entries) in roots {
+            store.trust(root, entries, now);
+        }
+        "trusted"
+    };
+    if outcome != "nothing" {
+        store
+            .write(&store_path)
+            .map_err(|e| error(e.to_string(), "nothing was changed"))?;
+    }
+    Ok((store_path, standing, outcome))
+}
+
+fn reviewed_plugins(
+    plugins: &[Declared],
+    standing: &BTreeMap<String, Standing>,
+) -> Vec<ReviewedPlugin> {
+    plugins
+        .iter()
+        .map(|p| ReviewedPlugin {
+            name: p.name.clone(),
+            standing: standing.get(p.id()).copied().unwrap_or(Standing::Trusted),
+            command: p.command.clone(),
+            digest: p.digest.clone(),
+        })
+        .collect()
 }
 
 /// A probe's queries for people: the one query, or `<kind>: <query>` on a line each.
@@ -323,6 +441,31 @@ fn reviewed_scripts(
             digest: d.digest.clone(),
         })
         .collect()
+}
+
+/// A table of what runs a command (scripts, plugins): its name, how it stood, and its
+/// command.
+fn commands_table<'a>(
+    title: &str,
+    what: &str,
+    rows: impl Iterator<Item = (&'a String, Standing, &'a Vec<String>)>,
+) -> ViewNode {
+    ViewNode::Table {
+        title: Some(title.to_owned()),
+        columns: vec![what.into(), "was".into(), "command".into()],
+        rows: rows
+            .map(|(name, standing, command)| {
+                let (was, tone) = was(standing);
+                vec![
+                    vec![Span::toned(name.as_str(), Tone::Code)],
+                    vec![Span::toned(was, tone)],
+                    vec![Span::toned(command.join(" "), Tone::Code)],
+                ]
+            })
+            .collect(),
+        breaks: Vec::new(),
+        footer: None,
+    }
 }
 
 /// How a definition stood, for people.
@@ -386,26 +529,22 @@ impl Present for TrustReport {
             });
         }
         if !self.scripts.is_empty() {
-            blocks.push(ViewNode::Table {
-                title: Some("Script checks".to_owned()),
-                columns: vec!["check".into(), "was".into(), "command".into()],
-                rows: self
-                    .scripts
-                    .iter()
-                    .map(|s| {
-                        let (was, tone) = was(s.standing);
-                        vec![
-                            vec![Span::toned(s.id.as_str(), Tone::Code)],
-                            vec![Span::toned(was, tone)],
-                            vec![Span::toned(s.command.join(" "), Tone::Code)],
-                        ]
-                    })
-                    .collect(),
-                breaks: Vec::new(),
-                footer: None,
-            });
+            blocks.push(commands_table(
+                "Script checks",
+                "check",
+                self.scripts.iter().map(|s| (&s.id, s.standing, &s.command)),
+            ));
         }
-        let what = match (self.probes.len(), self.scripts.len()) {
+        if !self.plugins.is_empty() {
+            blocks.push(commands_table(
+                "Plugins",
+                "plugin",
+                self.plugins
+                    .iter()
+                    .map(|p| (&p.name, p.standing, &p.command)),
+            ));
+        }
+        let mut what = match (self.probes.len(), self.scripts.len()) {
             (p, 0) => format!("{p} probe check{}", if p == 1 { "" } else { "s" }),
             (0, s) => format!("{s} script check{}", if s == 1 { "" } else { "s" }),
             (p, s) => format!(
@@ -414,17 +553,25 @@ impl Present for TrustReport {
                 if s == 1 { "" } else { "s" }
             ),
         };
+        match (self.probes.len() + self.scripts.len(), self.plugins.len()) {
+            (_, 0) => {}
+            (0, n) => what = format!("{n} plugin{}", if n == 1 { "" } else { "s" }),
+            (_, n) => {
+                let _ = write!(what, " and {n} plugin{}", if n == 1 { "" } else { "s" });
+            }
+        }
         let message = match self.outcome {
             "trusted" => format!(
                 "trusted {what} for this project, as defined now; a change to one makes it untrusted again"
             ),
             "revoked" => {
-                "forgot this project's trusted checks: its probes and scripts won't run".to_owned()
+                "forgot this project's trusted checks: its probes, scripts and plugins won't run"
+                    .to_owned()
             }
             "not_needed" => {
                 "these checks come from your own configuration and need no trust".to_owned()
             }
-            _ => "no probe or script checks to trust".to_owned(),
+            _ => "no probe or script checks or plugins to trust".to_owned(),
         };
         blocks.push(ViewNode::Notice {
             level: Level::Info,

@@ -49,6 +49,24 @@ pub struct Config {
     /// (ADR-0031 §3b).
     #[serde(default)]
     pub warehouses: BTreeMap<String, WarehouseConfig>,
+    /// Out-of-process plugins, by name: executables that speak the plugin protocol
+    /// (ADR-0031 §5), e.g. `[plugins.acme] command = ["acme-ods-plugin"]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, PluginConfig>,
+}
+
+/// `[plugins.<name>]`: an out-of-process plugin (ADR-0031 §5).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct PluginConfig {
+    /// Its command: its program, then its arguments, e.g. `["acme-ods-plugin"]`.
+    /// Started directly, never through a shell, in the project's root.
+    pub command: Vec<String>,
+    /// How long one call may take before it is stopped and its answer is unknown, e.g.
+    /// `"30s"` (default `"60s"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 /// `[warehouses.<kind>]`.

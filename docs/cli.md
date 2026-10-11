@@ -18,7 +18,7 @@ codes).
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
 | `ods health check` | available (preview): run the health checks `[health]` configures and gate CI on them, see [below](#ods-health-check) |
-| `ods health trust` | available (preview): review this project's probe and script checks and trust them to run, see [below](#ods-health-trust) |
+| `ods health trust` | available (preview): review this project's probe and script checks and plugins and trust them to run, see [below](#ods-health-trust) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -28,7 +28,7 @@ codes).
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the read-only dashboard, the lineage explorer and their JSON API, see [below](#the-dashboard) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
-| `ods plugin list\|show` | available (preview): the plugins this `ods` runs with and what each offers, see [below](#ods-plugin) |
+| `ods plugin list\|show\|test` | available (preview): the plugins this `ods` runs with and what each offers, and the SDK's suites run against an out-of-process plugin, see [below](#ods-plugin) |
 | `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
@@ -136,6 +136,8 @@ meanings get new numbers.
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
 | `ODS-E0801` | `ods plugin show` names a plugin this `ods` doesn't run with, or a name several plugins share without `--kind` (exit status 2). The hint lists the plugins, or the kinds to choose from. |
+| `ODS-E0802` | A `[plugins.<name>]` can't be used: a project declares it and it isn't trusted yet (`ods health trust`, or `--allow-scripts` for one run), it can't be started, or it didn't describe itself as the plugin protocol says (e.g. a contract built against another version). |
+| `ODS-E0803` | `ods plugin test`: the plugin fails a conformance case (exit status 5). The message names the case. |
 | `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
 | `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
@@ -234,6 +236,8 @@ format = "json"
     (Databricks is built on Spark). Only error patterns and the SQL dialect are
     inherited, never source versions, the login check, links or observed lineage
     (ADR-0031 §3b). Warehouses that extend each other in a cycle are an error.
+  - `plugins.<name>.command` and `plugins.<name>.timeout`: an out-of-process plugin, see
+    [`ods plugin`](#out-of-process-plugins)
 
   Unknown keys are errors.
 - **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`.
@@ -275,6 +279,63 @@ and, for a warehouse, `parents`, `parents_from` (`plugin`, or `configuration` wh
 `ods_list_plugins` answers the same. A warehouse without a plugin works too, with dbt's
 error patterns and the dialect of its kind; it just isn't listed. The built-in
 warehouses are in [Writing a provider](plugins.md#built-in-warehouses).
+
+### Out-of-process plugins
+
+An out-of-process plugin is a program, in any language, that ODS starts and talks to
+in JSON over its stdin and stdout ([ADR-0031](adr/0031-plugin-registry-and-loading.md)
+§5). It works with the released `ods`, with no custom build. Declare it in `ods.toml`,
+or in your own `config.toml`:
+
+```toml
+[plugins.acme]
+command = ["acme-ods-plugin", "--quiet"]   # its program, then its arguments; never a shell
+timeout = "30s"                            # each call; default 60s, at most 1h
+```
+
+ODS first asks it to describe itself, then calls it as each command needs: its health
+checks run in `ods health check` with the other checks, and tuned the same way
+(`[health.plugins.<id>]`, see [Plugin checks](#plugin-checks)); a warehouse it serves
+gives `ods state compile|run|seed|snapshot|build` its sources' data versions, as a
+built-in warehouse plugin does. [Writing a provider](plugins.md#out-of-process-plugins)
+describes the protocol.
+
+- **Where it runs:** in the directory of the project's `ods.toml` (else the current
+  one), with your environment. ODS hands it no credential and no resolved secret: a
+  plugin that needs the warehouse connects with its own environment, as dbt does. Its
+  warehouse's `[providers.<name>]` settings are passed to it, secret references
+  unresolved.
+- **Trust:** a plugin a project's files declare runs only once you have trusted it with
+  [`ods health trust`](#ods-health-trust): its `command` and the content of the files
+  its command names inside that directory. A commit that changes any of them needs
+  trust again; changing its `timeout` doesn't. `--allow-scripts` on `ods health check`, the `ods state` commands
+  that build and `ods plugin test` trusts it for one run. A plugin in your own
+  `config.toml` needs no trust.
+- **Failing safe:** a plugin that isn't trusted, can't start, or doesn't describe itself
+  as the protocol says (for example, a contract built against another version, named
+  with this `ods`'s) runs nothing. `ods health check` then fails (exit 1, `ODS-E0802`):
+  which checks it would have run is unknown, so nothing stands in for them. The `ods
+  state` commands warn and go on without its versions, judging sources by
+  `sources.json` alone. A call that fails, times out or answers about something it
+  wasn't asked about makes everything in that call *unknown*: a check's nodes, or the
+  sources asked about.
+- **Listing:** `ods plugin list` lists each declared plugin under `declared`, with the
+  contracts it describes, or why it doesn't run, and its checks and warehouse with the
+  other plugins (`from` is `<its name> (plugins.<name>) <its version>`). Listing asks
+  the trusted ones to describe themselves, and runs nothing else. `ods version`,
+  `ods doctor`, the MCP tool and the dashboard list the plugins this `ods` is built
+  with: they never start a declared plugin.
+
+`ods plugin test <name>` runs the SDK's conformance suites against `[plugins.<name>]`,
+as a subprocess, for each contract it describes: each of its health checks over fixture
+nodes, and its source versions over the sources you name, two it can read with
+`--source` and one it can't with `--unreadable`. Without two sources, that suite is
+skipped and says so. Changing a source's data is beyond a read-only test, so that case
+is always skipped. A failing case exits 5 (`ODS-E0803`), naming it:
+
+```sh
+ods plugin test acme --source source.shop.raw.orders --source source.shop.raw.customers
+```
 
 ## `ods doctor`
 
@@ -1340,6 +1401,7 @@ stdout carries only the report (one JSON document with `--json`).
 | `--dry-run` | prepare and plan, but build and record nothing (`compile` always does just that) |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
+| `--allow-scripts` | run the project's [out-of-process plugins](#out-of-process-plugins) for this run only, though not trusted (e.g. in CI); keeps nothing |
 | `--dbt PROGRAM` | the dbt executable; default the configured `program`, then `dbt` |
 | `--project-dir DIR` | dbt's; also where ODS finds the artifacts: `DIR/target` unless `--target-dir` says otherwise. Default `DBT_PROJECT_DIR`, then the configured `project_dir`, then `.` |
 | `--profiles-dir DIR`, `--target NAME` | dbt's; default `DBT_PROFILES_DIR`, `DBT_TARGET`, then the configured `profiles_dir`, `target` |
@@ -1650,6 +1712,11 @@ no check this `ods` has is a configuration error (exit 4), naming the checks it 
 have: a misspelt id never silently drops a gate. Like probes, plugin checks run in
 `ods health check`, and the dashboard shows what the last run recorded.
 
+[Out-of-process plugins](#out-of-process-plugins) add checks the same way, as they
+describe them. Their checks are known only once they run, so the dashboard accepts a
+`[health.plugins.<id>]` it can't find when the configuration declares any, and `ods
+health check` checks it.
+
 #### Coverage targets
 
 `[health.coverage.<measure>]` sets the share of the project a coverage measure on Home
@@ -1677,16 +1744,15 @@ so it never reads past a target it misses. A measure that doesn't exist, or a ta
 outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
 `ODS-E0102`).
 
-Out-of-process plugins come in a later phase of #392.
-
 ### ods health trust
 
-`ods health trust` lists the probe and script checks this project defines, with each
-probe's SQL and each script's command, and whether each is new, changed or already
-trusted, then trusts them as they are now:
+`ods health trust` lists the probe and script checks and the
+[out-of-process plugins](#out-of-process-plugins) this project defines, with each
+probe's SQL and each script's and plugin's command, and whether each is new, changed or
+already trusted, then trusts them as they are now:
 
 ```sh
-ods health trust            # review and trust this project's probes and scripts
+ods health trust            # review and trust this project's probes, scripts and plugins
 ods health trust --revoke   # forget them: they won't run
 ```
 
@@ -1700,7 +1766,9 @@ ods health trust --revoke   # forget them: they won't run
   Changing any of them makes the probe untrusted again; changing its `pass` or
   `severity` doesn't. A script's digest covers its `command`, `select` and `exclude`,
   a configured `project_dir`, and the content of the files its command names inside the
-  project. Probes in your own `config.toml` need trust too when a project
+  project. A plugin's digest covers its `command` and the content of the files its
+  command names in the directory it runs in; its id in the store is
+  `plugin:<name>`. Probes in your own `config.toml` need trust too when a project
   file sets `[health.probes]`: a repository can't point them at another target.
 - **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
   defined is no longer trusted. Cloning a repository never trusts anything.

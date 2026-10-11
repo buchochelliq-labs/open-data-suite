@@ -81,7 +81,7 @@ fn check_command() -> Command {
         Arg::new("allow-scripts")
             .long("allow-scripts")
             .action(ArgAction::SetTrue)
-            .help("Trust this project's probe and script checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
+            .help("Trust this project's probe and script checks and plugins as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
     )
     .arg(
         Arg::new("allow-elevated-login")
@@ -189,20 +189,11 @@ fn connection_for(
     }
 }
 
-/// Gives each script in `health` its process: its command, started in the dbt project's
-/// directory, with the artifacts it may read as absolute paths.
-fn run_scripts_here(
-    health: &mut ods_health::HealthSettings,
-    settings: &StateSettings,
-    ws: &Workspace,
-) -> Result<(), CliError> {
-    let scripts = health.script_definitions();
-    if scripts.is_empty() {
-        return Ok(());
-    }
+/// The project's artifacts a script or plugin check may read, by name, as absolute
+/// paths: those that exist, and the target directory.
+fn check_artifacts(ws: &Workspace) -> BTreeMap<String, String> {
     let absolute =
         |path: &std::path::Path| std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-    let root = script_root(settings);
     let target = absolute(&ws.target_dir);
     let mut artifacts: BTreeMap<String, String> = ["manifest", "run_results", "catalog"]
         .into_iter()
@@ -212,6 +203,44 @@ fn run_scripts_here(
         .map(|(name, path)| (name.to_owned(), path.display().to_string()))
         .collect();
     artifacts.insert("target_dir".to_owned(), target.display().to_string());
+    artifacts
+}
+
+/// The health checks with every out-of-process plugin's, which run here and only here,
+/// as each describes them (ADR-0031 §5); `None` when none is declared. One that can't
+/// run fails the command: which checks it would have run is unknown, so nothing else
+/// can stand in for them (AGENTS rule 3).
+fn with_plugin_checks(
+    args: &ArgMatches,
+    config: &Loaded,
+    artifacts: &BTreeMap<String, String>,
+) -> Result<Option<ods_health::HealthSettings>, CliError> {
+    if config.config.plugins.is_empty() {
+        return Ok(None);
+    }
+    let declared = block_on(super::plugin_process::with_declared(
+        config,
+        args.get_flag("allow-scripts"),
+        artifacts,
+    ))??;
+    if let Some(held) = declared.held.first() {
+        return Err(held.error());
+    }
+    super::serve_dashboard::health_settings_with(config, &declared.plugins).map(Some)
+}
+
+/// Gives each script in `health` its process: its command, started in the dbt project's
+/// directory, with the artifacts it may read.
+fn run_scripts_here(
+    health: &mut ods_health::HealthSettings,
+    settings: &StateSettings,
+    artifacts: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    let scripts = health.script_definitions();
+    if scripts.is_empty() {
+        return Ok(());
+    }
+    let root = script_root(settings);
     for script in scripts {
         let check = ods_provider_process::ScriptCheck::new(
             &script.id,
@@ -361,6 +390,10 @@ impl CheckReport {
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
+        let artifacts = check_artifacts(&ws);
+        if let Some(with_plugins) = with_plugin_checks(args, config, &artifacts)? {
+            health = with_plugins;
+        }
         // Where probes connect and scripts run, and the files scripts run, are part of
         // what is trusted (ADR-0030 §4d).
         pin_checks(&mut health, &settings);
@@ -373,7 +406,7 @@ impl CheckReport {
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
         // Scripts run here and only here, each as a process in the project's root
         // (ADR-0030 §4; ADR-0031 §6): the dashboard reads their findings from the record.
-        run_scripts_here(&mut health, &settings, &ws)?;
+        run_scripts_here(&mut health, &settings, &artifacts)?;
         let allow_elevated_login = args.get_flag("allow-elevated-login");
         if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
         {

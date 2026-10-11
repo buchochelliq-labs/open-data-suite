@@ -1,7 +1,10 @@
-//! Script checks as processes (ADR-0030 §4, ADR-0031 §6): the only code in ODS that
-//! starts a check's process. A [`ScriptCheck`] is a [`HealthCheck`] that runs a
-//! configured command, writes one [`CheckRequest`] to its stdin and reads one
-//! [`CheckResponse`] from its stdout.
+//! Script checks and out-of-process plugins as processes (ADR-0030 §4, ADR-0031 §5,
+//! §6): the only code in ODS that starts a check's or a plugin's process. A
+//! [`ScriptCheck`] is a [`HealthCheck`] that runs a configured command, writes one
+//! [`CheckRequest`] to its stdin and reads one [`CheckResponse`] from its stdout. A
+//! [`PluginProcess`] does the same for each call to a plugin, after asking it to
+//! describe itself: its checks are [`PluginCheck`]s, and its source versions a
+//! [`PluginVersions`].
 //!
 //! - **No shell:** the command is started directly, its first item as the program, so
 //!   nothing in it is expanded or interpreted.
@@ -37,6 +40,10 @@ use process_wrap::tokio::ProcessGroup;
 use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 
+mod plugin;
+
+pub use plugin::{Described, PluginCheck, PluginProcess, PluginVersions};
+
 /// The provider kind.
 pub const KIND: &str = "process";
 
@@ -53,10 +60,19 @@ pub const QUOTED: usize = 300;
 #[derive(Debug, Clone)]
 pub struct ScriptCheck {
     id: String,
-    command: Vec<String>,
+    process: Process,
     params: BTreeMap<String, serde_json::Value>,
-    root: PathBuf,
     artifacts: BTreeMap<String, String>,
+}
+
+/// A command, run once per request: started in `root`, given the request on stdin, and
+/// stopped, with all it started, after `timeout`.
+#[derive(Debug, Clone)]
+struct Process {
+    /// Who it runs for, in its log lines: a check's id, or a plugin's name.
+    label: String,
+    command: Vec<String>,
+    root: PathBuf,
     timeout: Duration,
 }
 
@@ -69,13 +85,17 @@ impl ScriptCheck {
         root: impl Into<PathBuf>,
         timeout: Duration,
     ) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
-            command,
+            process: Process {
+                label: id.clone(),
+                command,
+                root: root.into(),
+                timeout,
+            },
+            id,
             params: BTreeMap::new(),
-            root: root.into(),
             artifacts: BTreeMap::new(),
-            timeout,
         }
     }
 
@@ -95,6 +115,13 @@ impl ScriptCheck {
 
     /// The command, for people: its items joined by spaces.
     pub fn shown(&self) -> String {
+        self.process.shown()
+    }
+}
+
+impl Process {
+    /// The command, for people: its items joined by spaces.
+    fn shown(&self) -> String {
         self.command.join(" ")
     }
 
@@ -166,7 +193,7 @@ impl ScriptCheck {
         let _ = writing.await;
         let stderr = String::from_utf8_lossy(&stderr.0);
         for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
-            tracing::info!(check = %self.id, "{line}");
+            tracing::info!(process = %self.label, "{line}");
         }
         if !status.success() {
             let last = stderr
@@ -192,6 +219,54 @@ impl ScriptCheck {
         }
         Ok(stdout)
     }
+}
+
+impl Process {
+    /// Sends `request` and reads its answer: an error unless the process answers with
+    /// the protocol's JSON for `T`, in a major this host speaks (`protocol` reads it).
+    async fn ask<T: serde::de::DeserializeOwned>(
+        &self,
+        request: &impl serde::Serialize,
+        protocol: impl FnOnce(&T) -> ods_sdk::protocol::ProtocolVersion,
+    ) -> Result<T, ProviderError> {
+        let request = serde_json::to_vec(request)
+            .map_err(|e| ProviderError::Other(format!("the request couldn't be written: {e}")))?;
+        let stdout = self.run(&request).await.map_err(ProviderError::Other)?;
+        // The major first, so an answer in another major says so, not that its fields
+        // are wrong.
+        if let Ok(Major { protocol: Some(v) }) = serde_json::from_slice::<Major>(&stdout)
+            && v.major != PROTOCOL.major
+        {
+            return Err(self.other_major(v));
+        }
+        let answer: T = serde_json::from_slice(&stdout).map_err(|e| {
+            ProviderError::Other(format!(
+                "`{}` didn't answer with the script protocol's JSON: {e}",
+                self.shown()
+            ))
+        })?;
+        let v = protocol(&answer);
+        if v.major != PROTOCOL.major {
+            return Err(self.other_major(v));
+        }
+        Ok(answer)
+    }
+
+    fn other_major(&self, v: ods_sdk::protocol::ProtocolVersion) -> ProviderError {
+        ProviderError::Other(format!(
+            "`{}` answered in protocol {}.{}; this ods speaks {}.x",
+            self.shown(),
+            v.major,
+            v.minor,
+            PROTOCOL.major
+        ))
+    }
+}
+
+/// Only an answer's protocol version.
+#[derive(serde::Deserialize)]
+struct Major {
+    protocol: Option<ods_sdk::protocol::ProtocolVersion>,
 }
 
 /// A started script: unless it has finished, it is stopped with every process it
@@ -271,24 +346,10 @@ impl HealthCheck for ScriptCheck {
             scope.clone(),
             self.artifacts.clone(),
         );
-        let request = serde_json::to_vec(&request)
-            .map_err(|e| ProviderError::Other(format!("the request couldn't be written: {e}")))?;
-        let stdout = self.run(&request).await.map_err(ProviderError::Other)?;
-        let response: CheckResponse = serde_json::from_slice(&stdout).map_err(|e| {
-            ProviderError::Other(format!(
-                "`{}` didn't answer with the script protocol's JSON: {e}",
-                self.shown()
-            ))
-        })?;
-        if response.protocol.major != PROTOCOL.major {
-            return Err(ProviderError::Other(format!(
-                "`{}` answered in protocol {}.{}; this ods speaks {}.x",
-                self.shown(),
-                response.protocol.major,
-                response.protocol.minor,
-                PROTOCOL.major
-            )));
-        }
+        let response: CheckResponse = self
+            .process
+            .ask(&request, |r: &CheckResponse| r.protocol)
+            .await?;
         Ok(response.findings)
     }
 }

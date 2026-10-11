@@ -1,6 +1,6 @@
 [package]
 name = "ods-provider-process"
-description = "Runs OpenDataSuite script checks as processes, over the script protocol (ADR-0030 §4, ADR-0031 §6)."
+description = "Runs OpenDataSuite script checks and out-of-process plugins as processes, over the script protocol (ADR-0030 §4, ADR-0031 §5, §6)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,11 +13,13 @@ async-trait.workspace = true
 ods-core.workspace = true
 ods-sdk.workspace = true
 process-wrap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+ods-sdk = { workspace = true, features = ["conformance"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time", "rt", "macros"] }
 
@@ -25,6 +27,10 @@ tokio = { workspace = true, features = ["process", "io-util", "time", "rt", "mac
 # tests need neither a shell nor an interpreter, on every platform.
 [[test]]
 name = "script"
+harness = false
+
+[[test]]
+name = "plugin"
 harness = false
 
 [lints]
