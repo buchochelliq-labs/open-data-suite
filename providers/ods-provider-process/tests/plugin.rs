@@ -10,6 +10,7 @@ use std::time::Duration;
 use ods_core::SchemaVersion;
 use ods_core::state::{DataVersion, Exactness};
 use ods_provider_process::PluginProcess;
+use ods_sdk::Provider as _;
 use ods_sdk::contracts::changes::{
     CHANGE_PROVIDER, ChangeProvider, RequestedSource, SourceVersion,
 };
@@ -54,6 +55,15 @@ fn fixture(mode: &str) {
             ));
             if mode != "no-warehouse" {
                 answer.warehouse = Some("acme_db".to_owned());
+            }
+            // A kind of version it reads, a capability no host knows, and one that
+            // isn't a kind of version: only the first is taken.
+            if mode != "no-kind" {
+                answer.capabilities = vec![
+                    "relation_versions".to_owned(),
+                    "teleportation".to_owned(),
+                    "zero_copy_clone".to_owned(),
+                ];
             }
             if mode == "major" {
                 answer.protocol = ods_sdk::protocol::ProtocolVersion::new(2, 0);
@@ -180,6 +190,12 @@ async fn a_malformed_description_refuses_the_plugin() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("without naming its warehouse"), "{error}");
+    // Versions a planner could never choose, since they don't say what kind they are.
+    let error = plugin("no-kind").describe().await.unwrap_err().to_string();
+    assert!(
+        error.contains("without saying which versions it reads"),
+        "{error}"
+    );
     let error = plugin("major").describe().await.unwrap_err().to_string();
     assert!(error.contains("answered in protocol 2.0"), "{error}");
 }
@@ -210,6 +226,12 @@ async fn versions_are_answered_in_request_order_with_the_warehouses_settings() {
         serde_json::json!({"kind": "acme_db"}),
     )]);
     let provider = acme.versions(&described, settings).unwrap();
+    // The kind of version it said it reads, which is how the planner picks readings,
+    // and nothing else it named.
+    assert_eq!(
+        provider.info().capabilities,
+        ods_core::CapabilitySet::from([ods_core::Capability::RelationVersions])
+    );
     let asked = sources(&["raw.orders", "unreadable.events", "raw.customers"]);
     let report = provider.versions(&asked).await.unwrap();
     let ids: Vec<&str> = report.sources.iter().map(|(id, _)| id.as_str()).collect();

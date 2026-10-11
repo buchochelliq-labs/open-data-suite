@@ -5,7 +5,8 @@
 //! - **`health_check`:** each check it lists, over a scope of fixture nodes.
 //! - **`change_provider`:** over the sources given with `--source` (at least two it can
 //!   read; a plugin's warehouse is its own, so ODS can't pick them), and
-//!   `--unreadable` for one it can't. Changing data isn't something a test of a
+//!   `--unreadable` for one it can't, with its warehouse's settings, as a run sends
+//!   them. Changing data isn't something a test of a
 //!   read-only plugin can do, so that case is always skipped.
 
 use std::collections::BTreeMap;
@@ -141,7 +142,7 @@ impl TestReport {
             .map(|id| requested(id))
             .collect();
         let unreadable = args.get_one::<String>("unreadable").map(|id| requested(id));
-        block_on(run(plugin, sources, unreadable))?
+        block_on(run(config, plugin, sources, unreadable))?
     }
 
     /// The error to exit with when a case failed (exit 5).
@@ -177,6 +178,7 @@ fn requested(id: &str) -> RequestedSource {
 }
 
 async fn run(
+    config: &Loaded,
     plugin: Declared,
     sources: Vec<RequestedSource>,
     unreadable: Option<RequestedSource>,
@@ -213,9 +215,17 @@ async fn run(
                 )],
             })
         } else {
+            // What a run sends it: its warehouse's settings, as configured.
+            let settings = described
+                .answer
+                .warehouse
+                .as_deref()
+                .map(|w| super::plugin_process::warehouse_settings(config, w))
+                .unwrap_or_default();
             let harness = Versions {
                 process: process.clone(),
                 described: described.clone(),
+                settings,
                 sources,
                 unreadable,
             };
@@ -311,6 +321,7 @@ impl health_check::HealthCheckHarness for Checks {
 struct Versions {
     process: Arc<PluginProcess>,
     described: ods_provider_process::Described,
+    settings: BTreeMap<String, serde_json::Value>,
     sources: Vec<RequestedSource>,
     unreadable: Option<RequestedSource>,
 }
@@ -318,8 +329,10 @@ struct Versions {
 #[async_trait]
 impl changes::ChangeHarness for Versions {
     async fn provider(&self) -> Arc<dyn ChangeProvider> {
-        // The settings are the plugin's own business here: none are given.
-        match self.process.versions(&self.described, BTreeMap::new()) {
+        match self
+            .process
+            .versions(&self.described, self.settings.clone())
+        {
             Some(v) => Arc::new(v),
             None => unreachable!("only run when it implements change_provider"),
         }

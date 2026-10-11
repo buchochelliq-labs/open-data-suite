@@ -244,12 +244,16 @@ checks, and the warehouse kind it serves (as dbt names it, `adapter_type`):
               {"contract": "change_provider", "version": {"major": 0, "minor": 1}}],
  "checks": [{"id": "acme.pii_tagged", "about": "PII columns are tagged",
              "default_severity": "warn"}],
- "warehouse": "snowflake", "versions_read": "Snowflake table versions"}
+ "warehouse": "snowflake", "versions_read": "Snowflake table versions",
+ "capabilities": ["relation_versions"]}
 ```
 
 A contract version the host can't accept (before 1.0, any other minor) refuses the
 plugin, naming both. Checks without `health_check`, a check listed twice, or
-`change_provider` without a `warehouse` refuse it too. A contract the host doesn't know
+`change_provider` without a `warehouse` refuse it too. So does `change_provider`
+whose `capabilities` name neither `relation_versions` (a table's own version) nor
+`source_freshness` (its last load): `ods state` chooses among readings by the kind of
+version they are, so one that doesn't say would be read and never used. A contract the host doesn't know
 is listed and otherwise ignored, so a plugin can offer more than an older `ods` uses.
 A warehouse another plugin already serves (e.g. a built-in) is a configuration error.
 

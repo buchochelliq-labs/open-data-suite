@@ -46,7 +46,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   it when a contract it implements was built against a version this `ods` can't accept,
   then calls it: its health checks run in `ods health check` (tuned with
   `[health.plugins.<id>]`), and a warehouse it serves gives the `ods state` commands
-  that build their sources' data versions. A plugin a project declares runs only once
+  that build their sources' data versions, of the kind its `capabilities` name
+  (`relation_versions` or `source_freshness`). A plugin a project declares runs only once
   trusted with `ods health trust`, or with `--allow-scripts` (now also on the `ods
   state` commands that build) for one run. One that can't run fails `ods health check`
   (`ODS-E0802`) and is a warning in `ods state`; a call that fails makes what it was

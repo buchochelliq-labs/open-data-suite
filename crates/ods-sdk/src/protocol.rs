@@ -36,7 +36,7 @@
 //!               {"contract": "change_provider", "version": {"major": 0, "minor": 1}}],
 //!  "checks": [{"id": "acme.pii_tagged", "about": "PII columns are tagged",
 //!              "default_severity": "warn"}],
-//!  "warehouse": "snowflake"}
+//!  "warehouse": "snowflake", "capabilities": ["relation_versions"]}
 //! ```
 //!
 //! Source versions, asked for in one batch, and answered for every source in request
@@ -236,6 +236,12 @@ pub struct DescribeResponse {
     /// versions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub versions_read: Option<String>,
+    /// The capabilities its providers have (ADR-0006 §3), by name: for
+    /// `change_provider`, which kind of version it reads, `relation_versions` (a
+    /// table's own version) or `source_freshness` (its last load), which is how a
+    /// planner chooses among readings. Names a host doesn't know are ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
 }
 
 impl DescribeResponse {
@@ -250,6 +256,7 @@ impl DescribeResponse {
             checks: Vec::new(),
             warehouse: None,
             versions_read: None,
+            capabilities: Vec::new(),
         }
     }
 
@@ -392,7 +399,8 @@ mod tests {
                              {"contract": "change_provider", "version": {"major": 0, "minor": 1}}],
                 "checks": [{"id": "acme.pii_tagged", "about": "PII columns are tagged",
                             "default_severity": "warn"}],
-                "warehouse": "snowflake", "added_later": true}"#,
+                "warehouse": "snowflake", "capabilities": ["relation_versions"],
+                "added_later": true}"#,
         )
         .unwrap();
         assert_eq!(
@@ -406,6 +414,7 @@ mod tests {
         assert_eq!(described.provided("relation_linker"), None);
         assert_eq!(described.checks[0].id, "acme.pii_tagged");
         assert_eq!(described.warehouse.as_deref(), Some("snowflake"));
+        assert_eq!(described.capabilities, ["relation_versions"]);
 
         let request = VersionsRequest::new(
             vec![RequestedSource::new("source.shop.raw.orders", "raw.orders")],

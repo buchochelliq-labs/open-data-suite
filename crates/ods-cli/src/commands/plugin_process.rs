@@ -315,6 +315,24 @@ pub(super) async fn with_declared(
     })
 }
 
+/// The `settings` of each `[providers.<name>]` of kind `warehouse`, by name, as a
+/// plugin's `versions` request carries them: secret references left unresolved.
+pub(super) fn warehouse_settings(
+    config: &Loaded,
+    warehouse: &str,
+) -> BTreeMap<String, serde_json::Value> {
+    WarehouseSettings::from_config(&config.config, warehouse)
+        .providers()
+        .iter()
+        .map(|(name, table)| {
+            (
+                name.clone(),
+                serde_json::to_value(table).unwrap_or(serde_json::Value::Null),
+            )
+        })
+        .collect()
+}
+
 /// Adds what `described` offers to `plugins`.
 fn add(
     plugins: &mut Plugins,
@@ -350,18 +368,8 @@ fn add(
             .map_err(refused)?;
     }
     if let Some(warehouse) = answer.warehouse.as_deref().filter(|w| !w.is_empty()) {
-        let settings = WarehouseSettings::from_config(&config.config, warehouse)
-            .providers()
-            .iter()
-            .map(|(name, table)| {
-                (
-                    name.clone(),
-                    serde_json::to_value(table).unwrap_or(serde_json::Value::Null),
-                )
-            })
-            .collect();
         let changes = process
-            .versions(described, settings)
+            .versions(described, warehouse_settings(config, warehouse))
             .map(|v| Arc::new(v) as Arc<dyn ChangeProvider>);
         plugins
             .add_warehouse(Arc::new(ProcessWarehouse {

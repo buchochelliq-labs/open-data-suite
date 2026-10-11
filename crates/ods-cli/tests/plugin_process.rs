@@ -57,6 +57,7 @@ fn fixture(mode: &str) {
             ));
             answer.warehouse = Some("acme_db".to_owned());
             answer.versions_read = Some("Acme table versions".to_owned());
+            answer.capabilities = vec!["relation_versions".to_owned()];
             out(serde_json::to_vec(&answer).unwrap());
         }
         "check" => {
@@ -92,11 +93,15 @@ fn fixture(mode: &str) {
         }
         "versions" => {
             let request: VersionsRequest = serde_json::from_value(request).unwrap();
+            // It reads nothing without its warehouse's account, as a real one would.
+            let account = request.settings.values().any(|s| s["account"] == "acme");
             let sources = request
                 .sources
                 .iter()
                 .map(|s| {
-                    let version = if s.name.starts_with("none.") || s.name.starts_with("dark.") {
+                    let version = if !account {
+                        SourceVersion::Unknown("no account configured".to_owned())
+                    } else if s.name.starts_with("none.") || s.name.starts_with("dark.") {
                         SourceVersion::Unknown("no such table".to_owned())
                     } else {
                         SourceVersion::Version(DataVersion::new(
@@ -374,7 +379,11 @@ fn its_checks_and_warehouse_are_listed_as_it_describes_them() {
 }
 
 fn plugin_test_runs_the_sdks_suites_against_it() {
-    let project = Project::new(&plugin("good"));
+    // Its warehouse's settings reach it, as in a run.
+    let project = Project::new(&format!(
+        "{}\n[providers.warehouse]\nkind = \"acme_db\"\nsettings = {{ account = \"acme\" }}\n",
+        plugin("good")
+    ));
     // Untrusted: not run without --allow-scripts.
     let (code, envelope) = project.ods(&["plugin", "test", "acme"]);
     assert_eq!(code, 1, "{envelope:#}");

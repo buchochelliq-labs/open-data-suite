@@ -31,6 +31,20 @@ use crate::{KIND, Process};
 /// The contracts an out-of-process plugin can implement in this host.
 const CONTRACTS: [Contract; 2] = [HEALTH_CHECK, CHANGE_PROVIDER];
 
+/// The kinds of source version a planner chooses among (`ods_state`'s strategies).
+const VERSION_KINDS: [Capability; 2] = [Capability::RelationVersions, Capability::SourceFreshness];
+
+/// The kinds of source version `answer` says its `change_provider` reads; names this
+/// host doesn't know, or that aren't a kind of version, are ignored.
+fn version_kinds(answer: &DescribeResponse) -> CapabilitySet {
+    answer
+        .capabilities
+        .iter()
+        .filter_map(|name| name.parse::<Capability>().ok())
+        .filter(|c| VERSION_KINDS.contains(c))
+        .collect()
+}
+
 /// A configured plugin: its command, run once per request.
 #[derive(Debug, Clone)]
 pub struct PluginProcess {
@@ -138,13 +152,21 @@ impl PluginProcess {
         if let Some(twice) = answer.checks.iter().find(|c| !ids.insert(c.id.as_str())) {
             return Err(refuse(format!("lists the check `{}` twice", twice.id)));
         }
-        if answer.provided(CHANGE_PROVIDER.name).is_some()
-            && answer.warehouse.as_deref().is_none_or(str::is_empty)
-        {
-            return Err(refuse(format!(
-                "implements `{}` without naming its warehouse",
-                CHANGE_PROVIDER.name
-            )));
+        if answer.provided(CHANGE_PROVIDER.name).is_some() {
+            if answer.warehouse.as_deref().is_none_or(str::is_empty) {
+                return Err(refuse(format!(
+                    "implements `{}` without naming its warehouse",
+                    CHANGE_PROVIDER.name
+                )));
+            }
+            // A planner uses a reading only for the kind of version it says it is: one
+            // that says none would be read and never used.
+            if version_kinds(&answer).is_empty() {
+                return Err(refuse(format!(
+                    "implements `{}` without saying which versions it reads: its capabilities name neither `relation_versions` nor `source_freshness`",
+                    CHANGE_PROVIDER.name
+                )));
+            }
         }
         Ok(Described { answer, unknown })
     }
@@ -180,6 +202,7 @@ impl PluginProcess {
             .then(|| PluginVersions {
                 plugin: self.clone(),
                 settings,
+                capabilities: version_kinds(&described.answer),
             })
     }
 }
@@ -229,17 +252,19 @@ impl HealthCheck for PluginCheck {
 pub struct PluginVersions {
     plugin: Arc<PluginProcess>,
     settings: BTreeMap<String, serde_json::Value>,
+    /// The kinds of version it said it reads.
+    capabilities: CapabilitySet,
 }
 
 impl Provider for PluginVersions {
     fn info(&self) -> ProviderInfo {
-        // What kind of version it reads isn't declared, so none is assumed: a planner
-        // can't prefer it for a capability it never claimed.
+        // The kind of version it said it reads, and only that: a planner chooses a
+        // reading by it.
         ProviderInfo::new(
             KIND,
             self.plugin.name.clone(),
             env!("CARGO_PKG_VERSION"),
-            CapabilitySet::new(),
+            self.capabilities.clone(),
         )
     }
 }
