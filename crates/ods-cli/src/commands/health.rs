@@ -57,7 +57,7 @@ impl Module for HealthCommand {
             Some(("trust", args)) => {
                 let mut health = super::serve_dashboard::health_settings(ctx.config)?;
                 let settings = StateSettings::resolve(args, ctx.config)?;
-                health.pin_probe_connection(&probe_pins(&settings));
+                pin_checks(&mut health, &settings);
                 let report = super::health_trust::TrustReport::build(args, ctx.config, &health)?;
                 ctx.emit(&report)
             }
@@ -134,6 +134,26 @@ fn write_record(
     })
 }
 
+/// Pins in each probe's and script's trust digest what decides where it runs and what
+/// it runs, as far as a project can change it (ADR-0030 §4d): for probes, the dbt
+/// settings configuration sets; for scripts, a configured project directory and the
+/// files each command names in it.
+fn pin_checks(health: &mut ods_health::HealthSettings, settings: &StateSettings) {
+    let pins = probe_pins(settings);
+    health.pin_probe_connection(&pins);
+    let script_pins = pins
+        .into_iter()
+        .filter(|(key, _)| key == "dbt.project_dir")
+        .collect();
+    health.pin_scripts(&script_root(settings), &script_pins);
+}
+
+/// Where scripts run: the dbt project's directory, absolute.
+fn script_root(settings: &StateSettings) -> PathBuf {
+    let dir = super::failures::project_dir(settings);
+    std::path::absolute(&dir).unwrap_or(dir)
+}
+
 /// The dbt settings that decide where probes connect and that configuration set (so a
 /// project can): the program, the project and profiles directories and the profile.
 /// They are pinned in each probe's trust digest. Flags and `DBT_*` variables are the
@@ -182,7 +202,7 @@ fn run_scripts_here(
     }
     let absolute =
         |path: &std::path::Path| std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-    let root = absolute(&super::failures::project_dir(settings));
+    let root = script_root(settings);
     let target = absolute(&ws.target_dir);
     let mut artifacts: BTreeMap<String, String> = ["manifest", "run_results", "catalog"]
         .into_iter()
@@ -341,9 +361,9 @@ impl CheckReport {
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
-        // Where probes connect, as far as configuration decides it, is part of what is
-        // trusted (ADR-0030 §4d).
-        health.pin_probe_connection(&probe_pins(&settings));
+        // Where probes connect and scripts run, and the files scripts run, are part of
+        // what is trusted (ADR-0030 §4d).
+        pin_checks(&mut health, &settings);
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
         super::serve_dashboard::check_probe_sql(
             &mut health,

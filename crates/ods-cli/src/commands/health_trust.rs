@@ -131,7 +131,8 @@ pub(super) fn command() -> Command {
              probe's SQL and each script's command, and whether each is new, changed or \
              already trusted, then trusts them as they are now. A probe or script runs \
              only once its exact definition is trusted for this project; changing its \
-             SQL, its command or what it selects makes it untrusted again. Trust is kept \
+             SQL, its command, a file its command names or what it selects makes it \
+             untrusted again. Trust is kept \
              in your own configuration directory, never in the repository.",
         )
         .arg(

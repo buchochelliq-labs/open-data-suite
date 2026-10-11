@@ -1577,7 +1577,9 @@ severity = "error"
 
 `ods health check` starts the command (its first item as the program, never through a
 shell, so nothing in it is expanded) in the dbt project's directory, with your
-environment, as `dbt` would be started; ODS adds no credential and no secret. It writes
+environment, as `dbt` would be started; ODS adds no credential and no secret (what
+the script prints is its own: its last line on stderr is quoted in its findings when it
+fails, so don't let it print a credential from that environment). It writes
 one JSON request to the program's stdin and reads one JSON answer from its stdout, the
 *script protocol* (`ods_sdk::protocol`, version 1.0):
 
@@ -1607,13 +1609,18 @@ What the program writes to stderr is logged (`--verbose`). A script runs only on
 have trusted it, and until then every node it selects is *unknown*, never a pass. So is
 every node when it fails, saying why:
 - **Trust.** A script a project's `ods.toml` (or `ods.local.toml`) defines runs only once
-  you have trusted its `command`, `select` and `exclude` for that project with
-  [`ods health trust`](#ods-health-trust); changing its `params`, `timeout` or `severity`
-  doesn't need trust again. Scripts in your own `config.toml` need no trust.
+  you have trusted it for that project with [`ods health trust`](#ods-health-trust):
+  its `command`, `select` and `exclude`, a `project_dir` configuration sets, and the
+  content of every file its command names inside the project (e.g. `checks/pii.py`).
+  A commit that changes any of them makes it untrusted again; changing its `params`,
+  `timeout` or `severity` doesn't. Trust pins those files only, not what they import or
+  read in turn, so keep a script's code in the files its command names, or review what
+  it loads. Scripts in your own `config.toml` need no trust; a relative path there runs
+  that file in whichever project you check, so name your own scripts by absolute path.
 - **Failing safe.** A command that can't start, exits non-zero (the finding quotes its
-  last line on stderr), runs past its `timeout` (it is then stopped), or answers with
-  anything but the protocol's JSON in major version 1, makes every node it was asked
-  about *unknown*. So does an answer about a node it wasn't asked about. A node it
+  last line on stderr, up to 300 characters), runs past its `timeout` (it is then
+  stopped), writes more than 64 MiB to stdout, or answers with anything but the
+  protocol's JSON in major version 1, makes every node it was asked about *unknown*. So does an answer about a node it wasn't asked about. A node it
   doesn't answer, or answers twice, is *unknown*.
 
 A `command` that is missing or empty, a `timeout` that isn't a duration (`"30s"`,
@@ -1689,7 +1696,9 @@ ods health trust --revoke   # forget them: they won't run
   dbt settings configuration gives (`program`, `project_dir`, `profiles_dir`, `profile`;
   flags and `DBT_*` variables are yours, so they aren't pinned).
   Changing any of them makes the probe untrusted again; changing its `pass` or
-  `severity` doesn't. A script's digest covers its `command`, `select` and `exclude`. Probes in your own `config.toml` need trust too when a project
+  `severity` doesn't. A script's digest covers its `command`, `select` and `exclude`,
+  a configured `project_dir`, and the content of the files its command names inside the
+  project. Probes in your own `config.toml` need trust too when a project
   file sets `[health.probes]`: a repository can't point them at another target.
 - **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
   defined is no longer trusted. Cloning a repository never trusts anything.

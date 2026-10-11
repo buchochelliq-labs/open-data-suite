@@ -12,8 +12,11 @@
 //!   major this host speaks is an error: the host makes every node it was asked about
 //!   *unknown*, never a pass (AGENTS rule 3). So is an answer about a node it wasn't
 //!   asked about, which the host checks.
-//! - **Its log:** what it writes to stderr is logged, and its last line is in the error
-//!   when it fails.
+//! - **Its log:** what it writes to stderr is logged, and its last line, cut to
+//!   [`QUOTED`] characters, is in the error when it fails. It is the script's own output,
+//!   so a script that prints a credential from its environment puts it there.
+//! - **Bounded:** an answer longer than [`ANSWER_LIMIT`] is an error, and only the last
+//!   [`STDERR_KEPT`] bytes of stderr are kept, so a runaway script can't exhaust memory.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -27,10 +30,19 @@ use ods_sdk::contracts::health_check::{
 };
 use ods_sdk::protocol::{CheckCall, CheckRequest, CheckResponse, PROTOCOL};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 
 /// The provider kind.
 pub const KIND: &str = "process";
+
+/// The most a script may write to stdout: an answer is a few hundred bytes a node.
+pub const ANSWER_LIMIT: usize = 64 * 1024 * 1024;
+
+/// How much of the end of a script's stderr is kept.
+pub const STDERR_KEPT: usize = 1024 * 1024;
+
+/// The most characters of stderr's last line an error quotes.
+pub const QUOTED: usize = 300;
 
 /// A configured check run as a process, over the script protocol.
 #[derive(Debug, Clone)]
@@ -108,9 +120,19 @@ impl ScriptCheck {
                 let _ = stdin.shutdown().await;
             }
         });
-        let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => return Err(format!("`{}` couldn't be run: {e}", self.shown())),
+        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+        let running = async {
+            let (stdout, stderr) = tokio::join!(
+                read_capped(stdout, ANSWER_LIMIT, false),
+                read_capped(stderr, STDERR_KEPT, true)
+            );
+            (stdout, stderr, child.wait().await)
+        };
+        let (stdout, stderr, status) = match tokio::time::timeout(self.timeout, running).await {
+            Ok((Ok(stdout), Ok(stderr), Ok(status))) => (stdout, stderr, status),
+            Ok((Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e))) => {
+                return Err(format!("`{}` couldn't be run: {e}", self.shown()));
+            }
             Err(_) => {
                 return Err(format!(
                     "`{}` didn't answer within {}s, so it was stopped",
@@ -120,24 +142,66 @@ impl ScriptCheck {
             }
         };
         let _ = writing.await;
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = String::from_utf8_lossy(&stderr.0);
         for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
             tracing::info!(check = %self.id, "{line}");
         }
-        if !output.status.success() {
+        if !status.success() {
             let last = stderr
                 .lines()
                 .rev()
                 .find(|l| !l.trim().is_empty())
-                .map(|l| format!("; its last line on stderr: {}", l.trim()))
+                .map(|l| {
+                    let line = l.trim();
+                    let cut: String = line.chars().take(QUOTED).collect();
+                    let more = if cut.len() < line.len() { "…" } else { "" };
+                    format!("; its last line on stderr: {cut}{more}")
+                })
                 .unwrap_or_default();
+            return Err(format!("`{}` exited with {status}{last}", self.shown()));
+        }
+        let (stdout, over) = stdout;
+        if over {
             return Err(format!(
-                "`{}` exited with {}{last}",
+                "`{}` wrote more than {} MiB to stdout",
                 self.shown(),
-                output.status
+                ANSWER_LIMIT / (1024 * 1024)
             ));
         }
-        Ok(output.stdout)
+        Ok(stdout)
+    }
+}
+
+/// Reads `reader` to its end, keeping at most `cap` bytes: the first (or, with
+/// `keep_end`, the last) of them, and whether there were more. It reads on past `cap`,
+/// so the process never waits on a full pipe.
+async fn read_capped(
+    reader: Option<impl AsyncRead + Unpin>,
+    cap: usize,
+    keep_end: bool,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut kept = Vec::new();
+    let mut over = false;
+    let Some(mut reader) = reader else {
+        return Ok((kept, over));
+    };
+    let mut chunk = vec![0; 64 * 1024];
+    loop {
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok((kept, over));
+        }
+        if keep_end {
+            kept.extend_from_slice(&chunk[..n]);
+            if kept.len() > cap {
+                kept.drain(..kept.len() - cap);
+                over = true;
+            }
+        } else {
+            let room = cap.saturating_sub(kept.len());
+            kept.extend_from_slice(&chunk[..n.min(room)]);
+            over |= n > room;
+        }
     }
 }
 

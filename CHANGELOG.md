@@ -41,7 +41,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   nodes to its stdin and reading its findings from its stdout as JSON, the script
   protocol 1.0 (`ods_sdk::protocol`). It takes `params` and a `timeout` (60 seconds by
   default). A project's scripts run only once trusted with `ods health trust`, which now
-  shows each script's command; a script that fails, times out or answers with anything
+  shows each script's command; trust also covers the files the command names in the
+  project, so a commit that changes one needs trust again; a script that fails, times out or answers with anything
   but the protocol makes its nodes *unknown*, never a pass. The dashboard shows what the
   last run recorded. The new `ods-provider-process` crate is the only code that starts
   one.

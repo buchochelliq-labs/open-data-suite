@@ -972,6 +972,16 @@ impl HealthSettings {
         }
     }
 
+    /// Adds to each script's trust digest where it runs and what it runs (ADR-0030
+    /// §4d): `settings`, the host's that a project can set (e.g. a configured working
+    /// directory), and the content of every file its command names inside `root`, the
+    /// directory it runs in. Changing any of them needs trust again.
+    pub fn pin_scripts(&mut self, root: &std::path::Path, settings: &BTreeMap<String, String>) {
+        for script in &mut self.scripts {
+            script.pin(root, settings);
+        }
+    }
+
     /// Marks the probes whose ids are in `trusted` as trusted for this project, and the
     /// rest as not (ADR-0030 §4b).
     pub fn trust_probes(&mut self, trusted: &BTreeSet<String>) {

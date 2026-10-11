@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +53,8 @@ pub(crate) struct Script {
     command: Vec<String>,
     params: BTreeMap<String, serde_json::Value>,
     pub(crate) timeout: Duration,
+    /// What the digest covers as configured, before [`Script::pin`] adds the host's.
+    digested: Vec<u8>,
     digest: String,
     trusted: bool,
     /// What runs it, from the host; `None` where scripts aren't run.
@@ -72,8 +75,9 @@ impl fmt::Debug for Script {
     }
 }
 
-/// What a script's digest covers, in a fixed order: what runs, and on what. Its
-/// severity, timeout and parameters aren't in it: changing them runs nothing new.
+/// What a script's digest covers as configured, in a fixed order: what runs, and on
+/// what. Its severity, timeout and parameters aren't in it: changing them runs nothing
+/// new. The host adds where it runs and the files it names ([`Script::pin`]).
 #[derive(Serialize)]
 struct Digested<'a> {
     id: &'a str,
@@ -160,6 +164,7 @@ impl Script {
             params,
             timeout,
             digest: format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
+            digested: bytes,
             trusted: false,
             runner: None,
         })
@@ -174,6 +179,37 @@ impl Script {
             timeout: self.timeout,
             digest: self.digest.clone(),
         }
+    }
+
+    /// Adds to its digest what decides what it runs and that a project can change
+    /// (ADR-0030 §4d): `settings`, the host's (e.g. a configured working directory), and
+    /// the content of each file its command names inside `root`, where it runs. So a
+    /// commit that changes `checks/pii.py` makes `["python", "checks/pii.py"]`
+    /// untrusted again. What those files load in turn isn't pinned.
+    pub(crate) fn pin(&mut self, root: &Path, settings: &BTreeMap<String, String>) {
+        let mut pins = settings.clone();
+        if let Ok(inside) = std::fs::canonicalize(root) {
+            for item in &self.command {
+                let Ok(path) = std::fs::canonicalize(root.join(item)) else {
+                    continue;
+                };
+                if !path.starts_with(&inside) || !path.is_file() {
+                    continue;
+                }
+                // A file that can't be read is pinned as such: once readable, it is new.
+                let content = std::fs::read(&path).map_or_else(
+                    |_| "unreadable".to_owned(),
+                    |bytes| format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
+                );
+                pins.insert(format!("file:{item}"), content);
+            }
+        }
+        let mut bytes = self.digested.clone();
+        if !pins.is_empty() {
+            bytes.push(b'\n');
+            bytes.extend(serde_json::to_vec(&pins).unwrap_or_default());
+        }
+        self.digest = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
     }
 
     pub(crate) fn set_trusted(&mut self, trusted: bool) {

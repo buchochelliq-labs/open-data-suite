@@ -33,6 +33,7 @@ async-trait.workspace = true
 ods-provider-fake.workspace = true
 tokio = { workspace = true, features = ["time", "rt", "macros", "test-util"] }
 proptest.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 
 [lints]

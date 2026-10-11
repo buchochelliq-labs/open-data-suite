@@ -2122,6 +2122,47 @@ select = { tags = ["pii"] }
         assert_eq!(digest(&format!("{PII}params = {{ min = 3 }}\n")), base);
     }
 
+    #[test]
+    fn pinning_covers_the_files_the_command_names_in_the_project_and_where_it_runs() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("checks")).unwrap();
+        let script = project.path().join("checks/pii.py");
+        std::fs::write(&script, "print('v1')").unwrap();
+        let elsewhere = outside.path().join("lib.py");
+        std::fs::write(&elsewhere, "v1").unwrap();
+        let toml = PII.replace(
+            r#"["python", "checks/pii.py"]"#,
+            &format!("['python', 'checks/pii.py', '{}']", elsewhere.display()),
+        );
+        let digest = |settings: &BTreeMap<String, String>| {
+            let mut s = super::settings(&toml);
+            s.pin_scripts(project.path(), settings);
+            s.script_definitions()[0].digest.clone()
+        };
+        let none = BTreeMap::new();
+        let base = digest(&none);
+        assert_ne!(base, super::settings(&toml).script_definitions()[0].digest);
+        assert_eq!(digest(&none), base, "the same files pin the same digest");
+
+        // A file outside the project isn't the project's to change, so isn't pinned.
+        std::fs::write(&elsewhere, "v2").unwrap();
+        assert_eq!(digest(&none), base);
+
+        // A changed script, or a configured working directory, needs trust again.
+        std::fs::write(&script, "print('v2')").unwrap();
+        let changed = digest(&none);
+        assert_ne!(changed, base);
+        let dir = BTreeMap::from([("dbt.project_dir".to_owned(), "elsewhere".to_owned())]);
+        assert_ne!(digest(&dir), changed);
+
+        // A file that appears where the command named nothing is new too.
+        std::fs::remove_file(&script).unwrap();
+        let missing = digest(&none);
+        std::fs::write(&script, "print('v3')").unwrap();
+        assert_ne!(digest(&none), missing);
+    }
+
     #[tokio::test]
     async fn an_untrusted_script_never_runs_and_is_unknown_where_it_applies() {
         let mut s = settings(PII);

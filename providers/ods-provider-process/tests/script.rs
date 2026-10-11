@@ -69,6 +69,22 @@ fn fixture(mode: &str) {
             std::process::exit(3);
         }
         "garbage" => print!("all good!"),
+        "flood" => {
+            // Past the answer limit, and a lot on stderr too: neither may fill memory.
+            let chunk = vec![b' '; 1024 * 1024];
+            let mut out = std::io::stdout().lock();
+            for _ in 0..=ods_provider_process::ANSWER_LIMIT / chunk.len() {
+                out.write_all(&chunk).unwrap();
+            }
+            let mut err = std::io::stderr().lock();
+            for _ in 0..4 {
+                err.write_all(&chunk).unwrap();
+            }
+        }
+        "long-stderr" => {
+            eprintln!("{}", "x".repeat(5000));
+            std::process::exit(1);
+        }
         "major" => print!(r#"{{"protocol": {{"major": 2, "minor": 0}}, "findings": []}}"#),
         "sleep" => std::thread::sleep(Duration::from_secs(30)),
         other => panic!("no fixture mode `{other}`"),
@@ -197,6 +213,31 @@ async fn a_script_that_takes_too_long_is_stopped() {
     );
 }
 
+async fn an_answer_past_the_limit_is_an_error() {
+    let error = script("flood", LONG)
+        .check(&scope(&["model.shop.orders"]))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("wrote more than 64 MiB to stdout"),
+        "{error}"
+    );
+}
+
+async fn a_long_line_on_stderr_is_cut_when_quoted() {
+    let error = script("long-stderr", LONG)
+        .check(&scope(&["model.shop.orders"]))
+        .await
+        .unwrap_err()
+        .to_string();
+    let quoted = error.split("its last line on stderr: ").nth(1).unwrap();
+    assert_eq!(
+        quoted,
+        format!("{}…", "x".repeat(ods_provider_process::QUOTED))
+    );
+}
+
 async fn a_command_that_cant_start_is_an_error() {
     let check = ScriptCheck::new(
         "acme.pii",
@@ -247,6 +288,8 @@ fn main() {
         output_that_isnt_the_protocol_is_an_error,
         an_answer_in_another_major_is_an_error,
         a_script_that_takes_too_long_is_stopped,
+        an_answer_past_the_limit_is_an_error,
+        a_long_line_on_stderr_is_cut_when_quoted,
         a_command_that_cant_start_is_an_error,
     );
 }

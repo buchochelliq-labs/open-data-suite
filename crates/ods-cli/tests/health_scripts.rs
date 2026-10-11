@@ -216,6 +216,31 @@ fn a_projects_script_runs_only_once_trusted_and_a_new_command_untrusts_it() {
     assert_eq!(envelope["result"]["scripts"][0]["standing"], "changed");
 }
 
+fn changing_a_file_the_command_names_needs_trust_again() {
+    // The fixture ignores its extra argument: it stands for the script's own file.
+    let project = Project::new(&script("orders-fail", "").replace(
+        &format!("'{FIXTURE}', 'orders-fail']"),
+        &format!("'{FIXTURE}', 'orders-fail', 'checks/orders.py']"),
+    ));
+    let file = project.dir.path().join("checks/orders.py");
+    std::fs::create_dir(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "v1").unwrap();
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    project.check(&[]);
+    assert!(project.ran());
+
+    // A commit that changes the script, with `ods.toml` as it was, runs nothing.
+    std::fs::write(&file, "v2").unwrap();
+    let (_, envelope) = project.check(&[]);
+    assert!(!project.ran(), "{envelope:#}");
+    assert!(reason(&finding(&envelope, "orders")).contains("not trusted"));
+    let (_, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(envelope["result"]["scripts"][0]["standing"], "changed");
+    project.check(&[]);
+    assert!(project.ran());
+}
+
 fn a_script_that_fails_makes_its_nodes_unknown_saying_why() {
     let project = Project::new(&script("exit", ""));
     let (_, envelope) = project.check(&["--allow-scripts"]);
@@ -285,6 +310,7 @@ fn main() {
     tests!(
         a_projects_script_runs_only_once_trusted_and_a_new_command_untrusts_it,
         a_script_that_fails_makes_its_nodes_unknown_saying_why,
+        changing_a_file_the_command_names_needs_trust_again,
         allow_scripts_runs_it_once_and_never_keeps_it,
         scripts_in_the_users_own_configuration_need_no_trust,
         a_script_without_a_command_is_a_configuration_error,
