@@ -178,6 +178,9 @@ jobs:
       # The Semantic layer page (#352) in Chromium, with and without one; light and dark.
       - name: Semantic layer in a browser
         run: python crates/ods-web/tests/browser/semantic.py -v
+      # Contrast on every screen, light and dark (#353): WCAG AA for text, 3:1 for marks.
+      - name: Contrast on every screen
+        run: python crates/ods-web/tests/browser/contrast.py -v
 
   # A custom `ods` built from a crate outside the workspace, as a third party's would
   # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary

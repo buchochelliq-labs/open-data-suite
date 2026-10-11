@@ -84,6 +84,7 @@
 .lg.joined { stroke: var(--erd-joined); stroke-dasharray: 6 4; } .lg.inferred { stroke: var(--erd-inferred); stroke-dasharray: 2 3; }
 .lgg { stroke: var(--fg); stroke-width: 1.3; fill: none; }
 .lgg-o { stroke: var(--fg); stroke-width: 1.2; fill: var(--surface); }
+.lgg-t { fill: var(--fg); }
 .erd-legend .pk { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; }
 .erd-legend .pk.tested { background: var(--erd-pk-tested); } .erd-legend .pk.declared { background: var(--erd-pk-declared); }
 .erd-legend .pk.inferred { border: 1px dashed var(--unknown); }

@@ -117,6 +117,13 @@ masked).
 `expect` that isn't on the page, or a still whose text differs fails. The `.webm`
 video (`--webm`) isn't committed.
 
+Versions (as the About page shows them) are masked too.
+
+The `dark` tour (`dark.toml`) visits every screen in dark mode with a still of each (#353),
+including the live view, the replay and the Run page of a simulated run.
+
 CI (`docs-media` in `.github/workflows/ci.yml`) runs both checks on Linux, then the
-live run view's browser tests (`crates/ods-web/tests/browser/live_view.py`), which use
-the same Playwright, Chromium and simulated run.
+dashboard's browser tests (`crates/ods-web/tests/browser/*.py`), which use the same
+Playwright and Chromium. They include:
+- the live run view (`live_view.py`), with the same simulated run;
+- the contrast check on every screen, light and dark (`contrast.py`).

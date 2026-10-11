@@ -198,6 +198,14 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   cover is *unknown* for them, never healthy. A new record reloads the page.
 
 ### Changed
+- The dashboard meets WCAG AA contrast on every screen, light and dark (#353). Three
+  light colours are darker than before:
+  - the faint grey (separators, `—`);
+  - success green;
+  - warning amber.
+
+  The ERD legend's `?` is no longer black in dark mode. A browser test measures every
+  screen, and each screen has a dark still in the dashboard tours.
 - dbt's error catalogue is at version 8 (#415): dbt-databricks's own messages (unavailable
   compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
   (`databricks` 1), and `DuckDB`'s (`Binder Error`, `Catalog Error`, `Conversion Error`

@@ -35,7 +35,7 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | Settings: About | **Built** (#415): this `ods` and its plugins, with what each offers and whether this configuration can use it |
 | Settings | **Built** (#351): the configuration, read-only, with secrets as references and `ods doctor`'s checks that only read; Server mode as placeholders |
 | Semantic layer | **Built** (#352) as the board's read-only placeholder: the semantic models and metrics the manifest declares, and an empty state without them |
-| Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
+| Dark mode | **Built** (#353): every screen follows `prefers-color-scheme`, has a dark still in the tours, and passes the contrast check in light and dark |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
 `scripts/record-dashboard.py` ([how they're made](../../recordings.md)). The images
@@ -386,6 +386,26 @@ Board: `boards/live-run/ErrorExplained.dc.html` (in the repository, not on the d
 | ![Home, dark](images/main-dark.png) | ![Lineage, dark](images/lineage-dark.png) |
 | **Model page** | **Plan** |
 | ![Model page, dark](images/model-dark.png) | ![Plan, dark](images/plan-dark.png) |
+
+**Built** (#353). Every screen follows the browser's `prefers-color-scheme`; the boards
+have no manual switch, so there is none. The `dark` tour (`docs/tapes/dashboard/dark.toml`)
+keeps a dark still of each screen, and the Plan's own tour is dark, so
+`record-dashboard.py --check` catches a regression on any of them.
+
+Contrast is measured, not judged by eye. `crates/ods-web/tests/browser/contrast.py`
+visits every screen in light and dark and measures:
+- every piece of visible text against what is painted behind it (WCAG AA: 4.5:1, or 3:1
+  for large text);
+- the status dots, bars and glyphs against what they sit on (3:1).
+
+Inactive components (planned items, anything disabled) are exempt, as WCAG exempts them.
+
+Three light tokens are darker than the boards' so their text passes on every surface:
+- `--faint`: `#626C7B` (the board has `#8A94A3`);
+- `--ok`: `#197A43` (`#1F8A4C`);
+- `--warn`: `#8F6100` (`#B7791F`).
+
+The dark tokens are the boards' own.
 
 ## Decisions taken from the dbt platform review
 
