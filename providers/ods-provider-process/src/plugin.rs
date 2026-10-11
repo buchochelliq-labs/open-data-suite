@@ -2,7 +2,8 @@
 //! protocol's requests. ODS first asks it to `describe` itself, refuses it when a
 //! contract it implements was built against a version this host can't accept, then
 //! calls it once per request: `check` for each of its health checks ([`PluginCheck`]),
-//! `versions` for its warehouse's source versions ([`PluginVersions`]).
+//! `versions` for its warehouse's source versions ([`PluginVersions`]), and the
+//! warehouse requests of `warehouse` (ADR-0031 §3d).
 //!
 //! As for scripts, anything but a well-formed answer in this host's protocol major is an
 //! error, which the host makes *unknown*, never a pass or a version (AGENTS rule 3).
@@ -17,9 +18,14 @@ use ods_core::{Capability, CapabilitySet};
 use ods_sdk::contracts::changes::{
     CHANGE_PROVIDER, ChangeProvider, RequestedSource, SourceVersion, VersionReport,
 };
+use ods_sdk::contracts::error_catalogue::ERROR_CATALOGUE;
 use ods_sdk::contracts::health_check::{
     CheckFinding, CheckInfo, CheckScope, HEALTH_CHECK, HealthCheck,
 };
+use ods_sdk::contracts::observed_lineage::OBSERVED_LINEAGE_SOURCE;
+use ods_sdk::contracts::privileges::RELATION_PRIVILEGES;
+use ods_sdk::contracts::probe::RELATION_PROBE;
+use ods_sdk::contracts::relation_link::RELATION_LINKER;
 use ods_sdk::protocol::{
     CheckCall, CheckRequest, CheckResponse, DescribeRequest, DescribeResponse, VersionsRequest,
     VersionsResponse,
@@ -29,7 +35,25 @@ use ods_sdk::{Contract, Provider, ProviderError, ProviderInfo};
 use crate::{KIND, Process};
 
 /// The contracts an out-of-process plugin can implement in this host.
-const CONTRACTS: [Contract; 2] = [HEALTH_CHECK, CHANGE_PROVIDER];
+const CONTRACTS: [Contract; 7] = [
+    HEALTH_CHECK,
+    CHANGE_PROVIDER,
+    RELATION_LINKER,
+    ERROR_CATALOGUE,
+    OBSERVED_LINEAGE_SOURCE,
+    RELATION_PROBE,
+    RELATION_PRIVILEGES,
+];
+
+/// The contracts that serve a warehouse, so need one named.
+const WAREHOUSE_CONTRACTS: [Contract; 6] = [
+    CHANGE_PROVIDER,
+    RELATION_LINKER,
+    ERROR_CATALOGUE,
+    OBSERVED_LINEAGE_SOURCE,
+    RELATION_PROBE,
+    RELATION_PRIVILEGES,
+];
 
 /// The kinds of source version a planner chooses among (`ods_state`'s strategies).
 const VERSION_KINDS: [Capability; 2] = [Capability::RelationVersions, Capability::SourceFreshness];
@@ -48,8 +72,8 @@ fn version_kinds(answer: &DescribeResponse) -> CapabilitySet {
 /// A configured plugin: its command, run once per request.
 #[derive(Debug, Clone)]
 pub struct PluginProcess {
-    name: String,
-    process: Process,
+    pub(crate) name: String,
+    pub(crate) process: Process,
 }
 
 /// What a plugin said it is and provides, once accepted.
@@ -152,13 +176,33 @@ impl PluginProcess {
         if let Some(twice) = answer.checks.iter().find(|c| !ids.insert(c.id.as_str())) {
             return Err(refuse(format!("lists the check `{}` twice", twice.id)));
         }
+        if let Some(contract) = WAREHOUSE_CONTRACTS
+            .iter()
+            .find(|c| answer.provided(c.name).is_some())
+            && answer.warehouse.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(refuse(format!(
+                "implements `{}` without naming its warehouse",
+                contract.name
+            )));
+        }
+        if answer.provided(ERROR_CATALOGUE.name).is_some() && answer.catalogue.is_none() {
+            return Err(refuse(format!(
+                "implements `{}` without naming its catalogue",
+                ERROR_CATALOGUE.name
+            )));
+        }
+        // The login checked must be the login probed (ADR-0030 §4c): only the
+        // connection that probes can say what its login may do.
+        if answer.provided(RELATION_PRIVILEGES.name).is_some()
+            && answer.provided(RELATION_PROBE.name).is_none()
+        {
+            return Err(refuse(format!(
+                "implements `{}` without `{}`: it can only say what the login it probes with may do",
+                RELATION_PRIVILEGES.name, RELATION_PROBE.name
+            )));
+        }
         if answer.provided(CHANGE_PROVIDER.name).is_some() {
-            if answer.warehouse.as_deref().is_none_or(str::is_empty) {
-                return Err(refuse(format!(
-                    "implements `{}` without naming its warehouse",
-                    CHANGE_PROVIDER.name
-                )));
-            }
             // A planner uses a reading only for the kind of version it says it is: one
             // that says none would be read and never used.
             if version_kinds(&answer).is_empty() {

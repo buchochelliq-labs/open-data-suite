@@ -41,8 +41,10 @@ use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 
 mod plugin;
+mod warehouse;
 
 pub use plugin::{Described, PluginCheck, PluginProcess, PluginVersions};
+pub use warehouse::{AnsweredCatalogue, AnsweredLineage, AnsweredLinker, PluginProbe};
 
 /// The provider kind.
 pub const KIND: &str = "process";
@@ -68,7 +70,7 @@ pub struct ScriptCheck {
 /// A command, run once per request: started in `root`, given the request on stdin, and
 /// stopped, with all it started, after `timeout`.
 #[derive(Debug, Clone)]
-struct Process {
+pub(crate) struct Process {
     /// Who it runs for, in its log lines: a check's id, or a plugin's name.
     label: String,
     command: Vec<String>,
@@ -224,7 +226,7 @@ impl Process {
 impl Process {
     /// Sends `request` and reads its answer: an error unless the process answers with
     /// the protocol's JSON for `T`, in a major this host speaks (`protocol` reads it).
-    async fn ask<T: serde::de::DeserializeOwned>(
+    pub(crate) async fn ask<T: serde::de::DeserializeOwned>(
         &self,
         request: &impl serde::Serialize,
         protocol: impl FnOnce(&T) -> ods_sdk::protocol::ProtocolVersion,

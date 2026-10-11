@@ -46,6 +46,7 @@ use ods_state::{
 use ods_store_sqlite::SqliteStateStore;
 use serde::Serialize;
 
+use super::plugin_process::{ProjectPlugins, manifest_relations};
 use super::run_journal::JournalSink;
 use super::state_plan::{
     Sources, Workspace, block_on, common, display_name, plan_against, select_specs, store_error,
@@ -1740,9 +1741,10 @@ impl RunReport {
             .flatten()
             .copied()
             .unwrap_or(false);
-        let plugins = super::plugin_process::for_warehouses(ctx.config, allow);
-        let built = plugins
-            .and_then(|plugins| Self::build(kind, args, &settings, ctx.progress, retry, &plugins));
+        let project = super::plugin_process::for_project(ctx.config, allow, &BTreeMap::new(), None);
+        let built = project.and_then(|mut project| {
+            Self::build(kind, args, &settings, ctx.progress, retry, &mut project)
+        });
         let (report, record_error) = match built {
             Ok(built) => built,
             Err(error) => return failed_before_running::<false>(ctx, &settings, started, error),
@@ -1816,12 +1818,15 @@ impl RunReport {
         settings: &StateSettings,
         progress: ProgressSettings,
         retry: Option<&RetryFailed>,
-        (plugins, plugin_warnings): &(crate::plugins::Plugins, Vec<String>),
+        project: &mut Option<ProjectPlugins>,
     ) -> Result<(Self, Option<CliError>), CliError> {
         let builds = kind != Kind::Compile;
         let steps = Steps::new(progress, step_count(args, settings, builds));
         let executor = steps.attach(executor(args, settings));
-        let mut warnings = plugin_warnings.clone();
+        let mut warnings = project
+            .as_mut()
+            .map(|p| std::mem::take(&mut p.warnings))
+            .unwrap_or_default();
         let dbt = check_settings(args, settings, &executor, &mut warnings)?;
 
         // 1. Prepare: the code as it is, and the target dbt builds in.
@@ -1834,8 +1839,25 @@ impl RunReport {
         let tested = execution_tested(kind, args);
         // The store first: a problem with it stops the run before the warehouse is asked.
         let (store, latest) = open_state(&ws, dry_run)?;
-        let table_versions =
-            super::state_versions::read_table_versions(&mut ws, &executor, plugins, &mut warnings)?;
+        // A declared warehouse plugin's links, asked now and kept for the dashboard
+        // (ADR-0031 §3d); a dry run keeps nothing.
+        if let Some(project) = project.as_mut()
+            && !dry_run
+        {
+            project.attach(&ws.state_db, &ws.scope.to_string());
+            block_on(project.ask_links(
+                ws.manifest.adapter_type.as_deref(),
+                &manifest_relations(&ws.manifest),
+            ))?;
+            warnings.append(&mut project.warnings);
+        }
+        let plugins = super::plugin_process::plugins_of(project.as_ref()).clone();
+        let table_versions = super::state_versions::read_table_versions(
+            &mut ws,
+            &executor,
+            &plugins,
+            &mut warnings,
+        )?;
         // Saved for the commands that don't connect (ADR-0022 §7), whatever happens
         // next: it is what was read, not state, so it changes nothing that was built.
         if let Some(reading) = &table_versions {
@@ -1971,7 +1993,7 @@ impl RunReport {
             (requested, checked_sources),
             (sources, table_versions.as_ref()),
             (latest.as_ref(), &ws),
-            &store,
+            (&store, project),
         )
     }
 
@@ -1981,7 +2003,19 @@ impl RunReport {
         ws: &Workspace,
         settings: &StateSettings,
         before: Option<&StoredSnapshot>,
+        project: &mut Option<ProjectPlugins>,
     ) {
+        // A declared warehouse plugin classifies the run's errors first, and they are
+        // kept for the dashboard (ADR-0031 §3d).
+        if let (Some(project), Some(run)) = (project.as_mut(), &self.observed.run_stats) {
+            let errors = super::failures::run_errors(run);
+            if !errors.is_empty() {
+                let _ = block_on(
+                    project.ask_classifications(ws.manifest.adapter_type.as_deref(), &errors),
+                );
+                self.warnings.append(&mut project.warnings);
+            }
+        }
         let project_dir = super::failures::project_dir(settings);
         let files = super::failures::ProjectFiles {
             project_dir: &project_dir,
@@ -1989,6 +2023,7 @@ impl RunReport {
             manifest: Some(&ws.manifest),
             last_manifest: None,
             warehouses: &settings.warehouses,
+            plugins: super::plugin_process::plugins_of(project.as_ref()),
         };
         if let Some(execution) = &self.execution {
             self.observed.check_names = super::failures::describe_checks(execution, &files);
@@ -2024,7 +2059,7 @@ impl RunReport {
         (requested, checked_sources): (Vec<RequestedNode>, Vec<RequestedNode>),
         sources: (Sources, Option<&VersionReading>),
         (latest, ws): (Option<&StoredSnapshot>, &Workspace),
-        store: &SqliteStateStore,
+        (store, project): (&SqliteStateStore, &mut Option<ProjectPlugins>),
     ) -> Result<(Self, Option<CliError>), CliError> {
         // 3. Execute.
         let mode = if self.tests {
@@ -2092,7 +2127,7 @@ impl RunReport {
             (&self.planned_checks, self.observed.run_stats.as_ref()),
         );
         self.execution = Some(execution);
-        self.explain_failures(ws, settings, latest);
+        self.explain_failures(ws, settings, latest, project);
         Ok(match recorded {
             Ok(record) => {
                 self.outcome = if self.execution.as_ref().is_some_and(|e| e.succeeded) {
@@ -2653,6 +2688,8 @@ pub(super) fn failed_before_running<const TEST: bool>(
             manifest: manifest.as_ref(),
             last_manifest: last_manifest.as_ref(),
             warehouses: &settings.warehouses,
+            // dbt failed before anything ran: dbt's catalogue reads its message.
+            plugins: crate::plugins::installed(),
         },
         plan: None,
         before: None,

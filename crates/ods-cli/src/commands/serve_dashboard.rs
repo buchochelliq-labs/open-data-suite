@@ -168,12 +168,23 @@ pub(super) fn choose_probe_sql(
 ///
 /// # Errors
 /// A probe that isn't one read-only query (exit 4).
+#[cfg(test)]
 pub(super) fn check_probe_sql(
     health: &mut ods_health::HealthSettings,
     adapter: Option<&str>,
     warehouses: &crate::plugins::Warehouses,
 ) -> Result<(), CliError> {
-    let plugins = crate::plugins::installed();
+    check_probe_sql_with(crate::plugins::installed(), health, adapter, warehouses)
+}
+
+/// [`check_probe_sql`] with the dialects of `plugins`: with an out-of-process plugin's,
+/// as it describes it (ADR-0031 §3d).
+pub(super) fn check_probe_sql_with(
+    plugins: &crate::plugins::Plugins,
+    health: &mut ods_health::HealthSettings,
+    adapter: Option<&str>,
+    warehouses: &crate::plugins::Warehouses,
+) -> Result<(), CliError> {
     // A query given for one warehouse is read as that warehouse's; one for every
     // warehouse, as the project's.
     health
@@ -257,18 +268,22 @@ impl DashboardSource {
         // `ods health check` adds a record to this directory, which changes its time
         // (ADR-0030 §6).
         let health = ods_health::record::dir_for(&db);
+        // So is a plugin's record, by the commands that run it (ADR-0031 §3d).
+        let plugins = crate::plugins::record::dir_for(&db);
         vec![
             db,
             PathBuf::from(wal),
             sources,
             PathBuf::from(last_run),
             health,
+            plugins,
         ]
     }
 
     /// The server's snapshot of `loaded`, with the dashboard's facts.
     pub(super) fn snapshot(&self, loaded: &Loaded, source: String) -> Snapshot {
-        let links = loaded.links(&self.links);
+        let plugins = self.recorded_plugins(loaded);
+        let links = loaded.links(&self.links.clone().with_plugins(Some(plugins.clone())));
         let document = loaded.linked_document(&GraphFilter::default(), &links);
         let opaque_ids: Vec<(String, String, Option<String>)> = document
             .nodes
@@ -277,7 +292,7 @@ impl DashboardSource {
             .map(|n| (n.id.clone(), n.name.clone(), n.diagnostics.first().cloned()))
             .collect();
         let erd = super::erd::dashboard_erd(loaded);
-        let mut dashboard = self.dashboard(&opaque_ids, &loaded.graph, &links);
+        let mut dashboard = self.dashboard(&opaque_ids, &loaded.graph, &links, &plugins);
         // The ERD page (#64) shows it for this project, when it could be built.
         if erd.erd.is_ok() {
             for module in &mut dashboard.modules {
@@ -299,11 +314,42 @@ impl DashboardSource {
     }
 
     /// Never fails: what can't be read is shown as such.
+    /// The plugins the project's SQL is read with: a declared warehouse plugin's
+    /// dialect, as recorded in any scope (ADR-0031 §3d); `None` when none is declared.
+    pub(super) fn dialect_plugins(&self) -> Option<crate::plugins::Plugins> {
+        (!self.config.config.plugins.is_empty()).then(|| {
+            super::plugin_process::recorded_in_any_scope(&self.config, &self.settings.state_db())
+        })
+    }
+
+    /// The installed plugins, with what a declared warehouse plugin last answered for
+    /// this project's scope, as recorded: the dashboard never starts one (ADR-0031 §3d).
+    fn recorded_plugins(&self, loaded: &Loaded) -> crate::plugins::Plugins {
+        let scope = loaded.project_name().and_then(|project| {
+            ods_sdk::contracts::state_store::StateScope::new(
+                project,
+                &self.settings.environment.value,
+            )
+            .ok()
+        });
+        match scope {
+            Some(scope) if !self.config.config.plugins.is_empty() => {
+                super::plugin_process::recorded(
+                    &self.config,
+                    &self.settings.state_db(),
+                    &scope.to_string(),
+                )
+            }
+            _ => crate::plugins::installed().clone(),
+        }
+    }
+
     fn dashboard(
         &self,
         opaque: &[(String, String, Option<String>)],
         graph: &ods_lineage::ColumnGraph,
         links: &Links,
+        plugins: &crate::plugins::Plugins,
     ) -> Dashboard {
         let environment = self.settings.environment.value.clone();
         let ws = match Workspace::load(&self.args, &self.settings, Sources::AsGiven) {
@@ -355,7 +401,7 @@ impl DashboardSource {
                 OpaqueNode::new(id, name, why)
             })
             .collect();
-        let explainer = explainer(&ws, &self.settings, graph);
+        let explainer = explainer(&ws, &self.settings, graph, plugins);
         let (state, last_builds) = self.state(Arc::clone(&ws), explainer);
         // The Catalog (#313): the project's nodes, and their last builds from the
         // snapshot the plan is made against.
@@ -524,6 +570,7 @@ fn explainer(
     ws: &Workspace,
     settings: &StateSettings,
     graph: &ods_lineage::ColumnGraph,
+    plugins: &crate::plugins::Plugins,
 ) -> Explainer {
     let project_dir = super::failures::project_dir(settings);
     let files = super::failures::ProjectFiles {
@@ -532,6 +579,7 @@ fn explainer(
         manifest: Some(&ws.manifest),
         last_manifest: None,
         warehouses: &settings.warehouses,
+        plugins,
     };
     let missing = graph
         .nodes()
@@ -545,8 +593,7 @@ fn explainer(
         .map(|n| (n.id.clone(), n.parents.clone()))
         .collect();
     let mut explainer = Explainer::new(Arc::new(
-        crate::plugins::installed()
-            .project_catalogue(ws.manifest.adapter_type.as_deref(), &settings.warehouses),
+        plugins.project_catalogue(ws.manifest.adapter_type.as_deref(), &settings.warehouses),
     ))
     .with_missing_columns(missing)
     .with_parents(parents)

@@ -25,6 +25,7 @@ mod databricks;
 mod detect;
 mod duckdb;
 pub(crate) mod process;
+pub mod record;
 mod settings;
 
 pub use detect::{Detected, Feature, PluginKind};

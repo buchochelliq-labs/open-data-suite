@@ -21,6 +21,7 @@ use ods_sdk::contracts::state_store::StateStore;
 use ods_state::{RecordedSources, RecordedTests, SourceCheck, TestResult};
 use serde::Serialize;
 
+use super::plugin_process::ProjectPlugins;
 use super::state_plan::{Workspace, block_on, common, display_name, select_specs, store_error};
 use super::state_run::{
     LeftOut, Steps, dbt_args, dbt_options, executor, narrow, plan_source_checks, source_requests,
@@ -43,6 +44,7 @@ pub(super) fn test_command() -> Command {
     )
     // Whether sources have new data decides whether their tests run (#232).
     .arg(super::state_run::no_source_freshness())
+    .arg(super::state_run::allow_plugins())
 }
 
 /// How the test run ended.
@@ -137,7 +139,15 @@ impl TestReport {
         let settings = StateSettings::resolve(args, ctx.config)?;
         let remembered = super::state_retry::remember(&test_command(), args, &settings);
         let started = std::time::SystemTime::now();
-        let report = match Self::build(args, &settings, ctx.progress) {
+        let project = super::plugin_process::for_project(
+            ctx.config,
+            args.get_flag("allow-scripts"),
+            &std::collections::BTreeMap::new(),
+            None,
+        );
+        let report = match project
+            .and_then(|mut project| Self::build(args, &settings, ctx.progress, &mut project))
+        {
             Ok(report) => report,
             Err(error) => {
                 return super::state_run::failed_before_running::<true>(
@@ -190,10 +200,15 @@ impl TestReport {
         ctx.emit(&report)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one flow, in order: measure, compile, plan, test, record"
+    )]
     fn build(
         args: &ArgMatches,
         settings: &StateSettings,
         progress: ProgressSettings,
+        project: &mut Option<ProjectPlugins>,
     ) -> Result<Self, CliError> {
         let compiles = !args.get_flag("no-compile");
         let measures = compiles && !args.get_flag("no-source-freshness");
@@ -207,6 +222,9 @@ impl TestReport {
         let (_, sources) = super::state_run::prepare(args, &executor, &mut warnings)?;
         let target = super::state_run::identify(&executor)?;
         let ws = Workspace::load(args, settings, sources)?;
+        if let Some(project) = project.as_mut() {
+            project.attach(&ws.state_db, &ws.scope.to_string());
+        }
         let no_state = || {
             CliError::new(
                 ExitStatus::Failure,
@@ -293,7 +311,7 @@ impl TestReport {
             .with_engine_args(dbt_args(args))
             .with_scope(report.scope.clone());
         let execution = report.execute(&executor, &request, &steps)?;
-        report.explain_failures(&ws, settings, latest.as_ref(), &execution);
+        report.explain_failures(&ws, settings, latest.as_ref(), &execution, project);
         let store = match store {
             Some(store) => store,
             None => ws.open_store()?,
@@ -315,7 +333,19 @@ impl TestReport {
         settings: &StateSettings,
         latest: Option<&ods_sdk::contracts::state_store::StoredSnapshot>,
         execution: &ExecutionReport,
+        project: &mut Option<ProjectPlugins>,
     ) {
+        // A declared warehouse plugin classifies the run's errors first, and they are
+        // kept for the dashboard (ADR-0031 §3d).
+        if let (Some(project), Some(run)) = (project.as_mut(), &self.observed.run_stats) {
+            let errors = super::failures::run_errors(run);
+            if !errors.is_empty() {
+                let _ = block_on(
+                    project.ask_classifications(ws.manifest.adapter_type.as_deref(), &errors),
+                );
+            }
+            self.warnings.append(&mut project.warnings);
+        }
         let project_dir = super::failures::project_dir(settings);
         let files = super::failures::ProjectFiles {
             project_dir: &project_dir,
@@ -323,6 +353,7 @@ impl TestReport {
             manifest: Some(&ws.manifest),
             last_manifest: None,
             warehouses: &settings.warehouses,
+            plugins: super::plugin_process::plugins_of(project.as_ref()),
         };
         self.observed.check_names = super::failures::describe_checks(execution, &files);
         let Some(run) = &self.observed.run_stats else {

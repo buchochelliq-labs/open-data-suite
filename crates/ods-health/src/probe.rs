@@ -208,6 +208,9 @@ struct Digested<'a> {
     target: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<&'a str>,
+    /// Or the plugin it runs through (ADR-0031 §3d), pinned the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin: Option<&'a str>,
 }
 
 impl Probe {
@@ -301,6 +304,7 @@ impl Probe {
             exclude: config.exclude.as_ref(),
             target: connection.and_then(|c| c.target.as_deref()),
             profile: connection.and_then(|c| c.profile.as_deref()),
+            plugin: connection.and_then(|c| c.plugin.as_deref()),
         };
         let bytes =
             serde_json::to_vec(&digested).map_err(|e| HealthConfigError(format!("{at}: {e}")))?;
@@ -504,7 +508,7 @@ impl Probe {
             )
         } else if !connected {
             format!(
-                "{}: no connection to run probes through; set `[health.probes] target` to a target whose login can only read (ADR-0030 §4c)",
+                "{}: no connection to run probes through; set `[health.probes] target` to a target whose login can only read, or `plugin` to a plugin that probes (ADR-0030 §4c, ADR-0031 §3d)",
                 self.id
             )
         } else {

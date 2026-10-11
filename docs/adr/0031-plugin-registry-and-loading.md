@@ -1,6 +1,6 @@
 # ADR-0031: Plugins: an in-process registry and out-of-process plugins
 
-- **Status:** Proposed. Phase 2 is built (§7): `Ods`, `Plugins` and `WarehousePlugin` in `ods-cli`, with Databricks registered as a built-in; `[health.plugins.<id>]`; plugins listed in `ods version` and `ods doctor` (`capabilities.plugins`); and `examples/custom-ods`, built in CI. Phase 5 has begun: features are detected (§3c), and links, observed lineage, error patterns and the dialect come from the warehouse plugin (§3a); parents and `[warehouses.<kind>] extends` apply to error patterns and the dialect, and probe checks may give a query per warehouse (§3b). `ods plugin list`/`show`, the MCP `ods_list_plugins` tool and `docs/plugins.md`'s generated table of built-in warehouses are built (§3c). `DuckDB` is the second built-in (`ods-provider-duckdb`: its error patterns and dialect). The dashboard's About page shows the same detection (§3c). Script checks are built (§6): `ods-provider-process` starts them, over `ods_sdk::protocol`. Out-of-process plugins (phase 4, §5) are built for health checks and source versions: `[plugins.<name>]`, the `describe` handshake with contract versions checked, the `check` and `versions` requests, trust through `ods health trust` (id `plugin:<name>`) or `--allow-scripts`, `ods plugin list`'s declared plugins and `ods plugin test`. Not built yet: the out-of-process warehouse requests of §3a (`link`, `classify`, `observed_lineage`) and the login check.
+- **Status:** Proposed. Phase 2 is built (§7): `Ods`, `Plugins` and `WarehousePlugin` in `ods-cli`, with Databricks registered as a built-in; `[health.plugins.<id>]`; plugins listed in `ods version` and `ods doctor` (`capabilities.plugins`); and `examples/custom-ods`, built in CI. Phase 5 has begun: features are detected (§3c), and links, observed lineage, error patterns and the dialect come from the warehouse plugin (§3a); parents and `[warehouses.<kind>] extends` apply to error patterns and the dialect, and probe checks may give a query per warehouse (§3b). `ods plugin list`/`show`, the MCP `ods_list_plugins` tool and `docs/plugins.md`'s generated table of built-in warehouses are built (§3c). `DuckDB` is the second built-in (`ods-provider-duckdb`: its error patterns and dialect). The dashboard's About page shows the same detection (§3c). Script checks are built (§6): `ods-provider-process` starts them, over `ods_sdk::protocol`. Out-of-process plugins (phase 4, §5) are built for health checks and source versions: `[plugins.<name>]`, the `describe` handshake with contract versions checked, the `check` and `versions` requests, trust through `ods health trust` (id `plugin:<name>`) or `--allow-scripts`, `ods plugin list`'s declared plugins and `ods plugin test`. The out-of-process warehouse requests, their record for the dashboard and MCP, and probes through a plugin are §3d.
 - **Date:** 2026-10-06
 - **Issues:** #392 (phase 6: plugins), #387 (pluggable source-version providers), #415
   (the whole warehouse plugin, dispatch, detected features: §3a–§3c)
@@ -289,6 +289,67 @@ ODS asks it instead, and lists what it finds.
     that fails when the two differ.
 - **Forward compatible:** a request or capability a host doesn't know is listed as
   given and otherwise ignored.
+
+### 3d. Out-of-process warehouse requests, and the surfaces that never run them (amended 2026-10-11, #392)
+§3a lists `link`, `classify` and `observed_lineage` as the out-of-process requests of a
+warehouse plugin, and §5 lets one report "its own login's privileges". Two rules
+already decided constrain both:
+- **The dashboard and the MCP server never start a process** (ADR-0009: read-only and
+  offline; ADR-0030 §4: checks run in the CLI only). Yet they show "Open in warehouse"
+  links and explain failures whenever a page is read.
+- **The login checked is the login probed** (ADR-0030 §4c). An out-of-process plugin
+  never sees dbt's connection (rule 9), so it can't vouch for dbt's login.
+
+Decision:
+
+1. **Requests.** A warehouse plugin may implement, besides `change_provider` (§5):
+
+   | Contract | Request | Asked | Answer |
+   |---|---|---|---|
+   | `relation_linker` | `link` | every relation of the project, in one batch, with its warehouse's settings | a link or the reason there is none, per relation |
+   | `error_catalogue` | `classify` | every failed node's `ErrorSummary` in a run, in one batch | a `Classification` per summary, and its `CatalogueInfo` in `describe` |
+   | `observed_lineage_source` | `observed_lineage` | a path the user exported | the `ObservedLineage` |
+   | `relation_probe` | `probe` | a `ProbeRequest` and its `ProbeTarget`s | a `ProbeAnswer` per target |
+   | `relation_privileges` | `privileges` | `ProbeTarget`s | the login and an `Access` per target |
+
+   `describe` also gives the plugin's `dialect` (checked against the parser as in §3a).
+   The SDK's contracts stay as they are: the host turns each batch answer into the
+   contract's provider (a linker or catalogue that looks answers up), so the same
+   conformance suites run against it (`ods plugin test`), and every rule of §3a and
+   §3b (catalogue order, what inherits) applies unchanged.
+2. **Recorded for the surfaces that never run plugins.** The CLI commands that run a
+   project's plugins record what they answered, beside the state store
+   (`<state db>.plugins/`, one file per scope, with a `schema_version`): the links of
+   the project's relations, the classifications of its runs' errors (the newest 500,
+   by summary), and the plugin's name, version, warehouse, dialect and catalogue. The
+   dashboard and MCP read the record, with when it was written, as they read the health
+   record. Nothing in it is a secret: links are built from settings without secrets,
+   and an `ErrorSummary` has its values already removed. A record from a plugin no
+   longer declared, or for another warehouse, is ignored; a relation or summary it
+   doesn't hold has no link, or dbt's explanation, as without a plugin (rule 3).
+   - The `ods state` commands that build (not with `--dry-run`) and `ods health check`
+     (not with `--no-record`) record links; the `ods state` commands that build and
+     `ods state test` record the classifications of their run's failures, and
+     `ods state explain-failure` those it asks for. `ods lineage` asks for links and
+     keeps nothing. The dashboard reads a plugin's dialect from its records too, in any
+     scope, since it reads the project's SQL before it knows the scope.
+3. **Probes through a plugin.** `[health.probes] plugin = "<name>"`, in place of
+   `target`, runs probe checks through that `[plugins.<name>]`, over its own
+   connection: `probe` runs them, and `privileges` reports what that same login may do,
+   so the login checked is the login probed. Without `privileges`, every probe needs
+   `--allow-elevated-login`, as on a warehouse with no login check. The plugin must
+   serve the project's warehouse (exit 4 otherwise), and `target` and `plugin` together
+   are a configuration error. `plugin` is pinned in each probe's trust digest as
+   `target` is. The probe's SQL is still checked as read-only in that warehouse's
+   dialect, and only the relation the build made is asked about
+   (`ProbeTarget::expecting`).
+4. **Failing safe** (rule 3), as in §5: a failed `link` call is no link, with why; a
+   failed `classify` is dbt's explanation, or none; a failed `observed_lineage` is the
+   command's error; a failed `probe` or `privileges` makes every probed node *unknown*.
+
+Consequences: a plugin's links and explanations reach the dashboard as of the last
+command that ran it, never live; the record says when. A plugin that wants live links
+in the dashboard can be an in-process plugin instead.
 
 ### 4. Health-check plugins and their configuration
 - A registered check runs, as ADR-0030 §5 describes, at its own default severity.

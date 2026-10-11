@@ -40,6 +40,20 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 or 1.2 records: run `ods health check` again after going back to it.
 
 ### Added
+- An out-of-process warehouse plugin gives everything a built-in one does (#392,
+  ADR-0031 §3d): "Open in warehouse" links (`link`, asked for every relation of the
+  project by `ods state`, `ods health check` and `ods lineage`), error explanations
+  (`classify`, asked for a failed run's errors before dbt's catalogue), observed
+  lineage (`observed_lineage`, for `ods lineage compare --observed`), its SQL dialect,
+  and probes over its own connection (`probe` and `privileges`, with `[health.probes]
+  plugin = "<name>"` in place of `target`; the login it reports is the login it probes
+  with). The dashboard and MCP never start a plugin: the commands that run one keep its
+  links and explanations beside the state store (`<state db>.plugins/`, format 1.0),
+  and they read them from there. A plugin's link must be a safe `https://` URL, or the
+  relation has none (`NoRelationLink::NotAnswered`, new). `ods plugin test` runs the
+  link, catalogue (`--errors`) and lineage (`--export`) suites too. `ods_sdk::protocol`
+  gains the requests and answers; the probe and privilege types are serde types, read
+  only through their checked constructors.
 - Out-of-process plugins (#392, ADR-0031 §5): `[plugins.<name>]` with a `command` (never
   run through a shell) and a `timeout` declares a program, in any language, that speaks
   the plugin protocol over stdin and stdout. ODS asks it to `describe` itself, refusing
