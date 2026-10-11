@@ -281,7 +281,7 @@ pub struct DeclaredCheckConfig {
     /// Its id, unique among the checks: lowercase letters, digits, `_`, `-` and `.`,
     /// starting with a letter, e.g. `marts.documented`.
     pub id: String,
-    /// What kind of check it is: `declarative` (the default) or `probe`.
+    /// What kind of check it is: `declarative` (the default), `probe` or `script`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// What every selected node must have: `description`, `tests`, `test:<type>` (e.g.
@@ -297,6 +297,18 @@ pub struct DeclaredCheckConfig {
     /// Probes only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pass: Option<String>,
+    /// A script's command: its program, then its arguments, e.g.
+    /// `["python", "checks/pii.py"]`. Started directly, never through a shell, in the
+    /// project's root (ADR-0030 §4). Scripts only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// How long a script may take before it is stopped and its findings are unknown,
+    /// e.g. `"30s"` (default `"60s"`). Scripts only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+    /// A script's parameters, passed on in its request as given. Scripts only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<toml::Table>,
     /// How severe its failure is (default `warn`), or `off` to not run it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub severity: Option<HealthSeverity>,

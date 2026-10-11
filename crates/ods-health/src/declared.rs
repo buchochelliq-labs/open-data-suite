@@ -101,17 +101,19 @@ pub(crate) struct Declared {
     require: Vec<Requirement>,
 }
 
-/// The checks `[[health.checks]]` declares: rules over the project's metadata, and
-/// probes (ADR-0030 §4a, §4d).
+/// The checks `[[health.checks]]` declares: rules over the project's metadata, probes
+/// (ADR-0030 §4a, §4d) and scripts (§4).
 pub(crate) struct Configured {
     pub(crate) declared: Vec<Declared>,
     pub(crate) probes: Vec<crate::probe::Probe>,
+    pub(crate) scripts: Vec<crate::script::Script>,
 }
 
-/// One declared check, of either kind.
+/// One declared check, of any kind.
 enum One {
     Declared(Box<Declared>),
     Probe(Box<crate::probe::Probe>),
+    Script(Box<crate::script::Script>),
 }
 
 impl Declared {
@@ -166,53 +168,82 @@ impl Declared {
                             .map(|p| One::Probe(Box::new(p)));
                     }
                     Some("script") => {
-                        return Err(HealthConfigError(format!(
-                            "{at}.kind: `script` checks aren't supported yet (#392); `declarative` and `probe` are"
-                        )));
+                        return crate::script::Script::from_config(
+                            config, &at, severity, select, exclude,
+                        )
+                            .map(|s| One::Script(Box::new(s)));
                     }
                     Some(kind) => {
                         return Err(HealthConfigError(format!(
-                            "{at}.kind: `{kind}` isn't a kind of check; the kinds are `declarative` and `probe`"
+                            "{at}.kind: `{kind}` isn't a kind of check; the kinds are `declarative`, `probe` and `script`"
                         )));
                     }
                 }
-                for (field, set) in [("sql", config.sql.is_some()), ("pass", config.pass.is_some())] {
-                    if set {
-                        return Err(HealthConfigError(format!(
-                            "{at}.{field}: only a `kind = \"probe\"` check has `{field}`"
-                        )));
-                    }
-                }
-                if config.require.is_empty() {
-                    return Err(HealthConfigError(format!(
-                        "{at}.require: say what every selected node must have: {VOCABULARY}"
-                    )));
-                }
-                let require = config
-                    .require
-                    .iter()
-                    .map(|item| Requirement::parse(item, &at))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(One::Declared(Box::new(Self {
-                    id: config.id.clone(),
-                    severity,
-                    select,
-                    exclude,
-                    require,
-                })))
+                Self::declarative(config, &at, severity, select, exclude)
+                    .map(|d| One::Declared(Box::new(d)))
             })
             .collect::<Result<Vec<One>, HealthConfigError>>()?;
         let mut configured = Configured {
             declared: Vec::new(),
             probes: Vec::new(),
+            scripts: Vec::new(),
         };
         for one in all {
             match one {
                 One::Declared(d) => configured.declared.push(*d),
                 One::Probe(p) => configured.probes.push(*p),
+                One::Script(s) => configured.scripts.push(*s),
             }
         }
         Ok(configured)
+    }
+
+    /// A `kind = "declarative"` check: one with `require`, and nothing another kind has.
+    fn declarative(
+        config: &DeclaredCheckConfig,
+        at: &str,
+        severity: Option<Severity>,
+        select: Option<Selector>,
+        exclude: Option<Selector>,
+    ) -> Result<Self, HealthConfigError> {
+        for (field, set) in [
+            ("sql", config.sql.is_some()),
+            ("pass", config.pass.is_some()),
+        ] {
+            if set {
+                return Err(HealthConfigError(format!(
+                    "{at}.{field}: only a `kind = \"probe\"` check has `{field}`"
+                )));
+            }
+        }
+        for (field, set) in [
+            ("command", config.command.is_some()),
+            ("timeout", config.timeout.is_some()),
+            ("params", config.params.is_some()),
+        ] {
+            if set {
+                return Err(HealthConfigError(format!(
+                    "{at}.{field}: only a `kind = \"script\"` check has `{field}`"
+                )));
+            }
+        }
+        if config.require.is_empty() {
+            return Err(HealthConfigError(format!(
+                "{at}.require: say what every selected node must have: {VOCABULARY}"
+            )));
+        }
+        let require = config
+            .require
+            .iter()
+            .map(|item| Requirement::parse(item, at))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            id: config.id.clone(),
+            severity,
+            select,
+            exclude,
+            require,
+        })
     }
 
     /// What it checks, for people.

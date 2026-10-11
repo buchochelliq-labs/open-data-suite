@@ -81,7 +81,7 @@ fn check_command() -> Command {
         Arg::new("allow-scripts")
             .long("allow-scripts")
             .action(ArgAction::SetTrue)
-            .help("Trust this project's probe checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
+            .help("Trust this project's probe and script checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
     )
     .arg(
         Arg::new("allow-elevated-login")
@@ -167,6 +167,45 @@ fn connection_for(
         Some(checked) => ProbeConnection::new(checked),
         None => ProbeConnection::without_privileges(probe),
     }
+}
+
+/// Gives each script in `health` its process: its command, started in the dbt project's
+/// directory, with the artifacts it may read as absolute paths.
+fn run_scripts_here(
+    health: &mut ods_health::HealthSettings,
+    settings: &StateSettings,
+    ws: &Workspace,
+) -> Result<(), CliError> {
+    let scripts = health.script_definitions();
+    if scripts.is_empty() {
+        return Ok(());
+    }
+    let absolute =
+        |path: &std::path::Path| std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    let root = absolute(&super::failures::project_dir(settings));
+    let target = absolute(&ws.target_dir);
+    let mut artifacts: BTreeMap<String, String> = ["manifest", "run_results", "catalog"]
+        .into_iter()
+        .map(|name| (name, target.join(format!("{name}.json"))))
+        .chain(ws.sources_file.iter().map(|f| ("sources", absolute(f))))
+        .filter(|(_, path)| path.is_file())
+        .map(|(name, path)| (name.to_owned(), path.display().to_string()))
+        .collect();
+    artifacts.insert("target_dir".to_owned(), target.display().to_string());
+    for script in scripts {
+        let check = ods_provider_process::ScriptCheck::new(
+            &script.id,
+            script.command.clone(),
+            &root,
+            script.timeout,
+        )
+        .with_params(script.params.clone())
+        .with_artifacts(artifacts.clone());
+        health
+            .run_script_with(&script.id, Arc::new(check))
+            .map_err(|e| CliError::new(ExitStatus::Config, codes::HEALTH_CONFIG, e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
@@ -312,6 +351,9 @@ impl CheckReport {
             &config.config.warehouses,
         )?;
         super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
+        // Scripts run here and only here, each as a process in the project's root
+        // (ADR-0030 §4; ADR-0031 §6): the dashboard reads their findings from the record.
+        run_scripts_here(&mut health, &settings, &ws)?;
         let allow_elevated_login = args.get_flag("allow-elevated-login");
         if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
         {
@@ -492,6 +534,8 @@ fn source(source: CheckSource) -> &'static str {
     match source {
         CheckSource::Builtin => "built-in",
         CheckSource::Declarative => "declared",
+        CheckSource::Probe => "probe",
+        CheckSource::Script => "script",
         _ => "plugin",
     }
 }

@@ -224,6 +224,17 @@ impl Probe {
                 "{at}.require: a probe has `sql` and `pass`, not `require`"
             )));
         }
+        for (field, set) in [
+            ("command", config.command.is_some()),
+            ("timeout", config.timeout.is_some()),
+            ("params", config.params.is_some()),
+        ] {
+            if set {
+                return Err(HealthConfigError(format!(
+                    "{at}.{field}: only a `kind = \"script\"` check has `{field}`"
+                )));
+            }
+        }
         // A probe never runs on every node by default: it names what it reads.
         let select = select.ok_or_else(|| {
             HealthConfigError(format!(
