@@ -31,11 +31,30 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   list) instead of running the statements against every source. **What to do:** a
   provider implementing `RelationProbe` takes `&[ProbeTarget]`, runs nothing against a
   relation it wasn't asked about, and honours `ProbeRequest::timeout`.
+- `ods_cli::plugins::Origin` holds owned names (`Cow<'static, str>`), so an
+  out-of-process plugin can have one, and is no longer `Copy`. **What to do:** build one
+  with `ods_cli::origin!()` or `Origin::new(name, version)`, and clone it where you
+  copied it.
 - The health record's format is 1.2, as a check's source can be `declarative`, `probe`
   or `script` and a report holds its coverage targets' verdicts. ODS 0.0.2
   doesn't read 1.1 or 1.2 records: run `ods health check` again after going back to it.
 
 ### Added
+- Out-of-process plugins (#392, ADR-0031 §5): `[plugins.<name>]` with a `command` (never
+  run through a shell) and a `timeout` declares a program, in any language, that speaks
+  the plugin protocol over stdin and stdout. ODS asks it to `describe` itself, refusing
+  it when a contract it implements was built against a version this `ods` can't accept,
+  then calls it: its health checks run in `ods health check` (tuned with
+  `[health.plugins.<id>]`), and a warehouse it serves gives the `ods state` commands
+  that build their sources' data versions. A plugin a project declares runs only once
+  trusted with `ods health trust`, or with `--allow-scripts` (now also on the `ods
+  state` commands that build) for one run. One that can't run fails `ods health check`
+  (`ODS-E0802`) and is a warning in `ods state`; a call that fails makes what it was
+  asked about *unknown*. `ods plugin list` lists the declared plugins; `ods plugin test
+  <name>` runs the SDK's conformance suites against one (`ODS-E0803` when a case fails).
+  `ods_sdk::protocol` gains `DescribeRequest`/`DescribeResponse` and
+  `VersionsRequest`/`VersionsResponse`; `RequestedSource` and `SourceVersion` are serde
+  types.
 - Script checks (#392, ADR-0030 §4): `[[health.checks]]` with `kind = "script"` runs a
   `command` you name (never through a shell) in `ods health check`, writing the selected
   nodes to its stdin and reading its findings from its stdout as JSON, the script

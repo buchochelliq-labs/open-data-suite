@@ -20,7 +20,7 @@
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
 use ods_core::state::DataVersion;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ProviderError;
 use crate::provider::{Contract, Provider};
@@ -32,7 +32,8 @@ pub const CHANGE_PROVIDER: Contract = Contract {
 };
 
 /// A source whose data is asked about.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct RequestedSource {
     /// Its id, e.g. `source.shop.raw.orders`.
@@ -52,7 +53,7 @@ impl RequestedSource {
 }
 
 /// What a provider read about one source's data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SourceVersion {

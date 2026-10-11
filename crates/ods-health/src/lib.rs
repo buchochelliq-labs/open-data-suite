@@ -1304,7 +1304,7 @@ pub mod trust;
 
 pub use coverage::{COVERAGE_MEASURES, CoverageFinding, Measured, Share};
 pub use probe::{ElevatedLogin, ProbeConnection, ProbeDefinition, ReadOnlyCheck};
-pub use script::{SCRIPT_TIMEOUT, ScriptDefinition};
+pub use script::{SCRIPT_TIMEOUT, ScriptDefinition, command_files};
 pub use trust::{CheckDefinition, Pinned};
 
 #[cfg(test)]

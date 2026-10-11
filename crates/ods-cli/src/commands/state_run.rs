@@ -224,10 +224,20 @@ pub(super) fn no_source_freshness() -> Arg {
         .help("Don't run `dbt source freshness` first; use --sources or an existing sources.json")
 }
 
+/// `--allow-scripts`, for the commands that read source versions, which a project's
+/// out-of-process plugin may give (ADR-0031 §5).
+pub(super) fn allow_plugins() -> Arg {
+    Arg::new("allow-scripts")
+        .long("allow-scripts")
+        .action(ArgAction::SetTrue)
+        .help("Trust this project's plugins as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust")
+}
+
 /// An `ods state` command that builds, with its own arguments.
 pub(super) fn build_command(kind: Kind) -> Command {
     let mut command = dbt_options(common(Command::new(kind.name()).about(kind.about())))
-        .arg(no_source_freshness());
+        .arg(no_source_freshness())
+        .arg(allow_plugins());
     if kind == Kind::Compile {
         return command;
     }
@@ -1724,7 +1734,16 @@ impl RunReport {
             super::state_retry::remember(&build_command(kind), args, &settings)
         };
         let started = std::time::SystemTime::now();
-        let (report, record_error) = match Self::build(kind, args, &settings, ctx.progress, retry) {
+        let allow = args
+            .try_get_one::<bool>("allow-scripts")
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(false);
+        let plugins = super::plugin_process::for_warehouses(ctx.config, allow);
+        let built = plugins
+            .and_then(|plugins| Self::build(kind, args, &settings, ctx.progress, retry, &plugins));
+        let (report, record_error) = match built {
             Ok(built) => built,
             Err(error) => return failed_before_running::<false>(ctx, &settings, started, error),
         };
@@ -1797,11 +1816,12 @@ impl RunReport {
         settings: &StateSettings,
         progress: ProgressSettings,
         retry: Option<&RetryFailed>,
+        (plugins, plugin_warnings): &(crate::plugins::Plugins, Vec<String>),
     ) -> Result<(Self, Option<CliError>), CliError> {
         let builds = kind != Kind::Compile;
         let steps = Steps::new(progress, step_count(args, settings, builds));
         let executor = steps.attach(executor(args, settings));
-        let mut warnings = Vec::new();
+        let mut warnings = plugin_warnings.clone();
         let dbt = check_settings(args, settings, &executor, &mut warnings)?;
 
         // 1. Prepare: the code as it is, and the target dbt builds in.
@@ -1815,7 +1835,7 @@ impl RunReport {
         // The store first: a problem with it stops the run before the warehouse is asked.
         let (store, latest) = open_state(&ws, dry_run)?;
         let table_versions =
-            super::state_versions::read_table_versions(&mut ws, &executor, &mut warnings)?;
+            super::state_versions::read_table_versions(&mut ws, &executor, plugins, &mut warnings)?;
         // Saved for the commands that don't connect (ADR-0022 §7), whatever happens
         // next: it is what was read, not state, so it changes nothing that was built.
         if let Some(reading) = &table_versions {

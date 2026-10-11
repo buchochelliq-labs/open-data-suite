@@ -28,7 +28,16 @@ pub(super) fn change_provider(
     adapter_type: Option<&str>,
     executor: &DbtExecutor,
 ) -> Option<Arc<dyn ChangeProvider>> {
-    crate::plugins::installed().changes(adapter_type, Arc::new(executor.clone()))
+    change_provider_in(crate::plugins::installed(), adapter_type, executor)
+}
+
+/// The change provider of `plugins` for the dbt adapter `adapter_type`, if it has one.
+fn change_provider_in(
+    plugins: &crate::plugins::Plugins,
+    adapter_type: Option<&str>,
+    executor: &DbtExecutor,
+) -> Option<Arc<dyn ChangeProvider>> {
+    plugins.changes(adapter_type, Arc::new(executor.clone()))
 }
 
 /// Whether the commands that run dbt read table versions for this project, so
@@ -38,15 +47,18 @@ pub(super) fn reads_table_versions(ws: &Workspace) -> bool {
 }
 
 /// Reads the table version of every source of the project, when the adapter has a
-/// change provider, and has the planner pick each source's version again. Returns the
-/// reading, for recording, and nothing for other adapters or a project without
-/// sources.
+/// change provider in `plugins` (the installed ones, and the out-of-process plugins
+/// that described themselves), and has the planner pick each source's version again.
+/// Returns the reading, for recording, and nothing for other adapters or a project
+/// without sources.
 pub(super) fn read_table_versions(
     ws: &mut Workspace,
     executor: &DbtExecutor,
+    plugins: &crate::plugins::Plugins,
     warnings: &mut Vec<String>,
 ) -> Result<Option<VersionReading>, CliError> {
-    let Some(provider) = change_provider(ws.manifest.adapter_type.as_deref(), executor) else {
+    let Some(provider) = change_provider_in(plugins, ws.manifest.adapter_type.as_deref(), executor)
+    else {
         return Ok(None);
     };
     if ws.project.sources.is_empty() {
@@ -175,5 +187,24 @@ mod tests {
         for other in [Some("duckdb"), Some("snowflake"), None] {
             assert!(change_provider(other, &executor).is_none());
         }
+    }
+
+    #[test]
+    fn a_warehouse_an_out_of_process_plugin_serves_reads_its_versions() {
+        use crate::plugins::process::ProcessWarehouse;
+        let executor = DbtExecutor::new("dbt", "target");
+        let mut plugins = crate::plugins::Plugins::builtin();
+        plugins
+            .add_warehouse(Arc::new(ProcessWarehouse {
+                origin: crate::plugins::Origin::new("acme", "1.0.0"),
+                warehouse: "acme_db".to_owned(),
+                changes: Some(Arc::new(FakeChangeProvider::new().with_source("a"))),
+                versions_read: None,
+            }))
+            .unwrap();
+        assert!(change_provider_in(&plugins, Some("acme_db"), &executor).is_some());
+        // The installed set alone, which the commands that don't run plugins read,
+        // doesn't have it.
+        assert!(change_provider(Some("acme_db"), &executor).is_none());
     }
 }

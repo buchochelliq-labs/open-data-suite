@@ -18,10 +18,7 @@ pub(super) struct Duckdb;
 
 impl WarehousePlugin for Duckdb {
     fn origin(&self) -> Origin {
-        Origin {
-            name: "ods-provider-duckdb",
-            version: env!("CARGO_PKG_VERSION"),
-        }
+        Origin::new("ods-provider-duckdb", env!("CARGO_PKG_VERSION"))
     }
 
     fn warehouse(&self) -> &str {

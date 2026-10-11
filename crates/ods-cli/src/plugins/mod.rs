@@ -6,6 +6,7 @@
 //! adds its own through [`Ods`](crate::Ods), and [`Ods::run`](crate::Ods::run) installs
 //! the set once, as logging is set up once, for every command to read.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -23,29 +24,45 @@ use serde::Serialize;
 mod databricks;
 mod detect;
 mod duckdb;
+pub(crate) mod process;
 mod settings;
 
 pub use detect::{Detected, Feature, PluginKind};
 pub use settings::WarehouseSettings;
 
-/// The crate a plugin comes from, for people: `ods version` and `ods doctor` name it,
-/// so a custom build never passes for the released one (ADR-0031 §2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Where a plugin comes from, for people: `ods version` and `ods doctor` name it, so a
+/// custom build never passes for the released one (ADR-0031 §2). For an in-process
+/// plugin, the crate that registered it; for an out-of-process one, its
+/// `[plugins.<name>]` and the name and version it describes itself with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Origin {
-    /// The crate's name.
-    pub name: &'static str,
-    /// The crate's version.
-    pub version: &'static str,
+    /// The crate's (or plugin's) name.
+    pub name: Cow<'static, str>,
+    /// Its version.
+    pub version: Cow<'static, str>,
+}
+
+impl Origin {
+    /// The crate `name` at `version`.
+    pub const fn new(name: &'static str, version: &'static str) -> Self {
+        Self {
+            name: Cow::Borrowed(name),
+            version: Cow::Borrowed(version),
+        }
+    }
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.version)
+    }
 }
 
 /// The [`Origin`] of the crate this is written in.
 #[macro_export]
 macro_rules! origin {
     () => {
-        $crate::plugins::Origin {
-            name: env!("CARGO_PKG_NAME"),
-            version: env!("CARGO_PKG_VERSION"),
-        }
+        $crate::plugins::Origin::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
     };
 }
 
@@ -260,10 +277,9 @@ impl Plugins {
         known_dialect(plugin.as_ref())?;
         let warehouse = plugin.warehouse().to_owned();
         if let Some((existing, _)) = self.warehouses.get(&warehouse) {
-            let o = existing.origin();
             return Err(PluginError::DuplicateWarehouse {
                 warehouse,
-                existing: format!("{} {}", o.name, o.version),
+                existing: existing.origin().to_string(),
             });
         }
         self.warehouses.insert(warehouse, (plugin, false));
@@ -515,7 +531,7 @@ impl Plugins {
         let mut checks: Vec<Detected> = self
             .checks
             .iter()
-            .map(|(check, origin, builtin)| detect::check(check.as_ref(), *origin, *builtin))
+            .map(|(check, origin, builtin)| detect::check(check.as_ref(), origin, *builtin))
             .collect();
         checks.sort_by(|a, b| a.name.cmp(&b.name));
         checks.extend(
@@ -638,10 +654,7 @@ mod tests {
         struct Versions;
         impl WarehousePlugin for Versions {
             fn origin(&self) -> Origin {
-                Origin {
-                    name: "acme-ods",
-                    version: "1.2.3",
-                }
+                Origin::new("acme-ods", "1.2.3")
             }
             fn warehouse(&self) -> &'static str {
                 "acme"
@@ -663,10 +676,7 @@ mod tests {
     #[test]
     fn a_check_is_listed_with_the_crate_that_registered_it() {
         let mut plugins = Plugins::none();
-        let origin = Origin {
-            name: "acme-checks",
-            version: "0.4.0",
-        };
+        let origin = Origin::new("acme-checks", "0.4.0");
         plugins
             .add_health_check(
                 origin,
