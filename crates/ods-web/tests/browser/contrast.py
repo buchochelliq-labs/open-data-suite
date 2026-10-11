@@ -185,10 +185,14 @@ MEASURE = r"""
 }
 """
 
-# Marks whose colour carries meaning: status dots, bars, grade dots, glyphs.
+# Marks whose colour carries meaning, every kind the stylesheets draw: status, health,
+# confidence and grade dots; the live dots; run, timeline, thread and coverage bars;
+# glyphs and legend swatches. Chips that say what they mean in words (e.g. `.st-conf`)
+# are text, measured as such.
 MARKS = ", ".join([
-    ".dot:not(.none)", ".st-glyph", ".gdot", ".tl-bar:not(.unknown):not(.untimed)",
-    ".th-bar:not(.unknown)", ".th-dot", ".tl-kind", ".st-sw.built", ".st-sw.failed",
+    ".dot:not(.none)", ".hdot", ".cdot", ".gdot", ".th-dot", ".live-dot", ".lv-dot", ".lv-dot-done",
+    ".st-glyph", ".st-bar", ".st-sw", ".tl-kind",
+    ".tl-bar:not(.unknown):not(.untimed)", ".th-bar:not(.unknown)", ".bar .b", ".bar .r", ".track > span",
 ])
 
 
