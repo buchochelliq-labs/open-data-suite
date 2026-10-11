@@ -1615,11 +1615,13 @@ every node when it fails, saying why:
   A commit that changes any of them makes it untrusted again; changing its `params`,
   `timeout` or `severity` doesn't. Trust pins those files only, not what they import or
   read in turn, so keep a script's code in the files its command names, or review what
-  it loads. Scripts in your own `config.toml` need no trust; a relative path there runs
+  it loads. Scripts in your own `config.toml` need no trust, even where the project sets
+  `[health.probes]` (which makes your probes need it); a relative path there runs
   that file in whichever project you check, so name your own scripts by absolute path.
 - **Failing safe.** A command that can't start, exits non-zero (the finding quotes its
   last line on stderr, up to 300 characters), runs past its `timeout` (it is then
-  stopped), writes more than 64 MiB to stdout, or answers with anything but the
+  stopped, with every process it started: it runs in a process group, a job object on
+  Windows, of its own; a script ends when every process it started has), writes more than 64 MiB to stdout, or answers with anything but the
   protocol's JSON in major version 1, makes every node it was asked about *unknown*. So does an answer about a node it wasn't asked about. A node it
   doesn't answer, or answers twice, is *unknown*.
 

@@ -52,6 +52,9 @@ libc = "0.2"
 hex = "0.4"
 # Durations people write in configuration (`timeout = "30s"`); MIT/Apache-2.0.
 humantime = "2"
+# Runs a script check in a process group (a job object on Windows) of its own, so a
+# timeout stops what it started too (#392). MIT/Apache-2.0.
+process-wrap = { version = "10", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 insta = "1"
 # Builds the dashboard's URL query strings (MIT/Apache-2.0; already used by axum).
 form_urlencoded = "1"

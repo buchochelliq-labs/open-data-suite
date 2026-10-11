@@ -43,7 +43,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   default). A project's scripts run only once trusted with `ods health trust`, which now
   shows each script's command; trust also covers the files the command names in the
   project, so a commit that changes one needs trust again; a script that fails, times out or answers with anything
-  but the protocol makes its nodes *unknown*, never a pass. The dashboard shows what the
+  but the protocol makes its nodes *unknown*, never a pass; a timeout stops every
+  process it started. The dashboard shows what the
   last run recorded. The new `ods-provider-process` crate is the only code that starts
   one.
 - `DuckDB` is the second built-in warehouse plugin (#415, ADR-0031 §3a), in

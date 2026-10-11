@@ -8,8 +8,8 @@
 //! - **Where:** in the project's root, with the user's environment, as `dbt` would be.
 //!   ODS adds no credential and no resolved secret (AGENTS rule 9).
 //! - **Failing safe:** a command that can't start, exits non-zero, takes longer than its
-//!   timeout (it is then killed), or answers with anything but the protocol's JSON in a
-//!   major this host speaks is an error: the host makes every node it was asked about
+//!   timeout (it is then killed, with every process it started), or answers with
+//!   anything but the protocol's JSON in a major this host speaks is an error: the host makes every node it was asked about
 //!   *unknown*, never a pass (AGENTS rule 3). So is an answer about a node it wasn't
 //!   asked about, which the host checks.
 //! - **Its log:** what it writes to stderr is logged, and its last line, cut to
@@ -30,6 +30,11 @@ use ods_sdk::contracts::health_check::{
 };
 use ods_sdk::protocol::{CheckCall, CheckRequest, CheckResponse, PROTOCOL};
 use ods_sdk::{Provider, ProviderError, ProviderInfo};
+#[cfg(windows)]
+use process_wrap::tokio::JobObject;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessGroup;
+use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 
 /// The provider kind.
@@ -99,20 +104,32 @@ impl ScriptCheck {
             .command
             .split_first()
             .ok_or_else(|| "it has no command to run".to_owned())?;
-        let mut child = tokio::process::Command::new(program)
-            .args(args)
-            .current_dir(&self.root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // A check that times out, or a host that gives up, leaves no process behind.
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| format!("`{}` couldn't be started: {e}", self.shown()))?;
+        let mut command = CommandWrap::with_new(program, |command| {
+            command
+                .args(args)
+                .current_dir(&self.root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+        });
+        // In a process group (a job object on Windows) of its own, so what it starts in
+        // turn is stopped with it.
+        #[cfg(unix)]
+        command.wrap(ProcessGroup::leader());
+        #[cfg(windows)]
+        command.wrap(JobObject);
+        command.wrap(KillOnDrop);
+        let mut running = Running {
+            child: command
+                .spawn()
+                .map_err(|e| format!("`{}` couldn't be started: {e}", self.shown()))?,
+            finished: false,
+        };
+        let child = &mut running.child;
         // Written while its output is read, so neither side waits on a full pipe. A
         // script that answers without reading its request closes the pipe: that's
         // its business, not an error.
-        let mut stdin = child.stdin.take();
+        let mut stdin = child.stdin().take();
         let request = request.to_vec();
         let writing = tokio::spawn(async move {
             if let Some(stdin) = stdin.as_mut() {
@@ -120,16 +137,21 @@ impl ScriptCheck {
                 let _ = stdin.shutdown().await;
             }
         });
-        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let running = async {
+        let (stdout, stderr) = (child.stdout().take(), child.stderr().take());
+        let ending = async {
             let (stdout, stderr) = tokio::join!(
                 read_capped(stdout, ANSWER_LIMIT, false),
                 read_capped(stderr, STDERR_KEPT, true)
             );
+            // Until every process in its group has ended.
             (stdout, stderr, child.wait().await)
         };
-        let (stdout, stderr, status) = match tokio::time::timeout(self.timeout, running).await {
-            Ok((Ok(stdout), Ok(stderr), Ok(status))) => (stdout, stderr, status),
+        // On a timeout or an error, `running` stops what is left as it is dropped.
+        let (stdout, stderr, status) = match tokio::time::timeout(self.timeout, ending).await {
+            Ok((Ok(stdout), Ok(stderr), Ok(status))) => {
+                running.finished = true;
+                (stdout, stderr, status)
+            }
             Ok((Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e))) => {
                 return Err(format!("`{}` couldn't be run: {e}", self.shown()));
             }
@@ -169,6 +191,22 @@ impl ScriptCheck {
             ));
         }
         Ok(stdout)
+    }
+}
+
+/// A started script: unless it has finished, it is stopped with every process it
+/// started when dropped, which is how a timeout, an error or a host that gives up (the
+/// check's future dropped) leaves nothing behind.
+struct Running {
+    child: Box<dyn ChildWrapper>,
+    finished: bool,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.child.start_kill();
+        }
     }
 }
 

@@ -12,10 +12,10 @@ use ods_sdk::protocol::{CheckRequest, CheckResponse, ProtocolVersion};
 
 const FIXTURE: &str = "--ods-script-fixture";
 
-/// Plays a script, as `mode` says.
-fn fixture(mode: &str) {
+/// Plays a script, as `mode` says; `extra` is its argument after the mode.
+fn fixture(mode: &str, extra: Option<&str>) {
     let mut input = Vec::new();
-    if mode != "no-read" && mode != "sleep" {
+    if !matches!(mode, "no-read" | "sleep" | "spawn" | "grandchild") {
         std::io::stdin().read_to_end(&mut input).unwrap();
     }
     let answer = |findings: Vec<CheckFinding>| {
@@ -87,6 +87,26 @@ fn fixture(mode: &str) {
         }
         "major" => print!(r#"{{"protocol": {{"major": 2, "minor": 0}}, "findings": []}}"#),
         "sleep" => std::thread::sleep(Duration::from_secs(30)),
+        // Starts a process of its own, which leaves `extra` behind if it outlives the
+        // script's timeout, then waits past the timeout itself.
+        "spawn" => {
+            #[expect(
+                clippy::zombie_processes,
+                reason = "it must outlive this script unwaited, to show it is stopped with it"
+            )]
+            let _grandchild = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([FIXTURE, "grandchild", extra.unwrap()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
+        "grandchild" => {
+            std::thread::sleep(Duration::from_secs(3));
+            std::fs::write(extra.unwrap(), "survived").unwrap();
+        }
         other => panic!("no fixture mode `{other}`"),
     }
 }
@@ -238,6 +258,32 @@ async fn a_long_line_on_stderr_is_cut_when_quoted() {
     );
 }
 
+async fn what_a_script_started_is_stopped_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("survived");
+    let me = std::env::current_exe().unwrap().display().to_string();
+    let check = ScriptCheck::new(
+        "acme.pii",
+        vec![
+            me,
+            FIXTURE.to_owned(),
+            "spawn".to_owned(),
+            marker.display().to_string(),
+        ],
+        std::env::temp_dir(),
+        Duration::from_millis(500),
+    );
+    let error = check
+        .check(&scope(&["model.shop.orders"]))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("didn't answer within 0.5s"), "{error}");
+    // Past when the grandchild would have written it, had it lived.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(!marker.exists(), "a process the script started outlived it");
+}
+
 async fn a_command_that_cant_start_is_an_error() {
     let check = ScriptCheck::new(
         "acme.pii",
@@ -263,7 +309,7 @@ async fn a_command_that_cant_start_is_an_error() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some(FIXTURE) {
-        fixture(&args[2]);
+        fixture(&args[2], args.get(3).map(String::as_str));
         return;
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -288,6 +334,7 @@ fn main() {
         output_that_isnt_the_protocol_is_an_error,
         an_answer_in_another_major_is_an_error,
         a_script_that_takes_too_long_is_stopped,
+        what_a_script_started_is_stopped_with_it,
         an_answer_past_the_limit_is_an_error,
         a_long_line_on_stderr_is_cut_when_quoted,
         a_command_that_cant_start_is_an_error,

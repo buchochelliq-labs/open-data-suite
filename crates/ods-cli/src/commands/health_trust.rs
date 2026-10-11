@@ -39,6 +39,17 @@ impl Origin {
     /// makes even the user's own probes the project's to answer for: a repository can't
     /// point them at another target without the user trusting that.
     pub(super) fn of(config: &Loaded) -> Self {
+        Self::resolve(config, true)
+    }
+
+    /// Where `config`'s scripts come from: where `[[health.checks]]` does. `[health.probes]`
+    /// changes nothing about how a script runs, so it doesn't make the user's own scripts
+    /// the project's.
+    fn of_scripts(config: &Loaded) -> Self {
+        Self::resolve(config, false)
+    }
+
+    fn resolve(config: &Loaded, probes: bool) -> Self {
         let source = |key: &[&str]| {
             let key: Vec<String> = key.iter().map(|k| (*k).to_owned()).collect();
             config.effective(&key).map(|s| s.source.clone())
@@ -51,6 +62,7 @@ impl Origin {
             ["health", "probes", "profile"],
         ]
         .iter()
+        .filter(|_| probes)
         .filter_map(|key| source(key))
         .find(|s| file_kind(s) != Some(FileKind::User));
         let source = match (file_kind(&checks), from_project) {
@@ -106,7 +118,7 @@ pub(super) fn apply(health: &mut HealthSettings, config: &Loaded, allow_scripts:
         return;
     }
     let all = || definitions.iter().map(|d| d.id().to_owned()).collect();
-    let trusted: BTreeSet<String> = match Origin::of(config) {
+    let mut trusted: BTreeSet<String> = match Origin::of(config) {
         _ if allow_scripts => all(),
         Origin::User(_) => all(),
         Origin::None => BTreeSet::new(),
@@ -119,6 +131,9 @@ pub(super) fn apply(health: &mut HealthSettings, config: &Loaded, allow_scripts:
             None => BTreeSet::new(),
         },
     };
+    if matches!(Origin::of_scripts(config), Origin::User(_)) {
+        trusted.extend(health.script_definitions().into_iter().map(|d| d.id));
+    }
     health.trust_checks(&trusted);
 }
 
@@ -194,9 +209,17 @@ impl TrustReport {
         config: &Loaded,
         health: &HealthSettings,
     ) -> Result<Self, CliError> {
-        let definitions: Vec<CheckDefinition> = health.trust_definitions();
+        let mut definitions: Vec<CheckDefinition> = health.trust_definitions();
         let probes = health.probe_definitions();
-        let scripts = health.script_definitions();
+        let mut scripts = health.script_definitions();
+        // The user's own scripts need no trust, even where the project's probe settings
+        // make their probes need it: they are neither recorded nor shown.
+        if matches!(Origin::of_scripts(config), Origin::User(_))
+            && matches!(Origin::of(config), Origin::Project { .. })
+        {
+            definitions.retain(|d| !matches!(d, CheckDefinition::Script(_)));
+            scripts.clear();
+        }
         let revoke = args.get_flag("revoke");
         let (file, root) = match Origin::of(config) {
             Origin::Project { file, root } => (file, root),

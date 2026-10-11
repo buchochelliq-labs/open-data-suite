@@ -281,6 +281,24 @@ fn scripts_in_the_users_own_configuration_need_no_trust() {
     assert_eq!(envelope["result"]["outcome"], "not_needed");
 }
 
+fn a_projects_probe_settings_dont_make_the_users_own_scripts_need_trust() {
+    // `[health.probes]` makes the user's probes the project's to answer for, but it
+    // changes nothing about how a script runs.
+    let project = Project::new("[health.probes]\ntarget = \"health_readonly\"\n");
+    std::fs::create_dir_all(project.home.path().join("ods")).unwrap();
+    std::fs::write(
+        project.home.path().join("ods/config.toml"),
+        script("orders-fail", ""),
+    )
+    .unwrap();
+    let (_, envelope) = project.check(&[]);
+    assert!(project.ran(), "{envelope:#}");
+    assert_eq!(finding(&envelope, "orders")["status"], "fail");
+    let (code, envelope) = project.ods(&["health", "trust"]);
+    assert_eq!(code, 0, "{envelope:#}");
+    assert!(envelope["result"].get("scripts").is_none(), "{envelope:#}");
+}
+
 fn a_script_without_a_command_is_a_configuration_error() {
     let project = Project::new(
         "[[health.checks]]\nid = \"acme.orders_ok\"\nkind = \"script\"\nseverity = \"error\"\n",
@@ -313,6 +331,7 @@ fn main() {
         changing_a_file_the_command_names_needs_trust_again,
         allow_scripts_runs_it_once_and_never_keeps_it,
         scripts_in_the_users_own_configuration_need_no_trust,
+        a_projects_probe_settings_dont_make_the_users_own_scripts_need_trust,
         a_script_without_a_command_is_a_configuration_error,
     );
 }
