@@ -110,6 +110,10 @@ fn check_command() -> Command {
 /// How a health check runs: `ods health check`'s flags, or what `[health] after_run`
 /// gives a build (ADR-0030 §6).
 #[derive(Debug, Clone, Copy)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four independent flags, as `ods health check` takes them"
+)]
 pub(super) struct CheckOptions {
     /// `--strict`: a check at severity `error` that can't decide fails too.
     pub(super) strict: bool,
