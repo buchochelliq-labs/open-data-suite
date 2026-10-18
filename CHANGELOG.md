@@ -40,6 +40,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   doesn't read 1.1 or 1.2 records: run `ods health check` again after going back to it.
 
 ### Added
+- `[health] after_run = true` (#392, ADR-0030 §6): every `ods state` command that builds
+  runs the health checks once it succeeded and is recorded, as `ods health check`
+  would, and records them for the dashboard. The report ends with their counts and
+  names what fails at severity `error` (`health` in `--json`). Their verdict never
+  changes the build's exit status: gate CI with `ods health check`. Off by default.
 - An out-of-process warehouse plugin gives everything a built-in one does (#392,
   ADR-0031 §3d): "Open in warehouse" links (`link`, asked for every relation of the
   project by `ods state`, `ods health check` and `ods lineage`), error explanations

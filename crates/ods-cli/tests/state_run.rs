@@ -5025,3 +5025,89 @@ fn health_settings_tune_the_gate() {
     assert_eq!(code, 4, "{json:#}");
     assert_eq!(json["diagnostics"][0]["code"], "ODS-E0102", "{json:#}");
 }
+
+/// #392, ADR-0030 §6: with `[health] after_run`, a build that succeeds runs the health
+/// checks and records them for the dashboard. Their verdict never changes the build's
+/// exit status; checks that can't run say why; a failed build runs none; and without
+/// the setting nothing is checked.
+#[test]
+fn after_run_checks_health_once_a_build_succeeds_and_never_changes_its_exit() {
+    let project = Project::new("health-after-run");
+    let health_dir = project.dir.join(".ods/state.db.health");
+    let toml = |text: &str| std::fs::write(project.dir.join("ods.toml"), text).unwrap();
+
+    // Off by default: nothing is checked or recorded.
+    let result = project.run_ok(&[]);
+    assert!(result["health"].is_null(), "{result:#}");
+    assert!(!health_dir.exists());
+
+    // On: checked and recorded once the build is.
+    toml("[health]\nafter_run = true\n");
+    project.change_code("model.jaffle_ods.orders");
+    let result = project.run_ok(&[]);
+    let health = &result["health"];
+    assert_eq!(health["status"], "checked", "{result:#}");
+    // Built without tests: warnings.
+    assert!(
+        health["counts"]["warning"].as_u64().unwrap() > 0,
+        "{health:#}"
+    );
+    assert!(health["failing"].is_null(), "{health:#}");
+    let recorded = std::path::PathBuf::from(health["recorded"].as_str().unwrap());
+    assert!(recorded.starts_with(&health_dir), "{health:#}");
+    // The same record `ods health check` writes, which the dashboard reads.
+    let record: Value = serde_json::from_slice(&std::fs::read(&recorded).unwrap()).unwrap();
+    assert_eq!(record["scope"], result["scope"]);
+
+    // Nothing to build still checks: the findings stay current.
+    let result = project.run_ok(&[]);
+    assert_eq!(result["health"]["status"], "checked", "{result:#}");
+    assert_eq!(std::fs::read_dir(&health_dir).unwrap().count(), 2);
+
+    // A check failing at severity error is reported, and the build still exits 0:
+    // `ods health check` is the gate.
+    toml("[health]\nafter_run = true\n\n[health.builtin.tests_passed]\nseverity = \"error\"\n");
+    let result = project.run_ok(&[]);
+    let failing = result["health"]["failing"].as_array().unwrap();
+    assert!(
+        failing.iter().any(|n| n == "model.jaffle_ods.orders"),
+        "{result:#}"
+    );
+    let plain = project.ods_plain(&[
+        "state",
+        "build",
+        "--dbt",
+        fixture("fake-dbt/dbt").to_str().unwrap(),
+        "--dbt-output",
+        "capture",
+        "--exclude-resource-type",
+        "test",
+    ]);
+    let line = plain
+        .lines()
+        .find(|l| l.contains("health checked:"))
+        .unwrap_or_else(|| panic!("{plain}"));
+    assert!(line.contains("failing at severity error"), "{line}");
+    assert!(line.contains("ods health check"), "{line}");
+
+    // Checks that can't run say why; the build is recorded, and no health record is
+    // written.
+    toml("[health]\nafter_run = true\n\n[health.builtin.nope]\nseverity = \"warn\"\n");
+    let before = std::fs::read_dir(&health_dir).unwrap().count();
+    let result = project.run_ok(&[]);
+    let health = &result["health"];
+    assert_eq!(health["status"], "not_checked", "{result:#}");
+    assert!(
+        health["message"].as_str().unwrap().contains("nope"),
+        "{health:#}"
+    );
+    assert_eq!(std::fs::read_dir(&health_dir).unwrap().count(), before);
+
+    // A build that fails runs no checks.
+    toml("[health]\nafter_run = true\n");
+    project.change_code("model.jaffle_ods.orders");
+    let (code, json) = project.with("FAKE_DBT_FAIL", "orders").run(&[]);
+    assert_eq!(code, 1, "{json:#}");
+    assert!(json["result"]["health"].is_null(), "{json:#}");
+    assert_eq!(std::fs::read_dir(&health_dir).unwrap().count(), before);
+}

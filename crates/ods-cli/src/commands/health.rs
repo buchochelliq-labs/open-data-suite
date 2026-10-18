@@ -48,7 +48,7 @@ impl Module for HealthCommand {
                     // Before anything runs, whatever the output mode or what happens next.
                     let _ = writeln!(std::io::stderr(), "warning: {ELEVATED_WARNING}");
                 }
-                let report = CheckReport::build(args, ctx.config)?;
+                let report = CheckReport::build(args, ctx.config, CheckOptions::of(args))?;
                 match report.failure() {
                     Some(error) => ctx.emit_failed(&report, error),
                     None => ctx.emit(&report),
@@ -105,6 +105,44 @@ fn check_command() -> Command {
             .action(ArgAction::SetTrue)
             .help("Don't keep the findings beside the state store for the dashboard"),
     )
+}
+
+/// How a health check runs: `ods health check`'s flags, or what `[health] after_run`
+/// gives a build (ADR-0030 §6).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CheckOptions {
+    /// `--strict`: a check at severity `error` that can't decide fails too.
+    pub(super) strict: bool,
+    /// `--allow-scripts`: trust the project's probes, scripts and plugins for this run.
+    pub(super) allow_scripts: bool,
+    /// `--allow-elevated-login`: a flag only, never a setting (ADR-0030 §4c).
+    pub(super) allow_elevated_login: bool,
+    /// Keep the findings beside the state store (not `--no-record`).
+    pub(super) record: bool,
+}
+
+impl CheckOptions {
+    /// `ods health check`'s flags.
+    fn of(args: &ArgMatches) -> Self {
+        Self {
+            strict: args.get_flag("strict"),
+            allow_scripts: args.get_flag("allow-scripts"),
+            allow_elevated_login: args.get_flag("allow-elevated-login"),
+            record: !args.get_flag("no-record"),
+        }
+    }
+
+    /// After a build that succeeded: recorded, for the dashboard, with the build's
+    /// `--allow-scripts`, and never with an elevated login, which is only ever a flag of
+    /// `ods health check`.
+    pub(super) fn after_run(allow_scripts: bool) -> Self {
+        Self {
+            strict: false,
+            allow_scripts,
+            allow_elevated_login: false,
+            record: true,
+        }
+    }
 }
 
 /// Keeps `record` beside the state store at `state_db`; where.
@@ -212,18 +250,14 @@ fn check_artifacts(ws: &Workspace) -> BTreeMap<String, String> {
 /// `None` when none is declared. One that can't run fails the command: which checks it
 /// would have run is unknown, so nothing else can stand in for them (AGENTS rule 3).
 fn with_plugins(
-    args: &ArgMatches,
+    allow_scripts: bool,
     config: &Loaded,
     artifacts: &BTreeMap<String, String>,
     keep: Option<(&std::path::Path, &str)>,
     manifest: &ods_provider_dbt::Manifest,
 ) -> Result<Option<super::plugin_process::ProjectPlugins>, CliError> {
-    let Some(mut project) = super::plugin_process::for_project(
-        config,
-        args.get_flag("allow-scripts"),
-        artifacts,
-        keep,
-    )?
+    let Some(mut project) =
+        super::plugin_process::for_project(config, allow_scripts, artifacts, keep)?
     else {
         return Ok(None);
     };
@@ -417,9 +451,13 @@ impl CheckReport {
         clippy::too_many_lines,
         reason = "one check, in order: the project, its plugins, the checks, probes, the record"
     )]
-    pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
+    pub(super) fn build(
+        args: &ArgMatches,
+        config: &Loaded,
+        options: CheckOptions,
+    ) -> Result<Self, CliError> {
         let mut health = super::serve_dashboard::health_settings(config)?;
-        let strict = args.get_flag("strict");
+        let strict = options.strict;
         let settings = StateSettings::resolve(args, config)?;
         // Source freshness results as the dashboard reads them (`--sources`, else
         // `<target-dir>/sources.json`), so coverage is judged on the same evidence.
@@ -446,8 +484,16 @@ impl CheckReport {
         let artifacts = check_artifacts(&ws);
         // Out-of-process plugins: their checks, and their warehouse's links, asked now and
         // kept for the dashboard unless `--no-record` (ADR-0031 §5, §3d).
-        let keep = (!args.get_flag("no-record")).then_some((ws.state_db.as_path(), scope.as_str()));
-        let project = with_plugins(args, config, &artifacts, keep, &ws.manifest)?;
+        let keep = options
+            .record
+            .then_some((ws.state_db.as_path(), scope.as_str()));
+        let project = with_plugins(
+            options.allow_scripts,
+            config,
+            &artifacts,
+            keep,
+            &ws.manifest,
+        )?;
         if let Some(project) = &project {
             health = super::serve_dashboard::health_settings_with(config, project.plugins())?;
         }
@@ -467,11 +513,11 @@ impl CheckReport {
             ws.manifest.adapter_type.as_deref(),
             &config.config.warehouses,
         )?;
-        super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
+        super::health_trust::apply(&mut health, config, options.allow_scripts);
         // Scripts run here and only here, each as a process in the project's root
         // (ADR-0030 §4; ADR-0031 §6): the dashboard reads their findings from the record.
         run_scripts_here(&mut health, &settings, &artifacts)?;
-        let allow_elevated_login = args.get_flag("allow-elevated-login");
+        let allow_elevated_login = options.allow_elevated_login;
         if let Some(connection) = probe_connection(
             args,
             config,
@@ -492,7 +538,7 @@ impl CheckReport {
             ods_web::health::project_coverage(&catalog, &super::serve_catalog::freshness(&ws));
         let report: HealthReport = block_on(health.run(&check_scope, ods_health::CHECK_TIMEOUT))?
             .with_coverage(health.coverage(&measured));
-        let recorded = if args.get_flag("no-record") || !ws.state_db.is_file() {
+        let recorded = if !options.record || !ws.state_db.is_file() {
             None
         } else {
             Some(write_record(
@@ -626,6 +672,132 @@ impl CheckReport {
     fn fails(&self, severity: Severity, status: Status) -> bool {
         severity == Severity::Error
             && (status == Status::Fail || (self.strict && status == Status::Unknown))
+    }
+}
+
+/// What `[health] after_run` found after a build that succeeded (ADR-0030 §6), for the
+/// build's report. It never changes the build's exit status: the build is recorded
+/// already, and `ods health check` is the gate.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub(super) enum AfterRun {
+    /// The checks ran.
+    Checked {
+        /// How many nodes have each health.
+        counts: BTreeMap<Health, usize>,
+        /// The nodes failing a check at severity `error`, by id.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failing: Vec<String>,
+        /// Coverage targets at severity `error` that aren't met.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        missed: Vec<String>,
+        /// Where the findings were recorded.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recorded: Option<PathBuf>,
+    },
+    /// The checks couldn't run, e.g. a project's plugin isn't trusted yet; no record
+    /// was written, so the dashboard keeps the last one.
+    NotChecked {
+        /// Why, as `ods health check` would say.
+        message: String,
+        /// Its next step, if it has one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hint: Option<String>,
+    },
+}
+
+impl AfterRun {
+    /// Runs every enabled check as `ods health check` would on the build's own
+    /// arguments, with the build's `--allow-scripts`, and records the findings.
+    pub(super) fn check(args: &ArgMatches, config: &Loaded, allow_scripts: bool) -> Self {
+        match CheckReport::build(args, config, CheckOptions::after_run(allow_scripts)) {
+            Ok(report) => {
+                let failing = report
+                    .nodes
+                    .iter()
+                    .filter(|n| {
+                        n.findings
+                            .iter()
+                            .any(|f| report.fails(f.severity, f.status))
+                    })
+                    .map(|n| n.id.clone())
+                    .collect();
+                let missed = report
+                    .coverage
+                    .iter()
+                    .filter(|c| report.fails(c.severity, c.status))
+                    .map(|c| c.measure.clone())
+                    .collect();
+                Self::Checked {
+                    counts: report.counts,
+                    failing,
+                    missed,
+                    recorded: report.recorded,
+                }
+            }
+            Err(error) => Self::NotChecked {
+                message: error.message,
+                hint: error.hint,
+            },
+        }
+    }
+
+    /// One line for the build's report.
+    pub(super) fn notice(&self) -> ViewNode {
+        match self {
+            Self::Checked {
+                counts,
+                failing,
+                missed,
+                recorded,
+            } => {
+                let tally = HEALTHS
+                    .iter()
+                    .map(|h| format!("{} {}", counts.get(h).copied().unwrap_or(0), h.key()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut message = format!("health checked: {tally}");
+                if !failing.is_empty() {
+                    let _ = write!(
+                        message,
+                        "; failing at severity error: {}",
+                        failing.join(", ")
+                    );
+                }
+                if !missed.is_empty() {
+                    let _ = write!(
+                        message,
+                        "; coverage targets missed at severity error: {}",
+                        missed.join(", ")
+                    );
+                }
+                if recorded.is_some() {
+                    message.push_str("; recorded for the dashboard");
+                }
+                if !failing.is_empty() || !missed.is_empty() {
+                    message.push_str(" (`ods health check` shows why, and gates)");
+                }
+                ViewNode::Notice {
+                    level: if failing.is_empty() && missed.is_empty() {
+                        Level::Info
+                    } else {
+                        Level::Warning
+                    },
+                    message: vec![Span::plain(message)],
+                }
+            }
+            Self::NotChecked { message, hint } => ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(match hint {
+                    Some(hint) => format!(
+                        "health not checked: {message} ({hint}); the build is recorded, and the dashboard keeps the last health record"
+                    ),
+                    None => format!(
+                        "health not checked: {message}; the build is recorded, and the dashboard keeps the last health record"
+                    ),
+                })],
+            },
+        }
     }
 }
 
