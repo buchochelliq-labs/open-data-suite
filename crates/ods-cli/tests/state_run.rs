@@ -5106,7 +5106,9 @@ fn after_run_checks_health_once_a_build_succeeds_and_never_changes_its_exit() {
     // A build that fails runs no checks.
     toml("[health]\nafter_run = true\n");
     project.change_code("model.jaffle_ods.orders");
-    let (code, json) = project.with("FAKE_DBT_FAIL", "orders").run(&[]);
+    // Kept bound: the project's directory goes when it is dropped.
+    let failing = project.with("FAKE_DBT_FAIL", "orders");
+    let (code, json) = failing.run(&[]);
     assert_eq!(code, 1, "{json:#}");
     assert!(json["result"]["health"].is_null(), "{json:#}");
     assert_eq!(std::fs::read_dir(&health_dir).unwrap().count(), before);
