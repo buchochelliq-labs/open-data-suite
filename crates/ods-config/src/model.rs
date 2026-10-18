@@ -243,6 +243,11 @@ pub struct HealthConfig {
     /// default) or `warning`. Never healthy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unknown_counts_as: Option<UnknownCountsAs>,
+    /// Run the checks after every `ods state` build that succeeds, as `ods health
+    /// check` would, and record them for the dashboard (ADR-0030 §6). Off by default;
+    /// their verdict never changes the build's exit status.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub after_run: bool,
     /// The built-in checks, by id, e.g. `[health.builtin.tests_required]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub builtin: BTreeMap<String, HealthCheckConfig>,

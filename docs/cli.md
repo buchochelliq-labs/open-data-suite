@@ -224,7 +224,7 @@ format = "json"
     `never`) and `output.width` (at least 20)
   - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
   - `state.db` and `state.environment`: see [State settings](#state-settings-in-odstoml)
-  - `health.unknown_counts_as` and `health.builtin.<check>.severity`, `.select` and
+  - `health.unknown_counts_as`, `health.after_run` and `health.builtin.<check>.severity`, `.select` and
     `.exclude`: see [Health settings](#health-settings-in-odstoml)
   - `providers.<name>.kind` and `providers.<name>.settings`. For `kind = "dbt"` the
     settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
@@ -1483,6 +1483,7 @@ The built-in checks, and their defaults:
 ```toml
 [health]
 unknown_counts_as = "unknown"            # or "warning"
+after_run = false                        # true: check after every build that succeeds
 
 [health.builtin.tests_required]
 severity = "error"                       # error | warn | info | off
@@ -1853,6 +1854,19 @@ With the defaults, only `last_run_failed` is at severity `error`, so the gate fa
 nodes that failed in the last run and haven't been built since. Raise any other check
 to `error` in `[health]` to gate on it too.
 
+- **After a build:** with `after_run = true` in `[health]` (off by default), every
+  `ods state` command that builds (`build`, `run`, `seed`, `snapshot`, `retry --failed`)
+  runs the checks once it succeeded and is recorded (or had nothing to build), as
+  `ods health check` would with the same project and dbt options, and keeps the record
+  for the dashboard. The build's report ends with a line of counts, and names the nodes
+  and coverage targets failing at severity `error` (in `--json`, `health`, with
+  `status: checked`). Their verdict never changes the build's exit status: the build is
+  recorded already, so gate CI with `ods health check`. The build's `--allow-scripts`
+  applies; `--allow-elevated-login` is a flag of `ods health check` only, so probes that
+  need it are *unknown* here. When the checks can't run (e.g. a project's plugin isn't
+  trusted yet, or `[health]` is invalid), the report says why as a warning (`status:
+  not_checked`), no record is written, and the dashboard keeps the last one. A build
+  that fails, `--dry-run` and `ods state compile` run no checks.
 - **The health record:** each check run is kept beside the state store, in
   `<state db>.health/` (e.g. `.ods/state.db.health/2026-10-06T09-00-00Z-001.json`), as JSON
   with a `schema_version`, the scope, the time, the checks that ran and every node's

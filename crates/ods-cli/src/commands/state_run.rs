@@ -1501,6 +1501,10 @@ pub(super) struct RunReport {
     /// With `ods state retry --failed` (#292): what is retried, and what isn't.
     #[serde(skip_serializing_if = "Option::is_none")]
     retry: Option<RetryReport>,
+    /// With `[health] after_run`: the health checks run after the build succeeded
+    /// (ADR-0030 §6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<super::health::AfterRun>,
     #[serde(flatten)]
     observed: RunObserved,
 }
@@ -1745,7 +1749,7 @@ impl RunReport {
         let built = project.and_then(|mut project| {
             Self::build(kind, args, &settings, ctx.progress, retry, &mut project)
         });
-        let (report, record_error) = match built {
+        let (mut report, record_error) = match built {
             Ok(built) => built,
             Err(error) => return failed_before_running::<false>(ctx, &settings, started, error),
         };
@@ -1758,6 +1762,16 @@ impl RunReport {
         }
         if let Some(error) = record_error {
             return ctx.emit_failed(&report, error);
+        }
+        // Only once the build is recorded, so the checks see what it built; their
+        // verdict never changes the build's exit status (ADR-0030 §6).
+        if ctx.config.config.health.after_run
+            && matches!(
+                report.outcome,
+                RunOutcome::Succeeded | RunOutcome::NothingToBuild
+            )
+        {
+            report.health = Some(super::health::AfterRun::check(args, ctx.config, allow));
         }
         match report.outcome {
             RunOutcome::Failed => {
@@ -1949,6 +1963,7 @@ impl RunReport {
             planned_checks: checks_by_node(&ws.project),
             requested: requested.iter().map(|n| n.id.clone()).collect(),
             retry,
+            health: None,
             observed: RunObserved::default(),
         };
         for note in plan_notes(&report) {
@@ -2623,6 +2638,7 @@ impl Present for RunReport {
         }
         blocks.extend(super::failures::section(&self.observed.failures));
         blocks.extend(self.notices());
+        blocks.extend(self.health.as_ref().map(super::health::AfterRun::notice));
         ViewNode::Group(blocks)
     }
 }
