@@ -12,6 +12,25 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-19
+
+The dashboard is complete: every screen in its design is built (#309), so this is the
+first 0.1 release (ADR-0019 §1a). Beside it, health checks become configurable and
+pluggable, and ODS takes plugins, built into a custom `ods` or run as programs of their
+own. **It changes SDK contracts and the health record's format:** see **Breaking**.
+
+- **The rest of the dashboard:** Settings and About, the Semantic layer placeholder,
+  the Run page's Threads tab with the critical path, saved table versions as freshness
+  evidence, and dark mode checked on every screen.
+- **Health checks you configure:** declared checks, coverage targets, read-only SQL
+  probes under a login shown to only read, script checks, and `[health] after_run` to
+  check after every build. Anything a project defines that runs code or SQL runs only
+  once trusted with `ods health trust`.
+- **Plugins:** health checks and warehouse plugins in a custom `ods` (`ods_cli::Ods`),
+  or out of process in any language (`[plugins.<name>]`); `ods plugin list`, `show`
+  and `test`. Databricks is now a built-in warehouse plugin, and DuckDB a second one.
+- **SDK 0.9.** Rebuild out-of-process plugins and custom `ods` builds against it.
+
 ### Breaking
 - The `error_catalogue` contract is 0.5 (#415): `ErrorCatalogue::classify_attributed`
   names the catalogue that recognised an error, for a catalogue that consults others.
