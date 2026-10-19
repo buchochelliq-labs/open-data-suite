@@ -91,7 +91,7 @@ Definition of done: `cargo build/test/clippy/fmt` + `cargo deny` green in GitHub
 ADR-0001 (module boundaries), ADR-0002 (Rust stack), ADR-0003 (CLI presentation) merged;
 `ods --version` and `ods state --help` run; a fake provider passes a contract smoke test.
 
-**Status (2026-10-19): closed.** Done: #1, #105, #2, #3, #6, #7, #101; #100 and #108 with
+**Status (2026-10-19): nothing left open.** Done: #1, #105, #2, #3, #6, #7, #101; #100 and #108 with
 their last pieces moved to M2 (#435, #436). What was left of the others moved to the
 milestone that needs it:
 - **M2:** #4 the domain model, #183 entity identity, #10 licensing policy, #104 naming,
