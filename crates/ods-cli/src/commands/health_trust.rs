@@ -410,7 +410,7 @@ fn sql_line(sql: &ods_config::ProbeSql) -> Line {
                 if i > 0 {
                     line.push(Span::plain("\n"));
                 }
-                line.push(Span::toned(kind.to_string(), Tone::Code));
+                line.push(Span::toned(kind.clone(), Tone::Code));
                 line.push(Span::plain(": "));
                 line.push(Span::toned(sql.as_str(), Tone::Sql));
             }

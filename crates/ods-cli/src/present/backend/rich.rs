@@ -370,13 +370,13 @@ mod tests {
             "select 'x' from {{ ref('t') }}",
             Tone::Sql,
         )]);
-        let out = RichRenderer::with_environment(ColorChoice::Always, Some(80), false)
-            .render(&node);
+        let out =
+            RichRenderer::with_environment(ColorChoice::Always, Some(80), false).render(&node);
         assert!(out.contains("\x1b[34mselect"), "{out:?}");
         assert!(out.contains("\x1b[33m'x'"), "{out:?}");
         assert!(out.contains("\x1b[36m{{ ref('t') }}"), "{out:?}");
-        let plain = RichRenderer::with_environment(ColorChoice::Never, Some(80), false)
-            .render(&node);
+        let plain =
+            RichRenderer::with_environment(ColorChoice::Never, Some(80), false).render(&node);
         assert_eq!(plain.trim_end(), "select 'x' from {{ ref('t') }}");
     }
 
@@ -388,8 +388,8 @@ mod tests {
             Span::plain("q: "),
             Span::toned("select\u{1b}[2J 1", Tone::Sql),
         ]);
-        let out = RichRenderer::with_environment(ColorChoice::Always, Some(80), false)
-            .render(&node);
+        let out =
+            RichRenderer::with_environment(ColorChoice::Always, Some(80), false).render(&node);
         assert!(!out.contains("\u{1b}[2J"), "{out:?}");
         assert!(out.contains("\x1b[34mselect"), "{out:?}");
     }
