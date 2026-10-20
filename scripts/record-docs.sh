@@ -38,6 +38,9 @@ if ! command -v "$rich" >/dev/null 2>&1; then
   echo "record-docs.sh: \`rich\` not found; install it with \`cargo install rs-rich-cli --locked\`" >&2
   exit 2
 fi
+# The recorder writes `rich --version`, looked up on PATH, into each provenance.json:
+# put the chosen `rich` first so that version is the one that recorded.
+PATH="$(dirname "$(command -v "$rich")"):$PATH"
 
 if [[ -z "${ODS_BIN_DIR:-}" ]]; then
   cargo build --quiet -p ods-cli --bin ods
