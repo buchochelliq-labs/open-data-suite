@@ -1,9 +1,9 @@
 {
   "tape": "docs/tapes/state-plan.tape",
   "tape_fnv1a64": "24586289a0e4cedb",
-  "recorder": "rs-rich-record 0.0.1",
-  "rich": "rich (rs-rich-cli) 0.0.13",
-  "commit": "8fcf7ed31fcd66121a456a0e8f66c679c56de92a",
+  "recorder": "rs-rich-record 0.0.8",
+  "rich": "rich (rs-rich-cli) 0.0.20",
+  "commit": "0b47aaff789b35c1c909f202601c70942f9aad73",
   "screenshots": [
     "state-plan-first",
     "state-plan-after-change"

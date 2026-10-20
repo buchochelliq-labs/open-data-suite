@@ -9,7 +9,7 @@
 #              `<shot>.txt` (after the tape's `Mask`s); write nothing; exit 1 on a difference
 #   TAPE_NAME  only these tapes (e.g. `state-build`); default: every tape
 #
-# Needs `rich` 0.0.13 or later on PATH (`cargo install rs-rich-cli --locked`, or set
+# Needs `rich` 0.0.20 or later on PATH (`cargo install rs-rich-cli --locked`, or set
 # RICH=/path/to/rich), bash and python3. It builds `ods` (debug) with cargo; set ODS_BIN_DIR
 # to a directory holding an `ods` binary to skip that. The tapes run against a scratch copy
 # of fixtures/dbt/jaffle-ods with the fake dbt in fixtures/dbt/fake-dbt: no warehouse, no
@@ -38,6 +38,9 @@ if ! command -v "$rich" >/dev/null 2>&1; then
   echo "record-docs.sh: \`rich\` not found; install it with \`cargo install rs-rich-cli --locked\`" >&2
   exit 2
 fi
+# The recorder writes `rich --version`, looked up on PATH, into each provenance.json:
+# put the chosen `rich` first so that version is the one that recorded.
+PATH="$(dirname "$(command -v "$rich")"):$PATH"
 
 if [[ -z "${ODS_BIN_DIR:-}" ]]; then
   cargo build --quiet -p ods-cli --bin ods
