@@ -7,8 +7,8 @@ repo_url: https://github.com/buchochelliq-labs/open-data-suite
 repo_name: open-data-suite
 edit_uri: edit/main/docs/
 copyright: >-
-  OpenDataSuite contributors. Licensed under Apache-2.0. Experimental software, provided
-  "as is" without warranty. See the Legal and trademarks page.
+  &copy; OpenDataSuite contributors &middot; Apache-2.0 &middot;
+  <a href="https://buchochelliq-labs.github.io/open-data-suite/legal/">Legal and trademarks</a>
 
 docs_dir: docs
 # Working notes and competitive research are for contributors, not the public site.
@@ -25,31 +25,67 @@ theme:
   custom_dir: overrides
   # System fonts: no requests to Google Fonts.
   font: false
+  logo: assets/brand/logo.svg
+  favicon: assets/brand/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
   features:
+    - announce.dismiss
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
+    - navigation.indexes
     - navigation.top
     - navigation.footer
+    - navigation.tracking
+    - toc.follow
     - content.code.copy
+    - content.tabs.link
     - search.suggest
     - search.highlight
+    - search.share
+  # The colours are set in assets/stylesheets/ods.css (`custom`).
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
+      primary: custom
+      accent: custom
       toggle: {icon: material/weather-night, name: Dark mode}
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
+      primary: custom
+      accent: custom
       toggle: {icon: material/weather-sunny, name: Light mode}
+
+extra_css:
+  - assets/stylesheets/ods.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/buchochelliq-labs/open-data-suite
+      name: ODS on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/opendatasuite/
+      name: ODS on PyPI
+
+# Renders `\|` in table cells as `|`, as GitHub does (scripts/mkdocs_hooks.py).
+hooks:
+  - scripts/mkdocs_hooks.py
 
 markdown_extensions:
   - admonition
   - attr_list
+  - def_list
   - md_in_html
   - tables
   - toc:
       permalink: true
   - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
@@ -69,56 +105,60 @@ validation:
 
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
-  - Install: install.md
-  - Column-level lineage: lineage.md
-  - State on Databricks: databricks.md
-  - More capabilities: capabilities.md
-  - CLI reference: cli.md
+  - Get started:
+      - Getting started: getting-started.md
+      - Install: install.md
+  - Guides:
+      - Column-level lineage: lineage.md
+      - State on Databricks: databricks.md
+      - More capabilities: capabilities.md
   - Reference:
+      - CLI reference: cli.md
       - dbt error patterns: reference/error-patterns.md
-  - Principles: principles.md
-  - Architecture: architecture.md
+  - Architecture:
+      - Principles: principles.md
+      - Overview: architecture.md
+      - Decisions (ADRs):
+          - adr/README.md
+          - adr/0001-monorepo-architecture-and-module-boundaries.md
+          - adr/0002-rust-first-backend-and-technology-stack.md
+          - adr/0003-cli-presentation-boundary.md
+          - adr/0004-cli-framework-and-exit-codes.md
+          - adr/0005-configuration-and-profiles.md
+          - adr/0006-plugin-sdk-and-capabilities.md
+          - adr/0008-column-level-lineage.md
+          - adr/0009-hostable-explorer-ods-web.md
+          - adr/0010-mcp-server.md
+          - adr/0011-dbt-state-config-compatibility.md
+          - adr/0012-erd-from-tests-and-constraints.md
+          - adr/0013-state-snapshots-fingerprints-and-store.md
+          - adr/0014-executor-contract-and-state-run.md
+          - adr/0015-cli-compatibility-front-ends.md
+          - adr/0016-relation-existence-before-reuse.md
+          - adr/0017-state-per-target.md
+          - adr/0018-state-store-migrations-and-recovery.md
+          - adr/0019-release-and-versioning.md
+          - adr/0020-dbt-state-interop-and-favor-state.md
+          - adr/0021-databricks-authentication.md
+          - adr/0022-delta-table-versions-as-source-evidence.md
+          - adr/0023-ods-doctor-diagnostics.md
+          - adr/0024-run-events-node-stats-and-run-journal.md
+          - adr/0025-error-explanations.md
+          - adr/0026-run-playback.md
+          - adr/0027-federated-build-graph-across-project-formats.md
+          - adr/0028-open-data-environments.md
+          - adr/0029-build-timings-and-the-run-ledger.md
+          - adr/0030-configurable-and-pluggable-health-checks.md
+          - adr/0031-plugin-registry-and-loading.md
   - Contributing:
       - Writing a provider: plugins.md
       - Testing against Databricks: contributing-databricks.md
       - Recording the docs: recordings.md
       - Fuzzing: contributing-fuzzing.md
-  - UX designs:
-      - design/README.md
-      - Dashboard: design/dashboard/README.md
-      - VS Code: design/vscode-extension/README.md
-  - Roadmap: ROADMAP.md
-  - Decisions (ADRs):
-      - adr/README.md
-      - adr/0001-monorepo-architecture-and-module-boundaries.md
-      - adr/0002-rust-first-backend-and-technology-stack.md
-      - adr/0003-cli-presentation-boundary.md
-      - adr/0004-cli-framework-and-exit-codes.md
-      - adr/0005-configuration-and-profiles.md
-      - adr/0006-plugin-sdk-and-capabilities.md
-      - adr/0008-column-level-lineage.md
-      - adr/0009-hostable-explorer-ods-web.md
-      - adr/0010-mcp-server.md
-      - adr/0011-dbt-state-config-compatibility.md
-      - adr/0012-erd-from-tests-and-constraints.md
-      - adr/0013-state-snapshots-fingerprints-and-store.md
-      - adr/0014-executor-contract-and-state-run.md
-      - adr/0015-cli-compatibility-front-ends.md
-      - adr/0016-relation-existence-before-reuse.md
-      - adr/0017-state-per-target.md
-      - adr/0018-state-store-migrations-and-recovery.md
-      - adr/0019-release-and-versioning.md
-      - adr/0020-dbt-state-interop-and-favor-state.md
-      - adr/0021-databricks-authentication.md
-      - adr/0022-delta-table-versions-as-source-evidence.md
-      - adr/0023-ods-doctor-diagnostics.md
-      - adr/0024-run-events-node-stats-and-run-journal.md
-      - adr/0025-error-explanations.md
-      - adr/0026-run-playback.md
-      - adr/0027-federated-build-graph-across-project-formats.md
-      - adr/0028-open-data-environments.md
-      - adr/0029-build-timings-and-the-run-ledger.md
-      - adr/0030-configurable-and-pluggable-health-checks.md
-      - adr/0031-plugin-registry-and-loading.md
-  - Legal and trademarks: legal.md
+      - UX designs:
+          - design/README.md
+          - Dashboard: design/dashboard/README.md
+          - VS Code: design/vscode-extension/README.md
+  - Project:
+      - Roadmap: ROADMAP.md
+      - Legal and trademarks: legal.md

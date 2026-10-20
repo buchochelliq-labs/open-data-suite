@@ -1,0 +1,138 @@
+/* The documentation site's look (mkdocs.yml: palette `custom`, extra_css).
+   Slate for the header and tabs, teal for links and actions. Every text colour here is
+   at least 4.5:1 against its background, in both schemes. */
+
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #1e293b;
+  --md-primary-fg-color--light: #334155;
+  --md-primary-fg-color--dark: #0f172a;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.75);
+  --md-accent-fg-color: #0f766e;
+  --md-accent-fg-color--transparent: rgba(15, 118, 110, 0.1);
+  --md-typeset-a-color: #0f766e;
+  --ods-hero-fg: #475569;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #0f172a;
+  --md-primary-fg-color--light: #1e293b;
+  --md-primary-fg-color--dark: #020617;
+  --md-accent-fg-color: #5eead4;
+  --md-accent-fg-color--transparent: rgba(94, 234, 212, 0.1);
+  --md-typeset-a-color: #5eead4;
+  --md-default-bg-color: #0b1120;
+  --ods-hero-fg: #94a3b8;
+}
+
+/* Headings: firmer than the theme's light grey. */
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.md-typeset h2 {
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* The header logo sits a little larger than the theme's default. */
+.md-header__button.md-logo img {
+  height: 1.6rem;
+}
+
+/* The announcement bar: one quiet line, not an alarm. */
+.md-banner {
+  background-color: #0f766e;
+  color: #ffffff;
+}
+.md-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* Buttons. */
+/* The theme draws a plain button in the header colour, which disappears against the dark
+   scheme's background: draw it in the text colour instead. */
+.md-typeset .md-button {
+  border-radius: 0.4rem;
+  font-weight: 600;
+  color: var(--md-default-fg-color);
+  border-color: var(--md-default-fg-color--lighter);
+}
+.md-typeset .md-button:not(.md-button--primary):hover,
+.md-typeset .md-button:not(.md-button--primary):focus {
+  background-color: var(--md-accent-fg-color--transparent);
+  border-color: var(--md-accent-fg-color);
+  color: var(--md-default-fg-color);
+}
+.md-typeset .md-button--primary {
+  background-color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+  color: #ffffff;
+}
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+  color: #0b1120;
+}
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  filter: brightness(1.1);
+}
+
+/* The home page's opening section. */
+.ods-hero {
+  margin: 1.2rem 0 2.4rem;
+}
+.ods-hero h1 {
+  font-size: 2.6rem;
+  line-height: 1.15;
+  margin: 0 0 0.8rem;
+}
+.ods-hero .ods-hero__lead {
+  color: var(--ods-hero-fg);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 44rem;
+  margin: 0 0 1.4rem;
+}
+.ods-hero .ods-hero__actions .md-button {
+  margin: 0 0.5rem 0.5rem 0;
+}
+.ods-hero .ods-hero__meta {
+  color: var(--ods-hero-fg);
+  font-size: 0.75rem;
+  margin-top: 0.6rem;
+}
+@media screen and (max-width: 44.9375em) {
+  .ods-hero h1 {
+    font-size: 1.9rem;
+  }
+}
+
+/* Cards: an icon above the title, and a lift on hover. */
+.md-typeset .grid.cards > ul > li {
+  border-radius: 0.5rem;
+  transition: border-color 125ms, box-shadow 125ms;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: var(--md-shadow-z1);
+}
+.md-typeset .grid.cards .lg {
+  color: var(--md-accent-fg-color);
+}
+
+/* Recordings and screenshots: rounded, with a soft edge. */
+.md-typeset img[src*="recordings/"],
+.md-typeset img[src*="images/"] {
+  border-radius: 0.5rem;
+  box-shadow: var(--md-shadow-z2);
+}
+
+/* A grid of four cards reads as two rows of two on wide screens. */
+@media screen and (min-width: 60em) {
+  .md-typeset .grid.ods-grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
