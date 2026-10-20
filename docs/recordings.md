@@ -20,7 +20,7 @@ Bitstream Vera and CC BY 4.0 licences, which is why it isn't linked into the wor
 Install the `rich` CLI once, outside the repository, then record:
 
 ```sh
-cargo install rs-rich-cli --version 0.0.13 --locked
+cargo install rs-rich-cli --version 0.0.20 --locked
 scripts/record-docs.sh                    # every tape
 scripts/record-docs.sh state-build        # one tape
 scripts/record-docs.sh --check            # compare with what is committed; writes nothing

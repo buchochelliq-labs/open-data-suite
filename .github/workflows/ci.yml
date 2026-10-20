@@ -123,7 +123,7 @@ jobs:
   docs-media:
     runs-on: ubuntu-latest
     env:
-      RICH_VERSION: 0.0.13
+      RICH_VERSION: 0.0.20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
