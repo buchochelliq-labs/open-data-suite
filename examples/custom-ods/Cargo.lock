@@ -1064,6 +1064,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6928282826c822ad91bf1c9a1cb90a30ba1c26770749929b4656cd6be829cd7c"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1322,6 +1331,7 @@ dependencies = [
  "opener",
  "petgraph",
  "rs-rich",
+ "rs-rich-ext",
  "serde",
  "serde_json",
  "sha2",
@@ -1718,6 +1728,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags 2.13.2",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1806,14 +1827,37 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rs-rich"
-version = "0.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "633810214e2e28cff1134c0e3cec60737c3d0a9b66ba1e699f596531a50f758f"
+version = "0.0.11"
+source = "git+https://github.com/buchochelliq-labs/rs-rich-cli?rev=c25f65e943a6c992cf830ec1f9649ff7663414ac#c25f65e943a6c992cf830ec1f9649ff7663414ac"
 dependencies = [
  "anstyle-query",
  "fancy-regex",
+ "pulldown-cmark",
  "serde_json",
  "terminal_size",
+]
+
+[[package]]
+name = "rs-rich-ext"
+version = "0.0.18"
+source = "git+https://github.com/buchochelliq-labs/rs-rich-cli?rev=c25f65e943a6c992cf830ec1f9649ff7663414ac#c25f65e943a6c992cf830ec1f9649ff7663414ac"
+dependencies = [
+ "fancy-regex",
+ "libc",
+ "rs-rich",
+ "rs-rich-plugin-api",
+ "rustix",
+ "unicode-width",
+ "windows-sys",
+]
+
+[[package]]
+name = "rs-rich-plugin-api"
+version = "0.0.5"
+source = "git+https://github.com/buchochelliq-labs/rs-rich-cli?rev=c25f65e943a6c992cf830ec1f9649ff7663414ac#c25f65e943a6c992cf830ec1f9649ff7663414ac"
+dependencies = [
+ "inventory",
+ "rs-rich",
 ]
 
 [[package]]
@@ -2437,6 +2481,12 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-ident"

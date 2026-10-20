@@ -34,6 +34,7 @@ fn theme_key(tone: Tone) -> &'static str {
         Tone::Error => "ods.error",
         Tone::Success => "ods.success",
         Tone::Code => "ods.code",
+        Tone::Sql => "ods.sql",
     }
 }
 
@@ -48,6 +49,8 @@ fn default_style(tone: Tone) -> &'static str {
         Tone::Warning => "yellow",
         Tone::Error => "bold red",
         Tone::Code => "cyan",
+        // The highlighter colours the tokens (`append_spans`); the rest is plain.
+        Tone::Sql => "none",
     }
 }
 
@@ -318,10 +321,11 @@ fn text(line: &[Span]) -> Text {
 fn append_spans(text: &mut Text, line: &[Span]) {
     for span in line {
         let start = text.plain().len();
-        text.append(
-            &sanitize(&span.text),
-            span.tone.map(|tone| theme_key(tone).into()),
-        );
+        let shown = sanitize(&span.text);
+        text.append(&shown, span.tone.map(|tone| theme_key(tone).into()));
+        if span.tone == Some(Tone::Sql) {
+            highlight_sql(text, start, &shown);
+        }
         // Over the tone's style, so the text looks the same with or without a link.
         // Only renderers built with links get here with one (see `RichRenderer`).
         if let Some(link) = &span.link {
@@ -334,12 +338,60 @@ fn append_spans(text: &mut Text, line: &[Span]) {
     }
 }
 
+/// The SQL palette: `ansi_light` uses only the 16 standard colours (blue keywords,
+/// yellow strings, dim comments, cyan Jinja), as the rest of ODS's output does, so it
+/// reads on dark and light terminals alike.
+const SQL_THEME: &str = "ansi_light";
+
+/// Colours the SQL appended to `text` at `start` token by token, with rs-rich-ext's
+/// SQL highlighter (ADR-0003 §8). It styles byte ranges of text already sanitized, so
+/// nothing in the query is read as markup or reaches the terminal as a control.
+fn highlight_sql(text: &mut Text, start: usize, sql: &str) {
+    for token in rich_ext::sql::tokenize(sql) {
+        if let Some(style) = rich_ext::sql::token_style(token.kind, SQL_THEME) {
+            text.stylize(style, start + token.range.start, start + token.range.end);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn paragraph(text: &str) -> ViewNode {
         ViewNode::Paragraph(vec![Span::toned(text, Tone::Emphasis)])
+    }
+
+    /// SQL spans are coloured token by token in the standard colours: keywords blue,
+    /// strings yellow, Jinja cyan; the text is the query, unchanged.
+    #[test]
+    fn sql_spans_are_highlighted() {
+        let node = ViewNode::Paragraph(vec![Span::toned(
+            "select 'x' from {{ ref('t') }}",
+            Tone::Sql,
+        )]);
+        let out = RichRenderer::with_environment(ColorChoice::Always, Some(80), false)
+            .render(&node);
+        assert!(out.contains("\x1b[34mselect"), "{out:?}");
+        assert!(out.contains("\x1b[33m'x'"), "{out:?}");
+        assert!(out.contains("\x1b[36m{{ ref('t') }}"), "{out:?}");
+        let plain = RichRenderer::with_environment(ColorChoice::Never, Some(80), false)
+            .render(&node);
+        assert_eq!(plain.trim_end(), "select 'x' from {{ ref('t') }}");
+    }
+
+    /// A query's control characters are neutralised before it is highlighted, and the
+    /// highlighting lands on the right bytes after them.
+    #[test]
+    fn sql_spans_are_sanitized_first() {
+        let node = ViewNode::Paragraph(vec![
+            Span::plain("q: "),
+            Span::toned("select\u{1b}[2J 1", Tone::Sql),
+        ]);
+        let out = RichRenderer::with_environment(ColorChoice::Always, Some(80), false)
+            .render(&node);
+        assert!(!out.contains("\u{1b}[2J"), "{out:?}");
+        assert!(out.contains("\x1b[34mselect"), "{out:?}");
     }
 
     #[test]
