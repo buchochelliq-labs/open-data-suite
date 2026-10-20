@@ -1,0 +1,10 @@
+{% extends "main.html" %}
+
+{% block content %}
+<div class="ods-not-found">
+  <img src="{{ 'assets/herd/tui.svg' | url }}" alt="Tui, a small purple elephant, looking puzzled">
+  <h1>Page not found</h1>
+  <p>Tui looked everywhere, but this page isn't here. It may have moved.</p>
+  <p><a class="md-button md-button--primary" href="{{ config.site_url | d(nav.homepage.url, true) | url }}">Back to the docs</a></p>
+</div>
+{% endblock %}

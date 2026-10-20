@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 230" role="img" aria-labelledby="t">
+  <title id="t">Nemo, a purple elephant, holding up the ODS graph with her trunk</title>
+  <!-- Nemo: the ODS mascot. A purple elephant who keeps track of what depends on what. -->
+  <ellipse cx="118" cy="214" rx="92" ry="8" fill="#000" opacity=".08"/>
+  <!-- tail -->
+  <path d="M44 118 q-16 6 -14 26" fill="none" stroke="#7c3aed" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="30" cy="146" r="5" fill="#4c1d95"/>
+  <!-- back legs -->
+  <rect x="56" y="150" width="26" height="58" rx="12" fill="#7c3aed"/>
+  <rect x="128" y="150" width="26" height="58" rx="12" fill="#7c3aed"/>
+  <!-- body -->
+  <ellipse cx="110" cy="128" rx="72" ry="52" fill="#8b5cf6"/>
+  <!-- front legs -->
+  <rect x="80" y="156" width="26" height="54" rx="12" fill="#8b5cf6"/>
+  <rect x="150" y="150" width="26" height="60" rx="12" fill="#8b5cf6"/>
+  <g fill="#ede9fe"><rect x="84" y="202" width="7" height="5" rx="2"/><rect x="95" y="202" width="7" height="5" rx="2"/>
+  <rect x="154" y="202" width="7" height="5" rx="2"/><rect x="165" y="202" width="7" height="5" rx="2"/></g>
+  <!-- head -->
+  <circle cx="182" cy="92" r="42" fill="#8b5cf6"/>
+  <!-- trunk, raised and curling, holding the graph -->
+  <path d="M214 104 q22 10 22 -14 q0 -26 6 -40" fill="none" stroke="#8b5cf6" stroke-width="17" stroke-linecap="round"/>
+  <!-- the ODS graph: three nodes and their edges -->
+  <g transform="translate(232 16)">
+    <path d="M-12 4 L0 26 M12 4 L0 26" stroke="#64748b" stroke-width="3.5" stroke-linecap="round"/>
+    <g stroke="#ffffff" stroke-width="2"><circle cx="-12" cy="2" r="7" fill="#334155"/><circle cx="12" cy="2" r="7" fill="#14b8a6"/><circle cx="0" cy="28" r="7" fill="#334155"/></g>
+  </g>
+  <!-- ear -->
+  <path d="M168 62 q-46 -6 -46 36 q0 40 40 40 q20 0 22 -24 z" fill="#a78bfa"/>
+  <path d="M164 74 q-30 -2 -30 26 q0 26 26 26 q12 0 14 -14 z" fill="#ddd6fe"/>
+  <!-- eye and cheek -->
+  <circle cx="196" cy="82" r="5.5" fill="#2e1065"/><circle cx="198" cy="80" r="1.8" fill="#fff"/>
+  <path d="M188 70 q8 -6 16 0" fill="none" stroke="#2e1065" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="206" cy="102" r="6" fill="#f472b6" opacity=".45"/>
+  <path d="M196 112 q6 6 12 2" fill="none" stroke="#2e1065" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

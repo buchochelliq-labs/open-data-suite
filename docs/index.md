@@ -147,6 +147,14 @@ ods serve                      # the dashboard, on http://127.0.0.1:8765/
 
 </div>
 
+<div class="ods-herd-strip" markdown>
+![Nemo, the ODS mascot](assets/herd/nemo.svg)
+![Tui, Nemo's daughter](assets/herd/tui.svg){ .ods-herd-strip__small }
+</div>
+
+<p style="text-align:center" markdown>ODS is looked after by Nemo and her daughter Tui.
+[Meet the herd →](herd.md)</p>
+
 !!! info "Status"
     ODS is **pre-alpha**. Commands, flags, output and file formats change without
     notice, and results can be incomplete or wrong. Use it to explore and to give
