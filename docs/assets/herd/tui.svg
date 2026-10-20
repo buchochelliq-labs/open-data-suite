@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 190" role="img" aria-labelledby="t">
-  <title id="t">Tui, a small purple elephant, Nemo's daughter, with a teal bow</title>
-  <!-- Tui: Nemo's daughter. Small, curious, and always asking "but why?" -->
+  <title id="t">Tui, a small purple elephant, Memo's daughter, with a teal bow</title>
+  <!-- Tui: Memo's daughter. Small, curious, and always asking "but why?" -->
   <ellipse cx="96" cy="176" rx="66" ry="7" fill="#000" opacity=".08"/>
   <path d="M42 108 q-12 4 -10 18" fill="none" stroke="#8b5cf6" stroke-width="4" stroke-linecap="round"/>
   <circle cx="32" cy="128" r="4" fill="#5b21b6"/>

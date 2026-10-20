@@ -1,6 +1,6 @@
 ---
 title: Meet the herd
-description: Nemo, Tui, Nana and Grandpa, the purple elephants who look after ODS.
+description: Memo, Tui, Nana and Grandpa, the purple elephants who look after ODS.
 ---
 
 # Meet the herd
@@ -10,13 +10,13 @@ neither does ODS: it remembers what every run built, and why.
 
 <div class="grid cards ods-grid-2 ods-herd" markdown>
 
--   ![Nemo, a purple elephant, holding up the ODS graph with her trunk](assets/herd/nemo.svg)
+-   ![Memo, a purple elephant, holding up the ODS graph with her trunk](assets/herd/memo.svg)
 
-    **Nemo**
+    **Memo**
 
     ---
 
-    The ODS mascot. Nemo keeps track of what depends on what, and holds the graph up
+    The ODS mascot. Memo keeps track of what depends on what, and holds the graph up
     for everyone to see. When something changes, she knows exactly which models it
     reaches, and which it doesn't.
 
@@ -26,7 +26,7 @@ neither does ODS: it remembers what every run built, and why.
 
     ---
 
-    Nemo's daughter. Tui is small, curious and always asking "but *why*?", which is
+    Memo's daughter. Tui is small, curious and always asking "but *why*?", which is
     why every decision ODS makes comes with its reasons
     ([`ods state explain`](cli.md)).
 

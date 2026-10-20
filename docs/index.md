@@ -148,11 +148,11 @@ ods serve                      # the dashboard, on http://127.0.0.1:8765/
 </div>
 
 <div class="ods-herd-strip" markdown>
-![Nemo, the ODS mascot](assets/herd/nemo.svg)
-![Tui, Nemo's daughter](assets/herd/tui.svg){ .ods-herd-strip__small }
+![Memo, the ODS mascot](assets/herd/memo.svg)
+![Tui, Memo's daughter](assets/herd/tui.svg){ .ods-herd-strip__small }
 </div>
 
-<p style="text-align:center" markdown>ODS is looked after by Nemo and her daughter Tui.
+<p style="text-align:center" markdown>ODS is looked after by Memo and her daughter Tui.
 [Meet the herd →](herd.md)</p>
 
 !!! info "Status"
