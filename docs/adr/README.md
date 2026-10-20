@@ -1,6 +1,11 @@
 # Architecture Decision Records
 
-Use the `adr` skill (`.claude/skills/adr`) or copy [`0000-template.md`](0000-template.md).
+Each record captures one significant decision about ODS's architecture: the context,
+the options weighed, what was decided and what follows from it. A record is Proposed
+until it is Accepted; later changes are added as dated amendments rather than rewrites.
+
+To write one, use the `adr` skill (`.claude/skills/adr`) or copy
+[`0000-template.md`](https://github.com/buchochelliq-labs/open-data-suite/blob/main/docs/adr/0000-template.md).
 
 | ADR | Title | Status | Issues |
 |---|---|---|---|

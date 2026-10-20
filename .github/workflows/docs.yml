@@ -10,6 +10,7 @@ on:
       - "docs/**"
       - "overrides/**"
       - "mkdocs.yml"
+      - "scripts/mkdocs_hooks.py"
       - "requirements-docs.txt"
       - ".github/workflows/docs.yml"
       - "fixtures/dbt/**"
