@@ -14,7 +14,7 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 
-- The docs site has a *Meet the herd* page (Project): Memo, the purple elephant who is
+- The docs site has a *Meet the gang* page (Project): Memo, the purple elephant who is
   ODS's mascot, her daughter Tui, and Tui's Nana and Grandpa. Tui also keeps the site's
   404 page.
 

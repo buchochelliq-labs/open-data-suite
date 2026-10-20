@@ -137,8 +137,8 @@
   }
 }
 
-/* Meet the herd: each elephant on a soft panel above their name. */
-.md-typeset .ods-herd img {
+/* Meet the gang: each elephant on a soft panel above their name. */
+.md-typeset .ods-gang img {
   display: block;
   width: 100%;
   max-height: 11rem;
@@ -149,18 +149,18 @@
   background: var(--md-accent-fg-color--transparent);
   box-shadow: none;
 }
-.md-typeset .ods-herd-strip {
+.md-typeset .ods-gang-strip {
   display: flex;
   align-items: flex-end;
   justify-content: center;
   gap: 1rem;
   margin: 1.6rem 0 0.4rem;
 }
-.md-typeset .ods-herd-strip img {
+.md-typeset .ods-gang-strip img {
   height: 6.5rem;
   width: auto;
 }
-.md-typeset .ods-herd-strip img.ods-herd-strip__small {
+.md-typeset .ods-gang-strip img.ods-gang-strip__small {
   height: 4.6rem;
 }
 .ods-not-found {
