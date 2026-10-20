@@ -12,6 +12,23 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Added
+
+- The docs site has a *Meet the herd* page (Project): Memo, the purple elephant who is
+  ODS's mascot, her daughter Tui, and Tui's Nana and Grandpa. Tui also keeps the site's
+  404 page.
+
+### Changed
+
+- The docs site has a new look and layout: top-level tabs (Get started, Guides,
+  Reference, Architecture, Contributing, Project) in place of one long sidebar, a slate
+  and teal theme with a logo, a new home page, and one dismissible pre-alpha banner.
+
+### Fixed
+
+- The docs site's CLI reference showed a backslash before each `|` in table cells
+  (`ods state compile\|run`); it shows `ods state compile|run`, as on GitHub.
+
 ## [0.1.0] - 2026-10-19
 
 The dashboard is complete: every screen in its design is built (#309), so this is the
