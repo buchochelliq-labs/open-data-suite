@@ -20,6 +20,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Changed
 
+- `ods health trust` highlights each probe's SQL on a terminal: keywords, strings,
+  comments and dbt's Jinja blocks in the standard terminal colours. Plain and JSON
+  output are unchanged.
 - The docs site has a new look and layout: top-level tabs (Get started, Guides,
   Reference, Architecture, Contributing, Project) in place of one long sidebar, a slate
   and teal theme with a logo, a new home page, and one dismissible pre-alpha banner.

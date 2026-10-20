@@ -1,7 +1,7 @@
 # ADR-0003: CLI presentation boundary and rs-rich-cli
 
 - **Status:** Accepted (2026-10-04). Not built yet, now a follow-up: a generated JSON Schema per command (§3), and JSON and plain contract snapshots for every command (`ods erd`, most of `ods lineage` and `ods mcp` have none). The output envelope is at 1.0 (#342).
-- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, accepted 2026-10-05)
+- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, accepted 2026-10-05; 2026-10-20: rs-rich-ext and SQL highlighting, §8)
 - **Issues:** #108 (also #6, #21, #22, #85, #107)
 - **Deciders:** @n1ckyb
 
@@ -313,6 +313,53 @@ views; both are left for later.
 
 New dependencies: `url` (MIT OR Apache-2.0, already in the tree) and
 `supports-hyperlinks` (Apache-2.0).
+
+### 8. rs-rich-ext, and SQL highlighting (amendment, 2026-10-20)
+The rs-rich project keeps its core a faithful port of Python `rich` and ships what it
+adds in separate crates. ODS now takes one of them, `rs-rich-ext`, for SQL highlighting
+(#442).
+
+**What ODS takes.**
+- `rs-rich-ext` with `default-features = false` and only:
+  - `sql`: a SQL lexer and highlighter in pure Rust. It knows standard SQL and the common
+    dialects (PostgreSQL, BigQuery, Snowflake, DuckDB and others), and treats dbt's
+    Jinja blocks as tokens of their own. Its default features would bring back syntect,
+    which §6.1 removed.
+  - `markdown`: core rs-rich's Markdown renderer (with `pulldown-cmark`, MIT), whose
+    `sql` code blocks the same highlighter can colour. Nothing renders Markdown yet;
+    it is there for model descriptions and agent output.
+- `rs-rich-ext` is MIT, needs Rust 1.90 like the core, and adds `fancy-regex` and the
+  plugin API crate, both already MIT. `cargo tree` shows no syntect or bincode.
+
+**Where it comes from.** The `sql` feature isn't released to crates.io yet, so both
+`rs-rich` and `rs-rich-ext` come from the rs-rich-cli repository's main branch, at one
+pinned commit in the workspace `Cargo.toml`.
+- **Same source for both.** `rs-rich-ext` depends on the `rs-rich` of its own commit, and
+  two copies of the core would be two incompatible sets of types.
+- **Allowed sources:** `deny.toml` allows that one git source and no other.
+- **Publishing:** nothing is lost, as every ODS crate has `publish = false` (ADR-0019).
+- **Upgrades:** both crates move together, by changing the one `rev` in a PR of its own.
+  Once a release carries `sql`, ODS returns to crates.io versions.
+
+**How it is used.**
+- **A new tone:** `Tone::Sql` marks a span as SQL. The rich backend appends the span's
+  text, sanitized as every span is (§4), then colours its tokens with
+  `rich_ext::sql::token_style` in the `ansi_light` palette: only the 16 standard colours,
+  as the rest of ODS's output. It styles byte ranges of already-sanitized text, so a
+  query is never read as markup and can't put a control character on the terminal.
+- **Other backends:** the plain and JSON backends show the text unchanged.
+- **First use:** the probe queries `ods health trust` asks people to review before
+  trusting them. They are the project's own configuration, not engine output.
+- **Engine output stays out:** SQL from an engine or a failed node (error messages,
+  compiled code) is still not shown: failure explanations remove SQL and literal values,
+  which can carry rendered secrets (AGENTS.md rule 9). Showing such SQL needs its own
+  decision.
+
+**Next, under this amendment.**
+- The rest of `rs-rich-ext`'s presentation pieces stay as #442 lists them:
+  - `workflow` and `LiveCoordinator` for `ods state run`'s progress (#446);
+  - `diagnostic` for failures (#447).
+- Each adds features to the one dependency, not a new crate.
 
 ## Consequences
 - **Positive:**

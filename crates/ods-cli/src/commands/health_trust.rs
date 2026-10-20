@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::plugin_process::{Declaration, Declared};
 use crate::exit::{CliError, ExitStatus, codes};
-use crate::present::{Level, Present, Span, Tone, ViewNode};
+use crate::present::{Level, Line, Present, Span, Tone, ViewNode};
 
 /// Where the probes and scripts come from, and so whether they need trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,15 +401,23 @@ fn reviewed_plugins(
 }
 
 /// A probe's queries for people: the one query, or `<kind>: <query>` on a line each.
-fn sql_text(sql: &ods_config::ProbeSql) -> String {
+/// The queries are SQL spans, so a terminal shows them highlighted.
+fn sql_line(sql: &ods_config::ProbeSql) -> Line {
     match sql {
-        ods_config::ProbeSql::PerWarehouse(queries) => queries
-            .iter()
-            .map(|(kind, sql)| format!("{kind}: {sql}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        ods_config::ProbeSql::One(sql) => sql.clone(),
-        _ => String::new(),
+        ods_config::ProbeSql::PerWarehouse(queries) => {
+            let mut line = Vec::new();
+            for (i, (kind, sql)) in queries.iter().enumerate() {
+                if i > 0 {
+                    line.push(Span::plain("\n"));
+                }
+                line.push(Span::toned(kind.clone(), Tone::Code));
+                line.push(Span::plain(": "));
+                line.push(Span::toned(sql.as_str(), Tone::Sql));
+            }
+            line
+        }
+        ods_config::ProbeSql::One(sql) => vec![Span::toned(sql.as_str(), Tone::Sql)],
+        _ => Vec::new(),
     }
 }
 
@@ -520,7 +528,7 @@ impl Present for TrustReport {
                         vec![
                             vec![Span::toned(p.id.as_str(), Tone::Code)],
                             vec![Span::toned(was, tone)],
-                            vec![Span::toned(sql_text(&p.sql), Tone::Code)],
+                            sql_line(&p.sql),
                         ]
                     })
                     .collect(),

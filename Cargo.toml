@@ -78,11 +78,14 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"
-# Terminal rendering; only ods-cli may depend on it (ADR-0003, enforced by check-layering.py).
-# `^0.0.x` pins the patch version, so every upgrade is a deliberate PR.
 supports-hyperlinks = "3"
 url = "2"
-rs-rich = { version = "0.0.9", default-features = false }
+# Terminal rendering; only ods-cli may depend on these (ADR-0003, enforced by
+# check-layering.py). Both come from rs-rich-cli's main branch at one commit, upgraded
+# together: rs-rich-ext's `sql` feature (a SQL highlighter without syntect) isn't on
+# crates.io yet. Neither turns on `syntax`, so syntect and bincode stay out.
+rs-rich = { git = "https://github.com/buchochelliq-labs/rs-rich-cli", rev = "c25f65e943a6c992cf830ec1f9649ff7663414ac", default-features = false }
+rs-rich-ext = { git = "https://github.com/buchochelliq-labs/rs-rich-cli", rev = "c25f65e943a6c992cf830ec1f9649ff7663414ac", default-features = false, features = ["sql", "markdown"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"

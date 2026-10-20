@@ -42,3 +42,6 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# rs-rich and rs-rich-ext from their repository's main branch, at a pinned commit
+# (Cargo.toml, ADR-0003 §8): rs-rich-ext's `sql` feature isn't released yet.
+allow-git = ["https://github.com/buchochelliq-labs/rs-rich-cli"]

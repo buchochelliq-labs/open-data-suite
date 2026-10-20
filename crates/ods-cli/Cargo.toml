@@ -40,6 +40,7 @@ ods-web.workspace = true
 opener.workspace = true
 petgraph.workspace = true
 rs-rich.workspace = true
+rs-rich-ext.workspace = true
 supports-hyperlinks.workspace = true
 url.workspace = true
 serde.workspace = true
