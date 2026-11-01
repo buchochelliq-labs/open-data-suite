@@ -42,8 +42,8 @@ Every milestone must preserve these; reviewers reject PRs that break them.
 | pre-release (internal) | Foundations | M0 | 2026-10-30 | Workspace builds in CI; ADRs for architecture, Rust stack, CLI presentation; plugin SDK + semantic core compile with fake providers; demo dbt fixture project. |
 | **v0.0.1** — *first public release* | **ODS State MVP (code- and data-aware) + first dashboard screens** | M1 | **2026-10-30** | `ods state plan / run / explain / diff / history` on a dbt project using `manifest.json`, SQLite state, exact-selection dbt executor; skips models whose code **and upstream data** are unchanged (dbt source freshness + Delta table versions), with per-node staleness tolerance; failed runs leave prior state authoritative; JSON output; installable binary for Linux/macOS/Windows. `ods serve` dashboard: shell and Home (#310), State Plan and Why, Runs, Run (#311), Lineage with the State overlay (#312), Catalog and the Model page (#313). |
 | **v0.0.2** | **ERD, Impact & hardening** | R2 | 2026-11-27 | The ERD page (#64) and the Impact simulator (#347) on the dashboard, both over engines already built; failure explanations for agents and the CLI (#348); `ods state savings` (#210); Databricks error messages recorded from a real run (#349); the plugin conformance suite (#99) and property tests (#192). |
-| **v0.1.0** — *released* | **ODS Dashboard complete** | UX1 | 2026-10-19 (planned for 2027-01-29) | Every screen in the [dashboard design](design/dashboard/README.md) is built (#309): the v0.0.1 screens plus Freshness evidence, Semantic layer placeholder, Impact simulator, ERD, Settings and dark mode. |
-| v0.1.1, … | Incremental releases | M2, and any later-milestone work that lands early | as ready | Fixes, and work from M2 onwards that is done before v0.2.0. |
+| **v0.1.1** — *released* | **ODS Dashboard complete** | UX1 | 2026-11-01 (planned for 2027-01-29) | Every screen in the [dashboard design](design/dashboard/README.md) is built (#309): the v0.0.1 screens plus Freshness evidence, Semantic layer placeholder, Impact simulator, ERD, Settings and dark mode. |
+| v0.1.2, … | Incremental releases | M2, and any later-milestone work that lands early | as ready | Fixes, and work from M2 onwards that is done before v0.2.0. |
 | v0.2.0 | Databricks depth & reuse strategies | M2 | 2027-02-26 | Unity Catalog metadata; full Delta change providers (CDF, watermarks, partitions); remaining freshness/trigger policies incl. WAIT; REUSE/DEFER/CLONE strategies; PostgreSQL store with locking; secrets providers. |
 | v0.3.0 | Schema intelligence: ERD + Usage | M3 | 2027-04-30 | `ods erd generate/inspect/validate` (dbt provider, Mermaid/DOT/PlantUML); `ods usage …` backed by Unity Catalog. |
 | v0.4.0 | ODS CI | M4 | 2027-06-30 | Change-impact engine, selective CI planner, PR report (Markdown + JSON), usage-aware risk; SQL parser + column lineage. |
@@ -52,10 +52,11 @@ Every milestone must preserve these; reviewers reject PRs that break them.
 | later | Platform & ecosystem | M7–M9 | — | Mesh, server mode/API/RBAC/audit, integrations, synthetic data, dev envs, ops/cost/governance. |
 
 **Versioning rule:** releases stayed v0.0.x until every screen in the dashboard design
-(`docs/design/dashboard/`) was built; **v0.1.0 marks the complete dashboard** (UX1,
-#309). Each milestone after it ships as the next minor version (M2 → v0.2.0, M3 →
-v0.3.0, …); fixes, and work that lands before its milestone's release, ship as v0.1.x
-patch releases.
+(`docs/design/dashboard/`) was built; **v0.1 marks the complete dashboard** (UX1,
+#309). 0.1.0 was prepared but never released, so v0.1.1 is the first 0.1 release. Each
+milestone after it ships as the next minor version (M2 → v0.2.0, M3 → v0.3.0, …);
+fixes, and work that lands before its milestone's release, ship as v0.1.x patch
+releases.
 
 Target dates are proposals for a small team and should be revisited at the end of M0.
 Versioning follows SemVer with a `0.x` "anything may break between minors" caveat; in
@@ -194,13 +195,13 @@ come first because their engines exist.
 | #99 | Plugin conformance test suite |
 | #192 | Property and fuzz tests for the graph, SQL lineage and State invariants |
 
-### UX1 — ODS Dashboard (→ **v0.1.0**)
+### UX1 — ODS Dashboard (→ **v0.1.1**)
 Goal: build every screen of the [dashboard design](design/dashboard/README.md) in
 `ods serve` (server-rendered, read-only, [ADR-0009](adr/0009-hostable-explorer-ods-web.md)).
 **v0.1.0 ships only when every screen in the design is done**; until then releases are
 v0.0.x.
 
-**Status (2026-10-19): released as [v0.1.0](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.1.0).**
+**Status (2026-11-01): released as [v0.1.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.1.1)** (0.1.0 was skipped).
 Every screen of the design is built; #309 and its screens are closed.
 
 | Issue | Title |
