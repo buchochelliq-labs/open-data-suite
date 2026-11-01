@@ -48,7 +48,7 @@ impl Module for HealthCommand {
                     // Before anything runs, whatever the output mode or what happens next.
                     let _ = writeln!(std::io::stderr(), "warning: {ELEVATED_WARNING}");
                 }
-                let report = CheckReport::build(args, ctx.config)?;
+                let report = CheckReport::build(args, ctx.config, CheckOptions::of(args))?;
                 match report.failure() {
                     Some(error) => ctx.emit_failed(&report, error),
                     None => ctx.emit(&report),
@@ -57,7 +57,7 @@ impl Module for HealthCommand {
             Some(("trust", args)) => {
                 let mut health = super::serve_dashboard::health_settings(ctx.config)?;
                 let settings = StateSettings::resolve(args, ctx.config)?;
-                health.pin_probe_connection(&probe_pins(&settings));
+                pin_checks(&mut health, &settings);
                 let report = super::health_trust::TrustReport::build(args, ctx.config, &health)?;
                 ctx.emit(&report)
             }
@@ -81,7 +81,7 @@ fn check_command() -> Command {
         Arg::new("allow-scripts")
             .long("allow-scripts")
             .action(ArgAction::SetTrue)
-            .help("Trust this project's probe checks as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
+            .help("Trust this project's probe and script checks and plugins as they are now, for this run only (e.g. in CI); `ods health trust` keeps trust"),
     )
     .arg(
         Arg::new("allow-elevated-login")
@@ -105,6 +105,48 @@ fn check_command() -> Command {
             .action(ArgAction::SetTrue)
             .help("Don't keep the findings beside the state store for the dashboard"),
     )
+}
+
+/// How a health check runs: `ods health check`'s flags, or what `[health] after_run`
+/// gives a build (ADR-0030 §6).
+#[derive(Debug, Clone, Copy)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four independent flags, as `ods health check` takes them"
+)]
+pub(super) struct CheckOptions {
+    /// `--strict`: a check at severity `error` that can't decide fails too.
+    pub(super) strict: bool,
+    /// `--allow-scripts`: trust the project's probes, scripts and plugins for this run.
+    pub(super) allow_scripts: bool,
+    /// `--allow-elevated-login`: a flag only, never a setting (ADR-0030 §4c).
+    pub(super) allow_elevated_login: bool,
+    /// Keep the findings beside the state store (not `--no-record`).
+    pub(super) record: bool,
+}
+
+impl CheckOptions {
+    /// `ods health check`'s flags.
+    fn of(args: &ArgMatches) -> Self {
+        Self {
+            strict: args.get_flag("strict"),
+            allow_scripts: args.get_flag("allow-scripts"),
+            allow_elevated_login: args.get_flag("allow-elevated-login"),
+            record: !args.get_flag("no-record"),
+        }
+    }
+
+    /// After a build that succeeded: recorded, for the dashboard, with the build's
+    /// `--allow-scripts`, and never with an elevated login, which is only ever a flag of
+    /// `ods health check`.
+    pub(super) fn after_run(allow_scripts: bool) -> Self {
+        Self {
+            strict: false,
+            allow_scripts,
+            allow_elevated_login: false,
+            record: true,
+        }
+    }
 }
 
 /// Keeps `record` beside the state store at `state_db`; where.
@@ -132,6 +174,26 @@ fn write_record(
             "the records already there are unchanged; `--no-record` checks without keeping one"
         })
     })
+}
+
+/// Pins in each probe's and script's trust digest what decides where it runs and what
+/// it runs, as far as a project can change it (ADR-0030 §4d): for probes, the dbt
+/// settings configuration sets; for scripts, a configured project directory and the
+/// files each command names in it.
+fn pin_checks(health: &mut ods_health::HealthSettings, settings: &StateSettings) {
+    let pins = probe_pins(settings);
+    health.pin_probe_connection(&pins);
+    let script_pins = pins
+        .into_iter()
+        .filter(|(key, _)| key == "dbt.project_dir")
+        .collect();
+    health.pin_scripts(&script_root(settings), &script_pins);
+}
+
+/// Where scripts run: the dbt project's directory, absolute.
+fn script_root(settings: &StateSettings) -> PathBuf {
+    let dir = super::failures::project_dir(settings);
+    std::path::absolute(&dir).unwrap_or(dir)
 }
 
 /// The dbt settings that decide where probes connect and that configuration set (so a
@@ -169,6 +231,81 @@ fn connection_for(
     }
 }
 
+/// The project's artifacts a script or plugin check may read, by name, as absolute
+/// paths: those that exist, and the target directory.
+fn check_artifacts(ws: &Workspace) -> BTreeMap<String, String> {
+    let absolute =
+        |path: &std::path::Path| std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    let target = absolute(&ws.target_dir);
+    let mut artifacts: BTreeMap<String, String> = ["manifest", "run_results", "catalog"]
+        .into_iter()
+        .map(|name| (name, target.join(format!("{name}.json"))))
+        .chain(ws.sources_file.iter().map(|f| ("sources", absolute(f))))
+        .filter(|(_, path)| path.is_file())
+        .map(|(name, path)| (name.to_owned(), path.display().to_string()))
+        .collect();
+    artifacts.insert("target_dir".to_owned(), target.display().to_string());
+    artifacts
+}
+
+/// The project's plugins, with every out-of-process plugin as it describes itself
+/// (ADR-0031 §5): its checks run here and only here, and its warehouse's links are
+/// asked for now, and kept beside the state store when `keep` names where (§3d).
+/// `None` when none is declared. One that can't run fails the command: which checks it
+/// would have run is unknown, so nothing else can stand in for them (AGENTS rule 3).
+fn with_plugins(
+    allow_scripts: bool,
+    config: &Loaded,
+    artifacts: &BTreeMap<String, String>,
+    keep: Option<(&std::path::Path, &str)>,
+    manifest: &ods_provider_dbt::Manifest,
+) -> Result<Option<super::plugin_process::ProjectPlugins>, CliError> {
+    let Some(mut project) =
+        super::plugin_process::for_project(config, allow_scripts, artifacts, keep)?
+    else {
+        return Ok(None);
+    };
+    if let Some(held) = project.declared().held.first() {
+        return Err(held.error());
+    }
+    block_on(project.ask_links(
+        manifest.adapter_type.as_deref(),
+        &super::plugin_process::manifest_relations(manifest),
+    ))?;
+    for warning in project.warnings.drain(..) {
+        tracing::warn!("{warning}");
+    }
+    Ok(Some(project))
+}
+
+/// Gives each script in `health` its process: its command, started in the dbt project's
+/// directory, with the artifacts it may read.
+fn run_scripts_here(
+    health: &mut ods_health::HealthSettings,
+    settings: &StateSettings,
+    artifacts: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    let scripts = health.script_definitions();
+    if scripts.is_empty() {
+        return Ok(());
+    }
+    let root = script_root(settings);
+    for script in scripts {
+        let check = ods_provider_process::ScriptCheck::new(
+            &script.id,
+            script.command.clone(),
+            &root,
+            script.timeout,
+        )
+        .with_params(script.params.clone())
+        .with_artifacts(artifacts.clone());
+        health
+            .run_script_with(&script.id, Arc::new(check))
+            .map_err(|e| CliError::new(ExitStatus::Config, codes::HEALTH_CONFIG, e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// What probe checks run through: dbt, on `[health.probes]`'s target (ADR-0030 §4c).
 /// `None` when no probe is configured, or no target is: probes never borrow the build's
 /// own target, which can write. Each node is probed only on the relation its build
@@ -182,6 +319,7 @@ fn probe_connection(
     settings: &StateSettings,
     health: &ods_health::HealthSettings,
     manifest: &ods_provider_dbt::Manifest,
+    project: Option<&super::plugin_process::ProjectPlugins>,
 ) -> Result<Option<ProbeConnection>, CliError> {
     if health.probe_definitions().is_empty() {
         return Ok(None);
@@ -189,6 +327,9 @@ fn probe_connection(
     let Some(probes) = config.config.health.probes.as_ref() else {
         return Ok(None);
     };
+    if let Some(plugin) = probes.plugin.as_deref() {
+        return plugin_probes(probes, plugin, manifest, project).map(Some);
+    }
     let Some(target) = probes.target.as_deref() else {
         return Ok(None);
     };
@@ -222,6 +363,46 @@ fn probe_connection(
         .labelled(label)
         .expecting(relations),
     ))
+}
+
+/// Probes through the plugin `plugin`, over its own connection (ADR-0031 §3d): its
+/// `privileges` report what the login it probes with may do, so the login checked is
+/// the login probed; without it, every probe needs `--allow-elevated-login`.
+///
+/// # Errors
+/// `target` or `profile` is set too, or the plugin doesn't run here, serves another
+/// warehouse, or doesn't probe (exit 4).
+fn plugin_probes(
+    probes: &ods_config::HealthProbesConfig,
+    plugin: &str,
+    manifest: &ods_provider_dbt::Manifest,
+    project: Option<&super::plugin_process::ProjectPlugins>,
+) -> Result<ProbeConnection, CliError> {
+    let config_error =
+        |message: String| CliError::new(ExitStatus::Config, codes::HEALTH_CONFIG, message);
+    if probes.target.is_some() || probes.profile.is_some() {
+        return Err(config_error(
+            "health.probes: `plugin` and `target` (or `profile`) are two places for probes to run; set one".to_owned(),
+        ));
+    }
+    let probe = project
+        .ok_or_else(|| format!("no `[plugins.{plugin}]` is declared"))
+        .and_then(|p| p.probe(plugin, manifest.adapter_type.as_deref()))
+        .map_err(|why| config_error(format!("health.probes.plugin: {why}")))?;
+    let relations = manifest
+        .nodes
+        .iter()
+        .filter_map(|n| Some((n.unique_id.clone(), n.relation_name.clone()?)))
+        .collect();
+    let probe = Arc::new(probe);
+    let connection = if probe.reports_privileges() {
+        ProbeConnection::new(probe)
+    } else {
+        ProbeConnection::without_privileges(probe)
+    };
+    Ok(connection
+        .labelled(format!("plugin `{plugin}`"))
+        .expecting(relations))
 }
 
 /// One node that isn't healthy, or every node in JSON.
@@ -270,9 +451,17 @@ pub(super) struct CheckReport {
 }
 
 impl CheckReport {
-    pub(super) fn build(args: &ArgMatches, config: &Loaded) -> Result<Self, CliError> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one check, in order: the project, its plugins, the checks, probes, the record"
+    )]
+    pub(super) fn build(
+        args: &ArgMatches,
+        config: &Loaded,
+        options: CheckOptions,
+    ) -> Result<Self, CliError> {
         let mut health = super::serve_dashboard::health_settings(config)?;
-        let strict = args.get_flag("strict");
+        let strict = options.strict;
         let settings = StateSettings::resolve(args, config)?;
         // Source freshness results as the dashboard reads them (`--sources`, else
         // `<target-dir>/sources.json`), so coverage is judged on the same evidence.
@@ -296,25 +485,51 @@ impl CheckReport {
         };
         let last_builds =
             super::serve_catalog::last_builds(latest.as_ref(), &runs_index, &ws.manifest);
+        let artifacts = check_artifacts(&ws);
+        // Out-of-process plugins: their checks, and their warehouse's links, asked now and
+        // kept for the dashboard unless `--no-record` (ADR-0031 §5, §3d).
+        let keep = options
+            .record
+            .then_some((ws.state_db.as_path(), scope.as_str()));
+        let project = with_plugins(
+            options.allow_scripts,
+            config,
+            &artifacts,
+            keep,
+            &ws.manifest,
+        )?;
+        if let Some(project) = &project {
+            health = super::serve_dashboard::health_settings_with(config, project.plugins())?;
+        }
         let links = Links::new(
             ws.manifest.adapter_type.as_deref(),
-            &LinkSettings::read(config),
+            &LinkSettings::read(config).with_plugins(project.as_ref().map(|p| p.plugins().clone())),
         );
         let catalog =
             super::serve_catalog::catalog(&ws.manifest, &ws.target_dir, last_builds, &links);
-        // Where probes connect, as far as configuration decides it, is part of what is
-        // trusted (ADR-0030 §4d).
-        health.pin_probe_connection(&probe_pins(&settings));
+        // Where probes connect and scripts run, and the files scripts run, are part of
+        // what is trusted (ADR-0030 §4d).
+        pin_checks(&mut health, &settings);
         // Probe SQL again in the project's own dialect, then trust (ADR-0030 §4a, §4b).
-        super::serve_dashboard::check_probe_sql(
+        super::serve_dashboard::check_probe_sql_with(
+            super::plugin_process::plugins_of(project.as_ref()),
             &mut health,
             ws.manifest.adapter_type.as_deref(),
             &config.config.warehouses,
         )?;
-        super::health_trust::apply(&mut health, config, args.get_flag("allow-scripts"));
-        let allow_elevated_login = args.get_flag("allow-elevated-login");
-        if let Some(connection) = probe_connection(args, config, &settings, &health, &ws.manifest)?
-        {
+        super::health_trust::apply(&mut health, config, options.allow_scripts);
+        // Scripts run here and only here, each as a process in the project's root
+        // (ADR-0030 §4; ADR-0031 §6): the dashboard reads their findings from the record.
+        run_scripts_here(&mut health, &settings, &artifacts)?;
+        let allow_elevated_login = options.allow_elevated_login;
+        if let Some(connection) = probe_connection(
+            args,
+            config,
+            &settings,
+            &health,
+            &ws.manifest,
+            project.as_ref(),
+        )? {
             health = health
                 .with_probe_connection(connection.allowing_elevated_login(allow_elevated_login));
         }
@@ -327,7 +542,7 @@ impl CheckReport {
             ods_web::health::project_coverage(&catalog, &super::serve_catalog::freshness(&ws));
         let report: HealthReport = block_on(health.run(&check_scope, ods_health::CHECK_TIMEOUT))?
             .with_coverage(health.coverage(&measured));
-        let recorded = if args.get_flag("no-record") || !ws.state_db.is_file() {
+        let recorded = if !options.record || !ws.state_db.is_file() {
             None
         } else {
             Some(write_record(
@@ -464,6 +679,132 @@ impl CheckReport {
     }
 }
 
+/// What `[health] after_run` found after a build that succeeded (ADR-0030 §6), for the
+/// build's report. It never changes the build's exit status: the build is recorded
+/// already, and `ods health check` is the gate.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub(super) enum AfterRun {
+    /// The checks ran.
+    Checked {
+        /// How many nodes have each health.
+        counts: BTreeMap<Health, usize>,
+        /// The nodes failing a check at severity `error`, by id.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failing: Vec<String>,
+        /// Coverage targets at severity `error` that aren't met.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        missed: Vec<String>,
+        /// Where the findings were recorded.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recorded: Option<PathBuf>,
+    },
+    /// The checks couldn't run, e.g. a project's plugin isn't trusted yet; no record
+    /// was written, so the dashboard keeps the last one.
+    NotChecked {
+        /// Why, as `ods health check` would say.
+        message: String,
+        /// Its next step, if it has one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hint: Option<String>,
+    },
+}
+
+impl AfterRun {
+    /// Runs every enabled check as `ods health check` would on the build's own
+    /// arguments, with the build's `--allow-scripts`, and records the findings.
+    pub(super) fn check(args: &ArgMatches, config: &Loaded, allow_scripts: bool) -> Self {
+        match CheckReport::build(args, config, CheckOptions::after_run(allow_scripts)) {
+            Ok(report) => {
+                let failing = report
+                    .nodes
+                    .iter()
+                    .filter(|n| {
+                        n.findings
+                            .iter()
+                            .any(|f| report.fails(f.severity, f.status))
+                    })
+                    .map(|n| n.id.clone())
+                    .collect();
+                let missed = report
+                    .coverage
+                    .iter()
+                    .filter(|c| report.fails(c.severity, c.status))
+                    .map(|c| c.measure.clone())
+                    .collect();
+                Self::Checked {
+                    counts: report.counts,
+                    failing,
+                    missed,
+                    recorded: report.recorded,
+                }
+            }
+            Err(error) => Self::NotChecked {
+                message: error.message,
+                hint: error.hint,
+            },
+        }
+    }
+
+    /// One line for the build's report.
+    pub(super) fn notice(&self) -> ViewNode {
+        match self {
+            Self::Checked {
+                counts,
+                failing,
+                missed,
+                recorded,
+            } => {
+                let tally = HEALTHS
+                    .iter()
+                    .map(|h| format!("{} {}", counts.get(h).copied().unwrap_or(0), h.key()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut message = format!("health checked: {tally}");
+                if !failing.is_empty() {
+                    let _ = write!(
+                        message,
+                        "; failing at severity error: {}",
+                        failing.join(", ")
+                    );
+                }
+                if !missed.is_empty() {
+                    let _ = write!(
+                        message,
+                        "; coverage targets missed at severity error: {}",
+                        missed.join(", ")
+                    );
+                }
+                if recorded.is_some() {
+                    message.push_str("; recorded for the dashboard");
+                }
+                if !failing.is_empty() || !missed.is_empty() {
+                    message.push_str(" (`ods health check` shows why, and gates)");
+                }
+                ViewNode::Notice {
+                    level: if failing.is_empty() && missed.is_empty() {
+                        Level::Info
+                    } else {
+                        Level::Warning
+                    },
+                    message: vec![Span::plain(message)],
+                }
+            }
+            Self::NotChecked { message, hint } => ViewNode::Notice {
+                level: Level::Warning,
+                message: vec![Span::plain(match hint {
+                    Some(hint) => format!(
+                        "health not checked: {message} ({hint}); the build is recorded, and the dashboard keeps the last health record"
+                    ),
+                    None => format!(
+                        "health not checked: {message}; the build is recorded, and the dashboard keeps the last health record"
+                    ),
+                })],
+            },
+        }
+    }
+}
+
 /// What the last run kept beside the store says failed, if it ran for `scope` and says.
 fn last_failures(ws: &Workspace, scope: &str) -> Option<LastFailures> {
     let (_, last) = super::state_retry::peek(&ws.state_db)?;
@@ -492,6 +833,8 @@ fn source(source: CheckSource) -> &'static str {
     match source {
         CheckSource::Builtin => "built-in",
         CheckSource::Declarative => "declared",
+        CheckSource::Probe => "probe",
+        CheckSource::Script => "script",
         _ => "plugin",
     }
 }

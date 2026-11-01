@@ -48,7 +48,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use ods_core::SchemaVersion;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::contracts::changes::RequestedSource;
 use crate::error::ProviderError;
@@ -87,9 +87,11 @@ fn identifier(what: &str, name: &str) -> Result<String, InvalidProbe> {
     }
 }
 
-/// A statement to run against each relation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// A statement to run against each relation. Read from JSON (an out-of-process
+/// plugin's request, ADR-0031 §3d) only through [`new`](Self::new) or
+/// [`by_name`](Self::by_name), so it is checked as when built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "StatementFields")]
 pub struct ProbeStatement {
     template: String,
     columns: Vec<String>,
@@ -97,6 +99,28 @@ pub struct ProbeStatement {
     /// rather than the relation itself ([`PLACEHOLDER`]).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     by_name: bool,
+}
+
+/// A [`ProbeStatement`] as JSON gives it, before it is checked.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct StatementFields {
+    template: String,
+    columns: Vec<String>,
+    #[serde(default)]
+    by_name: bool,
+}
+
+impl TryFrom<StatementFields> for ProbeStatement {
+    type Error = InvalidProbe;
+
+    fn try_from(fields: StatementFields) -> Result<Self, InvalidProbe> {
+        if fields.by_name {
+            Self::by_name(fields.template, fields.columns)
+        } else {
+            Self::new(fields.template, fields.columns)
+        }
+    }
 }
 
 /// The placeholders a [by-name](ProbeStatement::by_name) statement names its
@@ -208,7 +232,7 @@ fn columns_of(
 }
 
 /// A node whose relation to probe: a source, model, seed or snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct ProbeTarget {
@@ -218,7 +242,7 @@ pub struct ProbeTarget {
     pub name: String,
     /// The relation the caller expects, as the project's artifacts name it (e.g.
     /// `"db"."main"."orders"`), if it knows: the implementation probes nothing else.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relation: Option<String>,
 }
 
@@ -247,9 +271,10 @@ impl From<&RequestedSource> for ProbeTarget {
     }
 }
 
-/// Which relations the statements run against.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// Which relations the statements run against. Read from JSON only through
+/// [`kinds`](Self::kinds) and [`with_format`](Self::with_format).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "FilterFields")]
 pub struct ProbeFilter {
     kinds: Vec<String>,
     format: Option<String>,
@@ -294,9 +319,31 @@ impl ProbeFilter {
     }
 }
 
-/// What to run, and against which relations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// A [`ProbeFilter`] as JSON gives it, before it is checked.
+#[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
+struct FilterFields {
+    kinds: Vec<String>,
+    #[serde(default)]
+    format: Option<String>,
+}
+
+impl TryFrom<FilterFields> for ProbeFilter {
+    type Error = InvalidProbe;
+
+    fn try_from(fields: FilterFields) -> Result<Self, InvalidProbe> {
+        let filter = Self::kinds(fields.kinds)?;
+        match fields.format {
+            Some(format) => filter.with_format(format),
+            None => Ok(filter),
+        }
+    }
+}
+
+/// What to run, and against which relations. Read from JSON only through
+/// [`new`](Self::new); its `timeout` is `{"secs": …, "nanos": …}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RequestFields")]
 pub struct ProbeRequest {
     filter: ProbeFilter,
     statements: Vec<ProbeStatement>,
@@ -343,12 +390,34 @@ impl ProbeRequest {
     }
 }
 
+/// A [`ProbeRequest`] as JSON gives it, before it is checked.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RequestFields {
+    filter: ProbeFilter,
+    statements: Vec<ProbeStatement>,
+    #[serde(default)]
+    timeout: Option<Duration>,
+}
+
+impl TryFrom<RequestFields> for ProbeRequest {
+    type Error = InvalidProbe;
+
+    fn try_from(fields: RequestFields) -> Result<Self, InvalidProbe> {
+        let request = Self::new(fields.filter, fields.statements)?;
+        Ok(match fields.timeout {
+            Some(timeout) => request.with_timeout(timeout),
+            None => request,
+        })
+    }
+}
+
 /// One statement's first row: column → value, without the columns that were missing
 /// or null.
 pub type ProbeRow = BTreeMap<String, String>;
 
 /// What probing one target's relation found.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ProbeAnswer {
@@ -361,7 +430,7 @@ pub enum ProbeAnswer {
 }
 
 /// What [`RelationProbe::probe`] found.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub struct ProbeReport {

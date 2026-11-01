@@ -1561,6 +1561,181 @@ mod journals {
     }
 
     #[test]
+    fn the_threads_tab_draws_each_thread_and_the_critical_path() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let view = dashboard.run_view(true, RUN_3, &BTreeMap::new()).unwrap();
+        let t = &view.threads;
+        assert_eq!(t.untimed, None);
+        assert_eq!(
+            t.span_ms,
+            Some(6_000),
+            "the run's length, not its last bar's"
+        );
+        assert_eq!(t.threads.len(), 1);
+        let row = &t.threads[0];
+        assert_eq!(row.thread, "Thread-1");
+        let bars: Vec<(&str, u64, u64)> = row
+            .bars
+            .iter()
+            .map(|b| (b.node.as_str(), b.start_ms, b.end_ms))
+            .collect();
+        assert_eq!(
+            bars,
+            [
+                ("model.customers", 500, 4_700),
+                ("model.customers_view", 4_800, 5_900)
+            ]
+        );
+        assert_eq!(row.busy_ms, 5_300);
+        assert_eq!(row.gaps, [(0, 500), (4_700, 4_800), (5_900, 6_000)]);
+        assert_eq!(row.idle_ms, 700);
+        // The view waited on customers, which finished last of its parents.
+        let path: Vec<&str> = t.critical_path.iter().map(|n| n.node.as_str()).collect();
+        assert_eq!(path, ["model.customers", "model.customers_view"]);
+        assert!(row.bars.iter().all(|b| b.critical));
+        assert_eq!(t.critical_took.as_deref(), Some("5.3s"));
+        assert!(!t.critical_inferred, "the run's snapshot records both");
+
+        let addr = start(dashboard);
+        let (status, page) = get(addr, &format!("/state/runs/{RUN_3}?tab=threads"));
+        assert_eq!(status, 200);
+        let run = RUN_3.replace('-', "%2D");
+        for expected in [
+            format!(
+                r#"<a class="st-tab" href="{run}?tab=threads" aria-current="page">Threads</a>"#
+            ),
+            format!(r#"<a class="st-tab" href="{run}?tab=nodes">Nodes</a>"#),
+            r#"<g class="th-row" data-thread="Thread-1">"#.to_owned(),
+            "busy 5.3s · idle 700ms".to_owned(),
+            r#"class="th-bar built critical""#.to_owned(),
+            r#"<rect class="th-gap""#.to_owned(),
+            // A bar opens the replay at the node's start, with the node selected.
+            format!(
+                r#"<a class="th-link" href="../../lineage?replay={run}&amp;t=0.5&amp;node=model%2Ecustomers" data-node="model.customers">"#
+            ),
+            "<strong>Critical path:</strong>".to_owned(),
+            "· 5.3s of the run's 6.0s".to_owned(),
+        ] {
+            assert!(page.contains(&expected), "{expected}\n{page}");
+        }
+    }
+
+    #[test]
+    fn a_failed_run_by_thread_has_no_bar_for_the_node_that_never_ran() {
+        let (dashboard, _) = dashboard(Duration::from_secs(5));
+        let view = dashboard.run_view(true, RUN_4, &BTreeMap::new()).unwrap();
+        let t = &view.threads;
+        let bars: Vec<(&str, &str)> = t
+            .threads
+            .iter()
+            .flat_map(|r| r.bars.iter().map(|b| (r.thread.as_str(), b.node.as_str())))
+            .collect();
+        assert_eq!(bars.len(), 2, "{bars:?}");
+        assert!(
+            !bars.iter().any(|(_, n)| *n == "model.orders_view"),
+            "skipped: no bar"
+        );
+        assert!(t.finishes_only.is_empty(), "skipped isn't a finish either");
+        // The failed node finished last: it alone is the path.
+        let path: Vec<&str> = t.critical_path.iter().map(|n| n.node.as_str()).collect();
+        assert_eq!(path, ["model.orders"]);
+        assert!(
+            t.critical_inferred,
+            "the run recorded no snapshot: its dependencies are the project's now"
+        );
+        let addr = start(dashboard);
+        let (_, page) = get(addr, &format!("/state/runs/{RUN_4}?tab=threads"));
+        assert!(page.contains(r#"class="th-bar failed critical""#), "{page}");
+        assert!(page.contains(
+            r#"<span class="st-grade inferred" title="The run recorded no dependencies"#
+        ));
+    }
+
+    #[test]
+    fn a_node_its_snapshot_kept_from_an_earlier_build_makes_the_path_inferred() {
+        // Run 3 failed customers_view, so snapshot 3 keeps run 2's build of it, and
+        // the parents run 2 recorded, not run 3's.
+        let mut snapshots = snapshots();
+        let mut kept = node("select *", RUN_2, "2026-09-29T00:01:03Z");
+        kept.parents.insert("model.customers".into(), RUN_2.into());
+        snapshots[0]
+            .1
+            .nodes
+            .insert("model.customers_view".into(), kept);
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        run_3(&dir);
+        let history = History::new(snapshots).with_journals(Journals::in_dir(&dir));
+        let view = recorded(history, plan())
+            .run_view(true, RUN_3, &BTreeMap::new())
+            .unwrap();
+        let t = &view.threads;
+        assert_eq!(
+            t.critical_path.last().map(|n| n.node.as_str()),
+            Some("model.customers_view")
+        );
+        assert!(t.critical_inferred, "{t:?}");
+    }
+
+    #[test]
+    fn a_journal_rebuilt_from_final_results_gets_no_bar() {
+        const REBUILT: &str = "7d21a0c4-0000-4000-8000-0000000000aa";
+        let dir = tempfile::tempdir().unwrap().keep().join("state.db.runs");
+        write(
+            &dir,
+            REBUILT,
+            &[
+                event(
+                    REBUILT,
+                    SCOPE,
+                    "2026-09-29T00:07:00.000Z",
+                    RunEventKind::RunStarted {
+                        nodes: vec!["model.orders".into()],
+                        mode: ExecutionMode::Build,
+                        live: false,
+                    },
+                ),
+                // Even with both times, a rebuilt journal's node gets no bar.
+                finished(
+                    REBUILT,
+                    "2026-09-29T00:07:02.000Z",
+                    "model.orders",
+                    NodeRunStats::new(NodeRunStatus::Success).with_times(
+                        Some(ms("2026-09-29T00:07:00.500Z")),
+                        Some(ms("2026-09-29T00:07:02.000Z")),
+                    ),
+                ),
+                ended(REBUILT, "2026-09-29T00:07:03.000Z", Ended::Succeeded),
+            ],
+            "",
+        );
+        let history = History::new(snapshots()).with_journals(Journals::in_dir(&dir));
+        let dashboard = recorded(history, plan());
+        let view = dashboard.run_view(true, REBUILT, &BTreeMap::new()).unwrap();
+        let t = &view.threads;
+        assert!(t.threads.is_empty(), "{t:?}");
+        assert!(t.critical_path.is_empty(), "{t:?}");
+        assert!(
+            t.untimed
+                .as_deref()
+                .unwrap()
+                .contains("rebuilt from its final results"),
+            "{t:?}"
+        );
+        let finishes: Vec<(&str, Option<u64>)> = t
+            .finishes_only
+            .iter()
+            .map(|f| (f.node.as_str(), f.end_ms))
+            .collect();
+        assert_eq!(finishes, [("model.orders", Some(2_000))]);
+        let addr = start(dashboard);
+        let (_, page) = get(addr, &format!("/state/runs/{REBUILT}?tab=threads"));
+        assert!(!page.contains(r#"class="th-bar"#), "{page}");
+        assert!(page.contains("Finishes only"));
+        assert!(page.contains(r#"<li data-node="model.orders">"#));
+        assert!(page.contains("finished +2.0s"));
+    }
+
+    #[test]
     fn a_failed_run_that_recorded_nothing_has_its_own_page() {
         let (dashboard, _) = dashboard(Duration::from_secs(5));
         let view = dashboard.run_view(true, RUN_4, &BTreeMap::new()).unwrap();

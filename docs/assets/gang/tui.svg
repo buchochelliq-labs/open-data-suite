@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 190" role="img" aria-labelledby="t">
+  <title id="t">Tui, a small purple elephant, Memo's daughter, with a teal bow</title>
+  <!-- Tui: Memo's daughter. Small, curious, and always asking "but why?" -->
+  <ellipse cx="96" cy="176" rx="66" ry="7" fill="#000" opacity=".08"/>
+  <path d="M42 108 q-12 4 -10 18" fill="none" stroke="#8b5cf6" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="32" cy="128" r="4" fill="#5b21b6"/>
+  <rect x="52" y="128" width="22" height="42" rx="11" fill="#8b5cf6"/>
+  <rect x="104" y="128" width="22" height="42" rx="11" fill="#8b5cf6"/>
+  <ellipse cx="88" cy="116" rx="50" ry="38" fill="#a78bfa"/>
+  <rect x="70" y="134" width="22" height="38" rx="11" fill="#a78bfa"/>
+  <rect x="120" y="130" width="22" height="42" rx="11" fill="#a78bfa"/>
+  <g fill="#f5f3ff"><rect x="74" y="164" width="6" height="4" rx="2"/><rect x="83" y="164" width="6" height="4" rx="2"/>
+  <rect x="124" y="164" width="6" height="4" rx="2"/><rect x="133" y="164" width="6" height="4" rx="2"/></g>
+  <!-- a big head: she's little -->
+  <circle cx="142" cy="80" r="40" fill="#a78bfa"/>
+  <!-- trunk, curled up in a question mark -->
+  <path d="M172 96 q16 6 14 -10 q-2 -14 -14 -10" fill="none" stroke="#a78bfa" stroke-width="13" stroke-linecap="round"/>
+  <path d="M130 50 q-42 -4 -42 32 q0 34 34 34 q18 0 20 -20 z" fill="#c4b5fd"/>
+  <path d="M126 62 q-26 0 -26 22 q0 22 22 22 q10 0 12 -12 z" fill="#ede9fe"/>
+  <!-- teal bow -->
+  <g transform="translate(140 40) rotate(-12)">
+    <path d="M0 0 l-16 -10 v20 z M0 0 l16 -10 v20 z" fill="#14b8a6"/><circle r="5" fill="#0f766e"/>
+  </g>
+  <circle cx="156" cy="74" r="7" fill="#2e1065"/><circle cx="159" cy="71" r="2.4" fill="#fff"/>
+  <circle cx="166" cy="94" r="6" fill="#f472b6" opacity=".5"/>
+  <path d="M152 100 q6 6 12 1" fill="none" stroke="#2e1065" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

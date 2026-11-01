@@ -230,6 +230,75 @@ expression: pretty(&body)
   "scope": "jaffle_ods/dev",
   "started_at": "2026-09-29T00:04:10Z",
   "state_rule": "This run recorded no snapshot (inferred: no listed snapshot has its id). Snapshot 3 was the last good state when it ran. A failed run never replaces the last good state; its successful builds, if any, weren't recorded.",
+  "threads": {
+    "critical_inferred": true,
+    "critical_path": [
+      {
+        "name": "orders",
+        "node": "model.orders"
+      }
+    ],
+    "critical_took": "3.6s",
+    "finishes_only": [],
+    "span_ms": 4000,
+    "threads": [
+      {
+        "bars": [
+          {
+            "critical": true,
+            "end_ms": 3800,
+            "name": "orders",
+            "node": "model.orders",
+            "start_ms": 200,
+            "status": "error",
+            "status_label": "failed",
+            "took": "3.6s"
+          }
+        ],
+        "busy_ms": 3600,
+        "gaps": [
+          [
+            0,
+            200
+          ],
+          [
+            3800,
+            4000
+          ]
+        ],
+        "idle_ms": 400,
+        "thread": "Thread-1 [value removed]"
+      },
+      {
+        "bars": [
+          {
+            "critical": false,
+            "end_ms": 1500,
+            "name": "model.payments",
+            "node": "model.payments",
+            "start_ms": 300,
+            "status": "success",
+            "status_label": "built",
+            "took": "1.2s"
+          }
+        ],
+        "busy_ms": 1200,
+        "gaps": [
+          [
+            0,
+            300
+          ],
+          [
+            1500,
+            4000
+          ]
+        ],
+        "idle_ms": 2800,
+        "thread": "Thread-2"
+      }
+    ],
+    "untimed": null
+  },
   "timeline": [
     {
       "built": false,

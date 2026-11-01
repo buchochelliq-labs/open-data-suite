@@ -123,7 +123,7 @@ jobs:
   docs-media:
     runs-on: ubuntu-latest
     env:
-      RICH_VERSION: 0.0.13
+      RICH_VERSION: 0.0.20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -171,6 +171,16 @@ jobs:
       # The Settings page (#351) in Chromium, light and dark, with no secret shown.
       - name: Settings page in a browser
         run: python crates/ods-web/tests/browser/settings.py -v
+      # The Run page's Threads tab (#355) in Chromium, on the board's demo run: the
+      # bars, the critical path, and a bar opening the replay; light and dark.
+      - name: Run threads in a browser
+        run: python crates/ods-web/tests/browser/threads.py -v
+      # The Semantic layer page (#352) in Chromium, with and without one; light and dark.
+      - name: Semantic layer in a browser
+        run: python crates/ods-web/tests/browser/semantic.py -v
+      # Contrast on every screen, light and dark (#353): WCAG AA for text, 3:1 for marks.
+      - name: Contrast on every screen
+        run: python crates/ods-web/tests/browser/contrast.py -v
 
   # A custom `ods` built from a crate outside the workspace, as a third party's would
   # be (ADR-0031 §2, #387): its plugins pass the conformance suites, and the binary

@@ -166,18 +166,18 @@ pub(super) fn warehouse(plugin: &dyn WarehousePlugin, builtin: bool) -> Detected
     Detected {
         name: plugin.warehouse().to_owned(),
         kind: PluginKind::Warehouse,
-        from: format!("{} {}", origin.name, origin.version),
+        from: origin.to_string(),
         builtin,
         features,
     }
 }
 
 /// What a health check plugin offers: itself.
-pub(super) fn check(check: &dyn HealthCheck, origin: Origin, builtin: bool) -> Detected {
+pub(super) fn check(check: &dyn HealthCheck, origin: &Origin, builtin: bool) -> Detected {
     Detected {
         name: check.describe().id,
         kind: PluginKind::HealthCheck,
-        from: format!("{} {}", origin.name, origin.version),
+        from: origin.to_string(),
         builtin,
         features: vec![Feature::new("health_check", Some(HEALTH_CHECK))],
     }

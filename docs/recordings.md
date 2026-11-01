@@ -20,7 +20,7 @@ Bitstream Vera and CC BY 4.0 licences, which is why it isn't linked into the wor
 Install the `rich` CLI once, outside the repository, then record:
 
 ```sh
-cargo install rs-rich-cli --version 0.0.13 --locked
+cargo install rs-rich-cli --version 0.0.20 --locked
 scripts/record-docs.sh                    # every tape
 scripts/record-docs.sh state-build        # one tape
 scripts/record-docs.sh --check            # compare with what is committed; writes nothing
@@ -117,6 +117,13 @@ masked).
 `expect` that isn't on the page, or a still whose text differs fails. The `.webm`
 video (`--webm`) isn't committed.
 
+Versions (as the About page shows them) are masked too.
+
+The `dark` tour (`dark.toml`) visits every screen in dark mode with a still of each (#353),
+including the live view, the replay and the Run page of a simulated run.
+
 CI (`docs-media` in `.github/workflows/ci.yml`) runs both checks on Linux, then the
-live run view's browser tests (`crates/ods-web/tests/browser/live_view.py`), which use
-the same Playwright, Chromium and simulated run.
+dashboard's browser tests (`crates/ods-web/tests/browser/*.py`), which use the same
+Playwright and Chromium. They include:
+- the live run view (`live_view.py`), with the same simulated run;
+- the contrast check on every screen, light and dark (`contrast.py`).

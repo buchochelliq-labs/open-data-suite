@@ -537,8 +537,8 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
     assert_eq!(status, 200);
     assert!(head.contains("content-type: text/html"), "{head}");
     assert!(head.contains("content-security-policy: default-src 'none'"));
-    // The nav: Catalog is a link, with Models current, Freshness evidence (#350) a link,
-    // and the semantic layer planned.
+    // The nav: Catalog is a link, with Models current, and Freshness evidence (#350)
+    // and the Semantic layer (#352) links.
     assert!(
         page.contains(r#"<a href="catalog" aria-current="page" data-section="catalog">"#),
         "{page}"
@@ -551,7 +551,8 @@ fn the_catalog_page_shows_every_node_in_the_shell() {
         "{page}"
     );
     assert!(
-        page.contains(r#"data-item="semantic">Semantic layer<span class="chip">Planned</span>"#)
+        page.contains(r#"<a href="catalog/semantic" data-item="semantic">Semantic layer</a>"#),
+        "{page}"
     );
     assert!(
         page.contains(r#"<span class="crumb-here">Models</span>"#),

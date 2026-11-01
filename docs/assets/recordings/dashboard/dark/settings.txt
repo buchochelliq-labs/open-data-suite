@@ -1,0 +1,115 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Configuration
+About
+Local · read-only
+Settings
+read-only view of the configuration
+Settings
+No configuration file: built-in defaults, the environment and flags apply. Change them in the files or the environment; the dashboard never writes configuration.
+Project and target
+[providers.*.settings]
+Project dir
+not set
+providers.<dbt>.settings.project_dir
+Profile
+not set
+providers.<dbt>.settings.profile
+Target
+not set
+providers.<dbt>.settings.target
+Profiles dir
+not set
+providers.<dbt>.settings.profiles_dir
+Artifacts
+target
+providers.<dbt>.settings.target_dir · default
+dbt program
+dbt
+providers.<dbt>.settings.program · default
+State store
+[state]
+Database
+.ods/state.db
+state.db · default
+Environment
+default
+state.environment · default
+Secrets
+references only
+No credential is configured here.
+Values are never stored or shown. ODS keeps the reference; the value is read from where it points only when a command needs it, and never written to state, events or logs.
+Providers
+[providers.*]
+None configured: the defaults apply.
+Planners choose by capability, never by provider name.
+Effective configuration
+ods config explain
+Key	Value	Source
+output.format	"plain"	flag --output
+Checks
+ods doctor
+The checks that only read: the configuration, the project's files and the state store. ods doctor also checks the tools, the target and, with --connect, the warehouse.
+OK
+config.load
+no configuration file: built-in defaults apply
+OK
+config.values
+1 value(s) set
+OK
+config.resolution
+where ODS finds the project, dbt and the state
+OK
+project.dbt_project
+found `./dbt_project.yml`
+OK
+project.manifest
+manifest.json schema v12, written by dbt <version>
+OK
+project.name
+project `jaffle_ods`
+OK
+project.freshness
+the manifest is newer than every project file
+OK
+state_store.database
+sound
+OK
+capabilities.relation_existence
+a build is reused only after checking its relation still exists
+OK
+capabilities.relation_versions
+no table versions, and none needed: the project has no sources
+OK
+capabilities.plugins
+this `ods` has the built-in plugins only
+Server mode
+PLANNED
+Not in ods serve today; nothing here can be turned on.
+Identity & access
+PLANNED
+Sign-in and roles for a shared server. Local ods serve needs neither.
+Webhooks
+PLANNED
+Event sinks that post run and plan events to a URL you choose.
+Audit log
+PLANNED
+An event sink recording who ran or exported what, and when.
+Webhooks and the audit log are event sinks on the same event stream the CLI already emits, not a second record.

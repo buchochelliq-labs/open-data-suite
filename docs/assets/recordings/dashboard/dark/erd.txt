@@ -1,0 +1,104 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Local · read-only
+ERD
+Relationships only. Lineage edges are on the lineage graph.
+Select entities
+Depth
+Entities without relationships
+Apply
+Inferred edges
+All columns
+Fit
+Export SVG
+JSON
+?
+?
+1
+customer_order_rank
+table
+amount
+PK
+customer_id
+FK
+order_id
+PK
+order_seq
+running_amount
+customers
+table
+PK
+customer_id
+lifetime_value
+orders
+table
+amount
+bank_transfer_amount
+coupon_amount
+credit_card_amount
+FK
+customer_id
+gift_card_amount
+order_date
+PK
+order_id
+status
+stg_customers
+view
+columns unknown
+stg_orders
+view
+PK
+order_id
+stg_payments
+view
+FK
+order_id
+PK
+payment_id
+Edge evidence
+tested
+declared constraint
+joined in SQL
+inferred
+One edge per relationship, by its strongest evidence: declared, then tested, joined, inferred. Inferred edges come only from matching names.
+Cardinality
+exactly one (a key, never null)
+zero or one (a key, may be null)
+many
+?
+unknown: no key on that side
+PK
+tested key
+PK
+declared key
+PK
+inferred key
+Every relationship (4)
+Missing relationships
+Keys used together, or named alike, with no relationship test. Add the test to make the edge tested.
+1
+orders ↔ stg_customers
+joined
+On customer_id: joined in customers, not tested. Neither side is a known key, so which side references which isn't known; test a key first. Cardinality unknown: the referenced columns aren't a tested or declared key.
+Already tested (3)
+customer_order_rank.order_id → orders (declared)
+orders.customer_id → customers
+stg_payments.order_id → stg_orders

@@ -1,0 +1,137 @@
+# Every screen in dark mode (#353), each with a still, so `--check` catches a dark-mode
+# regression on any of them. The Plan and its Why panel have their own dark tour
+# (plan.toml). The run is the live-run board's demo run, written to its journal by
+# scripts/ods_live_sim.py as the tour goes: watched live, then replayed, then its page.
+title = "Every screen, dark"
+theme = "dark"
+live_run = "7f2f6c69-0000-4000-8000-000000000353"
+live_scope = "jaffle_ods/default"
+
+[[step]]
+run = 0.4
+goto = "/"
+caption = "Home, in dark mode: a run is probably in progress"
+expect = ["Run probably in progress"]
+pause = 2400
+still = "home"
+
+[[step]]
+goto = "/catalog"
+caption = "The Catalog"
+expect = ["customers", "orders"]
+pause = 2000
+still = "catalog"
+
+[[step]]
+goto = "/catalog/model.jaffle_ods.customers?tab=columns"
+caption = "A model page: its columns"
+expect = ["lifetime_value"]
+pause = 2000
+still = "model"
+
+[[step]]
+goto = "/catalog/sources"
+caption = "Freshness evidence"
+expect = ["file checksum"]
+pause = 2000
+still = "freshness"
+
+[[step]]
+goto = "/catalog/semantic"
+caption = "The Semantic layer: the demo project declares none"
+expect = ["No semantic layer"]
+pause = 2000
+still = "semantic"
+
+[[step]]
+goto = "/lineage"
+caption = "Lineage with the State overlay"
+expect = ["BUILD", "REUSE"]
+pause = 2400
+still = "lineage"
+
+[[step]]
+click = "rect.hit[aria-label^='customers, model']"
+pause = 1200
+
+[[step]]
+click = "[role=tab]:has-text('Why')"
+caption = "Why customers builds"
+expect = ["upstream code changed"]
+pause = 2400
+still = "lineage-why"
+
+[[step]]
+goto = "/lineage/impact?column=orders.amount&change-0=drop&add=1"
+caption = "The Impact simulator"
+pause = 2400
+still = "impact"
+
+[[step]]
+goto = "/lineage?live=7f2f6c69-0000-4000-8000-000000000353"
+pause = 1200
+
+[[step]]
+run = 6.7
+caption = "The run, live on the DAG"
+expect = ["Following run", "NOW RUNNING"]
+pause = 2400
+still = "live"
+
+[[step]]
+run = 13.3
+caption = "It ends with a failure"
+expect = ["Run finished in"]
+pause = 2000
+
+[[step]]
+goto = "/lineage?replay=7f2f6c69-0000-4000-8000-000000000353&t=7"
+caption = "The same run, replayed at 7 s"
+pause = 2400
+still = "replay"
+
+[[step]]
+goto = "/state/runs"
+caption = "The runs"
+pause = 2000
+still = "runs"
+
+[[step]]
+goto = "/state/runs/7f2f6c69-0000-4000-8000-000000000353"
+caption = "The run: its timeline"
+expect = ["Timeline"]
+pause = 2000
+still = "run"
+
+[[step]]
+goto = "/state/runs/7f2f6c69-0000-4000-8000-000000000353?tab=nodes"
+caption = "Its nodes, the failure explained"
+expect = ["KeyError"]
+pause = 2000
+still = "run-nodes"
+
+[[step]]
+goto = "/state/runs/7f2f6c69-0000-4000-8000-000000000353?tab=threads"
+caption = "Its threads and critical path"
+expect = ["Critical path"]
+pause = 2000
+still = "run-threads"
+
+[[step]]
+goto = "/erd"
+caption = "The ERD"
+pause = 2400
+still = "erd"
+
+[[step]]
+goto = "/settings"
+caption = "Settings"
+expect = ["Effective configuration"]
+pause = 2000
+still = "settings"
+
+[[step]]
+goto = "/settings/about"
+caption = "About"
+pause = 2000
+still = "about"

@@ -1,0 +1,102 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Lineage
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Local · read-only
+jaffle_ods
+/
+Home
+/
+snapshot 3 ·
+<when>
+Run probably in progress
+inferred
+ods state build · <run> · 0 of 7 nodes finished · 1 probably running
+Watch live on the DAG →
+Run page
+Project health
+Last run: <run> · snapshot 3 · recorded
+NODES
+13
+10 models · 3 seeds
+KEPT EARLIER BUILD
+11
+not rebuilt by the last run
+BUILT LAST RUN
+2
+customer_segments and segment_summary
+SNAPSHOTS
+3
+each keeps only successful builds
+Recent runs
+All runs
+Snapshot	Command	Built · kept earlier build	Outcome
+3 · <run>	—
+2 built · 11 kept
+	recorded
+2 · <run>	—
+2 built · 11 kept
+	recorded
+1 · <run>	—
+13 built
+	recorded
+Built
+Kept earlier build
+Needs attention
+Changed
+orders
+Code changed since <run>: sql
+Opaque
+customer_segments
+Python model: column lineage unknown
+The plan builds 6 nodes (ods state plan): 5 upstream code changed · 1 code changed
+Health
+Healthy
+7
+Warning
+6
+Failing
+0
+Unknown
+0
+Stale
+6
+Runs with failures
+1 / 3
+last run: unfinished
+Coverage
+Models with tests
+5 / 10
+5 without
+Models with descriptions
+1 / 10
+9 without
+Models with constraints
+2 / 10
+8 without
+Sources with freshness
+not measured
+Modules
+Lineage (column-level)
+Ready
+State
+Ready
+ERD
+Ready
+Usage
+PLANNED

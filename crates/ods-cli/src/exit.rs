@@ -111,6 +111,11 @@ pub mod codes {
     /// `ods plugin show` names a plugin this `ods` doesn't run with, or one several share
     /// without `--kind` (exit 2).
     pub const PLUGIN_UNKNOWN: &str = "ODS-E0801";
+    /// A `[plugins.<name>]` can't be used: it isn't trusted yet, it can't be started, or
+    /// it didn't describe itself as the protocol says (ADR-0031 §5).
+    pub const PLUGIN_UNAVAILABLE: &str = "ODS-E0802";
+    /// `ods plugin test` found a conformance case the plugin fails (exit 5).
+    pub const PLUGIN_TEST_FAILED: &str = "ODS-E0803";
 }
 
 /// A failure returned by a command. Rendered once, by the framework, in the active

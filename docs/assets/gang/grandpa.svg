@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 240" role="img" aria-labelledby="t">
+  <title id="t">Grandpa, a purple elephant in a flat cap and work overalls, with a big black-grey moustache, a bird on his trunk and a puppy at his feet</title>
+  <!-- Grandpa: Tui's grandpa. First up, last to stop, and kind to every animal he meets. -->
+  <ellipse cx="124" cy="226" rx="96" ry="8" fill="#000" opacity=".08"/>
+  <path d="M46 118 q-16 6 -14 26" fill="none" stroke="#6d28d9" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="32" cy="146" r="5" fill="#3b0764"/>
+  <rect x="58" y="152" width="28" height="62" rx="12" fill="#6d28d9"/>
+  <rect x="132" y="152" width="28" height="62" rx="12" fill="#6d28d9"/>
+  <ellipse cx="114" cy="128" rx="76" ry="54" fill="#7c3aed"/>
+  <!-- denim overalls -->
+  <path d="M52 132 q62 18 124 0 l6 34 q-68 20 -136 0 z" fill="#1d4ed8"/>
+  <path d="M116 104 h44 l4 34 h-50 z" fill="#1d4ed8"/>
+  <path d="M150 84 l10 24 M122 82 l-4 24" stroke="#1d4ed8" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="126" cy="132" r="3.5" fill="#facc15"/><circle cx="160" cy="134" r="3.5" fill="#facc15"/>
+  <!-- a spanner in the pocket -->
+  <rect x="86" y="140" width="22" height="16" rx="3" fill="#1e40af"/>
+  <path d="M94 142 v-14" stroke="#94a3b8" stroke-width="4" stroke-linecap="round"/><circle cx="94" cy="126" r="5" fill="none" stroke="#94a3b8" stroke-width="3"/>
+  <rect x="86" y="158" width="28" height="58" rx="12" fill="#7c3aed"/>
+  <rect x="156" y="154" width="28" height="62" rx="12" fill="#7c3aed"/>
+  <g fill="#ddd6fe"><rect x="90" y="208" width="7" height="5" rx="2"/><rect x="102" y="208" width="7" height="5" rx="2"/>
+  <rect x="160" y="208" width="7" height="5" rx="2"/><rect x="172" y="208" width="7" height="5" rx="2"/></g>
+  <circle cx="190" cy="92" r="44" fill="#7c3aed"/>
+  <!-- trunk held out, with a little bird perched on it -->
+  <path d="M226 112 q26 4 34 -10" fill="none" stroke="#7c3aed" stroke-width="17" stroke-linecap="round"/>
+  <g transform="translate(252 82)">
+    <ellipse cx="0" cy="0" rx="11" ry="8" fill="#38bdf8"/><circle cx="8" cy="-6" r="6" fill="#38bdf8"/>
+    <path d="M13 -6 l6 2 l-6 2 z" fill="#f59e0b"/><circle cx="9" cy="-7" r="1.6" fill="#0f172a"/>
+    <path d="M-10 0 l-8 -4 l2 8 z" fill="#0ea5e9"/>
+  </g>
+  <path d="M176 60 q-48 -6 -48 38 q0 42 42 42 q20 0 22 -26 z" fill="#8b5cf6"/>
+  <path d="M172 72 q-32 -2 -32 28 q0 28 28 28 q12 0 14 -16 z" fill="#c4b5fd"/>
+  <!-- flat cap -->
+  <path d="M152 58 q38 -30 76 -2 q-2 8 -10 8 q-30 -14 -64 0 z" fill="#57534e"/>
+  <path d="M222 60 q16 0 20 8 q-12 2 -24 0 z" fill="#44403c"/>
+  <!-- eye and brow -->
+  <circle cx="206" cy="84" r="5.5" fill="#2e1065"/><circle cx="208" cy="82" r="1.8" fill="#fff"/>
+  <path d="M196 72 q10 -5 20 0" fill="none" stroke="#9ca3af" stroke-width="4" stroke-linecap="round"/>
+  <!-- the big black-grey moustache -->
+  <path d="M196 104 q14 -12 26 -2 q12 -10 24 4 q-10 18 -24 8 q-14 12 -26 -10 z" fill="#27272a"/>
+  <path d="M202 104 q8 -4 14 0 M226 104 q8 -4 14 2" fill="none" stroke="#a1a1aa" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="218" cy="98" r="5" fill="#f472b6" opacity=".4"/>
+  <!-- a puppy who follows him everywhere -->
+  <g transform="translate(232 196)">
+    <ellipse cx="0" cy="0" rx="18" ry="12" fill="#d6a76c"/><circle cx="16" cy="-12" r="11" fill="#d6a76c"/>
+    <path d="M10 -20 q-8 6 -4 16" fill="#92400e"/><circle cx="20" cy="-14" r="2" fill="#1c1917"/><circle cx="27" cy="-10" r="2.6" fill="#1c1917"/>
+    <rect x="-12" y="6" width="6" height="12" rx="3" fill="#b45309"/><rect x="6" y="6" width="6" height="12" rx="3" fill="#b45309"/>
+    <path d="M-18 -4 q-8 -8 -4 -14" fill="none" stroke="#d6a76c" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -12,7 +12,8 @@
 //! reuse and what needs attention, see [`dashboard`]), the explorer at `lineage`,
 //! the State pages under `state/` (the plan and why, the runs, see
 //! [`dashboard::state`]), the Catalog at `catalog`, with a page per node (see
-//! [`catalog`]), the Impact simulator at `lineage/impact` (see [`impact`]), Settings at
+//! [`catalog`]) and its Semantic layer at `catalog/semantic` (see [`semantic`]), the
+//! Impact simulator at `lineage/impact` (see [`impact`]), Settings at
 //! `settings` (the configuration, read-only, see [`settings`]) and its About page at
 //! `settings/about` (this `ods` and its plugins, see [`about`]).
 //!
@@ -40,6 +41,8 @@ pub mod live;
 mod model_page;
 mod page;
 mod search;
+pub mod semantic;
+mod semantic_page;
 mod server;
 pub mod settings;
 mod settings_page;

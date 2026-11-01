@@ -10,7 +10,6 @@ Catalog
 Models
 Freshness evidence
 Semantic layer
-Planned
 Lineage
 State
 ERD

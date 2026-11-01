@@ -29,7 +29,7 @@ expression: pretty(&body)
           "label": "Freshness evidence"
         },
         {
-          "href": null,
+          "href": "catalog/semantic",
           "key": "semantic",
           "label": "Semantic layer"
         }

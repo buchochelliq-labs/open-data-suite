@@ -19,6 +19,7 @@
 
 pub mod contracts;
 mod error;
+pub mod protocol;
 mod provider;
 mod registry;
 pub mod run_journal;

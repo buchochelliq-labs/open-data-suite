@@ -119,8 +119,38 @@ impl Module for Lineage {
         let Some((name, args)) = matches.subcommand() else {
             return Ok(());
         };
-        let loaded = Loaded::load(args, ctx.config)?;
-        let links = loaded.links(&LinkSettings::read(ctx.config));
+        // A declared warehouse plugin gives the dialect, reads observed lineage and links
+        // the relations (ADR-0031 §3d).
+        let mut project = super::plugin_process::for_project(
+            ctx.config,
+            false,
+            &std::collections::BTreeMap::new(),
+            None,
+        )?;
+        let loaded = Loaded::load_with(
+            args,
+            ctx.config,
+            project.as_ref().map(|p| p.plugins().clone()),
+        )?;
+        if let Some(project) = project.as_mut() {
+            let relations: Vec<String> = loaded
+                .relations
+                .values()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            super::state_plan::block_on(
+                project.ask_links(loaded.adapter_type.as_deref(), &relations),
+            )?;
+            for warning in project.warnings.drain(..) {
+                tracing::warn!("{warning}");
+            }
+        }
+        let links = loaded.links(
+            &LinkSettings::read(ctx.config)
+                .with_plugins(project.as_ref().map(|p| p.plugins().clone())),
+        );
         match name {
             "columns" => {
                 let model = args.get_one::<String>("model").map(String::as_str);
@@ -298,6 +328,9 @@ pub(super) struct LoadOptions {
     pub(super) trust_observed: bool,
     /// `[warehouses.<kind>]`, for the dialect a warehouse inherits (ADR-0031 §3b).
     pub(super) warehouses: crate::plugins::Warehouses,
+    /// The plugins the dialect and observed lineage come from, when not the installed
+    /// ones: with a declared plugin's (ADR-0031 §3d).
+    pub(super) plugins: Option<crate::plugins::Plugins>,
 }
 
 impl LoadOptions {
@@ -308,6 +341,13 @@ impl LoadOptions {
         self
     }
 
+    /// The plugins: the given ones, else the installed ones.
+    pub(super) fn plugins(&self) -> &crate::plugins::Plugins {
+        self.plugins
+            .as_ref()
+            .unwrap_or_else(|| crate::plugins::installed())
+    }
+
     /// From the arguments added by [`common_args`].
     pub(super) fn from_args(args: &ArgMatches) -> Self {
         Self {
@@ -316,6 +356,7 @@ impl LoadOptions {
             observed: args.get_one::<String>("observed").map(PathBuf::from),
             trust_observed: args.get_flag("trust-observed"),
             warehouses: crate::plugins::Warehouses::new(),
+            plugins: None,
         }
     }
 }
@@ -356,9 +397,16 @@ pub(super) struct Loaded {
 }
 
 impl Loaded {
-    pub(super) fn load(args: &ArgMatches, config: &ods_config::Loaded) -> Result<Self, CliError> {
+    /// The project's lineage from its artifacts, with the dialect and observed lineage
+    /// from `plugins` when given, else the installed ones.
+    pub(super) fn load_with(
+        args: &ArgMatches,
+        config: &ods_config::Loaded,
+        plugins: Option<crate::plugins::Plugins>,
+    ) -> Result<Self, CliError> {
         let target_dir = artifacts_dir(args, config)?;
-        let options = LoadOptions::from_args(args).with_warehouses(config);
+        let mut options = LoadOptions::from_args(args).with_warehouses(config);
+        options.plugins = plugins;
         Self::from_dir(&target_dir, &options, shared_cache())
     }
 
@@ -379,7 +427,7 @@ impl Loaded {
         let dialect_name = dialect
             .map(str::to_owned)
             .or_else(|| {
-                crate::plugins::installed().dialect(
+                options.plugins().dialect(
                     artifacts.manifest.adapter_type.as_deref(),
                     &options.warehouses,
                 )
@@ -421,7 +469,8 @@ impl Loaded {
             .map_err(|e| CliError::new(ExitStatus::Failure, codes::LINEAGE_BUILD, e.to_string()))?;
         let observed = match &options.observed {
             Some(file) => {
-                let lineage = read_observed(file, adapter_type.as_deref(), &analyzer)?;
+                let lineage =
+                    read_observed(options.plugins(), file, adapter_type.as_deref(), &analyzer)?;
                 let (stitched_graph, stitched) =
                     graph.with_observed(&lineage, options.trust_observed);
                 let unstitched = std::mem::replace(&mut graph, stitched_graph);
@@ -550,11 +599,11 @@ impl Loaded {
 /// The project's warehouse plugin reads the export, or else the only plugin that reads
 /// exports (ADR-0031 §3a).
 fn read_observed(
+    plugins: &crate::plugins::Plugins,
     file: &Path,
     warehouse: Option<&str>,
     analyzer: &SqlparserAnalyzer,
 ) -> Result<ObservedLineage, CliError> {
-    let plugins = crate::plugins::installed();
     let (reader, source) = plugins.observed_lineage(warehouse, file).ok_or_else(|| {
         let readers = plugins.observed_lineage_readers();
         CliError::new(
@@ -1351,6 +1400,7 @@ impl ImpactReport {
                 observed: None,
                 trust_observed: false,
                 warehouses: crate::plugins::Warehouses::new(),
+                plugins: None,
             },
             &MemoryCache::default(),
         )?;

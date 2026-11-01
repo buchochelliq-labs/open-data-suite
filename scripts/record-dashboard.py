@@ -71,6 +71,8 @@ MASKS = [
     (re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|s)\b"), "<took>"),
     # Relative times, as the dashboard writes them ("just now", "4 min ago", "2 h ago").
     (re.compile(r"\b(?:just now|\d+ (?:second|minute|hour|min|h|d)s? ago)\b"), "<when>"),
+    # Versions (About: this `ods` and its plugins), which every release changes.
+    (re.compile(r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?\b"), "<version>"),
 ]
 
 # A pointer and a click ring drawn into the page, and a caption bar: the page's own

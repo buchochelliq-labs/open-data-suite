@@ -1,13 +1,14 @@
 /* ODS Dashboard (docs/design/dashboard). Tokens from the design boards; dark values
    from its dark boards. IBM Plex is vendored and served by `ods serve` itself (the
    @font-face rules are generated in fonts.rs), so no font CDN is needed: the page works
-   offline and under the server's CSP (ADR-0009). Note: --ok on white is 4.37:1, just
-   under WCAG AA for small text; it is the design's token and kept as is. */
+   offline and under the server's CSP (ADR-0009). Three light tokens are darker than the
+   boards' so text in them meets WCAG AA (4.5:1) on every surface they sit on (#353):
+   --faint (board #8A94A3), --ok (#1F8A4C) and --warn (#B7791F). */
 :root {
-  --bg: #F7F8FA; --surface: #FFFFFF; --fg: #18202A; --muted: #5B6776; --faint: #8A94A3;
+  --bg: #F7F8FA; --surface: #FFFFFF; --fg: #18202A; --muted: #5B6776; --faint: #626C7B;
   --border: #D8DEE6; --line: #EEF1F5; --accent: #3F51D8; --accent-strong: #2B3AA8;
   --active-bg: #E8EBFB; --planned-bg: #F1F3F6; --dashed: #8A94A3; --heading-muted: #4A5462;
-  --build: #2F6FD6; --reuse: #0F8F80; --ok: #1F8A4C; --warn: #B7791F; --bad: #C8322F;
+  --build: #2F6FD6; --reuse: #0F8F80; --ok: #197A43; --warn: #8F6100; --bad: #C8322F;
   --unknown: #6B7684;
   --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;

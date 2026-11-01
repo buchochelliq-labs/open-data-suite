@@ -327,3 +327,126 @@ fn seed_columns_come_from_the_csv_dbt_loaded() {
             .all(|n| n.file_columns.is_none())
     );
 }
+
+#[test]
+fn the_semantic_layer_is_read_and_a_project_without_one_has_none() {
+    // `jaffle-metrics` declares two semantic models and four metrics (#352).
+    let metrics_target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/dbt/jaffle-metrics/artifacts/dbt-1.10/manifest.json");
+    let manifest = Manifest::read(&metrics_target).unwrap();
+    let models: Vec<&str> = manifest
+        .semantic_models
+        .iter()
+        .map(|m| m.unique_id.as_str())
+        .collect();
+    assert_eq!(
+        models,
+        [
+            "semantic_model.jaffle_metrics.customers",
+            "semantic_model.jaffle_metrics.orders"
+        ]
+    );
+    let orders = &manifest.semantic_models[1];
+    assert_eq!(orders.description.as_deref(), Some("One row per order."));
+    assert_eq!(orders.depends_on, ["model.jaffle_metrics.orders"]);
+    let fields = |f: &[ods_provider_dbt::SemanticField]| -> Vec<(String, Option<String>)> {
+        f.iter().map(|f| (f.name.clone(), f.kind.clone())).collect()
+    };
+    assert_eq!(
+        fields(&orders.entities),
+        [
+            ("order".to_owned(), Some("primary".to_owned())),
+            ("customer".to_owned(), Some("foreign".to_owned()))
+        ]
+    );
+    assert_eq!(
+        fields(&orders.measures),
+        [
+            ("order_total".to_owned(), Some("sum".to_owned())),
+            ("order_count".to_owned(), Some("count".to_owned()))
+        ]
+    );
+    assert_eq!(
+        orders.measures[0].description.as_deref(),
+        Some("The sum of what was ordered.")
+    );
+    assert_eq!(
+        fields(&orders.dimensions),
+        [("ordered_at".to_owned(), Some("time".to_owned()))]
+    );
+
+    let by = |id: &str| manifest.metrics.iter().find(|m| m.unique_id == id).unwrap();
+    let revenue = by("metric.jaffle_metrics.revenue");
+    assert_eq!(revenue.kind.as_deref(), Some("simple"));
+    assert_eq!(revenue.label.as_deref(), Some("Revenue"));
+    assert_eq!(revenue.input_measures, ["order_total"]);
+    assert_eq!(revenue.depends_on, ["semantic_model.jaffle_metrics.orders"]);
+    let aov = by("metric.jaffle_metrics.average_order_value");
+    assert_eq!(aov.kind.as_deref(), Some("ratio"));
+    assert_eq!(
+        aov.ratio,
+        Some(("revenue".to_owned(), "orders_placed".to_owned()))
+    );
+    assert_eq!(
+        aov.depends_on,
+        [
+            "metric.jaffle_metrics.revenue",
+            "metric.jaffle_metrics.orders_placed"
+        ]
+    );
+    // A blank description is none.
+    assert_eq!(by("metric.jaffle_metrics.orders_placed").description, None);
+
+    let without = Artifacts::load(&target()).unwrap().manifest;
+    assert_eq!(without.semantic_models, []);
+    assert_eq!(without.metrics, []);
+}
+
+#[test]
+fn a_null_list_reads_as_empty_and_an_unreadable_entry_never_breaks_the_manifest() {
+    let path = target().join("manifest.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // The schema allows `null` for these lists.
+    json["metrics"] = serde_json::json!({
+        "metric.jaffle_ods.revenue": {
+            "unique_id": "metric.jaffle_ods.revenue",
+            "name": "revenue",
+            "type": "simple",
+            "type_params": {"measure": {"name": "order_total"}, "metrics": null,
+                            "input_measures": [{"name": "order_total"}]},
+            "depends_on": {"nodes": ["semantic_model.jaffle_ods.orders"], "macros": []}
+        },
+        // Not a metric ODS can read: reported, the rest still read.
+        "metric.jaffle_ods.broken": {"unique_id": "metric.jaffle_ods.broken", "name": 42}
+    });
+    json["semantic_models"] = serde_json::json!({
+        "semantic_model.jaffle_ods.orders": {
+            "unique_id": "semantic_model.jaffle_ods.orders",
+            "name": "orders",
+            "entities": null,
+            "measures": [{"name": "order_total", "agg": "sum"}],
+            "dimensions": null,
+            "depends_on": {"nodes": ["model.jaffle_ods.orders"], "macros": []}
+        }
+    });
+    let manifest = Manifest::parse(&path, &json.to_string()).unwrap();
+    assert_eq!(manifest.metrics.len(), 1);
+    assert_eq!(manifest.metrics[0].input_metrics, Vec::<String>::new());
+    assert_eq!(manifest.metrics[0].input_measures, ["order_total"]);
+    assert_eq!(manifest.semantic_models[0].entities, []);
+    assert_eq!(manifest.semantic_models[0].measures.len(), 1);
+    let unreadable: Vec<&str> = manifest
+        .semantic_unreadable
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(unreadable, ["metric.jaffle_ods.broken"]);
+    // Nodes are read as ever.
+    assert!(
+        manifest
+            .nodes
+            .iter()
+            .any(|n| n.unique_id == "model.jaffle_ods.orders")
+    );
+}

@@ -195,7 +195,7 @@ impl ExplainFailureReport {
             };
         // Every failure of the run, explained: the node's own, the failed tests on it (a
         // build doesn't fail a model whose tests fail), and those that blocked it.
-        let explained = explain_history(args, &settings, &run);
+        let explained = explain_history(args, config, &settings, &run);
         let mut blocked_by = blocked_by;
         if outcome == Outcome::Skipped && !test {
             blocked_by.extend(

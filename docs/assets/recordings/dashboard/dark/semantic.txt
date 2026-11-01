@@ -1,0 +1,40 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Models
+Freshness evidence
+Semantic layer
+Lineage
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Local · read-only
+Catalog
+/
+Semantic layer
+/
+read-only · planned
+Semantic layer
+PLANNED
+Semantic models and metrics, as the project declares them.
+SOURCE
+dbt manifest (manifest.json)
+other build tools (planned)
+Read-only placeholder. ODS lists what the project declares and the models each is defined on. It doesn't query, validate or serve metrics, and lineage doesn't go through metrics yet.
+No semantic layer
+This project declares no semantic models or metrics. When it does, they are listed here with the models each is defined on.
+ODS reads semantic definitions; it doesn't serve or query metrics.
+No metric values, no query endpoint, no warehouse calls from this page. Use your own tools to compute metrics; the Impact simulator shows what a change to a model reaches.
+Open impact

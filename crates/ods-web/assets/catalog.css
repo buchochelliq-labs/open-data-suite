@@ -24,7 +24,7 @@
 .cdot.opaque { background: var(--warn); }
 .cdot.inferred, .cdot.observed { background: var(--surface); border: 1.5px dashed var(--unknown); }
 .cdot.unknown { background: var(--surface); border: 1.5px dashed var(--bad); }
-.cdot.na { background: var(--surface); border: 1px solid var(--border); }
+.cdot.na { background: var(--surface); border: 1.5px solid var(--faint); }
 .never { color: var(--muted); font-family: var(--mono); font-size: 12px; }
 .na { color: var(--muted); }
 .btn { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px;

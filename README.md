@@ -4,12 +4,10 @@ A Rust-first, provider-neutral control plane for analytics engineering. It start
 and Databricks, and every decision it makes can be explained.
 
 > **Status:** very experimental, pre-alpha. The latest release,
-> [v0.0.2](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.2), adds
-> health checks with a CI gate, what reuse saves, failure explanations and the
-> Freshness, ERD and Impact screens to the State MVP and first dashboard screens of
-> [v0.0.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.0.1). `ods state`, the `ods serve`
-> dashboard, column-level lineage, ERDs and an MCP server work as previews; everything
-> may change.
+> [v0.1.1](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.1.1),
+> completes the `ods serve` dashboard: every screen of its design, configurable health
+> checks with plugins, and dark mode. `ods state`, the dashboard, column-level lineage,
+> ERDs and an MCP server work as previews; everything may change.
 >
 > **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
 > `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
@@ -45,15 +43,15 @@ These recordings are the real `ods` on the demo project in `fixtures/`, with a f
 | Module | What it does | Target |
 |---|---|---|
 | `ods state` | Incremental, explainable "what needs to run", handed back to dbt with exact selection; per-node run stats and a run journal | v0.0.1 |
-| `ods serve` dashboard | Read-only web view of State, runs, lineage and the catalog; every screen of the design by v0.1.0 | v0.0.1 (first screens), v0.0.2 (Freshness, ERD, Impact), v0.1.0 (complete) |
+| `ods serve` dashboard | Read-only web view of State, runs, lineage and the catalog; every screen of the design | v0.1.1 (complete; first screens in v0.0.1) |
 | `ods lineage` | Column-level lineage, change impact, an offline explorer and OpenLineage export | preview |
 | `ods erd` / `ods usage` | Entity-relationship model and real consumer usage | v0.3.0 (`ods erd generate` is a preview today) |
 | `ods ci` | Change impact, selective CI, and PR reports | v0.4.0 |
 | `ods lsp` + VS Code | Clean-room language server and editor extension | v0.5.0 |
 | `ods agent` | Policy-controlled analytics-engineering agent and skills; `ods mcp` serves the engines to agents today | v0.6.0 |
 
-Releases stay v0.0.x until the whole dashboard design is built; v0.1.0 marks the complete
-dashboard.
+v0.1 marks the complete dashboard; v0.1.1 is its first release (0.1.0 was skipped). Each
+later milestone ships as the next minor version, with v0.1.x patch releases in between.
 
 - Roadmap, milestones, and releases: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Command reference: [`docs/cli.md`](docs/cli.md)

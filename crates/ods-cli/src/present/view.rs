@@ -24,11 +24,14 @@ pub enum Tone {
     Success,
     /// An identifier, path or code fragment.
     Code,
+    /// SQL, e.g. a query a check runs. A backend may highlight it as SQL; one that
+    /// doesn't shows it as [`Tone::Code`].
+    Sql,
 }
 
 impl Tone {
     /// Every tone, for backends that must declare a style for each.
-    pub const ALL: [Tone; 8] = [
+    pub const ALL: [Tone; 9] = [
         Tone::Emphasis,
         Tone::Muted,
         Tone::Added,
@@ -37,6 +40,7 @@ impl Tone {
         Tone::Error,
         Tone::Success,
         Tone::Code,
+        Tone::Sql,
     ];
 }
 

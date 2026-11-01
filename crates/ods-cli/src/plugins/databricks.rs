@@ -35,10 +35,7 @@ pub(super) struct Databricks;
 
 impl WarehousePlugin for Databricks {
     fn origin(&self) -> Origin {
-        Origin {
-            name: "ods-provider-databricks",
-            version: env!("CARGO_PKG_VERSION"),
-        }
+        Origin::new("ods-provider-databricks", env!("CARGO_PKG_VERSION"))
     }
 
     fn warehouse(&self) -> &str {

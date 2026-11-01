@@ -1150,7 +1150,7 @@ impl RunHistoryReport {
         let run_id = args.get_one::<String>("run").map_or("", String::as_str);
         let (journal, read) = read_journal(&state_db, Some(run_id))?;
         let run = ods_sdk::contracts::run_events::RunSummary::from_events(&read.events);
-        let failures = explain_history(args, &settings, &run);
+        let failures = explain_history(args, config, &settings, &run);
         Ok(Self {
             run,
             unreadable_lines: read.unreadable,
@@ -1211,6 +1211,7 @@ pub(super) fn read_journal(
 /// with less evidence.
 pub(super) fn explain_history(
     args: &ArgMatches,
+    config: &Loaded,
     settings: &StateSettings,
     run: &ods_sdk::contracts::run_events::RunSummary,
 ) -> Vec<ods_core::failure::ErrorExplanation> {
@@ -1231,6 +1232,28 @@ pub(super) fn explain_history(
             .unwrap_or_default()
     };
     let plan = ods_state::plan_from_states(run, before.as_ref(), after.as_ref(), &parents);
+    // A declared warehouse plugin classifies the run's errors, and they are kept
+    // (ADR-0031 §3d); from the MCP server, its recorded answers are used instead.
+    let scope = ws.as_ref().map(|w| w.scope.to_string());
+    let mut project = super::plugin_process::for_project(
+        config,
+        false,
+        &std::collections::BTreeMap::new(),
+        scope.as_deref().map(|s| (state_db.as_path(), s)),
+    )
+    .inspect_err(|e| tracing::warn!("plugins aren't used to explain the run: {e}"))
+    .ok()
+    .flatten();
+    if let Some(project) = project.as_mut() {
+        let errors = super::failures::run_errors(run);
+        let adapter = ws.as_ref().and_then(|w| w.manifest.adapter_type.as_deref());
+        if !errors.is_empty() {
+            let _ = block_on(project.ask_classifications(adapter, &errors));
+        }
+        for warning in project.warnings.drain(..) {
+            tracing::warn!("{warning}");
+        }
+    }
     let project_dir = super::failures::project_dir(settings);
     let target_dir = ws.as_ref().map_or_else(
         || PathBuf::from(&settings.target_dir.value),
@@ -1243,6 +1266,7 @@ pub(super) fn explain_history(
             manifest: ws.as_ref().map(|w| &w.manifest),
             last_manifest: None,
             warehouses: &settings.warehouses,
+            plugins: super::plugin_process::plugins_of(project.as_ref()),
         },
         plan: Some(&plan),
         before: before.as_ref(),

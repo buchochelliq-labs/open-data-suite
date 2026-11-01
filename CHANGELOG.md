@@ -12,6 +12,26 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-01
+
+The dashboard is complete: every screen in its design is built (#309), so this is the
+first 0.1 release (ADR-0019 §1a). 0.1.0 was prepared but never released; 0.1.1 is that
+release, with security updates to its dependencies and a new look for the docs site.
+Beside the dashboard, health checks become configurable and pluggable, and ODS takes
+plugins, built into a custom `ods` or run as programs of their own. **It changes SDK contracts and the health record's format:** see **Breaking**.
+
+- **The rest of the dashboard:** Settings and About, the Semantic layer placeholder,
+  the Run page's Threads tab with the critical path, saved table versions as freshness
+  evidence, and dark mode checked on every screen.
+- **Health checks you configure:** declared checks, coverage targets, read-only SQL
+  probes under a login shown to only read, script checks, and `[health] after_run` to
+  check after every build. Anything a project defines that runs code or SQL runs only
+  once trusted with `ods health trust`.
+- **Plugins:** health checks and warehouse plugins in a custom `ods` (`ods_cli::Ods`),
+  or out of process in any language (`[plugins.<name>]`); `ods plugin list`, `show`
+  and `test`. Databricks is now a built-in warehouse plugin, and DuckDB a second one.
+- **SDK 0.9.** Rebuild out-of-process plugins and custom `ods` builds against it.
+
 ### Breaking
 - The `error_catalogue` contract is 0.5 (#415): `ErrorCatalogue::classify_attributed`
   names the catalogue that recognised an error, for a catalogue that consults others.
@@ -31,11 +51,61 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   list) instead of running the statements against every source. **What to do:** a
   provider implementing `RelationProbe` takes `&[ProbeTarget]`, runs nothing against a
   relation it wasn't asked about, and honours `ProbeRequest::timeout`.
-- The health record's format is 1.1, as a check's source can be `declarative` or
-  `probe` and a report holds its coverage targets' verdicts. ODS 0.0.2
-  doesn't read 1.1 records: run `ods health check` again after going back to it.
+- `ods_cli::plugins::Origin` holds owned names (`Cow<'static, str>`), so an
+  out-of-process plugin can have one, and is no longer `Copy`. **What to do:** build one
+  with `ods_cli::origin!()` or `Origin::new(name, version)`, and clone it where you
+  copied it.
+- The health record's format is 1.2, as a check's source can be `declarative`, `probe`
+  or `script` and a report holds its coverage targets' verdicts. ODS 0.0.2
+  doesn't read 1.1 or 1.2 records: run `ods health check` again after going back to it.
 
 ### Added
+- `[health] after_run = true` (#392, ADR-0030 §6): every `ods state` command that builds
+  runs the health checks once it succeeded and is recorded, as `ods health check`
+  would, and records them for the dashboard. The report ends with their counts and
+  names what fails at severity `error` (`health` in `--json`). Their verdict never
+  changes the build's exit status: gate CI with `ods health check`. Off by default.
+- An out-of-process warehouse plugin gives everything a built-in one does (#392,
+  ADR-0031 §3d): "Open in warehouse" links (`link`, asked for every relation of the
+  project by `ods state`, `ods health check` and `ods lineage`), error explanations
+  (`classify`, asked for a failed run's errors before dbt's catalogue), observed
+  lineage (`observed_lineage`, for `ods lineage compare --observed`), its SQL dialect,
+  and probes over its own connection (`probe` and `privileges`, with `[health.probes]
+  plugin = "<name>"` in place of `target`; the login it reports is the login it probes
+  with). The dashboard and MCP never start a plugin: the commands that run one keep its
+  links and explanations beside the state store (`<state db>.plugins/`, format 1.0),
+  and they read them from there. A plugin's link must be a safe `https://` URL, or the
+  relation has none (`NoRelationLink::NotAnswered`, new). `ods plugin test` runs the
+  link, catalogue (`--errors`) and lineage (`--export`) suites too. `ods_sdk::protocol`
+  gains the requests and answers; the probe and privilege types are serde types, read
+  only through their checked constructors.
+- Out-of-process plugins (#392, ADR-0031 §5): `[plugins.<name>]` with a `command` (never
+  run through a shell) and a `timeout` declares a program, in any language, that speaks
+  the plugin protocol over stdin and stdout. ODS asks it to `describe` itself, refusing
+  it when a contract it implements was built against a version this `ods` can't accept,
+  then calls it: its health checks run in `ods health check` (tuned with
+  `[health.plugins.<id>]`), and a warehouse it serves gives the `ods state` commands
+  that build their sources' data versions, of the kind its `capabilities` name
+  (`relation_versions` or `source_freshness`). A plugin a project declares runs only once
+  trusted with `ods health trust`, or with `--allow-scripts` (now also on the `ods
+  state` commands that build) for one run. One that can't run fails `ods health check`
+  (`ODS-E0802`) and is a warning in `ods state`; a call that fails makes what it was
+  asked about *unknown*. `ods plugin list` lists the declared plugins; `ods plugin test
+  <name>` runs the SDK's conformance suites against one (`ODS-E0803` when a case fails).
+  `ods_sdk::protocol` gains `DescribeRequest`/`DescribeResponse` and
+  `VersionsRequest`/`VersionsResponse`; `RequestedSource` and `SourceVersion` are serde
+  types.
+- Script checks (#392, ADR-0030 §4): `[[health.checks]]` with `kind = "script"` runs a
+  `command` you name (never through a shell) in `ods health check`, writing the selected
+  nodes to its stdin and reading its findings from its stdout as JSON, the script
+  protocol 1.0 (`ods_sdk::protocol`). It takes `params` and a `timeout` (60 seconds by
+  default). A project's scripts run only once trusted with `ods health trust`, which now
+  shows each script's command; trust also covers the files the command names in the
+  project, so a commit that changes one needs trust again; a script that fails, times out or answers with anything
+  but the protocol makes its nodes *unknown*, never a pass; a timeout stops every
+  process it started. The dashboard shows what the
+  last run recorded. The new `ods-provider-process` crate is the only code that starts
+  one.
 - `DuckDB` is the second built-in warehouse plugin (#415, ADR-0031 §3a), in
   `ods-provider-duckdb`: `DuckDB`'s error patterns, recorded from real dbt-duckdb runs,
   and the `duckdb` dialect. It offers no source versions (`DuckDB` has no table version
@@ -74,6 +144,23 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   that only read (no dbt, no connection), and the Server mode placeholders. Nothing on
   it writes; beyond loopback it shows no value, path or check detail.
   `/api/settings` returns the same view model.
+- The dashboard's **Semantic layer** page (`/catalog/semantic`, #352), a read-only
+  placeholder. It lists the semantic models and metrics `manifest.json` declares:
+  - each semantic model's model, measures, dimensions and entities;
+  - each metric's type, what it is computed from, its dimensions, and the models it
+    depends on.
+
+  A project without a semantic layer gets an empty state. Artifacts that can't record a
+  semantic layer (the Information Schema) say so instead, and a definition that can't be
+  read is named rather than dropped. Nothing is queried or validated.
+  `/api/catalog/semantic` returns the same view model.
+- The Run page's **Threads** tab (`/state/runs/<run>?tab=threads`, #355): the run by
+  thread, a bar per node coloured by outcome and the idle stretches between them, with
+  the critical path (the chain of dependencies that set the run's length) outlined and
+  named. A bar opens the replay on the DAG at the node's start, with the node selected.
+  A journal rebuilt from final results has no start times, so it gets no bar: the tab
+  says so and lists when each node finished. `/api/state/runs/<run>` has the same view
+  as `threads`.
 - **Saved table versions** (#388, ADR-0022 §7): `ods state build` and `run` (and their
   `--dry-run`) save the sources' table versions they read in
   `<state-db>.versions.json`. `ods state plan`, `ods state explain` and the dashboard,
@@ -179,8 +266,19 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   Catalog. The "how" text names those checks and when they ran, `/api/home` and
   `/api/catalog` give the time as `health_recorded_at`, and a node the record doesn't
   cover is *unknown* for them, never healthy. A new record reloads the page.
+- The docs site has a *Meet the gang* page (Project): Memo, the purple elephant who is
+  ODS's mascot, her daughter Tui, and Tui's Nana and Grandpa. Tui also keeps the site's
+  404 page.
 
 ### Changed
+- The dashboard meets WCAG AA contrast on every screen, light and dark (#353). Three
+  light colours are darker than before:
+  - the faint grey (separators, `—`);
+  - success green;
+  - warning amber.
+
+  The ERD legend's `?` is no longer black in dark mode. A browser test measures every
+  screen, and each screen has a dark still in the dashboard tours.
 - dbt's error catalogue is at version 8 (#415): dbt-databricks's own messages (unavailable
   compute, timeouts, missing credentials) are now the Databricks plugin's catalogue
   (`databricks` 1), and `DuckDB`'s (`Binder Error`, `Catalog Error`, `Conversion Error`
@@ -195,11 +293,26 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   each other. `/roadmap/` redirects to `/ROADMAP/`.
 - The README, the docs' Home and Install pages and the roadmap say v0.0.2 is released;
   the install commands use `0.0.2` as the example version.
+- `ods health trust` highlights each probe's SQL on a terminal: keywords, strings,
+  comments and dbt's Jinja blocks in the standard terminal colours. Plain and JSON
+  output are unchanged.
+- The docs site has a new look and layout: top-level tabs (Get started, Guides,
+  Reference, Architecture, Contributing, Project) in place of one long sidebar, a slate
+  and teal theme with a logo, a new home page, and one dismissible pre-alpha banner.
 
 ### Fixed
 - `ods serve` bound to loopback but behind a proxy (`--allow-host`) no longer shows
   local paths, configuration values or error text: requests may come from elsewhere,
   so every page treats it as beyond loopback (#351).
+- The docs site's CLI reference showed a backslash before each `|` in table cells
+  (`ods state compile\|run`); it shows `ods state compile|run`, as on GitHub.
+
+### Security
+
+- Dependencies with RustSec advisories published since 0.0.2 are updated: tokio 1.54.1
+  (RUSTSEC-2026-0386), zstd 0.14.3, zstd-safe 8.2.0 and zstd-sys 2.1.2
+  (RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403, RUSTSEC-2026-0410), and
+  pulldown-cmark 0.13.6 (RUSTSEC-2026-0414).
 
 ## [0.0.2] - 2026-10-06
 

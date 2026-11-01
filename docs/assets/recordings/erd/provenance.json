@@ -1,9 +1,9 @@
 {
   "tape": "docs/tapes/erd.tape",
   "tape_fnv1a64": "447857d17f28248c",
-  "recorder": "rs-rich-record 0.0.1",
-  "rich": "rich (rs-rich-cli) 0.0.13",
-  "commit": "db67e38ff1a3c106850a32a13f768901174dfbb6",
+  "recorder": "rs-rich-record 0.0.8",
+  "rich": "rich (rs-rich-cli) 0.0.20",
+  "commit": "0b47aaff789b35c1c909f202601c70942f9aad73",
   "screenshots": [
     "erd"
   ],

@@ -59,6 +59,7 @@ live stats: yes, each node's reported as it ran
 State rule: if a node fails, it keeps its last good state. Snapshot 2 replaced snapshot 1 with this run's successful builds; every other node keeps its last good build. Its journal says some nodes failed: they keep their last good build.
 Timeline
 Nodes
+Threads
 Log
 PLANNED
 Graph

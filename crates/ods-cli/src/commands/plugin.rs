@@ -1,5 +1,6 @@
 //! `ods plugin list` and `ods plugin show` (ADR-0031 §3c): the plugins this `ods` runs
-//! with and what each offers, as detected by asking it, never as it declares.
+//! with and what each offers, as detected by asking it, never as it declares; and
+//! `ods plugin test` (ADR-0031 §5), in `plugin_test`.
 
 use clap::{Arg, ArgMatches, Command};
 use serde::Serialize;
@@ -17,7 +18,9 @@ impl Module for PluginCommand {
         Command::new("plugin")
             .about("List the plugins this ods runs with, and what each offers")
             .subcommand_required(true)
-            .subcommand(Command::new("list").about("Every plugin, one line each"))
+            .subcommand(Command::new("list").about(
+                "Every plugin, one line each, with the out-of-process plugins this project declares",
+            ))
             .subcommand(
                 Command::new("show")
                     .about("One plugin: each thing it offers, and what a warehouse inherits")
@@ -35,14 +38,38 @@ impl Module for PluginCommand {
                             .help("Which plugin, when a health check and a warehouse share NAME"),
                     ),
             )
+            .subcommand(super::plugin_test::command())
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &mut Context<'_>) -> Result<(), CliError> {
-        let plugins = crate::plugins::installed();
+        if let Some(("test", args)) = matches.subcommand() {
+            let report = super::plugin_test::TestReport::build(args, ctx.config)?;
+            return match report.failure() {
+                Some(error) => ctx.emit_failed(&report, error),
+                None => ctx.emit(&report),
+            };
+        }
+        // The declared plugins that may run describe themselves; the others are listed
+        // with why they don't run, and run nothing.
+        let declared = if ctx.config.config.plugins.is_empty() {
+            None
+        } else {
+            Some(super::state_plan::block_on(
+                super::plugin_process::with_declared(
+                    ctx.config,
+                    false,
+                    &std::collections::BTreeMap::new(),
+                ),
+            )??)
+        };
+        let plugins = declared
+            .as_ref()
+            .map_or_else(|| crate::plugins::installed(), |d| &d.plugins);
         let config = &ctx.config.config;
         match matches.subcommand() {
             Some(("list", _)) => ctx.emit(&PluginList {
                 plugins: views(plugins, Some(config)),
+                declared: declared.as_ref().map(declared_views).unwrap_or_default(),
             }),
             Some(("show", args)) => {
                 let name = args
@@ -332,15 +359,100 @@ fn show(
 #[serde(rename_all = "snake_case")]
 struct PluginList {
     plugins: Vec<PluginView>,
+    /// The `[plugins.<name>]` the configuration declares (ADR-0031 §5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    declared: Vec<DeclaredView>,
+}
+
+/// A `[plugins.<name>]`, and whether it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct DeclaredView {
+    /// Its name.
+    pub(crate) name: String,
+    /// Its command.
+    pub(crate) command: Vec<String>,
+    /// The contracts it described, with the version each was built against; those this
+    /// `ods` doesn't know too.
+    pub(crate) provides: Vec<String>,
+    /// Why it doesn't run: not trusted, or it didn't describe itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) held: Option<String>,
+}
+
+fn declared_views(declared: &super::plugin_process::WithDeclared) -> Vec<DeclaredView> {
+    let mut views: Vec<DeclaredView> = declared
+        .running
+        .iter()
+        .map(|r| DeclaredView {
+            name: r.declared.name.clone(),
+            command: r.declared.command.clone(),
+            provides: r
+                .described
+                .answer
+                .provides
+                .iter()
+                .map(|p| format!("{} {}.{}", p.contract, p.version.major, p.version.minor))
+                .collect(),
+            held: None,
+        })
+        .collect();
+    views.extend(declared.held.iter().map(|h| DeclaredView {
+        name: h.name.clone(),
+        command: declared_command(declared, &h.name),
+        provides: Vec::new(),
+        held: Some(h.why.clone()),
+    }));
+    views.sort_by(|a, b| a.name.cmp(&b.name));
+    views
+}
+
+fn declared_command(declared: &super::plugin_process::WithDeclared, name: &str) -> Vec<String> {
+    declared
+        .held_commands
+        .get(name)
+        .cloned()
+        .unwrap_or_default()
 }
 
 impl Present for PluginList {
     const COMMAND: &'static str = "plugin.list";
 
     fn view(&self) -> ViewNode {
-        if self.plugins.is_empty() {
+        if self.plugins.is_empty() && self.declared.is_empty() {
             return ViewNode::Paragraph(vec![Span::plain("This ods runs with no plugins.")]);
         }
+        let mut blocks = vec![self.plugins_table()];
+        if !self.declared.is_empty() {
+            blocks.push(ViewNode::Table {
+                title: Some("Declared out-of-process plugins".to_owned()),
+                columns: vec!["plugin".into(), "command".into(), "provides".into()],
+                rows: self
+                    .declared
+                    .iter()
+                    .map(|d| {
+                        vec![
+                            vec![Span::toned(d.name.as_str(), Tone::Code)],
+                            vec![Span::toned(d.command.join(" "), Tone::Code)],
+                            match &d.held {
+                                Some(why) => {
+                                    vec![Span::toned(format!("not run: {why}"), Tone::Warning)]
+                                }
+                                None => vec![Span::plain(d.provides.join(", "))],
+                            },
+                        ]
+                    })
+                    .collect(),
+                breaks: Vec::new(),
+                footer: None,
+            });
+        }
+        ViewNode::Group(blocks)
+    }
+}
+
+impl PluginList {
+    fn plugins_table(&self) -> ViewNode {
         ViewNode::Table {
             title: Some("Plugins".to_owned()),
             columns: vec![

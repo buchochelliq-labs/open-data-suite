@@ -1,0 +1,165 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Lineage
+State
+Plan
+Runs
+History
+Planned
+Policies
+Planned
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Local · read-only
+State
+/
+Runs
+/
+<run>
+/
+no snapshot · started <time>
+<run>
+Replay on the DAG
+Copy run id
+OUTCOME
+partial
+from its run journal
+BUILT
+0
+no snapshot recorded
+KEPT EARLIER BUILD
+6
+not in this run: kept from snapshot 3
+WALL CLOCK
+<took>
+5
+built
+1
+failed
+1
+skipped
+at least
+298
+rows (3 nodes didn't report)
+live stats: yes, each node's reported as it ran
+State rule: if a node fails, it keeps its last good state. This run recorded no snapshot (inferred: no listed snapshot has its id). Snapshot 3 was the last good state when it ran. A failed run never replaces the last good state; its successful builds, if any, weren't recorded.
+Timeline
+Nodes
+Threads
+Log
+PLANNED
+Graph
+PLANNED
+Node	Status	Started	Took	Rows	Thread	Tests	Why it ran
+stg_orders
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	—not reported	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+orders
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	99
+query_id 01b2-c3
+	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+customer_order_rank
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	99	Thread-2 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+customers
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	100	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+customer_segments
+model
+	failed
+kept its last good build
+	<clock>	<took>
+compile <took>
+execute <took>
+	—the node didn't build	Thread-1 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+python model · python exception
+known pattern
+The Python model raised KeyError
+WHY ODS THINKS SO
+It failed after <took>, during execution (compile succeeded). [run stats]
+It failed the same way in 1 of its last 3 runs. [run history]
+WHERE
+models/marts/customer_segments.py
+compiled: target/compiled/jaffle_ods/models/marts/customer_segments.py
+WHAT TO TRY
+Read the traceback in the full log: it shows where in the model's code the exception was raised.
+Impact: blocks 1 downstream node (segment_summary was skipped). Its last good build is kept.
+What dbt said
+customers_snapshot_view
+model
+	built	<clock>	<took>
+compile <took>
+execute <took>
+	—not reported	Thread-2 (worker)	—none ran on it	—not recorded: snapshots keep why only for the builds they record
+segment_summary
+model
+	skipped
+waited on customer_segments; kept its last good build
+	—didn't run	—didn't run	—the node didn't build	—didn't run	—didn't run	—not recorded: snapshots keep why only for the builds they record
+No warehouse link for duckdb targets
+Run details
+Command
+not recorded
+Target
+—
+Snapshot
+none: snapshot 3 kept inferred
+Compared with
+nothing: it recorded no snapshot
+Recorded
+—it recorded no snapshot
+Started
+<time>
+Finished
+<time>
+Run journal
+kept · live stats: yes
+Triggered by
+[user]
+FAILED NODE
+customer_segments
+model · after <took>
+The Python model raised KeyError Why it failed
+SKIPPED
+segment_summary · waited on customer_segments
+Built in this run
+Nothing recorded: this run recorded no snapshot.
+Earlier runs
+<run>
+succeeded
+2 built, 11 kept, <took> · <clock>
+<run>
+partial
+2 built, 9 kept, 1 failed, <took> · <clock>
+<run>
+succeeded
+13 built, 0 kept, <took> · <clock>
+Copy as JSON
+Download log
+PLANNED

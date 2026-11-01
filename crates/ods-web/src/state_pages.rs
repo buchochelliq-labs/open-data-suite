@@ -92,8 +92,26 @@ impl RunsQuery {
 
 #[derive(Debug, Default, Deserialize)]
 struct RunQuery {
-    /// `nodes` shows the table instead of the timeline.
+    /// `nodes` shows the table instead of the timeline, `threads` the run by thread.
     tab: Option<String>,
+}
+
+/// The Run page's tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunTab {
+    Timeline,
+    Nodes,
+    Threads,
+}
+
+impl RunTab {
+    fn from_query(tab: Option<&str>) -> Self {
+        match tab {
+            Some("nodes") => Self::Nodes,
+            Some("threads") => Self::Threads,
+            _ => Self::Timeline,
+        }
+    }
 }
 
 /// Runs `page` on a blocking thread: building a page may plan, which reads files.
@@ -210,7 +228,7 @@ async fn run_page(
             Some(view) => Html(run_html(
                 &shell,
                 &view,
-                query.tab.as_deref() == Some("nodes"),
+                RunTab::from_query(query.tab.as_deref()),
                 generation,
             ))
             .into_response(),
@@ -2270,7 +2288,7 @@ fn next_steps(b: &mut String, last: &LastRunView) {
 // ---------------------------------------------------------------------------- run
 
 #[allow(clippy::too_many_lines, reason = "one page, built top to bottom")]
-fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: u64) -> String {
+fn run_html(shell: &ShellView, view: &RunPageView, tab: RunTab, generation: u64) -> String {
     let run = &view.run;
     let mut b = String::with_capacity(32 * 1024);
     b.push_str(r#"<div class="st-split"><section class="st-main">"#);
@@ -2415,26 +2433,19 @@ fn run_html(shell: &ShellView, view: &RunPageView, nodes_tab: bool, generation: 
     let href = enc(&run.run_id);
     let _ = write!(
         b,
-        r#"<nav class="st-tabs" aria-label="Run views"><a class="st-tab" href="{href}"{t}>Timeline</a><a class="st-tab" href="{href}?tab=nodes"{n}>Nodes</a><span class="st-tab disabled" aria-disabled="true" title="Run logs aren't kept by ODS: a failed node's error summary says where the full message is">Log<span class="chip">Planned</span></span><span class="st-tab disabled" aria-disabled="true" title="Planned">Graph<span class="chip">Planned</span></span></nav>"#,
+        r#"<nav class="st-tabs" aria-label="Run views"><a class="st-tab" href="{href}"{t}>Timeline</a><a class="st-tab" href="{href}?tab=nodes"{n}>Nodes</a><a class="st-tab" href="{href}?tab=threads"{th}>Threads</a><span class="st-tab disabled" aria-disabled="true" title="Run logs aren't kept by ODS: a failed node's error summary says where the full message is">Log<span class="chip">Planned</span></span><span class="st-tab disabled" aria-disabled="true" title="Planned">Graph<span class="chip">Planned</span></span></nav>"#,
         href = attr(&href),
-        t = if nodes_tab {
-            ""
-        } else {
-            r#" aria-current="page""#
-        },
-        n = if nodes_tab {
-            r#" aria-current="page""#
-        } else {
-            ""
-        },
+        t = current(tab == RunTab::Timeline),
+        n = current(tab == RunTab::Nodes),
+        th = current(tab == RunTab::Threads),
     );
-    if nodes_tab {
-        nodes_table(&mut b, view);
-    } else {
-        timeline(&mut b, view);
+    match tab {
+        RunTab::Timeline => timeline(&mut b, view),
+        RunTab::Nodes => nodes_table(&mut b, view),
+        RunTab::Threads => threads_tab(&mut b, view),
     }
     b.push_str("</section>");
-    run_side(&mut b, view, nodes_tab);
+    run_side(&mut b, view, tab == RunTab::Nodes);
     b.push_str("</div>");
     b.push_str(LIVE);
     // The dot says the outcome only when the journal or the last run's record gives it.
@@ -2685,6 +2696,223 @@ fn timeline(b: &mut String, view: &RunPageView) {
             r#"<span><span class="st-sw wait"></span>waits on upstream</span>"#
         },
     );
+}
+
+/// ` aria-current="page"` on the current tab.
+fn current(is: bool) -> &'static str {
+    if is { r#" aria-current="page""# } else { "" }
+}
+
+/// Milliseconds as seconds for a URL: `1.25`, `0`.
+fn seconds(ms: u64) -> String {
+    let s = format!("{}.{:03}", ms / 1000, ms % 1000);
+    s.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// The run by thread (#355): a row per thread, a bar per node it ran, its idle
+/// stretches hatched and the critical path outlined. A bar opens the run's replay on
+/// the DAG at the node's start, with the node selected (ADR-0026).
+fn threads_tab(b: &mut String, view: &RunPageView) {
+    const ROW: usize = THREAD_ROW;
+    const TOP: usize = 30;
+    const X0: usize = 200;
+    const X1: usize = 776;
+    let t = &view.threads;
+    let run = enc(&view.run.run_id);
+    let replay = |node: &str, at: u64| {
+        format!(
+            "../../lineage?replay={run}&t={}&node={}",
+            seconds(at),
+            enc(node)
+        )
+    };
+    b.push_str(r#"<section class="st-threads" aria-label="Threads">"#);
+    if let Some(why) = &t.untimed {
+        threads_untimed(b, why, &t.finishes_only);
+        return;
+    }
+    let span = t.span_ms.unwrap_or(0).max(1);
+    let x = |ms: u64| {
+        X0 + usize::try_from(u128::from(ms.min(span)) * (X1 - X0) as u128 / u128::from(span))
+            .unwrap_or(0)
+    };
+    let took = crate::dashboard::journal::duration;
+    critical_line(b, t, &took(span));
+    let height = TOP + ROW * t.threads.len() + 6;
+    let _ = write!(
+        b,
+        r#"<svg width="100%" viewBox="0 0 796 {height}" role="img" aria-label="{label}"><defs><pattern id="th-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path class="th-hatch" d="M0 0V6"></path></pattern></defs><g class="tl-head"><text x="0" y="18">Thread</text><text x="{X0}" y="18">0s</text><text x="{X1}" y="18" text-anchor="end">{end}</text></g><g class="tl-guide"><path d="M{X0} 24V{height}"></path><path d="M{X1} 24V{height}"></path></g>"#,
+        label = attr(&format!(
+            "Run {} by thread: {} over {}. The Nodes tab lists the nodes as a table.",
+            view.run.short_run_id,
+            count(t.threads.len(), "thread"),
+            took(span),
+        )),
+        end = text(&took(span)),
+    );
+    for (i, row) in t.threads.iter().enumerate() {
+        thread_row(b, TOP + ROW * i, row, &x, &replay);
+    }
+    b.push_str("</svg>");
+    if !t.finishes_only.is_empty() {
+        let _ = write!(
+            b,
+            r#"<p class="st-small">{} only known to have finished, so drawn nowhere: the Nodes tab lists {}.</p>"#,
+            count(t.finishes_only.len(), "node"),
+            if t.finishes_only.len() == 1 {
+                "it"
+            } else {
+                "them"
+            },
+        );
+    }
+    b.push_str(r#"<div class="st-legend"><span><span class="st-sw built"></span>Built</span><span><span class="st-sw failed"></span>Failed</span><span><span class="st-sw th-crit" aria-hidden="true"></span>Critical path</span><span><span class="st-sw th-idle" aria-hidden="true"></span>Idle</span><span class="st-right">Bars: when each node started and finished on its thread, from the run's journal. Click one to replay the run from there.</span></div></section>"#);
+}
+
+/// Why a run has no bar, and the nodes only known to have finished.
+fn threads_untimed(b: &mut String, why: &str, finishes: &[crate::dashboard::threads::Finish]) {
+    let _ = write!(
+        b,
+        r#"<div class="st-notice" role="status">{INFO}<span>{}</span></div>"#,
+        text(why)
+    );
+    if !finishes.is_empty() {
+        b.push_str(r#"<h3 class="th-sub">Finishes only</h3><ul class="th-finishes">"#);
+        for f in finishes {
+            let _ = write!(
+                b,
+                r#"<li data-node="{id}"><span class="th-dot {class}" aria-hidden="true"></span>{name} <span class="st-dim">{at}</span></li>"#,
+                id = attr(&f.node),
+                class = bar_class(f.status),
+                name = text(&f.name),
+                at = f.end_ms.map_or_else(
+                    || "finished; when isn't known".to_owned(),
+                    |ms| format!("finished +{}", crate::dashboard::journal::duration(ms))
+                ),
+            );
+        }
+        b.push_str("</ul>");
+    }
+    b.push_str("</section>");
+}
+
+/// "Critical path: a → b → c · 5.3s of the run's 6.0s", when there is one.
+fn critical_line(b: &mut String, t: &crate::dashboard::threads::ThreadsView, run_took: &str) {
+    if t.critical_path.is_empty() {
+        return;
+    }
+    b.push_str(r#"<p class="th-path" title="From the node that finished last, back through the dependency it waited on that finished last: shortening any other node doesn't end the run sooner"><strong>Critical path:</strong> "#);
+    let names: Vec<String> = t
+        .critical_path
+        .iter()
+        .map(|n| {
+            format!(
+                r#"<span class="mono" data-node="{}">{}</span>"#,
+                attr(&n.node),
+                text(&n.name)
+            )
+        })
+        .collect();
+    b.push_str(&names.join(" → "));
+    if t.critical_inferred {
+        let _ = write!(
+            b,
+            " {}",
+            inferred_chip(
+                "The run recorded no dependencies for some of these nodes (it recorded no snapshot, or kept them from an earlier build): the project's dependencies now are used, which may differ from when it ran"
+            )
+        );
+    }
+    let _ = write!(
+        b,
+        r#" <span class="st-dim">· {} of the run's {}</span></p>"#,
+        text(t.critical_took.as_deref().unwrap_or(MISSING)),
+        run_took,
+    );
+}
+
+/// A thread's height on the Threads tab.
+const THREAD_ROW: usize = 40;
+
+/// One thread's row at `y`: its name, busy and idle, idle stretches and bars.
+fn thread_row(
+    b: &mut String,
+    y: usize,
+    row: &crate::dashboard::threads::ThreadRow,
+    x: &dyn Fn(u64) -> usize,
+    replay: &dyn Fn(&str, u64) -> String,
+) {
+    let took = crate::dashboard::journal::duration;
+    let _ = write!(
+        b,
+        r#"<g class="th-row" data-thread="{thread_attr}"><path class="tl-line" d="M0 {line}H796"></path><text class="tl-name built" x="0" y="{ny}"><title>{thread}</title>{short}</text><text class="th-busy" x="0" y="{by}">busy {busy} · idle {idle}</text>"#,
+        thread_attr = attr(&row.thread),
+        thread = text(&row.thread),
+        short = text(&clip(&row.thread, 26)),
+        line = y + THREAD_ROW,
+        ny = y + 17,
+        by = y + 32,
+        busy = took(row.busy_ms),
+        idle = took(row.idle_ms),
+    );
+    for (from, to) in &row.gaps {
+        let _ = write!(
+            b,
+            r#"<rect class="th-gap" x="{gx}" y="{gy}" width="{gw}" height="20"><title>idle {d}</title></rect>"#,
+            gx = x(*from),
+            gy = y + 10,
+            gw = x(*to).saturating_sub(x(*from)),
+            d = took(to - from),
+        );
+    }
+    for bar in &row.bars {
+        let bx = x(bar.start_ms);
+        let bw = x(bar.end_ms).saturating_sub(bx).max(3);
+        let _ = write!(
+            b,
+            r#"<a class="th-link" href="{href}" data-node="{id}"><rect class="th-bar {class}{crit}" x="{bx}" y="{bary}" width="{bw}" height="20" rx="3"><title>{title}</title></rect>"#,
+            href = attr(&replay(&bar.node, bar.start_ms)),
+            id = attr(&bar.node),
+            class = bar_class(bar.status),
+            crit = if bar.critical { " critical" } else { "" },
+            bary = y + 10,
+            title = text(&format!(
+                "{}: {}, started +{}, took {}{}. Opens the replay at its start.",
+                bar.name,
+                bar.status_label,
+                took(bar.start_ms),
+                bar.took,
+                if bar.critical {
+                    ", on the critical path"
+                } else {
+                    ""
+                },
+            )),
+        );
+        // The name, inside its bar when it fits.
+        let room = bw.saturating_sub(8) / 6;
+        if room >= 4 {
+            let _ = write!(
+                b,
+                r#"<text class="th-label" x="{lx}" y="{ly}">{name}</text>"#,
+                lx = bx + 4,
+                ly = y + 24,
+                name = text(&clip(&bar.name, room)),
+            );
+        }
+        b.push_str("</a>");
+    }
+    b.push_str("</g>");
+}
+
+/// A bar's class, by how its node ended.
+fn bar_class(status: NodeRunStatus) -> &'static str {
+    match status {
+        NodeRunStatus::Success => "built",
+        NodeRunStatus::Error => "failed",
+        NodeRunStatus::Running => "running",
+        _ => "unknown",
+    }
 }
 
 /// The name column of a timeline row: its kind mark and name.

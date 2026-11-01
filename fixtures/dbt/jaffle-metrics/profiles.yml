@@ -1,0 +1,8 @@
+# Local, network-free profile used only to regenerate the committed artifacts.
+jaffle_metrics:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "target/jaffle_metrics.duckdb"
+      threads: 1

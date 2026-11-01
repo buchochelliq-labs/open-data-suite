@@ -35,7 +35,8 @@ pub mod version;
 
 pub use artifacts::{
     ArtifactPreference, ArtifactSource, Artifacts, Catalog, DbtConfig, DbtConstraint, DbtError,
-    DbtMacro, DbtTest, DbtUnitTest, Manifest, ManifestNode, ResourceType,
+    DbtMacro, DbtMetric, DbtSemanticModel, DbtTest, DbtUnitTest, Manifest, ManifestNode,
+    ResourceType, SemanticField,
 };
 pub use runs::{NodeResult, ResultDetails, RunResults, RunStatus, SourceFreshness};
 pub use target::strip_credentials;

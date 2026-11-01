@@ -1,0 +1,101 @@
+OpenDataSuite
+PROJECT
+jaffle_ods
+▾
+TARGET
+dev · duckdb
+▾
+Home
+Catalog
+Lineage
+Graph
+Impact simulator
+State
+ERD
+Usage
+PLANNED
+CI · Impact
+PLANNED
+Agent
+PLANNED
+Settings
+Local · read-only
+Lineage
+/
+Impact simulator
+/
+column lineage · nothing is run
+Simulate
+Change 1
+COLUMN
+CHANGE
+rename
+type change
+drop
+NEW NAME OR TYPE
+double →
+Remove
+Change 2
+COLUMN
+CHANGE
+rename
+type change
+drop
+NEW NAME OR TYPE
+Remove
+Simulate
+Add another column
+Results
+6 must run · 2 known to break · 1 unknown · 0 skipped · 7 not downstream
+JSON
+MUST RUN
+6 nodes
+read the changed column directly or through another one, or can't be told apart
+Node	Verdict	Columns affected	How it reads	Reason
+orders
+parsed	CHANGED HERE	amount	changed here
+The column being changed: amount is dropped.
+customer_order_rank
+parsed	BREAKS	amount,
+running_amount	directtransformation
+Its SQL names orders.amount (dropped), which would no longer exist: its build fails until it is updated.
+customers
+parsed	BREAKS	lifetime_value,
+value_tier	aggregationcondition
+Its SQL names orders.amount (dropped), which would no longer exist: its build fails until it is updated.
+customer_segments
+opaque	UNKNOWN	[unknown]	no SQL lineage
+Its lineage is unknown (e.g. a Python model or SQL that couldn't be parsed): it may use what changed, so it is assumed affected, and may break.
+customers_snapshot_view
+parsed	AFFECTED	lifetime_value,
+value_tier	select *
+Reads customers.lifetime_value (changed) into lifetime_value through select *.
+Reads customers.value_tier (changed) into value_tier through select *.
+segment_summary
+inferred	AFFECTED	all (rows may change)	via opaque
+Reads customer_segments, whose lineage is unknown, so it is assumed affected.
+SKIPPED
+0 nodes, with reason
+No reader of a changed model can be skipped: each one uses what changed.
+7 other nodes are upstream of the change or are unrelated to it, so they can't be reached.
+Column trail
+orders.amount → customer_order_rank.amount direct
+orders.amount → customer_order_rank.running_amount transformation
+orders.amount → customers.lifetime_value aggregation
+orders.amount → customers.value_tier condition
+customers.lifetime_value → customers_snapshot_view.lifetime_value direct
+customers.value_tier → customers_snapshot_view.value_tier direct
+Build command
+ods state build -s customer_order_rank -s customer_segments -s customers -s customers_snapshot_view -s orders -s segment_summary
+Copy command
+Plans exactly what must run; the readers that can be skipped keep their last build. The models that break need their SQL updated first.
+Tests that run with it
+customer_order_rank.order_id relationships
+customer_order_rank.order_id unique
+customers relationships
+customers.customer_id not_null
+customers.customer_id unique
+orders relationships
+orders.customer_id relationships
+orders.order_id not_null
+orders.order_id unique

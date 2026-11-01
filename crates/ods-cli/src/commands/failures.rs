@@ -44,6 +44,9 @@ pub(super) struct ProjectFiles<'a> {
     pub(super) last_manifest: Option<&'a ods_provider_dbt::Manifest>,
     /// `[warehouses.<kind>]`, for the warehouses the project's is built on.
     pub(super) warehouses: &'a crate::plugins::Warehouses,
+    /// The plugins whose error catalogues explain failures: the installed ones, with a
+    /// declared plugin's, live or as recorded (ADR-0031 §3d).
+    pub(super) plugins: &'a crate::plugins::Plugins,
 }
 
 impl ProjectFiles<'_> {
@@ -79,7 +82,7 @@ impl ProjectFiles<'_> {
             .manifest
             .or(self.last_manifest)
             .and_then(|m| m.adapter_type.as_deref());
-        crate::plugins::installed().project_catalogue(warehouse, self.warehouses)
+        self.plugins.project_catalogue(warehouse, self.warehouses)
     }
 
     fn last_index(&self) -> Option<ProjectIndex> {
@@ -210,6 +213,24 @@ fn earlier_runs(state_db: &Path, run: &RunSummary) -> Vec<RunSummary> {
     runs
 }
 
+/// Every error `run`'s failed nodes and tests gave, each once: what a warehouse plugin
+/// is asked to classify (ADR-0031 §3d).
+pub(super) fn run_errors(run: &RunSummary) -> Vec<ods_sdk::contracts::run_events::ErrorSummary> {
+    let mut errors: Vec<ods_sdk::contracts::run_events::ErrorSummary> = Vec::new();
+    let nodes = failed_nodes(run)
+        .into_iter()
+        .filter_map(|node| run.get(node)?.stats.error.clone());
+    let checks = failed_checks(run)
+        .into_iter()
+        .filter_map(|c| c.error.clone());
+    for error in nodes.chain(checks) {
+        if !errors.contains(&error) {
+            errors.push(error);
+        }
+    }
+    errors
+}
+
 /// Explains every failed node of `run`, then every failed test (check).
 pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<ErrorExplanation> {
     let failed = failed_nodes(run);
@@ -250,6 +271,7 @@ pub(super) fn explain_run(run: &RunSummary, evidence: &Evidence<'_>) -> Vec<Erro
                     observed: None,
                     trust_observed: false,
                     warehouses: evidence.files.warehouses.clone(),
+                    plugins: Some(evidence.files.plugins.clone()),
                 };
                 Loaded::from_dir(evidence.files.target_dir, &options, shared_cache()).ok()
             });
@@ -746,6 +768,7 @@ mod tests {
             manifest: None,
             last_manifest: None,
             warehouses: &crate::plugins::Warehouses::new(),
+            plugins: crate::plugins::installed(),
         };
         assert_eq!(files.target_name(), "target");
         let files = ProjectFiles {
@@ -754,6 +777,7 @@ mod tests {
             manifest: None,
             last_manifest: None,
             warehouses: &crate::plugins::Warehouses::new(),
+            plugins: crate::plugins::installed(),
         };
         assert_eq!(files.target_name(), "target");
     }

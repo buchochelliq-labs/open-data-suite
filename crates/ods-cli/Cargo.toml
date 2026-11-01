@@ -16,6 +16,9 @@ path = "src/main.rs"
 async-trait.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
+# A plugin's trust digest (ADR-0030 §4b), and its `timeout`.
+hex.workspace = true
+humantime.workspace = true
 ods-config.workspace = true
 # `[health]` settings for the dashboard's badges (#392).
 ods-health.workspace = true
@@ -26,18 +29,23 @@ ods-mcp.workspace = true
 ods-provider-databricks.workspace = true
 ods-provider-duckdb.workspace = true
 ods-provider-dbt.workspace = true
+# Runs script checks and out-of-process plugins as processes (ADR-0031 §5, §6).
+ods-provider-process.workspace = true
 ods-provider-sqlparser.workspace = true
-ods-sdk.workspace = true
+# `ods plugin test` runs the SDK's suites against a plugin (ADR-0031 §5).
+ods-sdk = { workspace = true, features = ["conformance"] }
 ods-state.workspace = true
 ods-store-sqlite.workspace = true
 ods-web.workspace = true
 opener.workspace = true
 petgraph.workspace = true
 rs-rich.workspace = true
+rs-rich-ext.workspace = true
 supports-hyperlinks.workspace = true
 url.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 shlex.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
@@ -52,6 +60,22 @@ insta.workspace = true
 proptest.workspace = true
 ods-provider-fake.workspace = true
 serde_json.workspace = true
+
+# Its binary is also the script it checks with (`--ods-script-fixture`), so it has its
+# own `main`.
+[[test]]
+name = "health_scripts"
+harness = false
+
+# Likewise, its binary is the out-of-process plugin it tests (`--ods-plugin-fixture`).
+[[test]]
+name = "plugin_process"
+harness = false
+
+# And here, the out-of-process warehouse plugin it tests (`--ods-warehouse-fixture`).
+[[test]]
+name = "plugin_warehouse"
+harness = false
 
 [lints]
 workspace = true

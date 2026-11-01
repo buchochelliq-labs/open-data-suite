@@ -34,8 +34,8 @@ Light is the default. Home, Lineage, Model and Plan also have dark versions.
 | Catalog: freshness evidence | **Built** (#350): sources and seeds, their evidence and grade, what readers were built from, their decisions, and what is downstream |
 | Settings: About | **Built** (#415): this `ods` and its plugins, with what each offers and whether this configuration can use it |
 | Settings | **Built** (#351): the configuration, read-only, with secrets as references and `ods doctor`'s checks that only read; Server mode as placeholders |
-| Semantic layer | Designed (#309, #352) |
-| Dark mode | Built where the page's CSS follows `prefers-color-scheme`; not yet checked against every dark board (#309) |
+| Semantic layer | **Built** (#352) as the board's read-only placeholder: the semantic models and metrics the manifest declares, and an empty state without them |
+| Dark mode | **Built** (#353): every screen follows `prefers-color-scheme`, has a dark still in the tours, and passes the contrast check in light and dark |
 
 The recordings on this page are real: `ods serve` on the demo project, played by
 `scripts/record-dashboard.py` ([how they're made](../../recordings.md)). The images
@@ -97,7 +97,8 @@ reading it.
 
 ### Catalog: semantic layer (placeholder)
 
-Not built yet (#309).
+**Built** (#352) at `/catalog/semantic`, as the placeholder the board designs: it lists
+what the project declares and says it does nothing more yet.
 
 ![Semantic layer](images/metrics.png)
 
@@ -105,9 +106,22 @@ Not built yet (#309).
 - **Source picker:** "dbt semantic manifest" is the first source; other build tools
   are greyed as planned.
 
-The read goes through a generic semantic-source contract, so another build tool can
-plug in the way warehouses do. ODS reads definitions only; it never serves or queries
-metrics.
+ODS reads definitions only; it never serves or queries metrics.
+
+As built:
+- **Semantic models:** each with the model it is defined on (linked when the Catalog has
+  it), its description, and its measures (with their aggregation), dimensions (with
+  their type) and entities.
+- **Metrics:** a table of each metric's type, what it is computed from (its measure, a
+  ratio's two metrics, a derived metric's expression), the dimensions of the semantic
+  models it reaches through the metrics it reads, and the models those are defined on.
+- **No semantic layer:** a project that declares none gets an empty state. Artifacts
+  that can't record one (the Information Schema) say the definitions aren't available
+  there; an entry that can't be read is named, and the rest are still listed.
+- **Source:** the definitions come from `manifest.json`'s public `semantic_models` and
+  `metrics`. They reach the page as neutral facts the binary hands over, as the Catalog's
+  nodes do. A separate SDK contract for semantic sources waits for a second build tool.
+- **Not yet:** no query, no validation, and no lineage or impact through metrics.
 
 ### Lineage: State overlay
 
@@ -236,6 +250,14 @@ A run still going isn't followed live yet (#322 step 4).
 - **Totals and Nodes:** node counts by status and rows under the tiles; the Nodes tab
   lists each node's status, start, time taken (compile and execute), rows (`—` with the
   reason), thread, tests, why it ran and a failed node's error.
+- **Threads** (#355, `?tab=threads`): a row per thread with a bar per node it ran,
+  coloured by outcome, its idle stretches hatched, and how long it was busy and idle.
+  The critical path (from the node that finished last, back through the dependency it
+  waited on that finished last) is outlined and named, *inferred* when the run didn't
+  record a node's dependencies (no snapshot, or a node kept from an earlier build)
+  and the project's dependencies now stand in. A bar opens the
+  replay at the node's start with the node selected. A journal rebuilt from final
+  results (no start times) gets no bar: it says so and lists the finishes.
 - **Built this run:** why each node was built.
 - **Earlier runs:** the runs before it.
 
@@ -364,6 +386,26 @@ Board: `boards/live-run/ErrorExplained.dc.html` (in the repository, not on the d
 | ![Home, dark](images/main-dark.png) | ![Lineage, dark](images/lineage-dark.png) |
 | **Model page** | **Plan** |
 | ![Model page, dark](images/model-dark.png) | ![Plan, dark](images/plan-dark.png) |
+
+**Built** (#353). Every screen follows the browser's `prefers-color-scheme`; the boards
+have no manual switch, so there is none. The `dark` tour (`docs/tapes/dashboard/dark.toml`)
+keeps a dark still of each screen, and the Plan's own tour is dark, so
+`record-dashboard.py --check` catches a regression on any of them.
+
+Contrast is measured, not judged by eye. `crates/ods-web/tests/browser/contrast.py`
+visits every screen in light and dark and measures:
+- every piece of visible text against what is painted behind it (WCAG AA: 4.5:1, or 3:1
+  for large text);
+- the status dots, bars and glyphs against what they sit on (3:1).
+
+Inactive components (planned items, anything disabled) are exempt, as WCAG exempts them.
+
+Three light tokens are darker than the boards' so their text passes on every surface:
+- `--faint`: `#626C7B` (the board has `#8A94A3`);
+- `--ok`: `#197A43` (`#1F8A4C`);
+- `--warn`: `#8F6100` (`#B7791F`).
+
+The dark tokens are the boards' own.
 
 ## Decisions taken from the dbt platform review
 

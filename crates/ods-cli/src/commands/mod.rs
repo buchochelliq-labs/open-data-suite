@@ -14,6 +14,8 @@ mod mcp_data;
 mod mcp_tools;
 mod planned;
 mod plugin;
+mod plugin_process;
+mod plugin_test;
 mod relation_links;
 mod run_journal;
 mod run_stats;

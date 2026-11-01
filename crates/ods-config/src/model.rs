@@ -49,6 +49,24 @@ pub struct Config {
     /// (ADR-0031 §3b).
     #[serde(default)]
     pub warehouses: BTreeMap<String, WarehouseConfig>,
+    /// Out-of-process plugins, by name: executables that speak the plugin protocol
+    /// (ADR-0031 §5), e.g. `[plugins.acme] command = ["acme-ods-plugin"]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, PluginConfig>,
+}
+
+/// `[plugins.<name>]`: an out-of-process plugin (ADR-0031 §5).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[non_exhaustive]
+pub struct PluginConfig {
+    /// Its command: its program, then its arguments, e.g. `["acme-ods-plugin"]`.
+    /// Started directly, never through a shell, in the project's root.
+    pub command: Vec<String>,
+    /// How long one call may take before it is stopped and its answer is unknown, e.g.
+    /// `"30s"` (default `"60s"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 /// `[warehouses.<kind>]`.
@@ -225,6 +243,11 @@ pub struct HealthConfig {
     /// default) or `warning`. Never healthy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unknown_counts_as: Option<UnknownCountsAs>,
+    /// Run the checks after every `ods state` build that succeeds, as `ods health
+    /// check` would, and record them for the dashboard (ADR-0030 §6). Off by default;
+    /// their verdict never changes the build's exit status.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub after_run: bool,
     /// The built-in checks, by id, e.g. `[health.builtin.tests_required]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub builtin: BTreeMap<String, HealthCheckConfig>,
@@ -259,6 +282,10 @@ pub struct HealthProbesConfig {
     /// The dbt profile it is in, when not the project's (or `--dbt-profile`'s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// In place of `target`: a `[plugins.<name>]` that runs the probes over its own
+    /// connection and reports what that login may do (ADR-0031 §3d).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 /// A coverage target, e.g. `[health.coverage.tests]` (ADR-0030 §3).
@@ -281,7 +308,7 @@ pub struct DeclaredCheckConfig {
     /// Its id, unique among the checks: lowercase letters, digits, `_`, `-` and `.`,
     /// starting with a letter, e.g. `marts.documented`.
     pub id: String,
-    /// What kind of check it is: `declarative` (the default) or `probe`.
+    /// What kind of check it is: `declarative` (the default), `probe` or `script`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// What every selected node must have: `description`, `tests`, `test:<type>` (e.g.
@@ -297,6 +324,18 @@ pub struct DeclaredCheckConfig {
     /// Probes only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pass: Option<String>,
+    /// A script's command: its program, then its arguments, e.g.
+    /// `["python", "checks/pii.py"]`. Started directly, never through a shell, in the
+    /// project's root (ADR-0030 §4). Scripts only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// How long a script may take before it is stopped and its findings are unknown,
+    /// e.g. `"30s"` (default `"60s"`). Scripts only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+    /// A script's parameters, passed on in its request as given. Scripts only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<toml::Table>,
     /// How severe its failure is (default `warn`), or `off` to not run it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub severity: Option<HealthSeverity>,

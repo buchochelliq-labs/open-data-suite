@@ -18,7 +18,7 @@ codes).
 | `ods state doctor\|backup\|reset` | available (preview): check the state database, copy it, or set it aside, see [below](#recovering-state) |
 | `ods state explain\|why-build\|why-skip\|diff\|graph`, `ods state history NODE` | available (preview): why a node builds or is reused, what changed, and why each past build happened, see [below](#state-explain-diff-graph) |
 | `ods health check` | available (preview): run the health checks `[health]` configures and gate CI on them, see [below](#ods-health-check) |
-| `ods health trust` | available (preview): review this project's probe checks and trust them to run, see [below](#ods-health-trust) |
+| `ods health trust` | available (preview): review this project's probe and script checks and plugins and trust them to run, see [below](#ods-health-trust) |
 | `ods erd generate` | available (preview): entity-relationship diagram from tests and constraints, see [below](#entity-relationship-diagrams) |
 | `ods erd inspect\|validate` | planned: M3 ERD & Usage (v0.3.0) |
 | `ods usage` | planned: M3 ERD & Usage (v0.3.0) |
@@ -28,7 +28,7 @@ codes).
 | `ods lineage columns\|impact\|compare\|export\|graph\|view` | available (preview): column-level lineage, see [below](#column-level-lineage) |
 | `ods serve` | available (preview): host the read-only dashboard, the lineage explorer and their JSON API, see [below](#the-dashboard) |
 | `ods mcp` | available (preview): the ODS tools for AI agents over MCP, see [below](#mcp-server-for-ai-agents) |
-| `ods plugin list\|show` | available (preview): the plugins this `ods` runs with and what each offers, see [below](#ods-plugin) |
+| `ods plugin list\|show\|test` | available (preview): the plugins this `ods` runs with and what each offers, and the SDK's suites run against an out-of-process plugin, see [below](#ods-plugin) |
 | `ods doctor` | available (preview): check that ODS can work here (configuration, project, dbt, target, state store, capabilities), see [below](#ods-doctor) |
 | `ods config explain [KEY]` | available |
 | `ods version` | available |
@@ -136,6 +136,8 @@ meanings get new numbers.
 | `ODS-E0702` | `ods health check` couldn't write its health record. The records already there are unchanged. |
 | `ODS-E0703` | `ods health trust` couldn't read or write the trust store, or there is no user configuration directory to keep it in. Nothing was changed. |
 | `ODS-E0801` | `ods plugin show` names a plugin this `ods` doesn't run with, or a name several plugins share without `--kind` (exit status 2). The hint lists the plugins, or the kinds to choose from. |
+| `ODS-E0802` | A `[plugins.<name>]` can't be used: a project declares it and it isn't trusted yet (`ods health trust`, or `--allow-scripts` for one run), it can't be started, or it didn't describe itself as the plugin protocol says (e.g. a contract built against another version). |
+| `ODS-E0803` | `ods plugin test`: the plugin fails a conformance case (exit status 5). The message names the case. |
 | `ODS-W0704` | A warning, not an error: `ods health check --allow-elevated-login` ran, so probes may have run under a login that can do more than read. It names the connection and what was found. |
 | `ODS-W0705` | A warning: a probe check selects no model, seed or snapshot (e.g. it names a source, which can't be probed yet), so it checked nothing. With `--strict`, one at severity `error` fails the gate. |
 
@@ -222,7 +224,7 @@ format = "json"
     `never`) and `output.width` (at least 20)
   - `log.level` (`off`, `error`, `warn`, `info`, `debug` or `trace`)
   - `state.db` and `state.environment`: see [State settings](#state-settings-in-odstoml)
-  - `health.unknown_counts_as` and `health.builtin.<check>.severity`, `.select` and
+  - `health.unknown_counts_as`, `health.after_run` and `health.builtin.<check>.severity`, `.select` and
     `.exclude`: see [Health settings](#health-settings-in-odstoml)
   - `providers.<name>.kind` and `providers.<name>.settings`. For `kind = "dbt"` the
     settings are `program`, `project_dir`, `profiles_dir`, `profile`, `target` and
@@ -234,6 +236,8 @@ format = "json"
     (Databricks is built on Spark). Only error patterns and the SQL dialect are
     inherited, never source versions, the login check, links or observed lineage
     (ADR-0031 §3b). Warehouses that extend each other in a cycle are an error.
+  - `plugins.<name>.command` and `plugins.<name>.timeout`: an out-of-process plugin, see
+    [`ods plugin`](#out-of-process-plugins)
 
   Unknown keys are errors.
 - **Secrets:** credentials must be references such as `{ secret = "env:VAR" }`.
@@ -275,6 +279,94 @@ and, for a warehouse, `parents`, `parents_from` (`plugin`, or `configuration` wh
 `ods_list_plugins` answers the same. A warehouse without a plugin works too, with dbt's
 error patterns and the dialect of its kind; it just isn't listed. The built-in
 warehouses are in [Writing a provider](plugins.md#built-in-warehouses).
+
+### Out-of-process plugins
+
+An out-of-process plugin is a program, in any language, that ODS starts and talks to
+in JSON over its stdin and stdout ([ADR-0031](adr/0031-plugin-registry-and-loading.md)
+§5). It works with the released `ods`, with no custom build. Declare it in `ods.toml`,
+or in your own `config.toml`:
+
+```toml
+[plugins.acme]
+command = ["acme-ods-plugin", "--quiet"]   # its program, then its arguments; never a shell
+timeout = "30s"                            # each call; default 60s, at most 1h
+```
+
+ODS first asks it to describe itself, then calls it as each command needs: its health
+checks run in `ods health check` with the other checks, and tuned the same way
+(`[health.plugins.<id>]`, see [Plugin checks](#plugin-checks)). For a warehouse it
+serves (the project's, as dbt names it), it can give what a built-in warehouse plugin
+gives ([ADR-0031](adr/0031-plugin-registry-and-loading.md) §3d):
+- **source versions**, for `ods state compile|run|seed|snapshot|build`;
+- **"Open in warehouse" links**, asked for every relation of the project by `ods state`
+  (except `--dry-run`), `ods health check` and `ods lineage`;
+- **error explanations**, asked for the errors of a run that failed by `ods state` and
+  `ods state explain-failure`, before dbt's own;
+- **observed lineage**, read from the export `ods lineage compare --observed` names;
+- **the SQL dialect** column lineage reads the project in;
+- **probes**, over its own connection, with `[health.probes] plugin` (see
+  [Probe checks](#probe-checks)).
+
+[Writing a provider](plugins.md#out-of-process-plugins) describes the protocol.
+
+- **The dashboard and MCP never start a plugin** (ADR-0009). The commands that run one
+  keep its links and explanations beside the state store,
+  `<state db>.plugins/<scope digest>.json` (the newest 500 explanations), and the
+  dashboard and the MCP tools read them from there: what they show is as of the last
+  command that ran the plugin. Before any has, there are no links, saying why, and dbt
+  explains errors. The dashboard reads the plugin's dialect from there too, so run
+  `ods health check` or `ods state build` once before `ods serve` on such a project.
+
+- **Where it runs:** in the directory of the project's `ods.toml` (else the current
+  one), with your environment. ODS hands it no credential and no resolved secret: a
+  plugin that needs the warehouse connects with its own environment, as dbt does. Its
+  warehouse's `[providers.<name>]` settings are passed to it, secret references
+  unresolved.
+- **Trust:** a plugin a project's files declare runs only once you have trusted it with
+  [`ods health trust`](#ods-health-trust): its `command` and the content of the files
+  its command names inside that directory. A commit that changes any of them needs
+  trust again; changing its `timeout` doesn't. `--allow-scripts` on `ods health check`, the `ods state` commands
+  that build and `ods plugin test` trusts it for one run. A plugin in your own
+  `config.toml` needs no trust.
+- **Failing safe:** a plugin that isn't trusted, can't start, or doesn't describe itself
+  as the protocol says (for example, a contract built against another version, named
+  with this `ods`'s) runs nothing. `ods health check` then fails (exit 1, `ODS-E0802`):
+  which checks it would have run is unknown, so nothing stands in for them. The `ods
+  state` commands warn and go on without its versions, judging sources by
+  `sources.json` alone. A call that fails, times out or answers about something it
+  wasn't asked about makes everything in that call *unknown*: a check's nodes, or the
+  sources asked about.
+- **Links are checked:** a link a plugin gives must be an `https://` URL with a label
+  and no user part or fragment, or the relation has none, saying why: a page shows it.
+- **Listing:** `ods plugin list` lists each declared plugin under `declared`, with the
+  contracts it describes, or why it doesn't run, and its checks and warehouse with the
+  other plugins (`from` is `<its name> (plugins.<name>) <its version>`). Listing asks
+  the trusted ones to describe themselves, and runs nothing else. `ods version`,
+  `ods doctor`, the MCP tool and the dashboard list the plugins this `ods` is built
+  with: they never start a declared plugin.
+
+`ods plugin test <name>` runs the SDK's conformance suites against `[plugins.<name>]`,
+as a subprocess, for each contract it describes, with its warehouse's settings as a run
+sends them:
+- its health checks, over fixture nodes;
+- its source versions, over the sources you name, two it can read with `--source` and
+  one it can't with `--unreadable` (changing a source's data is beyond a read-only test,
+  so that case is always skipped);
+- its links, over three-part relation names quoted with `--quote` (default `"`);
+- its error explanations, over the samples in `--errors FILE`, a JSON list of
+  `{"message": …, "expected": <symptom or null>}`;
+- its observed lineage, reading `--export FILE` (and refusing `--malformed FILE`);
+- not its probes: they need relations in a live warehouse, which
+  `ods health check` with `[health.probes] plugin` has.
+
+A suite without what it needs is skipped and says so. A failing case exits 5
+(`ODS-E0803`), naming it:
+
+```sh
+ods plugin test acme --source source.shop.raw.orders --source source.shop.raw.customers \
+  --errors samples.json --export lineage.csv
+```
 
 ## `ods doctor`
 
@@ -829,7 +921,7 @@ Home, it only reads, and every action is a command to copy into a terminal.
 | Plan | `/state/plan` | every planned node with its Build or Reuse pill and reason, the counts to build and reuse, and how many reused relations were checked; `?action=build` or `reuse` filters |
 | Why | `/state/plan?node=<id>` | for one node (its percent-encoded unique id, or a name only one node has): its recorded build, which fingerprint parts changed, what it reads (parents' decisions; each source's version, strategy and origin, ADR-0022), the relation check, the decision, and the reason chain; `&view=json` shows its data |
 | Runs | `/state/runs` | every recorded run, and every run whose journal is kept, newest first (the newest 50; `ods state history` lists all): its outcome, node counts, rows and duration. Filtered by `?outcome=` (`succeeded`, `partial`, `failed`, `unfinished`, `unknown`, or `recorded` for runs without a journal), `?target=` and `?date=` (`1d`, `7d` or `30d`), with counts; `?run=<id>` picks the run in the side panel, with its failed nodes explained ([why a node failed](#why-a-node-failed)) |
-| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node explained: headline, category, how sure ODS is, why it thinks so (or what it knows), where, what to try with Copy buttons, the impact, and dbt's redacted message one click away. An unambiguous prefix of the id (8 characters or more) works too |
+| Run | `/state/runs/<run_id>` | the run's totals, a timeline of when each node started and finished (from its journal) and of the nodes that kept an earlier build, why each was built, and the earlier runs; `?tab=threads` draws the run by thread, a bar per node and its idle stretches, with the critical path outlined (*inferred* when the run recorded no snapshot, or kept a node on it from an earlier build), each bar opening the replay at the node's start; `?tab=nodes` lists each node's status, start, time taken (compile and execute), rows, thread, tests and why it ran, with a failed node explained: headline, category, how sure ODS is, why it thinks so (or what it knows), where, what to try with Copy buttons, the impact, and dbt's redacted message one click away. An unambiguous prefix of the id (8 characters or more) works too |
 
 What the pages claim is what ODS records, and no more:
 - **The plan** is the one `ods state plan` makes, offline, made again at most every 30
@@ -1094,6 +1186,21 @@ The numbers are the plan's: a source's version is the one `ods state explain` sh
 a model reading it. `/api/catalog/sources` returns the same view model, and leaves out
 seeds' file paths beyond loopback.
 
+**Semantic layer** (`/catalog/semantic`, under Catalog) lists the semantic models and
+metrics the project's `manifest.json` declares, read-only. Each semantic model shows the
+model it is defined on, and its measures, dimensions and entities. Each metric shows:
+- its type;
+- what it is computed from;
+- the dimensions it can be sliced by;
+- the models it depends on, through the metrics it reads.
+
+A project that declares none gets an empty state. The Information Schema (Parquet)
+records no semantic layer, so read from it the page says the definitions aren't available
+rather than that there are none. A definition whose entry can't be read is named on the
+page and left out, never fatal to the project. It is a placeholder: ODS never queries,
+validates or serves a metric, and lineage doesn't go through metrics yet.
+`/api/catalog/semantic` returns the same view model.
+
 **About** (`/settings/about`, under Settings) shows this `ods` and the plugins it runs
 with, from the same detection as `ods plugin list`
 ([ADR-0031 §3c](adr/0031-plugin-registry-and-loading.md)): its version and SDK version,
@@ -1325,6 +1432,7 @@ stdout carries only the report (one JSON document with `--json`).
 | `--dry-run` | prepare and plan, but build and record nothing (`compile` always does just that) |
 | `--no-compile` | plan from the artifacts already in `--target-dir`. Sources aren't measured either, and only an explicit `--sources` file is read |
 | `--no-source-freshness` | don't measure sources; use `--sources` or an existing `sources.json` |
+| `--allow-scripts` | run the project's [out-of-process plugins](#out-of-process-plugins) for this run only, though not trusted (e.g. in CI); keeps nothing |
 | `--dbt PROGRAM` | the dbt executable; default the configured `program`, then `dbt` |
 | `--project-dir DIR` | dbt's; also where ODS finds the artifacts: `DIR/target` unless `--target-dir` says otherwise. Default `DBT_PROJECT_DIR`, then the configured `project_dir`, then `.` |
 | `--profiles-dir DIR`, `--target NAME` | dbt's; default `DBT_PROFILES_DIR`, `DBT_TARGET`, then the configured `profiles_dir`, `target` |
@@ -1375,6 +1483,7 @@ The built-in checks, and their defaults:
 ```toml
 [health]
 unknown_counts_as = "unknown"            # or "warning"
+after_run = false                        # true: check after every build that succeeds
 
 [health.builtin.tests_required]
 severity = "error"                       # error | warn | info | off
@@ -1491,6 +1600,18 @@ target = "health_readonly"   # a target in profiles.yml whose login can only rea
 profile = "jaffle"           # optional: when not the project's (or --dbt-profile's)
 ```
 
+Or, in place of `target` and `profile`, through an
+[out-of-process plugin](#out-of-process-plugins) that serves the project's warehouse,
+over its own connection: it runs the probes, and reports what the login it runs them
+under may do, so the login checked is the login probed (ADR-0031 §3d). A plugin that
+doesn't report that has every probe refused, as below, unless `--allow-elevated-login`.
+`plugin` is pinned in each probe's trust, as `target` is:
+
+```toml
+[health.probes]
+plugin = "acme"              # a [plugins.<name>] that implements relation_probe
+```
+
 Reporting what a login may do is a provider capability (`relation_privileges`). On
 Databricks, ODS reads it from Unity Catalog's `system.information_schema`, through the
 probe target's own connection: a probe runs when the relation is a managed table, a
@@ -1544,6 +1665,78 @@ The columns `pass` names are kept in each finding's evidence (`row.<column>`), s
 are written to the health record and shown on the dashboard: don't select a column you
 wouldn't want kept there.
 
+#### Script checks
+
+A script check runs a program you name, for the checks no declaration or query can
+express ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §4):
+
+```toml
+[[health.checks]]
+id = "pii.columns_tagged"
+kind = "script"
+command = ["python", "checks/pii.py"]   # its program, then its arguments; no shell
+select = { path = ["models/marts/**"] } # every node when not set
+params = { tag = "pii" }                # optional: passed on as given
+timeout = "2m"                          # optional: default 60s, at most 1h
+severity = "error"
+```
+
+`ods health check` starts the command (its first item as the program, never through a
+shell, so nothing in it is expanded) in the dbt project's directory, with your
+environment, as `dbt` would be started; ODS adds no credential and no secret (what
+the script prints is its own: its last line on stderr is quoted in its findings when it
+fails, so don't let it print a credential from that environment). It writes
+one JSON request to the program's stdin and reads one JSON answer from its stdout, the
+*script protocol* (`ods_sdk::protocol`, version 1.0):
+
+```json
+{"protocol": {"major": 1, "minor": 0}, "request": "check",
+ "check": {"id": "pii.columns_tagged", "params": {"tag": "pii"}},
+ "scope": {"nodes": [{"id": "model.shop.orders", "name": "orders", "resource_type": "model",
+                      "path": "models/marts/orders.sql", "tags": ["finance"], "tests": 2,
+                      "described": true, "constraints": 0}]},
+ "artifacts": {"manifest": "/abs/path/target/manifest.json", "target_dir": "/abs/path/target"}}
+```
+
+`scope.nodes` are the nodes the check selects, with what ODS knows of each (the same
+facts every check gets: its tags, path, tests, constraints, when it was built, …), and
+`artifacts` gives the absolute paths of the dbt artifacts there are (`manifest`,
+`run_results`, `catalog`, `sources`, and `target_dir`), for a script that needs more.
+The answer gives one finding per node, with a `status` (`pass`, `fail`, `unknown`), a
+`reason` for people, and optional `evidence` (string keys and values):
+
+```json
+{"protocol": {"major": 1, "minor": 0},
+ "findings": [{"node": "model.shop.orders", "status": "fail",
+               "reason": "email isn't tagged pii", "evidence": {"columns": "email"}}]}
+```
+
+What the program writes to stderr is logged (`--verbose`). A script runs only once you
+have trusted it, and until then every node it selects is *unknown*, never a pass. So is
+every node when it fails, saying why:
+- **Trust.** A script a project's `ods.toml` (or `ods.local.toml`) defines runs only once
+  you have trusted it for that project with [`ods health trust`](#ods-health-trust):
+  its `command`, `select` and `exclude`, a `project_dir` configuration sets, and the
+  content of every file its command names inside the project (e.g. `checks/pii.py`).
+  A commit that changes any of them makes it untrusted again; changing its `params`,
+  `timeout` or `severity` doesn't. Trust pins those files only, not what they import or
+  read in turn, so keep a script's code in the files its command names, or review what
+  it loads. Scripts in your own `config.toml` need no trust, even where the project sets
+  `[health.probes]` (which makes your probes need it); a relative path there runs
+  that file in whichever project you check, so name your own scripts by absolute path.
+- **Failing safe.** A command that can't start, exits non-zero (the finding quotes its
+  last line on stderr, up to 300 characters), runs past its `timeout` (it is then
+  stopped, with every process it started: it runs in a process group, a job object on
+  Windows, of its own; a script ends when every process it started has), writes more than 64 MiB to stdout, or answers with anything but the
+  protocol's JSON in major version 1, makes every node it was asked about *unknown*. So does an answer about a node it wasn't asked about. A node it
+  doesn't answer, or answers twice, is *unknown*.
+
+A `command` that is missing or empty, a `timeout` that isn't a duration (`"30s"`,
+`"2m"`) or is over an hour, `params` that aren't a table, or `require`, `sql` or `pass`
+on a script, is a configuration error (exit 4, `ODS-E0102`); `command`, `timeout` and
+`params` on any other kind of check are too. Scripts run in `ods health check` only: the
+dashboard never starts one, and shows what the last run recorded, with when.
+
 #### Plugin checks
 
 A custom `ods` can add health checks of its own ([plugins](plugins.md#a-custom-ods-in-process-plugins),
@@ -1562,6 +1755,11 @@ A node the check doesn't select is *skipped* for it. A `[health.plugins.<id>]` t
 no check this `ods` has is a configuration error (exit 4), naming the checks it does
 have: a misspelt id never silently drops a gate. Like probes, plugin checks run in
 `ods health check`, and the dashboard shows what the last run recorded.
+
+[Out-of-process plugins](#out-of-process-plugins) add checks the same way, as they
+describe them. Their checks are known only once they run, so the dashboard accepts a
+`[health.plugins.<id>]` it can't find when the configuration declares any, and `ods
+health check` checks it.
 
 #### Coverage targets
 
@@ -1590,16 +1788,16 @@ so it never reads past a target it misses. A measure that doesn't exist, or a ta
 outside 0 to 1 or finer than a thousandth, is a configuration error (exit 4,
 `ODS-E0102`).
 
-Scripts and plugins come in later phases of #392.
-
 ### ods health trust
 
-`ods health trust` lists the probe checks this project defines, with their SQL and
-whether each is new, changed or already trusted, then trusts them as they are now:
+`ods health trust` lists the probe and script checks and the
+[out-of-process plugins](#out-of-process-plugins) this project defines, with each
+probe's SQL and each script's and plugin's command, and whether each is new, changed or
+already trusted, then trusts them as they are now:
 
 ```sh
-ods health trust            # review and trust this project's probes
-ods health trust --revoke   # forget them: its probes won't run
+ods health trust            # review and trust this project's probes, scripts and plugins
+ods health trust --revoke   # forget them: they won't run
 ```
 
 - **Where trust is kept:** `trust.json` in your own configuration directory, beside your
@@ -1610,7 +1808,11 @@ ods health trust --revoke   # forget them: its probes won't run
   dbt settings configuration gives (`program`, `project_dir`, `profiles_dir`, `profile`;
   flags and `DBT_*` variables are yours, so they aren't pinned).
   Changing any of them makes the probe untrusted again; changing its `pass` or
-  `severity` doesn't. Probes in your own `config.toml` need trust too when a project
+  `severity` doesn't. A script's digest covers its `command`, `select` and `exclude`,
+  a configured `project_dir`, and the content of the files its command names inside the
+  project. A plugin's digest covers its `command` and the content of the files its
+  command names in the directory it runs in; its id in the store is
+  `plugin:<name>`. Probes in your own `config.toml` need trust too when a project
   file sets `[health.probes]`: a repository can't point them at another target.
 - **Only what you reviewed:** trusting replaces the project's entry, so a check no longer
   defined is no longer trusted. Cloning a repository never trusts anything.
@@ -1629,15 +1831,16 @@ health gate ([ADR-0030](adr/0030-configurable-and-pluggable-health-checks.md) §
 ods health check                  # exit 5 when a check at severity error fails
 ods health check --strict --json  # also when one couldn't decide; one JSON document
 ods health check --no-record      # don't keep the findings
-ods health check --allow-scripts  # trust this project's probes as they are now, this run only
+ods health check --allow-scripts  # trust this project's probes and scripts as they are now, this run only
 ods health check --allow-elevated-login  # run probes whose login can do more than read: your risk
 ```
 
 It takes the options `ods state` commands take to find the project and the state store
 (`--project-dir`, `--target-dir`, `--state-db`, `--environment`, …) and to call dbt
 (`--dbt`, `--profiles-dir`, `--dbt-profile`, `--vars`, `--dbt-output`), and reads them
-only: no database is created or migrated, and dbt runs only for
-[probe checks](#probe-checks), on `[health.probes]`'s target.
+only: no database is created or migrated, dbt runs only for
+[probe checks](#probe-checks), on `[health.probes]`'s target, and
+[script checks](#script-checks) are the only other programs it starts.
 
 | Outcome | Exit |
 |---|---|
@@ -1651,6 +1854,19 @@ With the defaults, only `last_run_failed` is at severity `error`, so the gate fa
 nodes that failed in the last run and haven't been built since. Raise any other check
 to `error` in `[health]` to gate on it too.
 
+- **After a build:** with `after_run = true` in `[health]` (off by default), every
+  `ods state` command that builds (`build`, `run`, `seed`, `snapshot`, `retry --failed`)
+  runs the checks once it succeeded and is recorded (or had nothing to build), as
+  `ods health check` would with the same project and dbt options, and keeps the record
+  for the dashboard. The build's report ends with a line of counts, and names the nodes
+  and coverage targets failing at severity `error` (in `--json`, `health`, with
+  `status: checked`). Their verdict never changes the build's exit status: the build is
+  recorded already, so gate CI with `ods health check`. The build's `--allow-scripts`
+  applies; `--allow-elevated-login` is a flag of `ods health check` only, so probes that
+  need it are *unknown* here. When the checks can't run (e.g. a project's plugin isn't
+  trusted yet, or `[health]` is invalid), the report says why as a warning (`status:
+  not_checked`), no record is written, and the dashboard keeps the last one. A build
+  that fails, `--dry-run` and `ods state compile` run no checks.
 - **The health record:** each check run is kept beside the state store, in
   `<state db>.health/` (e.g. `.ods/state.db.health/2026-10-06T09-00-00Z-001.json`), as JSON
   with a `schema_version`, the scope, the time, the checks that ran and every node's
