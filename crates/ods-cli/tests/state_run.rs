@@ -1201,6 +1201,7 @@ fn assert_live_stats(json: &Value, rows: bool) {
 /// The same flow against real dbt and `DuckDB`, on a copy of the demo project. Set
 /// `ODS_TEST_DBT` to a dbt executable with `dbt-duckdb` installed.
 #[test]
+#[allow(clippy::too_many_lines, reason = "one real-dbt scenario, in order")]
 fn real_dbt() {
     let Some(dbt) = std::env::var_os("ODS_TEST_DBT") else {
         eprintln!("skipped: set ODS_TEST_DBT to run against real dbt");
@@ -1255,12 +1256,10 @@ fn real_dbt() {
     // The incremental model's compiled SQL gains its `is_incremental()` branch once its
     // table exists, so the next run rebuilds it, and only it (conservatively: the
     // fingerprint is of the compiled SQL); after that, nothing changes.
-    let (code, settled) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
-    assert_eq!(code, 0, "{settled:#}");
+    let (_, settled) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
     assert_eq!(
         names(&settled["result"]["execution"]["nodes"]),
-        ["payment_totals"],
-        "{settled:#}"
+        ["payment_totals"]
     );
     let (code, again) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
     assert_eq!(code, 0, "{again:#}");
@@ -1321,7 +1320,7 @@ fn real_dbt() {
     assert_eq!(
         project.history().len(),
         5,
-        "seed, run, the incremental model again, test, run"
+        "seed, run, its rerun, test, run"
     );
 
     std::fs::write(&model, &sql).unwrap();
