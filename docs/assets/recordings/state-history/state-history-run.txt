@@ -4,8 +4,8 @@ State history of jaffle_ods/default
 ┏─┳─┳─┳─┳─┳─┳─┓
 ┃ snapshot ┃ after ┃ recorded ┃ run ┃ nodes ┃ took ┃ rows ┃
 ┡─╇─╇─╇─╇─╇─╇─┩
-│ 2 │ 1 │ <time> │ <run-id> │ 13 │ <took> │ at least 298 (5 nodes didn't report rows) │
-│ 1 │ - │ <time> │ <run-id> │ 13 │ <took> │ at least 610 (7 nodes didn't report rows) │
+│ 2 │ 1 │ <time> │ <run-id> │ 14 │ <took> │ at least 298 (5 nodes didn't report rows) │
+│ 1 │ - │ <time> │ <run-id> │ 14 │ <took> │ at least 610 (8 nodes didn't report rows) │
 └─┴─┴─┴─┴─┴─┴─┘
 ❯ ods state history --run $run
 Run

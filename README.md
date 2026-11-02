@@ -19,7 +19,7 @@ and Databricks, and every decision it makes can be explained.
 `ods state build` runs `dbt build` on only what changed (code, or upstream data), shows
 each node's result as it finishes, and explains why each one ran:
 
-![ods state build after an edit to stg_orders: 8 nodes build, 5 are reused, with each node's time, rows and reason](docs/assets/recordings/state-build/state-build.gif)
+![ods state build after an edit to stg_orders: 8 nodes build, 6 are reused, with each node's time, rows and reason](docs/assets/recordings/state-build/state-build.gif)
 
 `ods serve` is a read-only dashboard of the project and its state: the plan, the runs
 with each node's stats, lineage coloured by what the next run does, and the catalog.

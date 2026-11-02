@@ -1,10 +1,8 @@
-❯ ods state plan
-State plan
 
 scope          jaffle_ods/default
 compared with  snapshot 1 in .ods/state.db
 recorded in    target dev (jaffle_ods, duckdb, fake-host, jaffle_ods) (not checked: `ods state compile` asks dbt)
-decision       8 to build, 5 to reuse
+decision       8 to build, 6 to reuse
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ node                    ┃ action            ┃ why                                                                    ┃
@@ -28,8 +26,10 @@ decision       8 to build, 5 to reuse
 │                         │                   │ <run-id>                                   │
 │ stg_payments            │ reuse             │ code and inputs unchanged since run                                    │
 │                         │                   │ <run-id>                                   │
+│ payment_totals          │ reuse             │ code and inputs unchanged since run                                    │
+│                         │                   │ <run-id>                                   │
 ├─────────────────────────┼───────────────────┼────────────────────────────────────────────────────────────────────────┤
-│ 13 nodes                │ 8 build · 5 reuse │                                                                        │
+│ 14 nodes                │ 8 build · 6 reuse │                                                                        │
 └─────────────────────────┴───────────────────┴────────────────────────────────────────────────────────────────────────┘
 
 run  dbt build --select stg_orders order_events orders customer_order_rank customers customer_segments

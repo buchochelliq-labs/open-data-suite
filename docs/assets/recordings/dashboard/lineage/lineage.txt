@@ -52,6 +52,8 @@ order_events
 REUSE
 orders
 BUILD
+payment_totals
+REUSE
 stg_customers
 REUSE
 customer_order_…
@@ -74,14 +76,14 @@ seed
 model
 opaque
 declared
-13 of 13 nodes · 66 column edges
+14 of 14 nodes · 70 column edges
 Focus on selection
 STATE OVERLAY
 Each node shows what ods state plan decides against snapshot 3.
 BUILD
 6 nodes
 REUSE
-7 nodes
+8 nodes
 WHAT QUALIFIES THE PLAN
 reuse assumes each relation built earlier still exists: this page didn't check the warehouse (ods state build --dry-run does)
 Click a node to see why it builds or is reused, and a column to trace it upstream and downstream.

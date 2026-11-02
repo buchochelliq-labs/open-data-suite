@@ -53,6 +53,8 @@ order_events
 REUSE
 orders
 BUILD
+payment_totals
+REUSE
 stg_customers
 REUSE
 customer_order_…
@@ -75,7 +77,7 @@ seed
 model
 opaque
 declared
-13 of 13 nodes · 66 column edges
+14 of 14 nodes · 70 column edges
 Focus on selection
 customers
 Open

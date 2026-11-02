@@ -1,7 +1,7 @@
 ❯ ods state build
 fake dbt: source freshness
 fake dbt: compile
-ods ▸ plan: 8 to build, 5 to reuse
+ods ▸ plan: 8 to build, 6 to reuse
 ods ▸   code changed: stg_orders
 ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, customer_segments,
 customers_snapshot_view, segment_summary
@@ -30,11 +30,14 @@ State run
 
 scope          jaffle_ods/default
 compared with  snapshot 1 in .ods/state.db
-plan           8 to build and test, 5 to reuse
-saved          ~1.3s of build time (estimate, serial: 5 of 13 nodes reused)
+plan           8 to build and test, 6 to reuse
+saved          ~1.5s of build time (estimate, serial: 6 of 14 nodes reused)
 dbt            target_dir target (default)
 target         dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
-ran            dbt build --select fqn:jaffle_ods.marts,resource_type:model
+ran            dbt build --select fqn:jaffle_ods.marts.customer_order_rank,resource_type:model
+fqn:jaffle_ods.marts.customer_segments,resource_type:model fqn:jaffle_ods.marts.customers,resource_type:model
+fqn:jaffle_ods.marts.customers_snapshot_view,resource_type:model fqn:jaffle_ods.marts.order_events,resource_type:model
+fqn:jaffle_ods.marts.orders,resource_type:model fqn:jaffle_ods.marts.segment_summary,resource_type:model
 fqn:jaffle_ods.staging.stg_orders,resource_type:model --target-path /tmp/ods-demo/jaffle_shop/target --write-json
 --partial-parse-file-diff --indirect-selection eager --log-format json --log-level debug
 outcome        succeeded
@@ -57,6 +60,3 @@ recorded       snapshot 2: 8 nodes advanced
 │ segment_summary         │ success │ 250ms │ —    │ upstream code changed: customer_segments will be rebuilt         │
 └─────────────────────────┴─────────┴───────┴──────┴──────────────────────────────────────────────────────────────────┘
 ❯
-
-
-

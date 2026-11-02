@@ -334,9 +334,9 @@ fn builds_everything_once_then_only_what_changed() {
     let project = Project::new("happy");
     let first = project.run_ok(&[]);
     assert_eq!(first["outcome"], "succeeded");
-    assert_eq!(first["build"], 13);
+    assert_eq!(first["build"], 14);
     assert_eq!(first["record"]["snapshot"], 1);
-    assert_eq!(first["record"]["advanced"].as_array().unwrap().len(), 13);
+    assert_eq!(first["record"]["advanced"].as_array().unwrap().len(), 14);
     assert!(
         first["execution"]["command"].as_str().unwrap().contains(
             "build --select fqn:jaffle_ods,resource_type:model fqn:jaffle_ods,resource_type:seed"
@@ -347,7 +347,7 @@ fn builds_everything_once_then_only_what_changed() {
     // Nothing changed: nothing runs and nothing is recorded.
     let again = project.run_ok(&[]);
     assert_eq!(again["outcome"], "nothing_to_build");
-    assert_eq!(again["reuse"], 13);
+    assert_eq!(again["reuse"], 14);
     assert!(again.get("execution").is_none());
     assert_eq!(project.history().len(), 1);
 
@@ -430,7 +430,7 @@ fn a_node_whose_tests_fail_keeps_its_last_state() {
     // `orders` was built, but not validated: it doesn't advance, so it (and its test)
     // runs again next time.
     let advanced = names(&result["record"]["advanced"]);
-    assert_eq!(advanced.len(), 12, "{advanced:?}");
+    assert_eq!(advanced.len(), 13, "{advanced:?}");
     assert!(!advanced.contains(&"orders".to_owned()), "{advanced:?}");
     assert!(
         result["record"]["kept"]
@@ -481,11 +481,11 @@ fn dbt_output_streams_to_stderr() {
         "fake dbt: compile",
         // Its answer is read, not shown.
         "ods ▸ 3/4 dbt compile --inline: which target dbt builds in",
-        "ods ▸ plan: 13 to build, 0 to reuse",
+        "ods ▸ plan: 14 to build, 0 to reuse",
         // What builds, by reason; long lists are cut short.
         "ods ▸   not built by ODS yet: raw_customers, ",
-        " and 5 more",
-        "ods ▸ 4/4 dbt build: 13 nodes, without tests",
+        " and 6 more",
+        "ods ▸ 4/4 dbt build: 14 nodes, without tests",
         "fake dbt: build",
     ];
     let mut rest = stderr.as_str();
@@ -510,7 +510,7 @@ fn dbt_output_streams_to_stderr() {
     // With state, what would be reused is checked first, in one dbt call (#230).
     assert!(
         again.contains(
-            "ods ▸ 4/5 dbt show: are the tables of 13 nodes ODS would reuse still there?"
+            "ods ▸ 4/5 dbt show: are the tables of 14 nodes ODS would reuse still there?"
         ),
         "{again}"
     );
@@ -573,7 +573,7 @@ fn dbt_output_streams_to_stderr() {
 fn a_skipped_test_leaves_its_node_untested() {
     let project = Project::new("skipped-test").with("FAKE_DBT_SKIP_TEST", "unique_orders_order_id");
     let result = project.run_ok(&["--test"]);
-    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 13);
+    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 14);
     let orders = result["execution"]["nodes"]
         .as_array()
         .unwrap()
@@ -610,7 +610,7 @@ fn only_tests_that_ran_mark_a_build_tested_and_changed_tests_run_again() {
     assert_eq!(json["result"]["record"]["passed"], serde_json::json!([]));
 
     let project = project.with("FAKE_DBT_NO_TESTS", "");
-    assert_eq!(project.test_ok(&[])["requested"], 5);
+    assert_eq!(project.test_ok(&[])["requested"], 6);
     assert_eq!(project.test_ok(&[])["outcome"], "nothing_to_test");
     // Only the nodes that test reads are tested again: stg_orders is left alone.
     project.change_test("test.jaffle_ods.unique_orders_order_id.fed79b3a6e");
@@ -630,7 +630,7 @@ fn each_command_runs_its_dbt_namesake() {
     let (code, compiled) = project.command("compile", &[]);
     assert_eq!(code, 0, "{compiled:#}");
     assert_eq!(compiled["result"]["outcome"], "compiled");
-    assert_eq!(compiled["result"]["build"], 13);
+    assert_eq!(compiled["result"]["build"], 14);
     assert!(compiled["result"].get("execution").is_none());
     assert!(project.history().is_empty(), "{:?}", project.history());
 
@@ -648,7 +648,7 @@ fn each_command_runs_its_dbt_namesake() {
         "{}",
         command(ran)
     );
-    assert_eq!(ran["execution"]["nodes"].as_array().unwrap().len(), 10);
+    assert_eq!(ran["execution"]["nodes"].as_array().unwrap().len(), 11);
     assert_eq!(
         names(&ran["left_out"]),
         ["raw_customers", "raw_orders", "raw_payments"]
@@ -762,6 +762,39 @@ fn full_refresh_rebuilds_what_it_changes() {
     assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
 }
 
+/// #435: the demo project's incremental model, `payment_totals`, is built by the first
+/// run, reused while nothing changes, and rebuilt from scratch with `--full-refresh`.
+#[test]
+fn the_incremental_model_is_built_reused_and_fully_refreshed() {
+    let project = Project::new("incremental");
+    let materialized = |result: &Value| {
+        result["plan"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "payment_totals")
+            .map(|e| (e["action"].clone(), e["reasons"][0]["code"].clone()))
+            .unwrap()
+    };
+    let first = project.run_ok(&[]);
+    assert_eq!(materialized(&first).0, "build", "{first:#}");
+    assert!(names(&first["record"]["advanced"]).contains(&"payment_totals".to_owned()));
+
+    let again = project.run_ok(&[]);
+    assert_eq!(again["outcome"], "nothing_to_build");
+    assert_eq!(materialized(&again).0, "reuse");
+
+    let refreshed = project.run_ok(&["--full-refresh", "-s", "payment_totals"]);
+    assert_eq!(
+        materialized(&refreshed),
+        (Value::from("build"), Value::from("full_refresh_requested"))
+    );
+    let command = refreshed["execution"]["command"].as_str().unwrap();
+    assert!(command.contains("--full-refresh"), "{command}");
+    assert!(command.contains("payment_totals"), "{command}");
+    assert_eq!(project.run_ok(&[])["outcome"], "nothing_to_build");
+}
+
 /// #229: `--vars` goes to every dbt command ODS runs, so the plan and the build see
 /// the same values; with `--no-compile`, artifacts compiled with other vars are named.
 #[test]
@@ -846,14 +879,14 @@ fn a_plain_run_builds_without_tests() {
     );
     assert_eq!(result["tests"], false);
     assert_eq!(result["execution"]["checks_failed"], serde_json::json!([]));
-    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 13);
+    assert_eq!(result["record"]["advanced"].as_array().unwrap().len(), 14);
 
     // What was built without its tests is untested: `ods state test` runs them.
     let (code, tested) = project.test(&[]);
     assert_eq!(code, 1, "the failing test fails: {tested:#}");
     let tested = &tested["result"];
-    // Only the 5 nodes with tests: the other 8 have nothing that could vouch for them.
-    assert_eq!(tested["requested"], 5);
+    // Only the 6 nodes with tests: the other 8 have nothing that could vouch for them.
+    assert_eq!(tested["requested"], 6);
     assert_eq!(tested["without_checks"], 8);
     assert!(
         tested["execution"]["command"]
@@ -865,7 +898,7 @@ fn a_plain_run_builds_without_tests() {
             ))
     );
     assert_eq!(names(&tested["record"]["failed"]), ["orders"]);
-    assert_eq!(tested["record"]["passed"].as_array().unwrap().len(), 4);
+    assert_eq!(tested["record"]["passed"].as_array().unwrap().len(), 5);
 
     // Once fixed, only the node still untested is tested again.
     let project = project.with("FAKE_DBT_FAIL_TEST", "");
@@ -875,7 +908,7 @@ fn a_plain_run_builds_without_tests() {
     let nothing = project.test_ok(&[]);
     assert_eq!(nothing["outcome"], "nothing_to_test");
     // --all tests everything again, and a build with --test marks what it builds tested.
-    assert_eq!(project.test_ok(&["--all"])["requested"], 5);
+    assert_eq!(project.test_ok(&["--all"])["requested"], 6);
     project.change_code("model.jaffle_ods.orders");
     project.run_ok(&["--test"]);
     assert_eq!(project.test_ok(&[])["outcome"], "nothing_to_test");
@@ -889,10 +922,10 @@ fn exclude_and_resource_type_leave_nodes_to_build() {
         names(&result["execution"]["nodes"]),
         ["raw_customers", "raw_orders", "raw_payments"]
     );
-    assert_eq!(result["left_out"].as_array().unwrap().len(), 10);
+    assert_eq!(result["left_out"].as_array().unwrap().len(), 11);
     // The models are still to build; excluding one leaves it (and it only) out.
     let result = project.run_ok(&["--exclude", "segment_summary"]);
-    assert_eq!(result["execution"]["nodes"].as_array().unwrap().len(), 9);
+    assert_eq!(result["execution"]["nodes"].as_array().unwrap().len(), 10);
     assert_eq!(names(&result["left_out"]), ["segment_summary"]);
     let last = project.run_ok(&[]);
     assert_eq!(names(&last["execution"]["nodes"]), ["segment_summary"]);
@@ -924,7 +957,7 @@ fn a_run_that_cant_be_recorded_still_reports_what_dbt_did() {
             .as_array()
             .unwrap()
             .len(),
-        13
+        14
     );
     assert!(json["result"].get("record").is_none());
     assert!(project.history().is_empty(), "{:?}", project.history());
@@ -1030,7 +1063,7 @@ fn when_the_relation_check_fails_candidates_are_built() {
     ]);
     assert_eq!(code, 0, "{json:#}");
     let result = &json["result"];
-    assert_eq!(result["build"], 13);
+    assert_eq!(result["build"], 14);
     assert_eq!(
         entry(result, "raw_orders")["reasons"][0]["code"],
         "relation_unverified"
@@ -1074,7 +1107,7 @@ fn a_dry_run_changes_nothing() {
     let project = Project::new("dry");
     let result = project.run_ok(&["--dry-run"]);
     assert_eq!(result["outcome"], "dry_run");
-    assert_eq!(result["build"], 13);
+    assert_eq!(result["build"], 14);
     assert!(result.get("execution").is_none());
     assert!(!project.db().exists());
 }
@@ -1846,7 +1879,7 @@ fn state_is_kept_per_target() {
     assert_eq!(prod["target"]["location"], "fake-host");
     let dev = project.run_ok(&[]);
     assert_eq!(dev["scope"], "jaffle_ods/default");
-    assert_eq!(dev["build"], 13, "prod's builds don't count in dev");
+    assert_eq!(dev["build"], 14, "prod's builds don't count in dev");
     assert_eq!(
         project.run_ok(&["--target", "prod"])["outcome"],
         "nothing_to_build"
@@ -1859,7 +1892,7 @@ fn state_is_kept_per_target() {
     // run says why.
     let moved = project.with("FAKE_DBT_TARGET_HOST", "other-host");
     let result = moved.run_ok(&["--target", "prod"]);
-    assert_eq!(result["build"], 13);
+    assert_eq!(result["build"], 14);
     assert_eq!(reasons(&result), ["target_changed"]);
     assert!(
         result["warnings"]
@@ -1887,7 +1920,7 @@ fn state_is_kept_per_target() {
     let (code, plan) = back.ods(&["state", "plan", "--target", "prod"]);
     assert_eq!(code, 0, "{plan:#}");
     assert_eq!(plan["result"]["recorded_target"]["name"], "prod");
-    assert_eq!(plan["result"]["reuse"], 13);
+    assert_eq!(plan["result"]["reuse"], 14);
     let (code, plan) = back.ods(&[
         "state",
         "plan",
@@ -1898,7 +1931,7 @@ fn state_is_kept_per_target() {
     ]);
     assert_eq!(code, 0, "{plan:#}");
     assert_eq!(
-        plan["result"]["build"], 13,
+        plan["result"]["build"], 14,
         "default holds dev's builds: {plan:#}"
     );
     assert!(
@@ -1936,7 +1969,7 @@ fn state_without_a_target_is_rebuilt_once() {
     assert_eq!(code, 0, "{json:#}");
 
     let result = project.run_ok(&[]);
-    assert_eq!(result["build"], 13);
+    assert_eq!(result["build"], 14);
     assert_eq!(reasons(&result), ["target_changed"]);
     assert!(
         result["warnings"]
@@ -1980,7 +2013,7 @@ fn dbt_target_names_the_environment() {
     let (code, plan) = project.ods(&["state", "plan"]);
     assert_eq!(code, 0, "{plan:#}");
     assert_eq!(plan["result"]["scope"], "jaffle_ods/prod");
-    assert_eq!(plan["result"]["reuse"], 13);
+    assert_eq!(plan["result"]["reuse"], 14);
 }
 
 /// #227: if dbt can't say which target it builds in, a dry run still plans, reusing
@@ -1991,7 +2024,7 @@ fn a_failed_target_check_only_stops_what_records() {
     project.run_ok(&[]);
     let failing = project.with("FAKE_DBT_TARGET_FAIL", "1");
     let planned = failing.run_ok(&["--dry-run"]);
-    assert_eq!(planned["build"], 13);
+    assert_eq!(planned["build"], 14);
     assert!(planned.get("target").is_none(), "{planned:#}");
     assert!(
         planned["warnings"]
@@ -2068,7 +2101,7 @@ fn ods_toml_configures_state_commands() {
     let (code, plan, _) = project.ods_in(&sub, &["state", "plan"]);
     assert_eq!(code, 0, "{plan:#}");
     assert_eq!(plan["result"]["scope"], "jaffle_ods/prod");
-    assert_eq!(plan["result"]["reuse"], 13, "{plan:#}");
+    assert_eq!(plan["result"]["reuse"], 14, "{plan:#}");
     let (code, history, _) = project.ods_in(&sub, &["state", "history"]);
     assert_eq!(code, 0, "{history:#}");
     assert_eq!(history["result"]["snapshots"].as_array().unwrap().len(), 1);
@@ -2769,7 +2802,7 @@ fn a_damaged_state_database_is_diagnosed_and_recovered() {
     std::fs::copy(&copy, &db).unwrap();
     let (code, plan) = project.ods(&["state", "plan"]);
     assert_eq!(code, 0, "{plan:#}");
-    assert_eq!(plan["result"]["reuse"], 13, "{plan:#}");
+    assert_eq!(plan["result"]["reuse"], 14, "{plan:#}");
 }
 
 /// #21: `explain`, `why-build` and `why-skip` trace a decision to its root cause.
@@ -3700,7 +3733,7 @@ fn a_run_keeps_a_journal_with_each_nodes_stats() {
     assert!(view["rows_affected"].is_null(), "{view}");
     let totals = &result["run_stats"]["totals"];
     assert_eq!(totals["rows_affected"], 105);
-    assert_eq!(totals["rows_unreported"], 11);
+    assert_eq!(totals["rows_unreported"], 12);
 
     // `history` shows the run's totals beside its snapshot.
     let history = project.history();
@@ -4876,14 +4909,14 @@ fn the_run_ledger_counts_every_run_and_savings_reports_it() {
     );
     assert_eq!(
         (runs[1]["reused"].clone(), runs[1]["timed"].clone()),
-        (Value::from(13), Value::from(13))
+        (Value::from(14), Value::from(14))
     );
     assert_eq!(runs[1]["timed_by"], serde_json::json!([first_run]));
     assert_eq!(runs[2]["run_id"], first_run.as_str());
     assert_eq!(runs[2]["reused"], 0);
-    assert_eq!(runs[2]["built"], 13);
+    assert_eq!(runs[2]["built"], 14);
     let totals = &report["totals"];
-    assert_eq!(totals["reused"], 13 + 9);
+    assert_eq!(totals["reused"], 14 + 10);
     assert_eq!(
         totals["avoided_ms"].as_u64(),
         Some(runs[0]["avoided_ms"].as_u64().unwrap() + runs[1]["avoided_ms"].as_u64().unwrap())

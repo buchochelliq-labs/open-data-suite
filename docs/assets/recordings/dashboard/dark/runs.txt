@@ -34,7 +34,7 @@ on this machine
 Runs
 jaffle_ods · every run recorded in this state store, newest first
 ODS doesn't schedule anything. A run appears here after ods state build or ods state run records it in this state store, from your terminal or a CI job.
-Reuse saved ~<took> of build time · estimate, serial: 9 of 28 nodes reused across 3 runs. ods state savings lists each run.
+Reuse saved ~<took> of build time · estimate, serial: 10 of 30 nodes reused across 3 runs. ods state savings lists each run.
 Local runs
 4
 CI runs — coming with server mode
@@ -56,15 +56,15 @@ Outcome
 	Run	Command	Target	Snapshot	Built	Kept	Failed	Skipped	Rows	Started	Duration	Triggered by
 <date> · UTC
 !
-	<run>	—	—	kept 3 inferred	0	6	1	1	≥ 298	<clock>	<took>	[user]
+	<run>	—	—	kept 3 inferred	0	7	1	1	≥ 298	<clock>	<took>	[user]
 ✓
 	<run>
 ods state build --state-db '<redacted>'
-	dev · duckdb	3	2	11	0	0	—	<clock>	<took>	[user]
+	dev · duckdb	3	2	12	0	0	—	<clock>	<took>	[user]
 !
-	<run>	—	dev · duckdb	2	2	9	1	1	≥ 100	<clock>	<took>	[user]
+	<run>	—	dev · duckdb	2	2	10	1	1	≥ 100	<clock>	<took>	[user]
 ✓
-	<run>	—	dev · duckdb	1	13	0	0	0	≥ 610	<clock>	<took>	[user]
+	<run>	—	dev · duckdb	1	14	0	0	0	≥ 610	<clock>	<took>	[user]
 n
 built
 n
@@ -85,7 +85,7 @@ What the state store records
 PARTIAL
 from its run journal
 command not recorded · — · <clock>
-0 built · 6 kept earlier build · 1 failed · 1 skipped
+0 built · 7 kept earlier build · 1 failed · 1 skipped
 <took> · at least 298 rows (3 nodes didn't report)
 FAILED NODE
 customer_segments

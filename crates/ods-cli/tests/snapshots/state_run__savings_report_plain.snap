@@ -1,14 +1,15 @@
 ---
 source: crates/ods-cli/tests/state_run.rs
+assertion_line: 4908
 expression: redacted.trim_end()
 ---
 What reuse saved in jaffle_ods/default
 
-saved: ~5.5s of build time (estimate, serial: 22 of 39 nodes reused across 3 runs)
+saved: ~6.0s of build time (estimate, serial: 24 of 42 nodes reused across 3 runs)
 timings from: 1 run
 
 Runs
 run	finished	outcome	reused	built	saved
-<run-3>	<time>	succeeded	9	4	~2.3s
-<run-2>	<time>	nothing to build	13	0	~3.3s
-<run-1>	<time>	succeeded	0	13	none
+<run-3>	<time>	succeeded	10	4	~2.5s
+<run-2>	<time>	nothing to build	14	0	~3.5s
+<run-1>	<time>	succeeded	0	14	none

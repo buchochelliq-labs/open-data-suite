@@ -106,7 +106,7 @@ fn pair(action: &str, code: &str) -> (String, String) {
 fn without_state_everything_is_built_and_planning_writes_nothing() {
     let s = Scratch::new("fresh");
     let plan = s.plan(&[]);
-    assert_eq!(plan["build"], 13);
+    assert_eq!(plan["build"], 14);
     assert_eq!(plan["reuse"], 0);
     assert_eq!(plan["based_on"], Value::Null);
     assert!(
@@ -134,7 +134,7 @@ fn record_keeps_build_times_and_the_plan_estimates_savings() {
     let saved = &s.plan(&[])["savings"];
     assert_eq!(
         (saved["reused"].clone(), saved["timed"].clone()),
-        (json!(13), json!(13))
+        (json!(14), json!(14))
     );
     assert_eq!(saved["untimed"], 0);
     assert!(saved["avoided_ms"].as_u64().unwrap() > 0, "{saved}");
@@ -146,13 +146,13 @@ fn a_recorded_run_is_reused_until_something_changes() {
     let s = Scratch::new("reuse");
     let recorded = s.ok(&["state", "record"]);
     assert_eq!(recorded["snapshot"], 1);
-    assert_eq!(recorded["advanced"].as_array().unwrap().len(), 13);
+    assert_eq!(recorded["advanced"].as_array().unwrap().len(), 14);
     assert_eq!(recorded["scope"], "jaffle_ods/default");
 
     let plan = s.plan(&[]);
     assert_eq!(
         (plan["build"].clone(), plan["reuse"].clone()),
-        (json!(0), json!(13))
+        (json!(0), json!(14))
     );
     assert_eq!(plan["dbt_command"], Value::Null);
     assert_eq!(
@@ -331,8 +331,8 @@ fn bad_input_is_reported_with_state_error_codes() {
 fn environments_keep_separate_state() {
     let s = Scratch::new("envs");
     s.ok(&["state", "record", "--environment", "dev"]);
-    assert_eq!(s.plan(&["--environment", "dev"])["reuse"], 13);
-    assert_eq!(s.plan(&["--environment", "prod"])["build"], 13);
+    assert_eq!(s.plan(&["--environment", "dev"])["reuse"], 14);
+    assert_eq!(s.plan(&["--environment", "prod"])["build"], 14);
 }
 
 #[test]

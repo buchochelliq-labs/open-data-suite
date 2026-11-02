@@ -97,7 +97,7 @@ fn without_a_state_store_every_node_shows_as_never_built() {
     let overlay = overlay(&server);
     assert_eq!(overlay["state"], "no_store", "{overlay}");
     let nodes = overlay["nodes"].as_object().unwrap();
-    assert_eq!(nodes.len(), 13, "every model and seed: {overlay}");
+    assert_eq!(nodes.len(), 14, "every model and seed: {overlay}");
     assert!(nodes.values().all(|n| n["decision"] == "never_built"));
     // No plan, so no decision to explain on the State plan page.
     assert!(nodes.values().all(|n| n["why_href"].is_null()));
@@ -237,7 +237,7 @@ fn assert_agrees_with_plan(overlay: &Value, target: &Path, db: &Path, dir: &Path
     let entries = plan["result"]["plan"]["entries"]
         .as_array()
         .unwrap_or_else(|| panic!("{plan}"));
-    assert_eq!(entries.len(), 13, "{plan}");
+    assert_eq!(entries.len(), 14, "{plan}");
     // The same nodes both ways…
     let planned: std::collections::BTreeSet<&str> = entries
         .iter()
@@ -288,7 +288,7 @@ fn an_unreadable_store_shows_every_node_as_unknown() {
     assert_eq!(overlay["state"], "unreadable", "{overlay}");
     assert!(overlay["error"].is_string(), "said on loopback: {overlay}");
     let nodes = overlay["nodes"].as_object().unwrap();
-    assert_eq!(nodes.len(), 13);
+    assert_eq!(nodes.len(), 14);
     assert!(
         nodes.values().all(|n| n["decision"] == "unknown"),
         "{overlay}"

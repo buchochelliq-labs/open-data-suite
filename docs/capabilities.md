@@ -90,7 +90,7 @@ succeeded advance.
 
 ```console
 $ ods state plan          # after editing stg_orders and running dbt compile
-decision: 8 to build, 5 to reuse
+decision: 8 to build, 6 to reuse
 
 node                     action  why
 raw_orders               reuse   code and inputs unchanged since run d11a1309…

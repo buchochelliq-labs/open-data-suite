@@ -23,7 +23,7 @@ Local · read-only
 jaffle_ods
 /
 Lineage
-· 13 nodes
+· 14 nodes
 Live · <run> · 2 of 7 finished · 2 running
 Skip to the selected node's details
 Overlay
@@ -66,6 +66,10 @@ orders
 model
 BUILT
 <took> · 99 rows
+payment_totals
+model
+KEPT
+build of <run>
 stg_customers
 model
 KEPT
