@@ -1247,11 +1247,21 @@ fn real_dbt() {
     assert!(ran(&seeded).contains(" seed --select "), "{}", ran(&seeded));
     let (code, first) = real(&[]);
     assert_eq!(code, 0, "{first:#}");
-    assert_eq!(advanced(&first), 11, "10 models and the extra one");
+    assert_eq!(advanced(&first), 12, "11 models and the extra one");
     assert!(ran(&first).contains(" run --select "), "{}", ran(&first));
     // #322: seeds report the rows they wrote; DuckDB reports none for models.
     assert_live_stats(&seeded, true);
     assert_live_stats(&first, false);
+    // The incremental model's compiled SQL gains its `is_incremental()` branch once its
+    // table exists, so the next run rebuilds it, and only it (conservatively: the
+    // fingerprint is of the compiled SQL); after that, nothing changes.
+    let (code, settled) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
+    assert_eq!(code, 0, "{settled:#}");
+    assert_eq!(
+        names(&settled["result"]["execution"]["nodes"]),
+        ["payment_totals"],
+        "{settled:#}"
+    );
     let (code, again) = dbt_cmd("build", &["--exclude-resource-type", "test"]);
     assert_eq!(code, 0, "{again:#}");
     assert_eq!(again["result"]["outcome"], "nothing_to_build");
@@ -1261,7 +1271,7 @@ fn real_dbt() {
     let (code, tested) = test(&[]);
     assert_eq!(code, 0, "{tested:#}");
     assert_eq!(
-        tested["result"]["requested"], 5,
+        tested["result"]["requested"], 6,
         "the nodes with tests: {tested:#}"
     );
     let (code, tested) = test(&[]);
@@ -1308,7 +1318,11 @@ fn real_dbt() {
     let (code, broken) = real(&[]);
     assert_eq!(code, 1, "{broken:#}");
     assert!(broken["result"]["record"]["snapshot"].is_null());
-    assert_eq!(project.history().len(), 4, "seed, run, test, run");
+    assert_eq!(
+        project.history().len(),
+        5,
+        "seed, run, the incremental model again, test, run"
+    );
 
     std::fs::write(&model, &sql).unwrap();
 }
@@ -1491,9 +1505,12 @@ fn real_dbt_a_failing_source_test_skips_downstream_models() {
         serde_json::json!(["source.jaffle_ods.raw.raw_orders"]),
         "{result:#}"
     );
+    // And the incremental model once more: real dbt compiles it without its
+    // `is_incremental()` branch the first time (its table didn't exist yet) and with it
+    // after, so its compiled SQL changed. A conservative rebuild; it settles after this.
     assert_eq!(
         names(&result["execution"]["nodes"]),
-        ["from_from_source", "from_source"]
+        ["from_from_source", "from_source", "payment_totals"]
     );
     // Same data: the tests are skipped, and nothing is left to build.
     let (code, json) = real_cmd(&project, &dbt, "build", &[]);
@@ -1630,7 +1647,12 @@ fn real_dbt_rebuilds_a_dropped_table() {
             "{name}"
         );
     }
-    assert_eq!(names(&result["execution"]["nodes"]), dropped);
+    // The incremental model is rebuilt once too: its compiled SQL gained its
+    // `is_incremental()` branch now that its table exists (a conservative rebuild).
+    let mut expected = dropped.to_vec();
+    expected.push("payment_totals");
+    expected.sort_unstable();
+    assert_eq!(names(&result["execution"]["nodes"]), expected);
     let (code, again) = real_cmd(&project, &dbt, "run", &[]);
     assert_eq!(code, 0, "{again:#}");
     assert_eq!(again["result"]["outcome"], "nothing_to_build", "{again:#}");
