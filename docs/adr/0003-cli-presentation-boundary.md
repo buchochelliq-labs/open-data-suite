@@ -1,7 +1,7 @@
 # ADR-0003: CLI presentation boundary and rs-rich-cli
 
 - **Status:** Accepted (2026-10-04). Not built yet, now a follow-up: a generated JSON Schema per command (§3), and JSON and plain contract snapshots for every command (`ods erd`, most of `ods lineage` and `ods mcp` have none). The output envelope is at 1.0 (#342).
-- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, accepted 2026-10-05; 2026-10-20: rs-rich-ext and SQL highlighting, §8)
+- **Date:** 2026-09-24 (amended 2026-09-29: `rs-rich` 0.0.9; 2026-10-05: hyperlinks, §7, accepted 2026-10-05; 2026-10-20: rs-rich-ext and SQL highlighting, §8; 2026-11-02: diagnostics, live progress and rs-rich-diagram, §9)
 - **Issues:** #108 (also #6, #21, #22, #85, #107)
 - **Deciders:** @n1ckyb
 
@@ -355,11 +355,74 @@ pinned commit in the workspace `Cargo.toml`.
   which can carry rendered secrets (AGENTS.md rule 9). Showing such SQL needs its own
   decision.
 
-**Next, under this amendment.**
-- The rest of `rs-rich-ext`'s presentation pieces stay as #442 lists them:
-  - `workflow` and `LiveCoordinator` for `ods state run`'s progress (#446);
-  - `diagnostic` for failures (#447).
-- Each adds features to the one dependency, not a new crate.
+**Next.** §9 adopts the rest of what #442 lists: diagnostics, live progress and
+rs-rich-diagram.
+
+### 9. Diagnostics, live progress and rs-rich-diagram (amendment, 2026-11-02)
+This completes #442. It decides how ODS uses three more parts of `rs-rich-ext`, and
+adopts `rs-rich-diagram` for drawing graphs in the terminal.
+
+**No new Cargo features.** At the pinned commit, `rs-rich-ext`'s `diagnostic`,
+`dashboard`, `workflow`, `live`, `target` and `capabilities` modules are not behind
+features. The dependency stays `default-features = false, features = ["sql",
+"markdown"]` (§8).
+
+**Diagnostics, for failures (#447).**
+- **What changes:** on a terminal, an error ODS reports and a failed node's
+  explanation (ADR-0025) render as `rich_ext::diagnostic::Diagnostic`s:
+  - the header `error[ODS-E….]: message`, with the ADR-0004 code;
+  - the hint as help;
+  - the location as `--> path:line`.
+- **Grouping:** several failures in one command are grouped with
+  `dashboard::DiagnosticsDashboard`.
+- **Built from redacted text:** a diagnostic is built from the same already-redacted
+  explanation the plain and JSON outputs carry, never from the raw engine message.
+- **Plain and JSON are unchanged,** byte for byte. Only the rich backend renders a
+  diagnostic, so `--output plain`, `--output json` and the MCP tools stay as they are.
+- **What SQL is shown:** §8 kept SQL from an engine out of the output, and this keeps
+  that rule.
+  - A diagnostic shows no compiled SQL. Compiled SQL is the engine's rendering, and can
+    carry rendered `env_var` values (AGENTS.md rule 9).
+  - A source snippet is allowed only from the project's own file (the model's `.sql`,
+    which has the `env_var` call but not its value), and only when the error's line
+    refers to that file.
+  - Otherwise the diagnostic gives the location without a snippet.
+  - A snippet's text is sanitized like every other span (§4).
+- **Name clash:** `present::Diagnostic`, which is the JSON envelope's diagnostic, keeps
+  its name, and the rich one is imported under an alias.
+
+**Live progress, for `ods state run` (#446).**
+- **One writer:** `live::LiveCoordinator` is the single writer of stderr while a run
+  is in progress. dbt's output and log lines are printed above the live region with
+  `print`, so the region and the logs never interleave.
+- **What it shows:** progress is a `workflow::TaskTree`, fed by the run events
+  (ADR-0024). A `workflow::CompletionSummary` closes it. The run report on stdout is
+  unchanged.
+- **The target comes from rs-rich-ext:** the render target comes from
+  `capabilities::Capabilities`, with ODS's §2 rules (`NO_COLOR`, `TERM=dumb`,
+  `--color`) applied as overrides. It replaces the hand-written escape codes and the
+  separate `ansi` flag.
+- **Not on a terminal:** the coordinator writes plain lines with no control characters.
+  This applies when output is piped, under `--output plain`, and in CI.
+- **Progress is best effort:** an error drawing progress is ignored and never fails
+  the run. Progress is not an output contract: the JSON, the run events and the
+  journal are, and they don't change.
+
+**rs-rich-diagram, for graphs in the terminal.**
+- **What it is:** the ERD in the terminal (#443) and `ods lineage` as a graph (#444)
+  use `rs-rich-diagram`, the family's graph-layout crate. It is MIT and needs Rust 1.90,
+  like the rest of the family.
+- **Where it comes from:** it is taken from the same pinned commit as `rs-rich` and
+  `rs-rich-ext`, with `default-features = false`.
+  - Its `graphviz` feature, which starts a separate `dot` program, stays off.
+  - Its `plugin` feature stays off too.
+- **When it is added:** in the PR that first uses it, not before.
+- **ERD ≠ lineage:** the two diagrams stay separate views, built from separate domain
+  types (AGENTS.md rule 6).
+
+**Confinement.** `scripts/check-layering.py` confines every crate whose name starts with
+`rs-rich` to `ods-cli`, so `rs-rich-ext` and `rs-rich-diagram` are covered as they
+are.
 
 ## Consequences
 - **Positive:**
@@ -381,7 +444,6 @@ pinned commit in the workspace `Cargo.toml`.
   - **Proof-of-concept PR for #108:** `ods-cli::present` plus the `rich`/`plain`/`json`
     backends, rendering `ods version` and a fixture `ExecutionPlan`, with the MSRV bump.
     It will re-render the real `ods state plan`/`explain` once #20 and #21 land.
-  - Extend `scripts/check-layering.py` to confine `rs-rich*` to `ods-cli`.
   - File the issues listed in section 6 in rs-rich-cli.
 
 ## References
