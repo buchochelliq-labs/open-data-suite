@@ -1,1 +1,1 @@
-doc-valid-idents = ["OpenDataSuite", "PostgreSQL", "SQLite", "..", "Databricks"]
+doc-valid-idents = ["OpenDataSuite", "PostgreSQL", "SQLite", "MySQL", "MariaDB", "..", "Databricks"]

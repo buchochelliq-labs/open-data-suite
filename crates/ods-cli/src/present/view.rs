@@ -250,8 +250,54 @@ pub enum ViewNode {
         /// What it holds.
         body: Box<ViewNode>,
     },
+    /// A problem as a compiler-style diagnostic: a header with its level and code, where
+    /// it is, notes and help (ADR-0003 §9). The rich backend draws `diagnostic`; the
+    /// plain backend prints `plain`, so plain output doesn't depend on how the terminal
+    /// draws it.
+    Diagnostic {
+        /// What the rich backend draws.
+        diagnostic: Box<DiagnosticView>,
+        /// What the plain backend prints instead.
+        plain: Box<ViewNode>,
+    },
+    /// Several diagnostics, summed up before they are shown. Every child is a
+    /// [`ViewNode::Diagnostic`]; the plain backend prints them as a [`ViewNode::Group`].
+    Diagnostics(Vec<ViewNode>),
     /// Blocks rendered in order, separated by a blank line.
     Group(Vec<ViewNode>),
+}
+
+/// A diagnostic's content, as data: built from text that is already safe to show (a
+/// failure's explanation is redacted before it gets here), and drawn by the rich
+/// backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticView {
+    /// How severe it is.
+    pub level: Level,
+    /// A stable code, e.g. `ODS-E0404`.
+    pub code: Option<String>,
+    /// What went wrong, in one line.
+    pub message: String,
+    /// The file it is about, and the line in it.
+    pub location: Option<(String, Option<usize>)>,
+    /// Facts that explain it, each shown as `note: …`.
+    pub notes: Vec<String>,
+    /// What to try, each shown as `help: …`.
+    pub help: Vec<String>,
+}
+
+impl DiagnosticView {
+    /// A diagnostic with only a level and a message.
+    pub fn new(level: Level, message: impl Into<String>) -> Self {
+        Self {
+            level,
+            code: None,
+            message: message.into(),
+            location: None,
+            notes: Vec::new(),
+            help: Vec::new(),
+        }
+    }
 }
 
 impl ViewNode {
@@ -279,7 +325,10 @@ impl ViewNode {
                 line(title);
                 body.drop_links();
             }
-            ViewNode::Group(children) => children.iter_mut().for_each(ViewNode::drop_links),
+            ViewNode::Diagnostic { plain, .. } => plain.drop_links(),
+            ViewNode::Diagnostics(children) | ViewNode::Group(children) => {
+                children.iter_mut().for_each(ViewNode::drop_links);
+            }
         }
     }
 }

@@ -18,6 +18,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   of MkDocs and Material (`zensical.toml` replaces `mkdocs.yml`;
   `python -m zensical serve` to preview). Its pages, links and look carry over, with
   Zensical's header and search.
+- On a terminal, failures are drawn as diagnostics (#447): `error[code]: what failed`,
+  the file it is about (`--> models/….sql`), then `note:` and `help:` lines with the
+  same redacted facts as before. When several nodes fail, a summary by file comes
+  first. An error ODS reports itself is drawn the same way, its hint as `help:`.
+  Plain and JSON output, and what the MCP tools return, are unchanged.
 
 ## [0.1.1] - 2026-11-01
 

@@ -26,7 +26,7 @@ use ods_state::{
 
 use super::lineage::{LoadOptions, Loaded, shared_cache};
 use super::state_plan::display_name;
-use crate::present::{Level, Line, Span, Tone, TreeItem, ViewNode};
+use crate::present::{DiagnosticView, Level, Line, Span, Tone, TreeItem, ViewNode, plain_text};
 
 /// How many earlier journals are read for a node's history.
 const HISTORY_JOURNALS: usize = 20;
@@ -630,9 +630,17 @@ pub(super) fn serialize_execution<S: serde::Serializer>(
     serde::Serialize::serialize(&execution.as_ref().map(shown_execution), serializer)
 }
 
-/// One failed node's (or test's) explanation, as the terminal shows it.
-/// One failure in a panel of its own, titled with what failed.
+/// One failed node's (or test's) explanation, as the terminal shows it: a diagnostic
+/// (ADR-0003 §9), or for plain output a panel of its own, titled with what failed.
 pub(super) fn panel(explanation: &ErrorExplanation) -> ViewNode {
+    ViewNode::Diagnostic {
+        diagnostic: Box::new(diagnostic(explanation)),
+        plain: Box::new(titled_panel(explanation)),
+    }
+}
+
+/// What failed, for a title: `customers failed`, or `test not_null on orders.id failed`.
+fn failure_title(explanation: &ErrorExplanation) -> Line {
     let mut title = match explanation.check() {
         Some(check) => {
             let mut title = vec![Span::plain("test ")];
@@ -642,11 +650,91 @@ pub(super) fn panel(explanation: &ErrorExplanation) -> ViewNode {
         None => vec![Span::toned(display_name(explanation.node()), Tone::Code)],
     };
     title.push(Span::plain(" failed"));
+    title
+}
+
+/// One failure in a panel of its own, titled with what failed.
+fn titled_panel(explanation: &ErrorExplanation) -> ViewNode {
     ViewNode::Panel {
-        title,
+        title: failure_title(explanation),
         level: Level::Error,
         body: Box::new(view(explanation)),
     }
+}
+
+/// One failure as a diagnostic: the same redacted facts the panel shows, as a header,
+/// where, notes and help. It never carries compiled SQL (ADR-0003 §9).
+fn diagnostic(explanation: &ErrorExplanation) -> DiagnosticView {
+    let recognised = explanation.confidence() != Confidence::NotRecognised;
+    let mut diagnostic = DiagnosticView::new(
+        Level::Error,
+        format!(
+            "{}: {}",
+            plain_text(&failure_title(explanation)),
+            explanation.headline().plain_text()
+        ),
+    );
+    diagnostic.code = explanation.pattern().map(|p| p.id.clone());
+    let location = explanation.location();
+    diagnostic.location = location.and_then(|l| {
+        l.file
+            .clone()
+            .map(|file| (file, l.line.and_then(|n| usize::try_from(n).ok())))
+    });
+    let notes = &mut diagnostic.notes;
+    notes.push(format!(
+        "{} (confidence: {})",
+        explanation.chip(),
+        explanation.confidence().label()
+    ));
+    if let Some(detail) = explanation.detail() {
+        notes.push(detail.plain_text());
+    }
+    let source = if recognised {
+        "why ODS thinks so"
+    } else {
+        "what ODS knows"
+    };
+    notes.extend(
+        explanation
+            .evidence()
+            .iter()
+            .map(|e| format!("{source}: {} [{}]", e.text.plain_text(), e.source.label())),
+    );
+    if let Some(location) = location {
+        match (&location.reported_line, &location.compiled_file) {
+            (Some(l), Some(f)) => notes.push(format!(
+                "reported at line {l} of the code it ran (compiled: {f})"
+            )),
+            (Some(l), None) => notes.push(format!("reported at line {l} of the code it ran")),
+            (None, Some(f)) => notes.push(format!("compiled: {f}")),
+            (None, None) => {}
+        }
+    }
+    notes.extend(impact_text(explanation));
+    if let Some(message) = explanation.engine_message() {
+        notes.push(format!(
+            "{} said: {}  ({REDACTED_NOTE})",
+            message.engine, message.message
+        ));
+        if let Some(at) = &message.details_at {
+            notes.push(format!("full text: {at}"));
+        }
+    }
+    diagnostic.help = explanation
+        .suggestions()
+        .iter()
+        .map(|s| {
+            let text = s.text.plain_text();
+            if s.commands.is_empty() {
+                return text;
+            }
+            let commands: Vec<String> = s.commands.iter().map(|c| format!("$ {c}")).collect();
+            let text = text.trim_end_matches([':', ' ']);
+            format!("{text}: {}", commands.join("; "))
+        })
+        .collect();
+    diagnostic
 }
 
 /// Why one node or test failed: what, how sure ODS is, the evidence, where, and what to
@@ -728,7 +816,12 @@ pub(super) fn section(explanations: &[ErrorExplanation]) -> Vec<ViewNode> {
             count(tests, "test")
         ),
     })];
-    blocks.extend(explanations.iter().map(panel));
+    let panels: Vec<ViewNode> = explanations.iter().map(panel).collect();
+    if panels.len() == 1 {
+        blocks.extend(panels);
+    } else {
+        blocks.push(ViewNode::Diagnostics(panels));
+    }
     blocks
 }
 
