@@ -1,3 +1,4 @@
-# The documentation site (mkdocs.yml). MkDocs 2 drops the theme and plugin system.
-mkdocs>=1.6,<2
-mkdocs-material>=9.7,<10
+# The documentation site (zensical.toml), built with Zensical, the successor to
+# Material for MkDocs. Pinned below 0.1: it is pre-1.0 and its minor versions may change
+# the configuration.
+zensical>=0.0.74,<0.1
