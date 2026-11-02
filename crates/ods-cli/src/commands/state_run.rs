@@ -626,6 +626,14 @@ impl Steps {
         }
     }
 
+    /// Says how the run ended, for the live drawing's summary; without it a step still
+    /// running is shown as not finished, never as succeeded.
+    pub(super) fn close(&self, succeeded: bool) {
+        if let Some(live) = &self.live {
+            live.close(succeeded);
+        }
+    }
+
     /// The live drawing, when there is one.
     fn live_progress(&self) -> Option<&LiveProgress> {
         self.live.as_deref()
@@ -1904,10 +1912,6 @@ impl RunReport {
 
     /// Runs the flow. A failure to record after dbt ran comes back with the report, so
     /// the caller still sees what dbt did.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one flow, in order: prepare, plan, narrow, report"
-    )]
     fn build(
         kind: Kind,
         args: &ArgMatches,
@@ -1919,6 +1923,25 @@ impl RunReport {
         let builds = kind != Kind::Compile;
         let title = format!("ods state {}", kind.name());
         let steps = Steps::live(progress, step_count(args, settings, builds), &title);
+        let result = Self::build_with(kind, args, settings, retry, project, &steps);
+        // The drawing says how the run ended only once it is known (#446).
+        steps.close(matches!(result, Ok((_, None))));
+        result
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one flow, in order: prepare, plan, narrow, report"
+    )]
+    fn build_with(
+        kind: Kind,
+        args: &ArgMatches,
+        settings: &StateSettings,
+        retry: Option<&RetryFailed>,
+        project: &mut Option<ProjectPlugins>,
+        steps: &Steps,
+    ) -> Result<(Self, Option<CliError>), CliError> {
+        let builds = kind != Kind::Compile;
         let executor = steps.attach(executor(args, settings));
         let mut warnings = project
             .as_mut()
@@ -2087,7 +2110,7 @@ impl RunReport {
 
         report.execute(
             (args, settings),
-            (&executor, &steps),
+            (&executor, steps),
             (requested, checked_sources),
             (sources, table_versions.as_ref()),
             (latest.as_ref(), &ws),

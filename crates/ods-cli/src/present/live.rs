@@ -49,6 +49,8 @@ struct Inner {
     step: Option<TaskId>,
     nodes: HashMap<String, TaskId>,
     title: String,
+    /// How the run ended, once the caller knows: `None` until [`LiveProgress::close`].
+    ended: Option<bool>,
 }
 
 /// stderr as `rich_ext::capabilities` sees a terminal: the process's environment,
@@ -122,6 +124,7 @@ impl LiveProgress {
                 step: None,
                 nodes: HashMap::new(),
                 title: sanitize(title),
+                ended: None,
             })),
         })
     }
@@ -187,6 +190,17 @@ impl LiveProgress {
         });
     }
 
+    /// Says how the run ended: whether it succeeded. Until then (or if it never comes,
+    /// e.g. the run stopped on an error), the step in progress isn't taken to have
+    /// succeeded.
+    pub fn close(&self, succeeded: bool) {
+        if let Ok(mut guard) = self.inner.lock()
+            && let Some(inner) = guard.as_mut()
+        {
+            inner.ended = Some(succeeded);
+        }
+    }
+
     /// A node finished, with what to say about it (`built in 1.2s, 120 rows`).
     pub fn finished(&self, node: &str, label: &str, outcome: Outcome, said: &str) {
         self.with(|inner| {
@@ -239,7 +253,19 @@ impl Drop for LiveProgress {
             return;
         };
         if let Some(step) = inner.step.take() {
-            inner.tree.succeed(step);
+            // Conservative: only a run said to have succeeded closes its last step as
+            // succeeded (AGENTS.md rule 3).
+            match inner.ended {
+                Some(true) => {
+                    inner.tree.succeed(step);
+                }
+                Some(false) => {
+                    inner.tree.fail(step, "the run didn't succeed");
+                }
+                None => {
+                    inner.tree.warn(step, "didn't finish");
+                }
+            }
         }
         // The nodes, not dbt's commands, in the order they were first seen.
         let mut nodes: Vec<TaskId> = inner.nodes.values().copied().collect();
@@ -349,6 +375,35 @@ mod tests {
         // The summary is what stays: it comes last.
         let summary = shown.rfind("1 failed").unwrap();
         assert!(shown.rfind("built in 1s").unwrap() < summary, "{shown}");
+    }
+
+    /// A run that ends without saying it succeeded (it stopped on an error before any
+    /// node ran) is never summed up as a success; one that says it failed, as failed.
+    #[test]
+    fn an_unconfirmed_run_is_not_summed_up_as_a_success() {
+        for (close, expected) in [
+            (None, "warning ods state build"),
+            (Some(false), "error ods state build"),
+        ] {
+            let terminal = MapEnvironment::tty().size(80, 24);
+            let out = Shared::default();
+            let live = LiveProgress::on(
+                "ods state build",
+                &terminal,
+                &no_color(),
+                Box::new(out.clone()),
+            )
+            .expect("a terminal to draw on");
+            live.step("2/5 dbt compile");
+            if let Some(succeeded) = close {
+                live.close(succeeded);
+            }
+            drop(live);
+            let shown = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+            let summary = &shown[shown.rfind("ods state build").unwrap()..];
+            assert!(!summary.contains("ok ods state build"), "{shown}");
+            assert!(shown.contains(expected), "{expected} in {shown}");
+        }
     }
 
     /// What a node or dbt says can't drive the terminal: it is sanitized first.
