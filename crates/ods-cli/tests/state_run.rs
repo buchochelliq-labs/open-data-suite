@@ -160,6 +160,20 @@ impl Project {
 
     /// `ods <args> -o plain`, whatever it exits with: its exit code and stdout.
     fn ods_plain_status(&self, args: &[&str]) -> (i32, String) {
+        self.ods_output_status(args, &["-o", "plain"])
+    }
+
+    /// `ods <args>` with human output, drawn without colour at `width` columns as a
+    /// terminal would get it: its exit code and stdout.
+    fn ods_human_status(&self, args: &[&str], width: u16) -> (i32, String) {
+        let width = width.to_string();
+        self.ods_output_status(
+            args,
+            &["-o", "human", "--color", "never", "--width", &width],
+        )
+    }
+
+    fn ods_output_status(&self, args: &[&str], output: &[&str]) -> (i32, String) {
         let target = self.dir.join("target");
         let db = self.db();
         let out = Command::new(env!("CARGO_BIN_EXE_ods"))
@@ -169,9 +183,8 @@ impl Project {
                 target.to_str().unwrap(),
                 "--state-db",
                 db.to_str().unwrap(),
-                "-o",
-                "plain",
             ])
+            .args(output)
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("XDG_CONFIG_HOME", &self.dir)
@@ -3982,6 +3995,40 @@ fn a_failed_node_is_explained_without_values() {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!("failure_explained_plain", redact(&section));
+
+    // On a terminal, the failure is a diagnostic (ADR-0003 §9), built from the same
+    // redacted facts: the secret never shows, and no compiled SQL does.
+    // From the run's journal, so every width shows the same run.
+    let human = |width: u16| {
+        let (code, human) =
+            project.ods_human_status(&["state", "history", "--run", &run_id], width);
+        assert_eq!(code, 0, "{human}");
+        assert!(!human.contains("SENTINEL"), "{human}");
+        human
+            .lines()
+            .skip_while(|l| !l.starts_with("Why "))
+            .take_while(|l| !l.starts_with("info:") && !l.starts_with("warning:"))
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // How long the fake took varies, so where a narrow terminal wraps does too: the
+    // wide form is the snapshot, and the narrow one fits its width and says the same.
+    let wide = human(100);
+    let narrow = human(60);
+    assert!(narrow.lines().all(|l| l.chars().count() <= 60), "{narrow}");
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(words(&narrow), words(&wide));
+    let took = wide.find("It failed after ").map(|at| {
+        let start = at + "It failed after ".len();
+        let end = start + wide[start..].find(',').unwrap();
+        wide[start..end].to_owned()
+    });
+    let wide = match took {
+        Some(took) => wide.replacen(&took, "<took>", 1),
+        None => wide,
+    };
+    insta::assert_snapshot!("failure_explained_human", redact(&wide));
 }
 
 /// What dbt says when a test returns rows, with a secret where a value would be.
