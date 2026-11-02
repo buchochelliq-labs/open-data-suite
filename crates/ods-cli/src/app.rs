@@ -157,6 +157,8 @@ where
     let progress = ProgressSettings {
         enabled: level >= LevelFilter::WARN,
         ansi: log_ansi,
+        // Info and debug log lines would write through the live drawing.
+        live: level == LevelFilter::WARN && io.stderr_is_terminal && !io.dumb_terminal,
     };
     let mut ctx = Context::new(settings, &loaded, io.out, &root)
         .with_progress(progress)

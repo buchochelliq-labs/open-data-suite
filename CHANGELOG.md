@@ -23,6 +23,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   same redacted facts as before. When several nodes fail, a summary by file comes
   first. An error ODS reports itself is drawn the same way, its hint as `help:`.
   Plain and JSON output, and what the MCP tools return, are unchanged.
+- On a terminal, `ods state build` (and `run`, `seed`, `snapshot`, `compile`) draws
+  its progress live (#446): each dbt command and its nodes in a tree redrawn in place,
+  dbt's lines printed above it, and a summary of the nodes (succeeded, failed, skipped)
+  when the run ends. Piped or redirected, and with `-q` or `-v`, progress is the plain
+  `ods ▸` lines it was. The report, JSON output, run events and journal are unchanged.
 
 ## [0.1.1] - 2026-11-01
 

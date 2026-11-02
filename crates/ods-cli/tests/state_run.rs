@@ -471,6 +471,8 @@ fn dbt_output_streams_to_stderr() {
         dbt.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "{json:#}");
+    // Not a terminal: plain lines, nothing drawn in place (#446).
+    assert!(!stderr.contains(['\x1b', '\r']), "{stderr:?}");
     // ODS says which dbt command runs, and why, just before dbt's own output (#220).
     let expected = [
         "ods ▸ 1/4 dbt source freshness: how new each source's data is",

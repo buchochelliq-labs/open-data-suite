@@ -4,6 +4,7 @@
 //! [`ViewNode`] tree for the human backends, or wraps it in the versioned JSON envelope.
 
 pub mod backend;
+pub mod live;
 pub mod view;
 
 use std::io::{self, Write};

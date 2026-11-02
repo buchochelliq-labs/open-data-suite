@@ -58,6 +58,11 @@ pub enum DbtOutput {
     Stderr,
     /// Captured; the last lines appear in error messages.
     Capture,
+    /// Every line dbt prints, from every command and from both of its streams, goes
+    /// to the [`on_output`](DbtExecutor::on_output) hook and nowhere else, so a caller
+    /// that draws on the terminal (live progress) can print it without dbt writing
+    /// through the drawing. Without a hook, nothing is shown.
+    Hook,
 }
 
 /// A dbt command the executor is about to run, for callers that show progress.
@@ -207,6 +212,12 @@ impl DbtExecutor {
         self
     }
 
+    /// Where dbt's own output goes.
+    #[must_use]
+    pub fn output_mode(&self) -> DbtOutput {
+        self.output
+    }
+
     /// dbt's `--vars`, passed to every dbt command, so what is planned, built and
     /// recorded all see the same values.
     #[must_use]
@@ -340,7 +351,7 @@ impl DbtExecutor {
                     .stdout(Stdio::from(std::io::stderr()))
                     .stderr(Stdio::from(std::io::stderr()));
             }
-            DbtOutput::Capture => {
+            DbtOutput::Capture | DbtOutput::Hook => {
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
             }
         }
@@ -369,8 +380,14 @@ impl DbtExecutor {
             "dbt finished"
         );
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        if self.output == DbtOutput::Hook {
+            // What `Stderr` would have written, line by line, once dbt is done.
+            let shown = if read_stdout { "" } else { stdout.as_str() };
+            self.relay(shown.lines().chain(errors.lines()));
+        }
         let mut text = stdout.clone();
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        text.push_str(&errors);
         let lines: Vec<&str> = text.lines().collect();
         let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
         Ok((output.status.success(), tail, stdout))
@@ -409,7 +426,7 @@ impl DbtExecutor {
         command.stdout(Stdio::piped());
         match self.output {
             DbtOutput::Stderr => command.stderr(Stdio::from(std::io::stderr())),
-            DbtOutput::Capture => command.stderr(Stdio::piped()),
+            DbtOutput::Capture | DbtOutput::Hook => command.stderr(Stdio::piped()),
         };
         // Names only: values can be credentials (AGENTS.md rule 9).
         tracing::info!(command = %self.display(args), "running dbt");
@@ -472,10 +489,25 @@ impl DbtExecutor {
             seconds = started.elapsed().as_secs_f64(),
             "dbt finished"
         );
+        if self.output == DbtOutput::Hook {
+            self.relay(errors.lines());
+        }
         let mut lines: Vec<String> = shown.into_iter().collect();
         lines.extend(errors.lines().map(str::to_owned));
         let tail = lines[lines.len().saturating_sub(OUTPUT_TAIL)..].join("\n");
         Ok((status.success(), tail))
+    }
+
+    /// Passes `lines` dbt printed, as they are, to the output hook ([`DbtOutput::Hook`]).
+    fn relay<'l>(&self, lines: impl Iterator<Item = &'l str>) {
+        if let Some(hook) = &self.on_output {
+            for text in lines {
+                hook(crate::events::DbtLine {
+                    time: None,
+                    text: text.to_owned(),
+                });
+            }
+        }
     }
 
     fn failure(what: &str, tail: &str) -> ProviderError {

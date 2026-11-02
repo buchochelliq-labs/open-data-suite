@@ -36,7 +36,7 @@ use ods_sdk::contracts::executor::{
 };
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::run_events::{
-    CollectedEvents, RunEvent, RunEventKind, RunEventSink, RunSummary,
+    CollectedEvents, NodeRunStats, NodeRunStatus, RunEvent, RunEventKind, RunEventSink, RunSummary,
 };
 use ods_sdk::contracts::state_store::{StateScope, StateStore, StoredSnapshot};
 use ods_state::{
@@ -55,6 +55,7 @@ use super::state_retry::{LastOutcome, RetryFailed};
 use super::state_settings::{Origin, Setting, StateSettings};
 use crate::exit::{CliError, ExitStatus, codes};
 use crate::module::{Context, ProgressSettings};
+use crate::present::live::{LiveProgress, Outcome as NodeOutcome};
 use crate::present::{Level, Line, Link, Present, Span, Tone, ViewNode};
 
 /// Options shared by the commands that run dbt (`run`, `test`).
@@ -491,11 +492,26 @@ pub(super) fn executor(args: &ArgMatches, settings: &StateSettings) -> DbtExecut
 /// and why. dbt starts each command with the same banner, so without them the steps
 /// look alike. They go to the process's stderr, where dbt writes, so they interleave
 /// with it in order.
-#[derive(Debug, Clone)]
+///
+/// On an interactive terminal, a run draws them live instead (ADR-0003 §9, #446): each
+/// dbt command and its nodes in a tree redrawn in place, with dbt's output and the
+/// notes printed above it.
+#[derive(Clone)]
 pub(super) struct Steps {
     settings: ProgressSettings,
     done: Arc<AtomicUsize>,
     total: usize,
+    live: Option<Arc<LiveProgress>>,
+}
+
+impl std::fmt::Debug for Steps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Steps")
+            .field("settings", &self.settings)
+            .field("total", &self.total)
+            .field("live", &self.live.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Steps {
@@ -505,11 +521,26 @@ impl Steps {
             settings,
             done: Arc::default(),
             total,
+            live: None,
         }
+    }
+
+    /// Like [`new`](Self::new), drawn live under `title` when stderr is an interactive
+    /// terminal (#446). The drawing ends when the last copy is dropped.
+    pub(super) fn live(settings: ProgressSettings, total: usize, title: &str) -> Self {
+        let mut steps = Self::new(settings, total);
+        if settings.enabled && settings.live {
+            steps.live = LiveProgress::start(title, settings.ansi).map(Arc::new);
+        }
+        steps
     }
 
     /// A note that isn't a dbt command, e.g. the plan.
     pub(super) fn note(&self, text: &str) {
+        if let Some(live) = &self.live {
+            live.print(&format!("ods ▸ {text}"));
+            return;
+        }
         self.line(None, text);
     }
 
@@ -553,6 +584,10 @@ impl Steps {
             ),
             _ => "dbt".to_owned(),
         };
+        if let Some(live) = &self.live {
+            live.step(&format!("{n}/{} {text}", self.total.max(n)));
+            return;
+        }
         self.line(Some(n), &text);
     }
 
@@ -570,10 +605,30 @@ impl Steps {
         let _ = std::io::stderr().write_all(line.as_bytes());
     }
 
-    /// Makes `executor` announce each dbt command here.
+    /// Makes `executor` announce each dbt command here, and, when drawn live, print
+    /// dbt's output above the drawing.
     pub(super) fn attach(&self, executor: DbtExecutor) -> DbtExecutor {
         let steps = self.clone();
-        executor.on_step(move |step| steps.step(step))
+        let executor = executor.on_step(move |step| steps.step(step));
+        match &self.live {
+            // Unless it is captured, every line dbt prints comes here, so dbt never
+            // writes through the drawing itself.
+            Some(live) if executor.output_mode() == DbtOutput::Stderr => {
+                let live = Arc::clone(live);
+                executor.output(DbtOutput::Hook).on_output(move |line| {
+                    live.print(&crate::present::engine_line(
+                        line.time.as_deref(),
+                        &line.text,
+                    ));
+                })
+            }
+            _ => executor,
+        }
+    }
+
+    /// The live drawing, when there is one.
+    fn live_progress(&self) -> Option<&LiveProgress> {
+        self.live.as_deref()
     }
 }
 
@@ -610,12 +665,41 @@ impl RunEventSink for Observed<'_> {
     fn emit(&self, event: RunEvent) {
         // Whatever the executor filled in, only redacted text is kept or shown (rule 9).
         let event = event.sanitized();
-        if let RunEventKind::NodeFinished { node, stats } = &event.kind {
-            let mut line = format!(
-                "{} {}",
-                display_name(node),
-                super::run_stats::status(stats, Some(self.mode)).text
-            );
+        if let Some(live) = self.steps.live_progress() {
+            match &event.kind {
+                RunEventKind::NodeQueued { node } => live.queued(node, &display_name(node)),
+                RunEventKind::NodeStarted { node, .. } => live.started(node, &display_name(node)),
+                RunEventKind::NodeFinished { node, stats } => {
+                    let outcome = match stats.status {
+                        NodeRunStatus::Success => NodeOutcome::Succeeded,
+                        NodeRunStatus::Error => NodeOutcome::Failed,
+                        NodeRunStatus::Skipped => NodeOutcome::Skipped,
+                        _ => NodeOutcome::Unknown,
+                    };
+                    // A skipped node says why, if anything; "skipped" is its symbol.
+                    let note = if outcome == NodeOutcome::Skipped {
+                        super::run_stats::detail(stats)
+                    } else {
+                        self.finished(stats)
+                    };
+                    live.finished(node, &display_name(node), outcome, &note);
+                }
+                _ => {}
+            }
+        } else if let RunEventKind::NodeFinished { node, stats } = &event.kind {
+            self.steps
+                .note(&format!("{} {}", display_name(node), self.finished(stats)));
+        }
+        self.journal.emit(event.clone());
+        self.collected.emit(event);
+    }
+}
+
+impl Observed<'_> {
+    /// How a node finished: `built in 1.2s, 120 rows (tests: 3 passed)`.
+    fn finished(&self, stats: &NodeRunStats) -> String {
+        {
+            let mut line = super::run_stats::status(stats, Some(self.mode)).text;
             if stats.took_ms().is_some() {
                 let _ = write!(line, " in {}", super::run_stats::took(stats));
             }
@@ -626,10 +710,8 @@ impl RunEventSink for Observed<'_> {
             if !detail.is_empty() {
                 let _ = write!(line, " ({detail})");
             }
-            self.steps.note(&line);
+            line
         }
-        self.journal.emit(event.clone());
-        self.collected.emit(event);
     }
 }
 
@@ -1835,7 +1917,8 @@ impl RunReport {
         project: &mut Option<ProjectPlugins>,
     ) -> Result<(Self, Option<CliError>), CliError> {
         let builds = kind != Kind::Compile;
-        let steps = Steps::new(progress, step_count(args, settings, builds));
+        let title = format!("ods state {}", kind.name());
+        let steps = Steps::live(progress, step_count(args, settings, builds), &title);
         let executor = steps.attach(executor(args, settings));
         let mut warnings = project
             .as_mut()
