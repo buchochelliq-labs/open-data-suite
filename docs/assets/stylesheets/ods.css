@@ -1,4 +1,4 @@
-/* The documentation site's look (mkdocs.yml: palette `custom`, extra_css).
+/* The documentation site's look (zensical.toml: palette `custom`, extra_css).
    Slate for the header and tabs, teal for links and actions. Every text colour here is
    at least 4.5:1 against its background, in both schemes. */
 
@@ -40,6 +40,11 @@
 /* The header logo sits a little larger than the theme's default. */
 .md-header__button.md-logo img {
   height: 1.6rem;
+}
+/* The logo is drawn light, for a dark header. Zensical's light scheme has a light
+   header, so it is inverted there; the hue turn keeps its teal node teal. */
+[data-md-color-scheme="default"] .md-header__button.md-logo img {
+  filter: invert(1) hue-rotate(180deg);
 }
 
 /* The announcement bar: one quiet line, not an alarm. */

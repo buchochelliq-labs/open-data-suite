@@ -10,7 +10,7 @@ and Databricks, and every decision it makes can be explained.
 > ERDs and an MCP server work as previews; everything may change.
 >
 > **Documentation:** https://buchochelliq-labs.github.io/open-data-suite/ (built from
-> `docs/` with MkDocs: `pip install -r requirements-docs.txt && mkdocs serve`).
+> `docs/` with Zensical: `pip install -r requirements-docs.txt && python -m zensical serve`).
 >
 > **Install:** `pip install opendatasuite` puts `ods` on your PATH next to dbt, or
 > `brew install buchochelliq-labs/tap/ods`. `cargo binstall`, direct downloads and

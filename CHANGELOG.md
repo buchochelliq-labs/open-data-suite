@@ -12,6 +12,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Changed
+
+- The docs site is built with Zensical, the successor to Material for MkDocs, in place
+  of MkDocs and Material (`zensical.toml` replaces `mkdocs.yml`;
+  `python -m zensical serve` to preview). Its pages, links and look carry over, with
+  Zensical's header and search.
+
 ## [0.1.1] - 2026-11-01
 
 The dashboard is complete: every screen in its design is built (#309), so this is the

@@ -44,7 +44,7 @@ impl Tone {
     ];
 }
 
-/// The site ODS's documentation is published at (`site_url` in `mkdocs.yml`).
+/// The site ODS's documentation is published at (`site_url` in `zensical.toml`).
 const DOCS_SITE: &str = "https://buchochelliq-labs.github.io/open-data-suite/";
 
 /// Where a span leads when a terminal can follow links (ADR-0003 §7): a local file, or
