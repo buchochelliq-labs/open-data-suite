@@ -3,7 +3,9 @@
 - **Status:** Proposed. Exploratory and unscheduled: this records a direction, and
   nothing here is built. Pieces of it are already on the roadmap as separate issues
   (#29, #30, #114, #120, #195); this ADR gives them one design. It isn't planned before
-  v0.1.0.
+  v0.1.0. *Amended (2026-11-02):* the dbt write-redirection spike
+  (`docs/research/dbt-build-redirection-spike.md`) answered the first
+  risk: dbt can build into ODS-chosen locations without changing any model.
 - **Date:** 2026-10-05
 - **Issues:** none yet. Related: #29 (REUSE/DEFER/CLONE abstraction), #30 (Databricks
   shallow clone), #114 (dev environment cloning), #120 (deployment/promotion), #195
@@ -135,9 +137,15 @@ contract is fixed by this ADR.
   The choice may differ per node: a node read by a streaming consumer can't sit behind
   a view.
 - **Write redirection.** A build tool's provider declares whether it can build a node
-  into a location ODS chooses. dbt can: ODS supplies the schema and alias per node
-  (through a small macro package or generated config) and points `ref()` at the
-  environment's tables with a state directory, as in ADR-0020. A tool without this
+  into a location ODS chooses. dbt can, as the spike showed:
+  - **Placement.** ODS passes each node's schema and alias as `--vars`, and an ODS
+    macro package looks them up.
+  - **Root macros.** dbt only takes `generate_schema_name`/`generate_alias_name` from
+    the root project, so the root project must call that package. Either ODS adds a
+    two-macro file (when the project has no naming macros), or the user adds one line
+    to their own macros (`ods env init` prints it for review). No model changes.
+  - **Unchanged nodes** are read from their physical tables with `--defer` and a
+    state directory, as in ADR-0020. A tool without this
   capability isn't versioned. Its nodes build in place, and its environments are
   targets as today.
 - **Delegation.** A tool with its own environments (SQLMesh) declares it, and ODS maps
@@ -213,7 +221,11 @@ environment and the plan says why.
 - **Materialized views and streaming tables**, and any node whose readers need table
   features a view lacks (change data feed, streaming reads, time travel), unless the
   warehouse offers a non-view pointer.
-- **Hooks that use `{{ this }}` in ways ODS can't redirect**, until shown safe.
+- **Nodes named by hand somewhere else**, not through `ref()`/`source()`: in a
+  constraint expression (`references main.orders`), a hook, a macro or a grant. Those
+  names don't follow redirection, so the spike's constraint failed. ODS finds them with
+  its SQL parser (ADR-0008) plus checks of constraints and hooks. The spike showed
+  `{{ this }}` in hooks and data tests follow redirection, so they aren't opted out.
 
 ### Incremental models (the hard part)
 A new version of an incremental model means rebuilding all of its history into a new
@@ -275,10 +287,11 @@ write redirection in build-tool providers, all through `ods-sdk` contracts (ADR-
    delegation to SQLMesh's own environments, which ADR-0027 builds on.
 
 ### Risks and signs to stop
-- Phase 1 has to show that dbt can reliably build a node into a chosen schema and
-  alias with no change to the user's models, including custom `generate_schema_name`
-  macros. If it can't, write redirection for dbt fails, and this falls back to
-  Option A.
+- ~~Phase 1 has to show that dbt can reliably build a node into a chosen schema and
+  alias with no change to the user's models.~~ Answered by the spike: it can, with an
+  ODS macro file or a one-line change to the user's naming macros. What remains is
+  Databricks (cross-schema rename, clone pointers, multi-object transactions) and
+  passing placement for large projects without huge `--vars` and full re-parses.
 - If the views or clones change query performance or BI behaviour enough that users
   opt most nodes out, the feature isn't worth its complexity.
 - Every opt-out shrinks the benefit. If a typical project's important nodes are mostly
@@ -302,8 +315,11 @@ write redirection in build-tool providers, all through `ods-sdk` contracts (ADR-
     date as dbt changes.
   - Forward-only changes and incrementals are a large problem of their own.
 - Follow-up issues (not to open until phase 1 is scheduled):
-  - Spike: build dbt nodes into ODS-chosen schemas and aliases, and point `ref()`
-    there, on the demo project and on a project with a custom `generate_schema_name`.
+  - ~~Spike: build dbt nodes into ODS-chosen schemas and aliases.~~ Done
+    (research note above).
+  - Spike on Databricks: cross-schema rename, shallow-clone pointers, transactions
+    across objects.
+  - A placement channel that scales to large projects.
   - Version keys (code fingerprints with parents by version key, independent of
     rendered relation names), physical table naming, table ownership, and the
     environment record and promotion journal as persisted formats with a
