@@ -3,7 +3,7 @@
   "tape_fnv1a64": "efd211ee9b5e5d8c",
   "recorder": "rs-rich-record 0.0.8",
   "rich": "rich (rs-rich-cli) 0.0.20",
-  "commit": "0b47aaff789b35c1c909f202601c70942f9aad73",
+  "commit": "cda305b57b3ade5761c536c2e904a2196392100e",
   "screenshots": [
     "state-build-failed",
     "state-retry-failed"
