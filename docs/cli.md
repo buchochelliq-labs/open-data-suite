@@ -2065,6 +2065,15 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
 
   When nothing needs building, the last line is `ods ▸ nothing to build, so dbt
   doesn't run again`. `-q` turns them off.
+
+  **On a terminal**, `ods state build` (and `run`, `seed`, `snapshot`, `compile`) draws
+  the same steps live instead (#446): each dbt command in a tree redrawn in place, with
+  each node under the command that builds it as it queues, starts and finishes
+  (`stg_orders  built in 250ms, 99 rows`). dbt's lines and the plan's notes are printed
+  above the tree, and when the run ends the tree gives way to a summary of the nodes:
+  how many succeeded, failed and were skipped, and which failed. Piped, redirected,
+  with `-q`, or with `-v` and more (whose log lines would write through the drawing),
+  progress is the plain lines above. Either way the report on stdout is the same.
 - **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
   streams to **stderr** as dbt writes it. For the build or test itself, ODS asks dbt
   for its structured log (`--log-format json --log-level debug`) to read each node's

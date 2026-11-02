@@ -331,6 +331,31 @@ async fn a_stale_run_results_file_is_never_read_as_this_runs() {
     );
 }
 
+/// With `DbtOutput::Hook`, what dbt prints for every command reaches the output hook,
+/// so a caller drawing on the terminal can print it (#446): the commands before the
+/// build (source freshness, compile) as well as the build itself.
+#[tokio::test]
+async fn hook_output_relays_every_command() {
+    let dir = scratch("hook");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let executor = executor(&dir)
+        .output(DbtOutput::Hook)
+        .on_output(move |line| {
+            sink.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(line.text);
+        });
+    executor
+        .prepare(&PrepareRequest::new().measuring_sources())
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    for line in ["fake dbt: source freshness", "fake dbt: compile"] {
+        assert!(seen.iter().any(|l| l.contains(line)), "{line} in {seen:?}");
+    }
+}
+
 #[tokio::test]
 async fn prepare_compiles_and_measures_sources() {
     let dir = scratch("prepare");

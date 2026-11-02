@@ -157,6 +157,12 @@ where
     let progress = ProgressSettings {
         enabled: level >= LevelFilter::WARN,
         ansi: log_ansi,
+        live: live_progress(
+            settings.mode,
+            level,
+            io.stderr_is_terminal,
+            io.dumb_terminal,
+        ),
     };
     let mut ctx = Context::new(settings, &loaded, io.out, &root)
         .with_progress(progress)
@@ -170,6 +176,13 @@ where
         Err(err) if err.is_broken_pipe() => ExitStatus::Success,
         Err(err) => report(&err, name, &settings, io.stderr_is_terminal, io.out, io.err),
     }
+}
+
+/// Whether a run's progress is drawn live (ADR-0003 §9): only for human output, on a
+/// terminal, at the default log level. `--output plain` and JSON get the plain lines,
+/// and info or debug log lines would write through the drawing.
+fn live_progress(mode: Mode, level: LevelFilter, stderr_is_terminal: bool, dumb: bool) -> bool {
+    mode == Mode::Human && level == LevelFilter::WARN && stderr_is_terminal && !dumb
 }
 
 /// Loads configuration (ADR-0005). A module that diagnoses configuration itself
@@ -479,6 +492,17 @@ mod tests {
             out: String::from_utf8(out).unwrap(),
             err: String::from_utf8(err).unwrap(),
         }
+    }
+
+    /// Only human output on a terminal, at the default level, is drawn live.
+    #[test]
+    fn only_human_output_on_a_terminal_is_drawn_live() {
+        assert!(live_progress(Mode::Human, LevelFilter::WARN, true, false));
+        assert!(!live_progress(Mode::Plain, LevelFilter::WARN, true, false));
+        assert!(!live_progress(Mode::Json, LevelFilter::WARN, true, false));
+        assert!(!live_progress(Mode::Human, LevelFilter::INFO, true, false));
+        assert!(!live_progress(Mode::Human, LevelFilter::WARN, false, false));
+        assert!(!live_progress(Mode::Human, LevelFilter::WARN, true, true));
     }
 
     #[test]

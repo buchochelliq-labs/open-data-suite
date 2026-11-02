@@ -87,6 +87,9 @@ pub struct ProgressSettings {
     pub enabled: bool,
     /// Style them with ANSI escapes.
     pub ansi: bool,
+    /// Draw a run's progress live, in place (ADR-0003 §9): stderr is a terminal and
+    /// nothing else (a log line at `info` or below) writes to it meanwhile.
+    pub live: bool,
 }
 
 impl<'a> Context<'a> {

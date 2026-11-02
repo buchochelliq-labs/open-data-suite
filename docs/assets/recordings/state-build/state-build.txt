@@ -1,23 +1,18 @@
+❯ ods state build
+fake dbt: source freshness
+fake dbt: compile
+ods ▸ plan: 8 to build, 5 to reuse
 ods ▸   code changed: stg_orders
-ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, customer_segments, customers_snapsh
-ot_view, segment_summary
-ods ▸ 5/5 dbt build: 8 nodes and their tests
+ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, customer_segments,
+customers_snapshot_view, segment_summary
 HH:MM:SS  fake dbt: build
-ods ▸ stg_orders built in 250ms, 99 rows
 HH:MM:SS  SUCCESS model.jaffle_ods.stg_orders
-ods ▸ orders built in 250ms, 99 rows
 HH:MM:SS  SUCCESS model.jaffle_ods.orders
-ods ▸ customers built in 250ms, 100 rows
 HH:MM:SS  SUCCESS model.jaffle_ods.customers
-ods ▸ order_events built in 250ms
 HH:MM:SS  SUCCESS model.jaffle_ods.order_events
-ods ▸ customer_order_rank built in 250ms
 HH:MM:SS  SUCCESS model.jaffle_ods.customer_order_rank
-ods ▸ customer_segments built in 250ms
 HH:MM:SS  SUCCESS model.jaffle_ods.customer_segments
-ods ▸ segment_summary built in 250ms
 HH:MM:SS  SUCCESS model.jaffle_ods.segment_summary
-ods ▸ customers_snapshot_view built in 250ms
 HH:MM:SS  SUCCESS model.jaffle_ods.customers_snapshot_view
 HH:MM:SS  PASS test.jaffle_ods.unique_customers_customer_id.c5af1ff4b1
 HH:MM:SS  PASS test.jaffle_ods.not_null_customers_customer_id.5c9bf9911d
@@ -29,6 +24,8 @@ HH:MM:SS  PASS test.jaffle_ods.relationships_customer_order_rank_order_id__order
 HH:MM:SS  PASS test.jaffle_ods.unique_stg_orders_order_id.e3b841c71a
 HH:MM:SS  PASS test.jaffle_ods.not_null_stg_orders_order_id.81cfe2fe64
 HH:MM:SS  fake dbt: a warning after the nodes
+✔ ok ods state build
+  8 succeeded
 State run
 
 scope          jaffle_ods/default
@@ -60,3 +57,6 @@ recorded       snapshot 2: 8 nodes advanced
 │ segment_summary         │ success │ 250ms │ —    │ upstream code changed: customer_segments will be rebuilt         │
 └─────────────────────────┴─────────┴───────┴──────┴──────────────────────────────────────────────────────────────────┘
 ❯
+
+
+
