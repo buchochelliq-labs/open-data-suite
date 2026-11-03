@@ -7,6 +7,7 @@
 
 mod changes;
 mod clock;
+mod credentials;
 mod error_catalogue;
 mod executor;
 mod health_check;
@@ -20,6 +21,7 @@ mod state_store;
 
 pub use changes::{FakeChangeProvider, FakeRelationProbe};
 pub use clock::FakeClock;
+pub use credentials::FakeCredentials;
 pub use error_catalogue::FakeErrorCatalogue;
 pub use executor::FakeExecutor;
 pub use health_check::{FakeHealthCheck, Misbehaviour};

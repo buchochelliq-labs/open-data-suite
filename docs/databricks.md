@@ -108,6 +108,43 @@ the page says why instead of guessing one: no `host` configured, a host or
 that isn't well formed (whitespace inside an unquoted name, text after a closing
 backtick, or a name that is `.` or `..`), which is never repaired.
 
+## Sign in to the workspace
+
+ODS can sign in to the workspace itself, for the Databricks features that will call its
+APIs ([ADR-0021](adr/0021-databricks-authentication.md)). No command uses it yet: dbt
+still connects with its own profile, and `ods doctor` will show the sign-in next.
+
+Two methods so far, each used only when named with `auth`:
+
+```toml
+[providers.uc]
+kind = "databricks"
+
+[providers.uc.settings]
+host = "https://<workspace>.cloud.databricks.com"   # or DATABRICKS_HOST
+auth = "m2m"                                          # a service principal's OAuth secret
+client_id = "<application id>"                        # not a secret
+client_secret = { secret = "env:DATABRICKS_CLIENT_SECRET" }
+scopes = ["sql"]                                      # optional: default sql, then all-apis
+```
+
+- **`m2m`** exchanges the service principal's secret for a token at
+  `<host>/oidc/v1/token`. It asks for each scope in `scopes` in turn while Databricks
+  answers that the scope isn't assigned to the principal, and stops at any other
+  refusal. The token is reused until a minute before it expires.
+- **`pat`**, the last resort, sends a static token as is:
+  `auth = "pat"` and `token = { secret = "env:DATABRICKS_TOKEN" }`. Nothing checks it
+  until an API is called with it. The short-lived token that `.github/databricks/ci.py`
+  exports is an OAuth token, and works here too.
+
+`client_secret` and `token` are secret references, never the values
+([secrets](cli.md#configuration)): they are resolved only when a token is needed, and
+tokens stay in ODS's memory. They are never written to configuration, state, logs or
+output, and an error from the token endpoint has the secret removed before it is shown.
+Only `https://` hosts are accepted and redirects are not followed. `auth = "cli"` (your
+`databricks auth login`) and federation come later; `profile`, `cli_path` and
+`audience` are refused until then.
+
 ## Next steps
 - **`ods state explain <node>`:** why a node was built or reused. See the [CLI reference](cli.md).
 - **`ods state retry --failed`:** after a failure, rebuild only what failed.

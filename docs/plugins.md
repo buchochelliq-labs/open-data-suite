@@ -14,6 +14,7 @@ the same suites from its own tests (#99).
 | Contract (trait) | Suite (`ods_sdk::conformance::…`) | Harness | `run` | Reference fake |
 |---|---|---|---|---|
 | `ChangeProvider` | `changes` | `ChangeHarness` | async | `FakeChangeProvider` |
+| `Credentials` | `credentials` | `CredentialsHarness` | async | `FakeCredentials` |
 | `HealthCheck` | `health_check` | `HealthCheckHarness` | async | `FakeHealthCheck` |
 | `ErrorCatalogue` | `error_catalogue` | `ErrorCatalogueHarness` | sync | `FakeErrorCatalogue` |
 | `Executor` | `executor` | `ExecutorHarness` | async | `FakeExecutor` |

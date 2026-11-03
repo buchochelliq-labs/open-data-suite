@@ -10,6 +10,10 @@
 //!   ADR-0030 §4c).
 //! - [`CatalogExplorer`]: links to a relation's page in Catalog Explorer, as a
 //!   [`RelationLinker`](ods_sdk::contracts::relation_link::RelationLinker) (#329).
+//! - [`DatabricksCredentials`]: signs in to the workspace with a service principal's
+//!   OAuth secret (`auth = "m2m"`) or a static token (`auth = "pat"`), as
+//!   [`Credentials`](ods_sdk::contracts::credentials::Credentials) (#297, ADR-0021).
+//!   Tokens stay in memory and never leave this crate.
 //!
 //! Reading Unity Catalog's lineage system table,
 //! [`system.access.column_lineage`](https://docs.databricks.com/aws/en/admin/system-tables/lineage),
@@ -30,14 +34,18 @@
 //!   AND event_date >= current_date() - INTERVAL 30 DAYS
 //! ```
 
+mod auth;
 pub mod catalog_explorer;
 mod column_lineage;
+mod credentials;
 pub mod delta_versions;
 pub mod error_catalogue;
 pub mod unity_catalog;
+mod workspace;
 
 pub use catalog_explorer::CatalogExplorer;
 pub use column_lineage::{ExportFormat, UcColumnLineage};
+pub use credentials::DatabricksCredentials;
 pub use delta_versions::DeltaVersions;
 pub use error_catalogue::DatabricksErrors;
 pub use unity_catalog::UnityCatalog;

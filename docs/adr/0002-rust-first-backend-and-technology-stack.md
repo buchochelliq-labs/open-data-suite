@@ -1,7 +1,7 @@
 # ADR-0002: Rust-first backend and technology stack
 
 - **Status:** Accepted (2026-10-04). Not built yet: the OpenTelemetry exporter (#8); `tracing` is in. The SQL parser was decided in ADR-0008 (`sqlparser`); the LSP library is still open (M5).
-- **Date:** 2026-09-24
+- **Date:** 2026-09-24 (amended 2026-11-03: the HTTP client, #297)
 - **Issues:** #105 (also #6, #8, #25, #27, #67, #95, #106)
 - **Deciders:** @n1ckyb
 
@@ -50,6 +50,7 @@ Baseline stack (all permissively licensed, actively maintained):
 | Errors | `thiserror` in libraries, `anyhow` in binaries only | MIT/Apache-2.0 | Typed errors keep contracts explicit. |
 | Async runtime | `tokio` | MIT | Only at I/O boundaries; planning stays sync. |
 | HTTP/service | `axum` (server mode, #95) | MIT | Tower middleware shared with LSP. |
+| HTTP client | `reqwest` 0.12 with `rustls`, `ring` and native roots (ADR-0021 §8, #297) | MIT/Apache-2.0; `ring` Apache-2.0 AND ISC | Warehouse APIs (Databricks' token endpoint). Not OpenSSL, `aws-lc-rs` or `webpki-roots`, whose licences `deny.toml` doesn't allow. |
 | Database | `sqlx` for SQLite/PostgreSQL stores (#25, #27) | MIT/Apache-2.0 | Behind the `StateStore` contract; swappable (e.g. `rusqlite`). |
 | Observability | `tracing` + OpenTelemetry exporter (#8) | MIT | Events are ODS types; tracing is a sink. |
 | LSP | `tower-lsp` or `async-lsp` — decided in the LSP ADR (#67) | MIT/Apache-2.0 | Protocol types via `lsp-types`. |
