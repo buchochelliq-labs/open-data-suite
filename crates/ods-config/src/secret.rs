@@ -2,7 +2,8 @@
 //!
 //! Configuration never holds a secret's value, only a reference to where it lives
 //! (`{ secret = "env:DATABRICKS_TOKEN" }`). Resolving references is the job of
-//! `SecretProvider`s (#126); this crate parses them and rejects plaintext.
+//! `ods_sdk`'s secret providers (#126, ADR-0032); this crate parses them and rejects
+//! plaintext.
 
 use std::fmt;
 
@@ -32,11 +33,7 @@ impl SecretRef {
         let (scheme, name) = reference
             .split_once(':')
             .ok_or_else(|| "a secret reference must be `<scheme>:<name>`".to_owned())?;
-        let scheme_ok = !scheme.is_empty()
-            && scheme
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-        if !scheme_ok {
+        if !Self::is_valid_scheme(scheme) {
             return Err(
                 "a secret reference's scheme must be lowercase letters, digits or `-`".to_owned(),
             );
@@ -48,6 +45,15 @@ impl SecretRef {
             scheme: scheme.to_owned(),
             name: name.to_owned(),
         })
+    }
+
+    /// Whether `scheme` is one a reference can name: one or more lowercase ASCII
+    /// letters, digits or `-`. Secret providers register under such a scheme (#126).
+    pub fn is_valid_scheme(scheme: &str) -> bool {
+        !scheme.is_empty()
+            && scheme
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
     }
 
     /// Where the secret lives, e.g. `env` or `keychain`.

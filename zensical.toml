@@ -79,6 +79,7 @@ nav = [
       "adr/0029-build-timings-and-the-run-ledger.md",
       "adr/0030-configurable-and-pluggable-health-checks.md",
       "adr/0031-plugin-registry-and-loading.md",
+      "adr/0032-secret-providers.md",
     ] },
   ] },
   { "Contributing" = [

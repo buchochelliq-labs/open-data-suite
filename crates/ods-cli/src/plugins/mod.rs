@@ -19,6 +19,8 @@ use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
 use ods_sdk::contracts::privileges::PrivilegedProbe;
 use ods_sdk::contracts::probe::RelationProbe;
 use ods_sdk::contracts::relation_link::{NoRelationLink, RelationLinker};
+use ods_sdk::contracts::secrets::SecretProvider;
+use ods_sdk::secrets::{EnvSecrets, ResolverError, SecretResolver};
 use serde::Serialize;
 
 mod databricks;
@@ -186,6 +188,9 @@ pub enum PluginError {
         /// The dialects the parser knows.
         known: String,
     },
+    /// A secret provider can't be added: its scheme is invalid or already served.
+    #[error("{0}")]
+    SecretScheme(#[from] ResolverError),
     /// The plugin set was installed already.
     #[error("the plugin set is installed once per process, and already was")]
     AlreadyInstalled,
@@ -202,6 +207,10 @@ pub type ObservedReader = Result<Arc<dyn ObservedLineageSource>, ProviderError>;
 pub struct Plugins {
     checks: Vec<(Arc<dyn HealthCheck>, Origin, bool)>,
     warehouses: BTreeMap<String, (Arc<dyn WarehousePlugin>, bool)>,
+    /// Whether `env:` references resolve, from the environment `ods` runs in.
+    env_secrets: bool,
+    /// Secret providers a custom build added, by scheme (ADR-0032).
+    secrets: BTreeMap<String, (Arc<dyn SecretProvider>, Origin)>,
 }
 
 impl std::fmt::Debug for Plugins {
@@ -233,9 +242,11 @@ impl Plugins {
         Self::default()
     }
 
-    /// What the released `ods` has: the Databricks and `DuckDB` plugins.
+    /// What the released `ods` has: the Databricks and `DuckDB` plugins, and `env:`
+    /// secret references.
     pub fn builtin() -> Self {
         let mut plugins = Self::none();
+        plugins.env_secrets = true;
         let builtins: [Arc<dyn WarehousePlugin>; 2] =
             [Arc::new(databricks::Databricks), Arc::new(duckdb::Duckdb)];
         for plugin in builtins {
@@ -299,6 +310,51 @@ impl Plugins {
         self.warehouses
             .insert(plugin.warehouse().to_owned(), (plugin, false));
         Ok(())
+    }
+
+    /// Adds a secret provider for its scheme (ADR-0032), e.g. `keychain` or a cloud
+    /// secret store. `origin` is the crate it comes from, as for
+    /// [`add_health_check`](Self::add_health_check).
+    ///
+    /// # Errors
+    /// Its scheme isn't valid, or is already served (`env` always is): which store a
+    /// reference is read from must never depend on the order plugins were added in.
+    pub fn add_secret_provider(
+        &mut self,
+        origin: Origin,
+        provider: Arc<dyn SecretProvider>,
+    ) -> Result<(), PluginError> {
+        // `env` is reserved even where it isn't served (`Plugins::none`), so a
+        // reference never means one store here and another there.
+        if provider.scheme() == EnvSecrets::SCHEME {
+            return Err(ResolverError::DuplicateScheme(EnvSecrets::SCHEME.to_owned()).into());
+        }
+        // Building the resolver checks the scheme the same way it will at use.
+        let mut resolver = self.secrets(&[]);
+        resolver.register(Arc::clone(&provider))?;
+        self.secrets
+            .insert(provider.scheme().to_owned(), (provider, origin));
+        Ok(())
+    }
+
+    /// The secret providers, for resolving references where a credential is used:
+    /// `env:` from `env` (the environment `ods` runs in), and each one a custom build
+    /// added. Values are never kept: each reference is read again when it is resolved.
+    ///
+    /// # Panics
+    /// Never: each scheme was checked as it was added.
+    pub fn secrets(&self, env: &[(String, String)]) -> SecretResolver {
+        let mut resolver = SecretResolver::new();
+        let env_provider = self.env_secrets.then(|| {
+            Arc::new(EnvSecrets::from_vars(env.iter().cloned())) as Arc<dyn SecretProvider>
+        });
+        let added = self.secrets.values().map(|(p, _)| Arc::clone(p));
+        for provider in env_provider.into_iter().chain(added) {
+            resolver.register(provider).expect(
+                "each scheme was checked as it was added, they are keyed by scheme, and `env` can't be added",
+            );
+        }
+        resolver
     }
 
     /// The registered health checks, in the order they were added.
@@ -540,6 +596,14 @@ impl Plugins {
                 .values()
                 .map(|(plugin, builtin)| detect::warehouse(plugin.as_ref(), *builtin)),
         );
+        if self.env_secrets {
+            checks.push(detect::env_secrets());
+        }
+        checks.extend(
+            self.secrets
+                .values()
+                .map(|(provider, origin)| detect::secrets(provider.as_ref(), origin)),
+        );
         checks
     }
 
@@ -719,6 +783,7 @@ mod tests {
                 ("observed_lineage_source", "databricks", true),
                 ("error_catalogue", "databricks", true),
                 ("error_catalogue", "duckdb", true),
+                ("secret_provider", "env", true),
             ]
         );
         assert_eq!(
@@ -1050,5 +1115,70 @@ mod tests {
             (listed.contract, listed.name.as_str(), listed.builtin),
             ("health_check", "owner", false)
         );
+    }
+
+    #[test]
+    fn secret_providers_serve_their_schemes_and_never_take_over_one() {
+        use ods_provider_fake::FakeSecrets;
+        let mut plugins = Plugins::builtin();
+        let origin = Origin::new("my-secrets", "1.0.0");
+        plugins
+            .add_secret_provider(
+                origin.clone(),
+                Arc::new(FakeSecrets::new("vault").with("db", "pw")),
+            )
+            .expect("vault is free");
+        for taken in ["vault", "env"] {
+            assert_eq!(
+                plugins.add_secret_provider(origin.clone(), Arc::new(FakeSecrets::new(taken))),
+                Err(PluginError::SecretScheme(ResolverError::DuplicateScheme(
+                    taken.to_owned()
+                )))
+            );
+        }
+        assert!(matches!(
+            plugins.add_secret_provider(origin, Arc::new(FakeSecrets::new("Vault"))),
+            Err(PluginError::SecretScheme(ResolverError::InvalidScheme(_)))
+        ));
+        let resolver = plugins.secrets(&[("TOKEN".to_owned(), "t0k".to_owned())]);
+        assert_eq!(resolver.schemes(), ["env", "vault"]);
+        let resolve = |text: &str| {
+            let reference = ods_config::SecretRef::parse(text).expect("valid reference");
+            futures_lite_block_on(resolver.resolve(&reference)).map(|v| v.expose().to_owned())
+        };
+        assert_eq!(resolve("env:TOKEN").as_deref(), Ok("t0k"));
+        assert_eq!(resolve("vault:db").as_deref(), Ok("pw"));
+        assert!(resolve("keychain:x").is_err());
+        let listed: Vec<_> = plugins
+            .listing()
+            .into_iter()
+            .filter(|l| l.contract == "secret_provider")
+            .map(|l| (l.name, l.from, l.builtin))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "env".to_owned(),
+                    format!("ods-sdk {}", env!("CARGO_PKG_VERSION")),
+                    true
+                ),
+                ("vault".to_owned(), "my-secrets 1.0.0".to_owned(), false),
+            ]
+        );
+        // No plugins at all: not even `env:`, and it still can't be taken.
+        let mut none = Plugins::none();
+        assert!(none.secrets(&[]).schemes().is_empty());
+        assert!(
+            none.add_secret_provider(Origin::new("x", "1"), Arc::new(FakeSecrets::new("env")))
+                .is_err()
+        );
+    }
+
+    fn futures_lite_block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
+            .block_on(future)
     }
 }
