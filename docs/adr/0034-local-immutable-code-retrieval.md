@@ -7,7 +7,7 @@
 
 ## Context
 
-ADR-0032 locates producing-code references, but consumers cannot yet inspect source.
+ADR-0033 locates producing-code references, but consumers cannot yet inspect source.
 A local checkout may have moved or contain uncommitted changes. Retrieval must not
 misrepresent those files as historical evidence, execute inspected code, follow an
 unapproved repository reference, or place source literals in routine reports.
@@ -90,5 +90,5 @@ metadata. The fake provider runs the same SDK conformance checks.
 
 ## References
 
-- [ADR-0032](0032-producing-code-references.md)
+- [ADR-0033](0033-producing-code-references.md)
 - [#462](https://github.com/buchochelliq-labs/open-data-suite/issues/462)
