@@ -53,3 +53,49 @@ This initial version is an in-process API. Registry/process transport, Git retri
 and catalog-derived code references are remaining parts of #462.
 
 See [ADR-0033](adr/0033-producing-code-references.md).
+
+## Reading an exact revision
+
+`CodeReader` is a separate async trait. `ods-provider-git::LocalGitCode::new` takes a
+map of approved aliases to local checkout roots, a byte limit (1 byte–8 MiB), and a
+nonzero total deadline. Call `read_code(&location, Some(producing_run))` explicitly.
+It needs Git 2.48+ and local objects. No clone/fetch, hooks, filters, textconv or code
+execution occurs. Standard host-controlled checkout layouts only; linked worktrees,
+bare repositories, symlinks as source and external object alternates are rejected.
+
+The returned `CodeDocument` exposes `location()`, `commit()` and opt-in `text()`.
+It has no serialization implementation and its Debug output omits source text.
+Do not add the text to ordinary evidence reports: source may contain sensitive
+literals. Errors are typed and omit stderr and filesystem paths. Current/unknown
+revision references require resolution before reading; an inaccessible commit or
+file returns an error rather than today's source or an empty success.
+
+See [ADR-0034](adr/0034-local-immutable-code-retrieval.md) for trust boundaries.
+
+### Remote repositories are read-only
+
+`RemoteGitCode::new` accepts a host-managed alias-to-HTTPS-URL map, byte limit and
+nonzero deadline. It fetches the exact commit at depth one into a disposable local
+object store; nothing is checked out and no remote/push URL is configured. The same
+local immutable reader handles the requested blob. Git process groups are killed
+on timeout/cancellation, and temporary storage is removed on completion.
+
+The built-in remote reader is anonymous: no inherited SSH agent, token, askpass,
+credential helper, global/system Git configuration or proxy credentials. User info,
+query strings, fragments and redirects are rejected. Private repository access must
+use a separate provider with server-enforced read-only credentials. Never give a
+reader a token that can push. A fetch-only API alone does not sandbox rogue native
+plugins; untrusted plugins require process isolation and restricted credentials.
+Remote pack storage needs a host disk quota; source byte limits do not cap pack size.
+
+Authentication is **fail-closed**: `CodeReader::verify_read_access` defaults to
+unverified. `require_read_only` rejects `WriteCapable` and `Unverified` before a read;
+Elephantry runs this gate within its total deadline before calling the reader.
+A credentialed adapter may return `VerifiedReadOnly` only after authoritative
+permission inspection for the target repository. A user-provided flag, plugin
+advertisement or unsuccessful push is not verification. If scope introspection is
+unsupported, it must refuse. The built-in remote reader accepts no authentication
+at all, so authenticated private access remains unsupported rather than bypassing
+this requirement. This protects the inspected repositories from write credentials
+being passed to fetch processes; a separate sandbox is still required for arbitrary
+untrusted native code.

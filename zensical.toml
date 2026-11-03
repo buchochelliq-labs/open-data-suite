@@ -82,6 +82,7 @@ nav = [
       "adr/0031-plugin-registry-and-loading.md",
       "adr/0032-secret-providers.md",
       "adr/0033-producing-code-references.md",
+      "adr/0034-local-immutable-code-retrieval.md",
     ] },
   ] },
   { "Contributing" = [
