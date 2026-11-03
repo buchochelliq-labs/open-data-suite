@@ -35,8 +35,14 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   (`ods_sdk::conformance::secrets`) and `FakeSecrets` in `ods-provider-fake`.
 - Provider-neutral producing-code references, scoped declared mappings and a dbt
   source metadata adapter (part of #462,
-  [ADR-0033](docs/adr/0033-producing-code-references.md)). Metadata lookup only; code
-  retrieval and process-plugin transport are not yet implemented.
+  [ADR-0033](docs/adr/0033-producing-code-references.md)). Metadata lookup only; process-plugin
+  transport is not yet implemented. Local retrieval is available through the separate
+  reader contract.
+- Opt-in immutable code retrieval through a provider-neutral reader and approved
+  local Git repositories or credential-free HTTPS fetches, with run/revision
+  checks, byte limits and deadlines (part of #462,
+  [ADR-0034](docs/adr/0034-local-immutable-code-retrieval.md)). No push API or
+  worktree source reads; private authentication requires read-only credentials.
 
 ## [0.1.2] - 2026-11-03
 

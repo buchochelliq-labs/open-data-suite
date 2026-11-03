@@ -27,6 +27,7 @@ ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-duckdb = { path = "providers/ods-provider-duckdb" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
+ods-provider-git = { path = "providers/ods-provider-git" }
 ods-provider-process = { path = "providers/ods-provider-process" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 ods-store-sqlite = { path = "providers/ods-store-sqlite" }
@@ -42,6 +43,8 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 async-trait = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+# Windows paths without the verbatim `\\?\` prefix canonicalize adds, which Git rejects.
+dunce = "1"
 # Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
 csv = "1"
 # Streams for the dashboard's Server-Sent Events (#322). MIT/Apache-2.0; axum already

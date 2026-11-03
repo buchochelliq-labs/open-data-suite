@@ -325,6 +325,7 @@ providers/
   ods-provider-databricks/   # Metadata/Change/Clone/Usage providers
   ods-store-sqlite/  ods-store-fs/  ods-store-postgres/
   ods-provider-fake/         # reference fake used by conformance tests
+  ods-provider-git/          # approved local immutable source retrieval (#462)
 fixtures/
   dbt/jaffle-ods/            # #100 demo project + artifacts for multiple dbt versions
 ```
