@@ -54,16 +54,13 @@ fn exact_revision_is_only_for_its_recorded_run() {
         commit: "a".repeat(40),
         run: "r1".into(),
     };
-    assert!(
-        mappings
-            .resolve(&asset("prod"), Some("r1"))
-            .unwrap()
-            .gaps
-            .is_empty()
+    assert_eq!(
+        mappings.resolve(&asset("prod"), Some("r1")).unwrap().gaps,
+        Vec::new()
     );
     let wrong = mappings.resolve(&asset("prod"), Some("r2")).unwrap();
     assert_eq!(wrong.gaps, vec![CodeGap::RevisionMismatch]);
-    assert!(wrong.references.is_empty());
+    assert_eq!(wrong.references, Vec::new());
 }
 
 #[test]

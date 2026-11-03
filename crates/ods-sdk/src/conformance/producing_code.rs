@@ -25,6 +25,6 @@ pub fn check(source: &dyn ProducingCodeSource, asset: &AssetKey) {
     let absent = source
         .producing_code(&other, None)
         .expect("unmapped resolves");
-    assert!(absent.references.is_empty());
+    assert_eq!(absent.references, Vec::new());
     assert!(absent.gaps.contains(&CodeGap::Missing));
 }

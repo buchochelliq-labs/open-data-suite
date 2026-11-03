@@ -14,7 +14,7 @@ fn source_metadata_is_a_declared_mapping_and_does_not_need_a_catalog() {
     let key = AssetKey::new("project", "prod", "source.p.raw");
     let result = source.producing_code(&key, None).unwrap();
     assert_eq!(result.references.len(), 1);
-    assert!(result.gaps.is_empty());
+    assert_eq!(result.gaps, Vec::new());
     assert_eq!(
         source
             .producing_code(&AssetKey::new("other", "prod", "source.p.raw"), None)
