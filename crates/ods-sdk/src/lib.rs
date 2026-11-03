@@ -23,6 +23,7 @@ pub mod protocol;
 mod provider;
 mod registry;
 pub mod run_journal;
+pub mod secrets;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -34,7 +35,7 @@ pub use registry::{ProviderFactory, Registry, RegistryError};
 use ods_core::SchemaVersion;
 
 /// Version of the plugin contract surface exposed by this crate.
-pub const SDK_VERSION: SchemaVersion = SchemaVersion::new(0, 9);
+pub const SDK_VERSION: SchemaVersion = SchemaVersion::new(0, 10);
 
 #[cfg(test)]
 mod tests {

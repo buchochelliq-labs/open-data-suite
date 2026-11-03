@@ -18,6 +18,7 @@ async-trait.workspace = true
 ods-config.workspace = true
 ods-core.workspace = true
 percent-encoding.workspace = true
+secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

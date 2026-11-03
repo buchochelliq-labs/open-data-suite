@@ -247,6 +247,12 @@ format = "json"
   - Malformed references are rejected too.
   - Error messages never repeat configured values, and the configuration never holds
     a secret's value.
+  - `env:VAR` reads the environment variable `VAR` (and so CI secrets). A custom build
+    can add other schemes, such as an OS keychain or a cloud secret store
+    ([plugins](plugins.md#a-custom-ods-in-process-plugins), ADR-0032). A reference is
+    resolved only where its credential is used, and its value is kept in memory for
+    that use alone: never written to configuration, state, logs or output. A variable
+    that is unset or empty counts as missing.
 - **Explain:** `ods config explain [KEY]` shows each effective value, where it came
   from and what it overrode (`--json` for machines):
 
@@ -269,10 +275,13 @@ What a plugin offers is found by asking it, never as it declares (ADR-0031 §3c)
 feature's factory is called with a connection that refuses every statement, so listing
 runs nothing and connects to nothing. Whether a feature it offers can be used is judged
 with this project's configuration, as a run would use it: one that can't says why (e.g.
-Databricks' links without a `host`). A health check and a warehouse may share a name;
-`--kind warehouse` or `--kind health_check` says which to show.
+Databricks' links without a `host`). Secret providers are listed by their scheme
+(`env` is built in; ADR-0032). Plugins of different kinds may share a name;
+`--kind warehouse`, `--kind health_check` or `--kind secret_provider` says which to
+show.
 
-`--json` gives each plugin's `name`, `kind` (`warehouse` or `health_check`), `from`,
+`--json` gives each plugin's `name`, `kind` (`warehouse`, `health_check` or
+`secret_provider`), `from`,
 `builtin`, `features` (`name`, `contract`, `contract_version`, `detail`, `unavailable`)
 and, for a warehouse, `parents`, `parents_from` (`plugin`, or `configuration` when
 `[warehouses.<kind>] extends` sets them) and `inherited`. The MCP tool

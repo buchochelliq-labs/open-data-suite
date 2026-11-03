@@ -78,6 +78,8 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"
+# Resolved secrets: zeroized on drop, never Debug-printed (#126, ADR-0032).
+secrecy = "0.10"
 supports-hyperlinks = "3"
 url = "2"
 # Terminal rendering; only ods-cli may depend on these (ADR-0003, enforced by

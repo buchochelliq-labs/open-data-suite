@@ -1,6 +1,5 @@
 ---
 source: crates/ods-cli/tests/doctor.rs
-assertion_line: 171
 expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
 ---
 {
@@ -354,6 +353,10 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           {
             "key": "error_catalogue.duckdb",
             "value": "error_catalogue 0.5 for duckdb (ods-provider-duckdb [ods-version], built in)"
+          },
+          {
+            "key": "secret_provider.env",
+            "value": "secret_provider 0.1 for env (ods-sdk [ods-version], built in)"
           }
         ]
       },
