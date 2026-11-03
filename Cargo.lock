@@ -1506,6 +1506,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ods-provider-git"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "ods-core",
+ "ods-sdk",
+ "process-wrap",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "ods-provider-process"
 version = "0.1.2"
 dependencies = [

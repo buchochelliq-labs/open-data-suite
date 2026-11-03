@@ -34,3 +34,6 @@ pub const KIND: &str = "fake";
 
 mod producing_code;
 pub use producing_code::FakeProducingCodeSource;
+
+mod code_reader;
+pub use code_reader::FakeCodeReader;

@@ -37,3 +37,5 @@ pub struct Report {
 }
 
 pub mod producing_code;
+
+pub mod code_reader;

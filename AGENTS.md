@@ -62,7 +62,7 @@ decided in their own ADRs (#67, #73). Python/TypeScript/Go are thin consumers on
 
 ```
 crates/       ods-core, ods-sdk, ods-events, ods-config, ods-policy, ods-state, … ods-cli
-providers/    ods-provider-dbt, ods-provider-databricks, ods-store-sqlite, ods-provider-fake, …
+providers/    ods-provider-dbt, ods-provider-databricks, ods-provider-git, ods-store-sqlite, ods-provider-fake, …
 fixtures/     dbt demo project + versioned artifacts (#100)
 docs/         ROADMAP.md, adr/, user & contributor docs
 .claude/      skills/ and agents/ for AI-assisted development

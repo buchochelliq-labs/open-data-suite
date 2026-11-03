@@ -43,4 +43,6 @@ To write one, use the `adr` skill (`.claude/skills/adr`) or copy
 
 | [0032](0032-producing-code-references.md) | Scoped producing-code references | Proposed | #462 |
 
+| [0033](0033-local-immutable-code-retrieval.md) | Read-only immutable producing-code retrieval | Proposed | #462 |
+
 ADR-0007 (the clean-room and licensing policy, #10) is planned and not written yet; until it is, the rule is `AGENTS.md` rule 8, and `deny.toml` checks dependency licences. Each ADR's status line notes what of its decision isn't built yet.
