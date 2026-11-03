@@ -12,6 +12,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-03
+
+The first M2 release: failures are drawn as diagnostics and run progress is drawn live
+on a terminal, the docs site moves to Zensical, and releases update the Homebrew tap.
+Plain and JSON output are unchanged, so nothing here breaks a script.
+
 ### Changed
 
 - The docs site is built with Zensical, the successor to Material for MkDocs, in place
