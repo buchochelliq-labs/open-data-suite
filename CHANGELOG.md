@@ -33,6 +33,10 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   secret providers, `env` among them.
 - SDK 0.10: the `secret_provider` contract 0.1, its conformance suite
   (`ods_sdk::conformance::secrets`) and `FakeSecrets` in `ods-provider-fake`.
+- Provider-neutral producing-code references, scoped declared mappings and a dbt
+  source metadata adapter (part of #462,
+  [ADR-0033](docs/adr/0033-producing-code-references.md)). Metadata lookup only; code
+  retrieval and process-plugin transport are not yet implemented.
 
 ## [0.1.2] - 2026-11-03
 

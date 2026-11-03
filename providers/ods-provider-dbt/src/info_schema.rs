@@ -422,6 +422,7 @@ fn read_nodes(
                         .map(|code| format!("compiled_code:{}", fingerprint(code)))
                 });
             nodes.push(ManifestNode {
+                meta: serde_json::Value::Null,
                 resource_type,
                 database: None,
                 schema: None,
@@ -503,6 +504,7 @@ fn read_tests(
             None => serde_json::Value::Null,
         };
         tests.push(ManifestNode {
+            meta: serde_json::Value::Null,
             resource_type: ResourceType::Test,
             database: None,
             schema: None,
