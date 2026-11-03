@@ -44,3 +44,5 @@ pub mod relations;
 pub mod run_events;
 pub mod sql_lineage;
 pub mod state_store;
+
+pub mod producing_code;

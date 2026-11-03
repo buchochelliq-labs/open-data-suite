@@ -12,6 +12,12 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Added
+
+- Provider-neutral producing-code references, scoped declared mappings and a dbt
+  source metadata adapter (part of #462, ADR-0032). Metadata lookup only; code
+  retrieval and process-plugin transport are not yet implemented.
+
 ## [0.1.2] - 2026-11-03
 
 The first M2 release: failures are drawn as diagnostics and run progress is drawn live

@@ -35,3 +35,5 @@ pub struct Report {
     /// Cases that were skipped, with the reason.
     pub skipped: Vec<(&'static str, String)>,
 }
+
+pub mod producing_code;
