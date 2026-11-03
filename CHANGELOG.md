@@ -14,6 +14,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 
+- The Databricks provider can sign in to the workspace itself (#297,
+  [ADR-0021](docs/adr/0021-databricks-authentication.md), now accepted): with a
+  service principal's OAuth secret (`auth = "m2m"`, narrowest scope first) or a static
+  token (`auth = "pat"`). Secrets are references, tokens stay in memory, and only
+  HTTPS hosts are used. No command signs in yet; `ods doctor` will show it next.
+- SDK 0.11: the `credentials` contract 0.1 (how a provider signs in, never its token),
+  its conformance suite (`ods_sdk::conformance::credentials`) and `FakeCredentials`.
 - Secret references are resolved by secret providers, one per scheme (#126,
   [ADR-0032](docs/adr/0032-secret-providers.md)). `env:` is built in. A custom `ods`
   adds others, such as an OS keychain or a cloud secret store, with

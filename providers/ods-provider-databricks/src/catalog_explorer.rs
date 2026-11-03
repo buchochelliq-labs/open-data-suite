@@ -22,6 +22,7 @@ use ods_sdk::contracts::relation_link::{
 use ods_sdk::{Provider, ProviderInfo};
 
 use crate::KIND;
+use crate::workspace::HostError;
 
 /// What the link is called.
 pub const LABEL: &str = "Open in Catalog Explorer";
@@ -130,45 +131,15 @@ fn workspace_in_host(base: &str) -> Option<String> {
         .flatten()
 }
 
-/// `https://<host>` from the configured `host`: HTTPS only, no trailing `/`, and no
-/// path, query, fragment or user part.
+/// `https://<host>` from the configured `host`, as [`crate::workspace::https_base`]
+/// reads it.
 fn base(host: Option<&str>) -> Result<String, NoRelationLink> {
-    let host = host
-        .map(str::trim)
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| NoRelationLink::NotConfigured {
+    crate::workspace::https_base(host).map_err(|e| match e {
+        HostError::NotConfigured => NoRelationLink::NotConfigured {
             setting: "host".to_owned(),
-        })?;
-    let rest = match host.split_once("://") {
-        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("https") => rest,
-        Some(_) => return Err(invalid("must be an https:// workspace URL")),
-        None => host,
-    };
-    let authority = rest.trim_end_matches('/');
-    if authority.contains(['/', '?', '#']) {
-        return Err(invalid(
-            "must be the workspace's URL alone, with no path or query string",
-        ));
-    }
-    if authority.contains('@') {
-        // Never echoed: the part before `@` may be a credential.
-        return Err(invalid("must not carry a user name or password"));
-    }
-    let (name, port) = match authority.rsplit_once(':') {
-        Some((name, port)) => (name, Some(port)),
-        None => (authority, None),
-    };
-    let valid_name = !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-        && !name.starts_with(['.', '-'])
-        && !name.ends_with(['.', '-']);
-    let valid_port = port.is_none_or(|p| !p.is_empty() && p.parse::<u16>().is_ok());
-    if !valid_name || !valid_port {
-        return Err(invalid("isn't a host name"));
-    }
-    Ok(format!("https://{}", authority.to_ascii_lowercase()))
+        },
+        HostError::Invalid(why) => invalid(why),
+    })
 }
 
 impl Provider for CatalogExplorer {

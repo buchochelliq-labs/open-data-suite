@@ -29,7 +29,7 @@ To write one, use the `adr` skill (`.claude/skills/adr`) or copy
 | [0018](0018-state-store-migrations-and-recovery.md) | State store migrations, integrity and recovery | Accepted | #188 |
 | [0019](0019-release-and-versioning.md) | Release and versioning strategy | Accepted | #101, #212 |
 | [0020](0020-dbt-state-interop-and-favor-state.md) | dbt state interop: export a state that `--favor-state` can trust, and import dbt runs | Accepted | #296 |
-| [0021](0021-databricks-authentication.md) | Databricks authentication: U2M first, M2M for CI, tokens never persisted | Proposed | #297 |
+| [0021](0021-databricks-authentication.md) | Databricks authentication: U2M first, M2M for CI, tokens never persisted | Accepted | #297 |
 | [0022](0022-delta-table-versions-as-source-evidence.md) | Delta table versions as source change evidence, read through dbt | Accepted | #17, #16 |
 | [0023](0023-ods-doctor-diagnostics.md) | `ods doctor`: typed health checks, stable codes and exit semantics | Accepted | #181 |
 | [0024](0024-run-events-node-stats-and-run-journal.md) | Run events, per-node run stats and the run journal | Accepted | #322 |

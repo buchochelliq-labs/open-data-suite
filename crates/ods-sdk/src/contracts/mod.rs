@@ -29,9 +29,11 @@
 //! | `UsageProvider` | #55 | planned |
 //! | `SchemaProvider` (ERD) | #60 | planned |
 //! | [`SecretProvider`](secrets::SecretProvider) | #126 | defined (ADR-0032) |
+//! | [`Credentials`](credentials::Credentials) | #297 | defined (ADR-0021) |
 //! | `LlmProvider` | #33 | planned |
 
 pub mod changes;
+pub mod credentials;
 pub mod error_catalogue;
 pub mod executor;
 pub mod health_check;

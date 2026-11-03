@@ -1,6 +1,6 @@
 # ADR-0021: Databricks authentication: U2M first, M2M for CI, tokens never persisted
 
-- **Status:** Proposed (reviewed 2026-10-04). Not built yet: ODS doesn't talk to Databricks directly; only the workspace `host` and `workspace_id` settings are used (Catalog Explorer links).
+- **Status:** Accepted (2026-11-03, #297). Built: the `credentials` 0.1 contract, its conformance suite and fake; `auth = "m2m"` and `auth = "pat"` in `DatabricksCredentials`, with the token cache, scope fallback, HTTPS only and no redirects (§8). Not yet: a command that signs in (`ods doctor`, and the settings check), `auth = "cli"` and the `user_login` capability, `federated`, automatic method order, the 401 retry, and the live M2M proof in the `databricks` job.
 - **Date:** 2026-09-28
 - **Issues:** #297 (related: #294, #295, #126, #17, #30)
 - **Deciders:** @n1ckyb
@@ -226,6 +226,31 @@ Out of scope: a compromised user account or machine, and memory dumps.
 - **Conformance:** the `credentials` suite, run by the fake and Databricks providers.
 - **Live:** U2M by hand against Free Edition, with a CLI profile. M2M in the
   `databricks` CI job (#294). Federation where an account allows it.
+
+### 8. Amendments (2026-11-03, #297)
+- **Order.** M2M and PAT ship first, then `cli` (U2M), then `federated`: CI can prove
+  M2M against a real workspace without a person present, and U2M needs one. Until
+  automatic order ships, `auth` is required.
+- **The token wrapper** is `ods_sdk::contracts::secrets::SecretValue` (ADR-0032), not a
+  second type: it already zeroizes and redacts.
+- **HTTP client:** `reqwest` 0.12 with `rustls`, the `ring` crypto provider and the
+  operating system's root certificates (`rustls-tls-native-roots`). Not OpenSSL, not
+  `aws-lc-rs` (its licence includes OpenSSL's) and not `webpki-roots`
+  (CDLA-Permissive-2.0), which `deny.toml` doesn't allow. The client is HTTPS only,
+  follows no redirect, and times out after 60 seconds. ADR-0002's stack table lists it.
+- **Scope fallback** happens only when Databricks answers that a scope "are not
+  assigned", the words `ci.py` matches (#295). Any other refusal, such as a wrong
+  secret, stops at once.
+- **Errors:** at most 64 KiB of an endpoint's answer is read. The client secret is
+  removed from a refusal (`SecretValue::redact_in`) before it is cut to 500 characters
+  and shown. Any `2xx` answer is read as a token and never shown. `408`, `429` and
+  `5xx` are worth retrying (`Unavailable`); other refusals aren't.
+- **Reuse:** a token is reused until a minute before it expires; a token whose expiry
+  the endpoint didn't give is never reused. The token's text passes through the HTTP
+  client's buffers before it is wrapped, so only the `SecretValue` is zeroized; memory
+  dumps stay out of scope (§6).
+- **`profile`, `cli_path` and `audience`** are refused as not supported yet, rather than
+  ignored, until their methods ship.
 
 ## Consequences
 - Positive:
