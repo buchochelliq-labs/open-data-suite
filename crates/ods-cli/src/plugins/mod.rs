@@ -1168,7 +1168,7 @@ mod tests {
         );
         // No plugins at all: not even `env:`, and it still can't be taken.
         let mut none = Plugins::none();
-        assert!(none.secrets(&[]).schemes().is_empty());
+        assert_eq!(none.secrets(&[]).schemes(), Vec::<String>::new());
         assert!(
             none.add_secret_provider(Origin::new("x", "1"), Arc::new(FakeSecrets::new("env")))
                 .is_err()
