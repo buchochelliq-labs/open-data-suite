@@ -164,6 +164,8 @@ version (ADR-0019). The tag starts `.github/workflows/release.yml`, which:
 5. publishes the wheels to PyPI;
 6. packs the Chocolatey package for the release, installs it on Windows, and pushes it
    to the Chocolatey community repository (`.github/workflows/chocolatey.yml`).
+7. opens a pull request on the Homebrew tap that puts the release's `ods.rb` in
+   `Formula/ods.rb` (not for prereleases).
 
 Run the workflow by hand (**Actions → Release → Run workflow**) for a dry run: it builds
 and tests everything, uploads the result as workflow artifacts, and publishes nothing.
@@ -178,10 +180,15 @@ One-time setup, by a repository and PyPI admin:
   to `v*` tags, and add required reviewers so each upload waits for approval.
 - **Tag protection.** Add a ruleset for `v*` tags so only maintainers can create them.
 - **Homebrew tap.** The public repository `buchochelliq-labs/homebrew-tap` holds the
-  formula. After each release, copy the release's `ods.rb` asset to `Formula/ods.rb`
-  there and commit it.
-  Automating this needs a token with write access to the tap, stored as a secret; it
-  isn't set up yet.
+  formula. The release opens a pull request there with the new `Formula/ods.rb`;
+  merging it publishes the release to `brew upgrade`. For that, create a fine-grained
+  personal access token with access to `buchochelliq-labs/homebrew-tap` only and the
+  **Contents** and **Pull requests** permissions set to read and write. Then create
+  the `homebrew` environment, restricted to `v*` tags, with the token as its
+  `HOMEBREW_TAP_TOKEN` secret. Without the secret the release's `homebrew-tap` job
+  only prints a notice, and you copy the release's `ods.rb` asset to `Formula/ods.rb`
+  in the tap by hand. When the token expires, the job fails: renew it and re-run the
+  job.
 - **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
   secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
   required reviewers, like `pypi`. The release pushes from its `v*` tag. To push an
