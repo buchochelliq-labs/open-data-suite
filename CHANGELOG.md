@@ -28,6 +28,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   dbt's lines printed above it, and a summary of the nodes (succeeded, failed, skipped)
   when the run ends. Piped or redirected, and with `-q` or `-v`, progress is the plain
   `ods ▸` lines it was. The report, JSON output, run events and journal are unchanged.
+- Releases open a pull request on the Homebrew tap with the new formula, so
+  `brew upgrade ods` gets each release once that is merged (maintainers set up a token:
+  see "For maintainers" in `docs/install.md`).
 
 ## [0.1.1] - 2026-11-01
 
