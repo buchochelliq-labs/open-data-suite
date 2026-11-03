@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/doctor.rs
+assertion_line: 171
 expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
 ---
 {
@@ -153,7 +154,7 @@ expression: "project.redact(&serde_json::to_string_pretty(&json).unwrap())"
           },
           {
             "key": "nodes",
-            "value": "25"
+            "value": "28"
           }
         ]
       },

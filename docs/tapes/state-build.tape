@@ -2,7 +2,7 @@
 # with each node's result, time taken, rows and why it ran.
 Set Size 120x62
 Set Title "ods state build"
-Set Caption "After an edit to stg_orders: 8 nodes build, 5 are reused"
+Set Caption "After an edit to stg_orders: 8 nodes build, 6 are reused"
 Set TypingDelay 30ms
 Output png svg gif
 # dbt's log lines carry the wall-clock time; run ids and the run's own duration vary.

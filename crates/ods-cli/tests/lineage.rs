@@ -99,7 +99,10 @@ fn impact_prunes_readers_that_do_not_use_the_changed_column() {
         "--column",
         "stg_payments.payment_method",
     ]);
-    assert_eq!(strings(&result["run"]), ["model.jaffle_ods.orders"]);
+    assert_eq!(
+        strings(&result["run"]),
+        ["model.jaffle_ods.orders", "model.jaffle_ods.payment_totals"]
+    );
     let pruned: Vec<&str> = result["impact"]["pruned"]
         .as_array()
         .unwrap()
@@ -185,8 +188,11 @@ fn export_writes_openlineage_job_events_with_column_lineage() {
         "--output-file",
         file.to_str().unwrap(),
     ]);
-    assert_eq!(result["events"], 10, "every model, the Python one included");
-    assert_eq!(result["with_column_lineage"], 9, "all but the Python model");
+    assert_eq!(result["events"], 11, "every model, the Python one included");
+    assert_eq!(
+        result["with_column_lineage"], 10,
+        "all but the Python model"
+    );
     let events: Vec<Value> = fs::read_to_string(&file)
         .unwrap()
         .lines()
@@ -290,7 +296,7 @@ fn graph_exports_every_format_and_focus_narrows_it() {
     };
 
     let (result, text) = write("json", &[]);
-    assert_eq!(result["nodes"], 13);
+    assert_eq!(result["nodes"], 14);
     let document: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(document["schema_version"], 1);
     let orders = document["nodes"]
@@ -483,7 +489,29 @@ fn dbt_1x_json_v2_json_and_v2_parquet_give_the_same_lineage() {
     let v2_json = graph(&v2_fixture(), "json");
     let v2_parquet = graph(&v2_fixture(), "info-schema");
     assert!(v1.0.as_array().unwrap().len() > 50);
-    assert_eq!(v1, v2_json, "dbt v2's manifest.json matches dbt 1.x");
+    // dbt v2 compiles the incremental model only with its DuckDB driver, which it
+    // downloads; the fixture was captured without it, so that model has no compiled SQL
+    // there (fixtures/dbt/jaffle-ods/regenerate.sh). Every other model must match.
+    let without_incremental = |(columns, nodes): &(Value, Value)| {
+        let keep = |edge: &&Value| !edge.to_string().contains("model.jaffle_ods.payment_totals");
+        let filtered = |edges: &Value| {
+            Value::Array(
+                edges
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(keep)
+                    .cloned()
+                    .collect(),
+            )
+        };
+        (filtered(columns), filtered(nodes))
+    };
+    assert_eq!(
+        without_incremental(&v1),
+        without_incremental(&v2_json),
+        "dbt v2's manifest.json matches dbt 1.x"
+    );
     assert_eq!(
         v2_json, v2_parquet,
         "the Parquet Information Schema matches the JSON"
@@ -509,8 +537,10 @@ fn a_v2_target_without_json_is_read_from_the_information_schema() {
         "--target-dir",
         target.path().to_str().unwrap(),
     ]);
+    // The Python model, and the incremental one dbt v2 couldn't compile offline
+    // (fixtures/dbt/jaffle-ods/regenerate.sh), have no SQL to analyze.
     assert_eq!(result["summary"]["models_analyzed"], 9);
-    assert_eq!(result["summary"]["models_opaque"], 1);
+    assert_eq!(result["summary"]["models_opaque"], 2);
 }
 
 fn copy_dir(from: &Path, to: &Path) {

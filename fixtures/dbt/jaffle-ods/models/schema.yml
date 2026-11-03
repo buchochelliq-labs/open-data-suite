@@ -32,6 +32,12 @@ models:
       - {name: bank_transfer_amount, data_type: double}
       - {name: gift_card_amount, data_type: double}
       - {name: amount, data_type: double}
+  - name: payment_totals
+    # Incremental (#435): new payments are appended by id.
+    columns:
+      - name: payment_id
+        description: Primary key.
+        data_tests: [unique, not_null]
   - name: customer_order_rank
     # Model-level constraints: a composite primary key, and a foreign key in the
     # `expression` syntax. (DuckDB rejects the database-qualified name dbt renders for

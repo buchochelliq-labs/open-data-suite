@@ -30,16 +30,18 @@ Filters
 Clear all
 RESOURCE TYPE
 model
-10
+11
 seed
 3
 LAYER
 staging
 3
 marts
-7
+8
 Inferred from each model's first folder under the model paths (its dbt fqn), not declared. Seeds have none.
 MATERIALIZATION
+incremental
+1
 table
 6
 view
@@ -52,7 +54,7 @@ NEXT-RUN DECISION
 Build
 6
 Reuse
-7
+8
 Never built
 0
 Unknown
@@ -60,7 +62,7 @@ Unknown
 From the plan against the latest snapshot, made offline. Reuse is decided offline: a reused node's relation isn't checked by this plan (it is when a run starts).
 HEALTH
 Healthy
-7
+8
 Warning
 6
 Failing
@@ -70,7 +72,7 @@ Unknown
 A node is failing when a check at severity error fails, then unknown when a check couldn't decide, a warning when a check at severity warn fails, and healthy when every check that applies passed. Checks (configure them under [health] in ods.toml): built (on): ODS built it: a node never built is unknown (it can't fail). Turned off, nodes are judged on the other checks alone. last_run_failed (error): It didn't fail in the last run, or was built since. last_run_skipped (warn): It wasn't skipped in the last run because of a failure upstream. tests_required (warn): It has at least one test (by default, models and snapshots). tests_passed (warn): Its tests passed on its current build, as they are now.
 LINEAGE CONFIDENCE
 parsed
-8
+9
 inferred
 1
 observed
@@ -83,7 +85,7 @@ n/a
 3
 Column lineage from the SQL; seeds have none (n/a).
 /
-13 of 13 nodes
+14 of 14 nodes
 decisions against snapshot 3
 Name
 ↑
@@ -122,6 +124,10 @@ Warning	1 · <run>
 orders
 model	marts	table
 parsed	BUILD
+Healthy	1 · <run>
+payment_totals
+model	marts	incremental
+parsed	REUSE
 Healthy	1 · <run>
 raw_customers
 seed	n/a	seed

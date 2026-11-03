@@ -120,16 +120,16 @@ fn without_a_state_store_the_catalog_lists_the_manifest_and_never_built() {
     let server = serve(&fixtures("jaffle-ods/artifacts/dbt-1.10"), &[]);
     let view = json(&server, "api/catalog");
     assert_eq!(view["schema_version"], 3);
-    assert_eq!(view["total"], 13, "10 models and 3 seeds: {view}");
-    assert_eq!(counts(&view, "type"), pairs(&[("model", 10), ("seed", 3)]));
+    assert_eq!(view["total"], 14, "11 models and 3 seeds: {view}");
+    assert_eq!(counts(&view, "type"), pairs(&[("model", 11), ("seed", 3)]));
     assert_eq!(
         counts(&view, "layer"),
-        pairs(&[("staging", 3), ("marts", 7)]),
+        pairs(&[("staging", 3), ("marts", 8)]),
         "the folders under models/, upstream first"
     );
     assert_eq!(
         counts(&view, "materialized"),
-        pairs(&[("table", 6), ("view", 4), ("seed", 3)])
+        pairs(&[("incremental", 1), ("table", 6), ("view", 4), ("seed", 3)])
     );
     assert!(counts(&view, "tag").is_empty(), "the fixture has no tags");
     assert_eq!(
@@ -137,7 +137,7 @@ fn without_a_state_store_the_catalog_lists_the_manifest_and_never_built() {
         pairs(&[
             ("build", 0),
             ("reuse", 0),
-            ("never_built", 13),
+            ("never_built", 14),
             ("unknown", 0)
         ])
     );
@@ -146,7 +146,7 @@ fn without_a_state_store_the_catalog_lists_the_manifest_and_never_built() {
     }
     let (status, page) = get(&server, "catalog");
     assert_eq!(status, 200);
-    assert!(page.contains("13 of 13 nodes"), "{page}");
+    assert!(page.contains("14 of 14 nodes"), "{page}");
 
     // A model page: types from catalog.json, tests from the manifest.
     let model = json(&server, "api/catalog/model.jaffle_ods.customers");
@@ -244,7 +244,7 @@ fn the_catalog_shows_the_plan_and_the_builds_the_state_store_recorded() {
         "{view}"
     );
     assert_eq!(decisions["reuse"], home["plan"]["reuse"].as_u64().unwrap());
-    assert_eq!(decisions["reuse"], 13, "nothing changed since the build");
+    assert_eq!(decisions["reuse"], 14, "nothing changed since the build");
     let run = home["runs"][0]["run_id"].as_str().unwrap();
     // The builds shown and the decisions rest on the same snapshot: every build is
     // one the plan's snapshot records, never a later one.
@@ -734,7 +734,7 @@ fn health_and_coverage_come_from_the_project_and_say_what_isnt_measured() {
             .unwrap()
             .clone()
     };
-    assert_eq!(health("unknown")["count"], 13, "nothing was ever built");
+    assert_eq!(health("unknown")["count"], 14, "nothing was ever built");
     assert_eq!(health("healthy")["count"], 0);
     assert!(
         health("failing")["count"].is_null(),
@@ -743,7 +743,7 @@ fn health_and_coverage_come_from_the_project_and_say_what_isnt_measured() {
     let (status, page) = get(&server, "catalog?health=unknown");
     assert_eq!(status, 200);
     assert!(
-        page.contains("13 of 13 nodes"),
+        page.contains("14 of 14 nodes"),
         "the badge's link lists them"
     );
 }

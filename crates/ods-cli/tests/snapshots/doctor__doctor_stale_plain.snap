@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/doctor.rs
+assertion_line: 205
 expression: project.redact(&plain)
 ---
 ODS doctor
@@ -33,7 +34,7 @@ Project
     format: manifest.json
     schema_version: 12
     dbt_version: 1.10.23
-    nodes: 25
+    nodes: 28
   [ok] project.name: project `jaffle_ods`
     project_name: jaffle_ods
   [warning ODS-W0206] project.freshness: the manifest is older than `./models/orders.sql`: plans would describe code that isn't what runs

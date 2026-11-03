@@ -4,7 +4,7 @@ State plan
 scope          jaffle_ods/default
 compared with  no recorded state: everything is built
 recorded in    no target recorded
-decision       13 to build, 0 to reuse
+decision       14 to build, 0 to reuse
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ node                    ┃ action   ┃ why                                 ┃
@@ -17,19 +17,19 @@ decision       13 to build, 0 to reuse
 │ stg_payments            │ build    │ no successful build recorded by ODS │
 │ order_events            │ build    │ no successful build recorded by ODS │
 │ orders                  │ build    │ no successful build recorded by ODS │
+│ payment_totals          │ build    │ no successful build recorded by ODS │
 │ customer_order_rank     │ build    │ no successful build recorded by ODS │
 │ customers               │ build    │ no successful build recorded by ODS │
 │ customer_segments       │ build    │ no successful build recorded by ODS │
 │ customers_snapshot_view │ build    │ no successful build recorded by ODS │
 │ segment_summary         │ build    │ no successful build recorded by ODS │
 ├─────────────────────────┼──────────┼─────────────────────────────────────┤
-│ 13 nodes                │ 13 build │                                     │
+│ 14 nodes                │ 14 build │                                     │
 └─────────────────────────┴──────────┴─────────────────────────────────────┘
 
 run  dbt build --select raw_customers raw_orders raw_payments stg_customers stg_orders stg_payments order_events orders
-customer_order_rank customers customer_segments customers_snapshot_view segment_summary
+payment_totals customer_order_rank customers customer_segments customers_snapshot_view segment_summary
 ❯
-
 
 
 

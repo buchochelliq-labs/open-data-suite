@@ -23,7 +23,7 @@ Local · read-only
 jaffle_ods
 /
 Lineage
-· 13 nodes
+· 14 nodes
 Replay · <run> · paused · 2 of 7 finished · 2 running
 Skip to the selected node's details
 Overlay
@@ -67,6 +67,10 @@ orders
 model
 BUILT
 <took> · 99 rows
+payment_totals
+model
+KEPT
+build of <run>
 stg_customers
 model
 KEPT
@@ -111,7 +115,7 @@ ods state build
 <run> · scope jaffle_ods/default · started <clock>
 Running
 <elapsed>
-2 of 7 selected nodes finished · 6 not selected
+2 of 7 selected nodes finished · 7 not selected
 2
 RUNNING
 2
@@ -122,7 +126,7 @@ FAILED
 QUEUED
 0
 SKIPPED
-6
+7
 KEPT
 NOW RUNNING
 customers

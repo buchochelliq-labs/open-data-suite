@@ -41,7 +41,7 @@ BUILT
 0
 no snapshot recorded
 KEPT EARLIER BUILD
-6
+7
 not in this run: kept from snapshot 3
 WALL CLOCK
 <took>
@@ -124,13 +124,13 @@ Nothing recorded: this run recorded no snapshot.
 Earlier runs
 <run>
 succeeded
-2 built, 11 kept, <took> · <clock>
+2 built, 12 kept, <took> · <clock>
 <run>
 partial
-2 built, 9 kept, 1 failed, <took> · <clock>
+2 built, 10 kept, 1 failed, <took> · <clock>
 <run>
 succeeded
-13 built, 0 kept, <took> · <clock>
+14 built, 0 kept, <took> · <clock>
 Copy as JSON
 Download log
 PLANNED

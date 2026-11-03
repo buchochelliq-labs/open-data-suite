@@ -23,7 +23,7 @@ Local · read-only
 jaffle_ods
 /
 Lineage
-· 13 nodes
+· 14 nodes
 Finished · <run>
 Skip to the selected node's details
 Overlay
@@ -68,6 +68,10 @@ orders
 model
 BUILT
 <took> · 99 rows
+payment_totals
+model
+KEPT
+build of <run>
 stg_customers
 model
 KEPT
@@ -99,7 +103,7 @@ FAILED
 SKIPPED
 KEPT
 Run finished in <took>
-5 built · 1 failed · 1 skipped · 6 kept
+5 built · 1 failed · 1 skipped · 7 kept
 Jump to failure
 Replay
 orders

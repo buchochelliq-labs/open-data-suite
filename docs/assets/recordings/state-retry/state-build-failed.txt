@@ -1,7 +1,7 @@
 scope          jaffle_ods/default
 compared with  snapshot 1 in .ods/state.db
-plan           4 to build and test, 9 to reuse
-saved          ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)
+plan           4 to build and test, 10 to reuse
+saved          ~2.5s of build time (estimate, serial: 10 of 14 nodes reused)
 dbt            target_dir target (default)
 target         dev (jaffle_ods, duckdb, fake-host, jaffle_ods)
 ran            dbt build --select fqn:jaffle_ods.marts.customer_segments,resource_type:model

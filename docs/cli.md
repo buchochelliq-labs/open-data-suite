@@ -2052,8 +2052,8 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   ods ▸ 1/5 dbt source freshness: how new each source's data is
   ods ▸ 2/5 dbt compile: the code as it is now, for the plan
   ods ▸ 3/5 dbt compile --inline: which target dbt builds in
-  ods ▸ 4/5 dbt show: are the tables of 5 nodes ODS would reuse still there?
-  ods ▸ plan: 8 to build, 5 to reuse
+  ods ▸ 4/5 dbt show: are the tables of 6 nodes ODS would reuse still there?
+  ods ▸ plan: 8 to build, 6 to reuse
   ods ▸   code changed: stg_orders
   ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, …
   ods ▸ 5/5 dbt build: 8 nodes and their tests
@@ -2153,7 +2153,7 @@ kept while the build is reused (#210, [ADR-0029](adr/0029-build-timings-and-the-
 reuses builds says what that saved:
 
 ```text
-saved: ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)
+saved: ~2.3s of build time (estimate, serial: 10 of 14 nodes reused)
 ```
 
 It is an estimate: the sum of each reused node's last measured build, so it overstates

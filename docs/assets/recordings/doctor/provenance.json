@@ -3,7 +3,7 @@
   "tape_fnv1a64": "61343f107c047286",
   "recorder": "rs-rich-record 0.0.8",
   "rich": "rich (rs-rich-cli) 0.0.20",
-  "commit": "23b3f0174acc1c5f5f1742bbe174ed925e2a9d72",
+  "commit": "d8b56622346ef0a19d3ade5cb67c9bdc822f7a42",
   "screenshots": [
     "doctor"
   ],

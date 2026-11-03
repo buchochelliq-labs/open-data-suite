@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/lineage.rs
+assertion_line: 773
 expression: "serde_json::to_string_pretty(&models).unwrap()"
 ---
 {
@@ -21,6 +22,10 @@ expression: "serde_json::to_string_pretty(&models).unwrap()"
   },
   "model.jaffle_ods.orders": {
     "relation_url_unavailable": "no warehouse link: `main`.`orders` has 2 parts, and a link needs 3"
+  },
+  "model.jaffle_ods.payment_totals": {
+    "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/payment_totals",
+    "relation_url_label": "Open in Catalog Explorer"
   },
   "model.jaffle_ods.segment_summary": {
     "relation_url": "https://dbc-0123.cloud.databricks.com/explore/data/jaffle_ods/main/segment_summary",

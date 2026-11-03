@@ -78,9 +78,9 @@ exact
 eb143d5e7ed5…
 built <time> · <run>
 REUSE stg_payments Why
-8 nodes
+9 nodes
 customer_order_rank · customer_segments · customers · customers_snapshot_view · order_events · orders
-2 more
+3 more
 No sources declared
 When the project declares sources, each appears here with its evidence. A source that says how its new data is measured gets a version ODS can compare; one that doesn't is unknown, and everything reading it builds.
 RULE

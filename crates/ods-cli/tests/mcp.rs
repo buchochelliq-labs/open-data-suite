@@ -127,7 +127,7 @@ fn every_tool_answers_from_the_fixture() {
                 && t["inputSchema"]["type"] == "object")
     );
 
-    assert_eq!(structured(&r[1])["counts"]["data_tests"], 12);
+    assert_eq!(structured(&r[1])["counts"]["data_tests"], 14);
     assert_eq!(
         structured(&r[2])["hits"][0]["label"],
         "customers.lifetime_value"
@@ -138,7 +138,10 @@ fn every_tool_answers_from_the_fixture() {
     );
     assert!(structured(&r[4])["column_edges"].as_array().unwrap().len() > 1);
     assert!(text(&r[5]).starts_with("flowchart"), "{}", text(&r[5]));
-    assert_eq!(structured(&r[6])["run"], json!(["model.jaffle_ods.orders"]));
+    assert_eq!(
+        structured(&r[6])["run"],
+        json!(["model.jaffle_ods.orders", "model.jaffle_ods.payment_totals"])
+    );
     assert!(text(&r[7]).starts_with("erDiagram"));
     assert_eq!(structured(&r[7])["tested"], 1, "orders -> customers");
     assert_eq!(

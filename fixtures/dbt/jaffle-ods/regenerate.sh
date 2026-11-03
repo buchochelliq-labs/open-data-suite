@@ -31,6 +31,31 @@ root="$(pwd)"
 # Machine-specific paths are replaced so the artifacts are identical everywhere.
 scrub() { sed "s#${root}#<project_root>#g" "$1" > "$2"; }
 
+# dbt stamps its artifacts with the wall clock. Tests compare those times with ones
+# they write (a `dbt source freshness` before or after the build), so every timestamp
+# in the given files is shifted by one offset that puts the earliest at PINNED_AT:
+# their order and the durations between them are kept, and a regeneration doesn't move
+# them. The Parquet files of dbt v2 aren't shifted (no test compares their times).
+PINNED_AT="${PINNED_AT:-2026-09-25T06:55:00Z}"
+pin_times() {
+  python3 - "$PINNED_AT" "$@" <<'PY'
+import re, sys
+from datetime import datetime, timezone
+STAMP = re.compile(r'"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z"')
+def parse(base):
+    return datetime.fromisoformat(base).replace(tzinfo=timezone.utc)
+pinned = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+texts = {path: open(path).read() for path in sys.argv[2:]}
+stamps = [parse(m.group(1)) for t in texts.values() for m in STAMP.finditer(t)]
+offset = pinned - min(stamps)
+def shift(m):
+    moved = parse(m.group(1)) + offset
+    return '"' + moved.strftime("%Y-%m-%dT%H:%M:%S") + (m.group(2) or "") + 'Z"'
+for path, text in texts.items():
+    open(path, "w").write(STAMP.sub(shift, text))
+PY
+}
+
 if [[ -n "${DBT:-}" ]]; then
   # A fresh database: the foreign key constraint on `orders` blocks replacing it.
   rm -f target/jaffle_ods.duckdb
@@ -54,20 +79,24 @@ if [[ -n "${DBT:-}" ]]; then
   for artifact in manifest run_results; do
     scrub "target-build/${artifact}.json" "${out}/${artifact}.json"
   done
+  pin_times "artifacts/dbt-${version}"/{manifest,catalog,run_results}.json "${out}"/*.json
   echo "wrote ${out}"
 fi
 
 if [[ -n "${DBT_V2:-}" ]]; then
   rm -rf target-v2
-  # Compiling the Python model needs dbt's DuckDB driver, which dbt-oss downloads from
-  # its CDN; offline that one node fails. Its compiled code isn't needed (ODS treats
-  # Python models as opaque), so carry on as long as the artifacts were written.
+  # Compiling the Python model, and the incremental one (`is_incremental()` looks at
+  # the database), needs dbt's DuckDB driver, which dbt-oss downloads from its CDN;
+  # offline those nodes fail. Their compiled code isn't needed (ODS treats Python models
+  # as opaque, and reads incremental models from the manifest), so carry on as long as
+  # the artifacts were written.
   "$DBT_V2" compile --profiles-dir . --generate-info-schema --target-path target-v2 || true
   test -s target-v2/manifest.json
   version="$("$DBT_V2" --version | sed -n 's/^dbt[-a-z]* \([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
   out="artifacts/dbt-${version}"
   rm -rf "$out" && mkdir -p "$out/info_schema/v1"
   scrub target-v2/manifest.json "${out}/manifest.json"
+  PINNED_AT=2026-09-25T06:56:00Z pin_times "${out}/manifest.json"
   cp target-v2/info_schema/v1/*.parquet "${out}/info_schema/v1/"
   # dbt-oss writes compiled SQL to files rather than into the Information Schema.
   (cd target-v2 && find compiled -name '*.sql' ! -path '*generic_tests*' -exec install -D {} "../${out}/{}" \;)

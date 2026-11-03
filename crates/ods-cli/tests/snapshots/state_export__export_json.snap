@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/state_export.rs
+assertion_line: 312
 expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
 ---
 {
@@ -25,7 +26,7 @@ expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
     {
       "reason": "not_deferrable",
       "pointer": "unchanged",
-      "nodes": 12
+      "nodes": 14
     },
     {
       "reason": "not_built_here",
@@ -35,7 +36,7 @@ expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
     {
       "reason": "built_here",
       "pointer": "this_target",
-      "nodes": 7
+      "nodes": 8
     }
   ],
   "nodes": [
@@ -84,6 +85,22 @@ expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
       "pointer": "upstream",
       "reason": "not_built_here",
       "message": "no successful build of it is recorded in this target"
+    },
+    {
+      "node": "model.jaffle_ods.payment_totals",
+      "pointer": "this_target",
+      "reason": "built_here",
+      "message": "built here by run <run-id> at <built-at>, and its relation is still there",
+      "run_id": "<run-id>",
+      "built_at": "<built-at>",
+      "evidence": [
+        {
+          "kind": "relation_exists",
+          "subject": "model.jaffle_ods.payment_totals",
+          "value": "present",
+          "exactness": "exact"
+        }
+      ]
     },
     {
       "node": "model.jaffle_ods.segment_summary",
@@ -200,6 +217,12 @@ expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
       "message": "never deferred to (not a table or view the project builds)"
     },
     {
+      "node": "test.jaffle_ods.not_null_payment_totals_payment_id.2969d6b98b",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
       "node": "test.jaffle_ods.not_null_stg_orders_order_id.81cfe2fe64",
       "pointer": "unchanged",
       "reason": "not_deferrable",
@@ -243,6 +266,12 @@ expression: "redact(&serde_json::to_string_pretty(&result).unwrap(), &result)"
     },
     {
       "node": "test.jaffle_ods.unique_orders_order_id.fed79b3a6e",
+      "pointer": "unchanged",
+      "reason": "not_deferrable",
+      "message": "never deferred to (not a table or view the project builds)"
+    },
+    {
+      "node": "test.jaffle_ods.unique_payment_totals_payment_id.d8cd43dbb1",
       "pointer": "unchanged",
       "reason": "not_deferrable",
       "message": "never deferred to (not a table or view the project builds)"
