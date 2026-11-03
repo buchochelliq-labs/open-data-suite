@@ -97,7 +97,10 @@ impl CodeLocation {
     /// # Errors
     /// Returns an error for invalid aliases, paths or revision evidence.
     pub fn validate(&self) -> Result<(), ProviderError> {
+        // An alias may name a directory when code is retrieved, so `.`, `..` and
+        // other dot-led names are refused along with anything but `[A-Za-z0-9_.-]`.
         if self.repository.is_empty()
+            || self.repository.starts_with('.')
             || !self
                 .repository
                 .bytes()

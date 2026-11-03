@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use ods_sdk::contracts::health_check::HealthCheck;
+use ods_sdk::contracts::secrets::SecretProvider;
 
 use crate::app::{self, Io};
 use crate::commands::default_registry;
@@ -21,7 +22,8 @@ use crate::plugins::{self, Origin, PluginError, Plugins, WarehousePlugin};
 ///     let ods = ods_cli::Ods::new();
 ///     // let ods = ods
 ///     //     .health_check(ods_cli::origin!(), Arc::new(MyCheck))?
-///     //     .warehouse(Arc::new(MyWarehouse))?;
+///     //     .warehouse(Arc::new(MyWarehouse))?
+///     //     .secret_provider(ods_cli::origin!(), Arc::new(MyKeychain))?;
 ///     ods.run()
 /// }
 /// ```
@@ -57,6 +59,22 @@ impl Ods {
         check: Arc<dyn HealthCheck>,
     ) -> Result<Self, PluginError> {
         self.plugins.add_health_check(origin, check)?;
+        Ok(self)
+    }
+
+    /// Adds a secret provider, which serves `{ secret = "<scheme>:<name>" }`
+    /// references of its scheme wherever a credential is read (ADR-0032), e.g. an OS
+    /// keychain or a cloud secret store. `env:` is built in. `origin` is as for
+    /// [`health_check`](Self::health_check).
+    ///
+    /// # Errors
+    /// Its scheme isn't valid, or another provider serves it.
+    pub fn secret_provider(
+        mut self,
+        origin: Origin,
+        provider: Arc<dyn SecretProvider>,
+    ) -> Result<Self, PluginError> {
+        self.plugins.add_secret_provider(origin, provider)?;
         Ok(self)
     }
 

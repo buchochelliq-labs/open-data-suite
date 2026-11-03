@@ -24,7 +24,8 @@ A generic `DeclaredMappings` JSON document:
 }
 ```
 
-`repository` is a host-managed alias. It is not a URL or credential. Paths are
+`repository` is a host-managed alias: letters, digits, `-`, `_` and `.`, not
+starting with `.`. It is not a URL or credential. Paths are
 relative, slash-separated and reject dot/parent components. Lookup validates
 metadata only; a future retriever must enforce its own checkout allowlist and
 canonical path/symlink containment before reading anything.
@@ -51,4 +52,4 @@ the SDK's `conformance` feature; a fake provider demonstrates the same contract.
 This initial version is an in-process API. Registry/process transport, Git retrieval
 and catalog-derived code references are remaining parts of #462.
 
-See [ADR-0032](adr/0032-producing-code-references.md).
+See [ADR-0033](adr/0033-producing-code-references.md).

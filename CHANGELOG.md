@@ -14,8 +14,21 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 
+- Secret references are resolved by secret providers, one per scheme (#126,
+  [ADR-0032](docs/adr/0032-secret-providers.md)). `env:` is built in. A custom `ods`
+  adds others, such as an OS keychain or a cloud secret store, with
+  `Ods::secret_provider`. A value is resolved only where its credential is used, kept
+  in memory for that use alone, and never written to configuration, state, logs or
+  output; a missing or empty secret is an error, never an empty credential.
+  Nothing reads a credential through them yet: Databricks authentication (#297) is
+  the first.
+- `ods version`, `ods plugin list` and `ods doctor` (`capabilities.plugins`) list
+  secret providers, `env` among them.
+- SDK 0.10: the `secret_provider` contract 0.1, its conformance suite
+  (`ods_sdk::conformance::secrets`) and `FakeSecrets` in `ods-provider-fake`.
 - Provider-neutral producing-code references, scoped declared mappings and a dbt
-  source metadata adapter (part of #462, ADR-0032). Metadata lookup only; code
+  source metadata adapter (part of #462,
+  [ADR-0033](docs/adr/0033-producing-code-references.md)). Metadata lookup only; code
   retrieval and process-plugin transport are not yet implemented.
 
 ## [0.1.2] - 2026-11-03

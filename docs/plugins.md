@@ -23,6 +23,7 @@ the same suites from its own tests (#99).
 | `RelationPrivileges` | `privileges` | `PrivilegesHarness` | async | `FakeRelationPrivileges` |
 | `RelationLinker` | `relation_link` | `RelationLinkHarness` | sync | `FakeRelationLinker` |
 | `RelationInspector` | `relations` | `RelationHarness` | async | `FakeExecutor` |
+| `SecretProvider` | `secrets` | `SecretsHarness` | async | `FakeSecrets` |
 | `SqlLineageAnalyzer` | `sql_lineage` | `SqlLineageHarness` | sync | `FakeSqlLineageAnalyzer` |
 | `StateStore` | `state_store` | `StateStoreHarness` | async | `FakeStateStore` |
 
@@ -95,7 +96,7 @@ suites.
 
 A provider plugs into ODS through a **custom `ods`**: a small binary crate of your own
 that runs the released CLI with your plugins added
-([ADR-0031](adr/0031-plugin-registry-and-loading.md)). Two kinds of plugin go in this way:
+([ADR-0031](adr/0031-plugin-registry-and-loading.md)). Three kinds of plugin go in this way:
 
 - **Health checks.** Any `HealthCheck` (ADR-0030). `ods health check` runs it with the
   built-in, declared and probe checks, and the dashboard shows its recorded findings.
@@ -129,6 +130,17 @@ that runs the released CLI with your plugins added
   comes back. The released `ods` has one built-in warehouse plugin, Databricks: Delta
   table versions, Unity Catalog's login check, Catalog Explorer links, Unity Catalog's
   column lineage exports, dbt-databricks's error messages and the Databricks dialect.
+- **Secret providers.** A `SecretProvider` serves one scheme of the secret references
+  in configuration, `{ secret = "<scheme>:<name>" }`: an OS keychain (`keychain:`), a
+  cloud secret store (`vault:`, `aws-sm:`, …), or anything else that holds
+  credentials ([ADR-0032](adr/0032-secret-providers.md)). Add one with
+  `.secret_provider(ods_cli::origin!(), Arc::new(MyStore))`. `env:` (environment
+  variables, and so CI secrets) is built in and reserved. ODS resolves a
+  reference only where a credential is used and keeps the value in memory for that
+  use alone; a `SecretValue` can't be printed, serialised or cloned. Your provider
+  returns `NotFound` for a missing secret and `Empty` for an empty one, never an empty
+  value, and its errors name the reference, never the value: the `secrets` suite
+  checks both (give its harness an empty secret, or the `Empty` case is skipped).
 
 ```rust
 // src/main.rs of your crate
@@ -150,7 +162,8 @@ fn main() -> ExitCode {
 ```
 
 - **Registration is strict.** A health check needs a valid id that no other plugin
-  check has. A warehouse already served, by a built-in or another plugin, is refused.
+  check has. A secret scheme must be lowercase letters, digits or `-`, and one no
+  other provider serves. A warehouse already served, by a built-in or another plugin, is refused.
   To replace one, say so with `replacing_warehouse`: the replacement serves the
   warehouse alone, so offer again what the built-in did if you want to keep it
   (`examples/custom-ods` replaces the built-in `duckdb` plugin and keeps its error

@@ -32,7 +32,7 @@ ods version
 Version
 <version>
 Plugin SDK
-0.9
+0.10
 Dashboard API
 1
 This project's warehouse

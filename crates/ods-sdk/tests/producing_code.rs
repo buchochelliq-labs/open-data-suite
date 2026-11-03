@@ -42,6 +42,14 @@ fn rejects_bad_paths_and_future_schema() {
         mappings.entries[0].code.path = path.into();
         assert!(mappings.resolve(&asset("prod"), None).is_err(), "{path}");
     }
+    for repository in ["", ".", "..", ".hidden", "a/b", "https://host/repo"] {
+        let mut mappings = mappings();
+        mappings.entries[0].code.repository = repository.into();
+        assert!(
+            mappings.resolve(&asset("prod"), None).is_err(),
+            "{repository}"
+        );
+    }
     let mut mappings = mappings();
     mappings.schema_version.major = 99;
     assert!(mappings.resolve(&asset("prod"), None).is_err());

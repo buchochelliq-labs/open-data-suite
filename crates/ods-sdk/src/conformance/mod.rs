@@ -24,6 +24,7 @@ pub mod privileges;
 pub mod probe;
 pub mod relation_link;
 pub mod relations;
+pub mod secrets;
 pub mod sql_lineage;
 pub mod state_store;
 

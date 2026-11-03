@@ -37,6 +37,7 @@ nav = [
   ] },
   { "Guides" = [
     { "Column-level lineage" = "lineage.md" },
+    { "Producing-code references" = "producing-code.md" },
     { "State on Databricks" = "databricks.md" },
     { "More capabilities" = "capabilities.md" },
   ] },
@@ -79,6 +80,8 @@ nav = [
       "adr/0029-build-timings-and-the-run-ledger.md",
       "adr/0030-configurable-and-pluggable-health-checks.md",
       "adr/0031-plugin-registry-and-loading.md",
+      "adr/0032-secret-providers.md",
+      "adr/0033-producing-code-references.md",
     ] },
   ] },
   { "Contributing" = [

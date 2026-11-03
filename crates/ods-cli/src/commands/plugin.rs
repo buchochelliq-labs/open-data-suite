@@ -28,14 +28,14 @@ impl Module for PluginCommand {
                         Arg::new("name")
                             .required(true)
                             .value_name("NAME")
-                            .help("A health check's id, or a warehouse kind (e.g. `databricks`)"),
+                            .help("A health check's id, a warehouse kind (e.g. `databricks`) or a secret scheme (e.g. `env`)"),
                     )
                     .arg(
                         Arg::new("kind")
                             .long("kind")
                             .value_name("KIND")
-                            .value_parser(["warehouse", "health_check"])
-                            .help("Which plugin, when a health check and a warehouse share NAME"),
+                            .value_parser(["warehouse", "health_check", "secret_provider"])
+                            .help("Which plugin, when plugins of different kinds share NAME"),
                     ),
             )
             .subcommand(super::plugin_test::command())
@@ -166,10 +166,13 @@ pub(crate) fn about(
     use ods_web::about::{FeatureFacts, InheritedFacts, PluginFacts, PluginKind as Kind};
     let facts = views(plugins, config)
         .into_iter()
-        .map(|p| {
+        .filter_map(|p| {
             let kind = match p.kind {
                 PluginKind::HealthCheck => Kind::HealthCheck,
                 PluginKind::Warehouse => Kind::Warehouse,
+                // The About page doesn't show secret providers yet; `ods plugin list`
+                // and `ods version` do.
+                _ => return None,
             };
             let mut facts = PluginFacts::new(p.name, kind, p.from, p.builtin);
             facts.parents = p.parents;
@@ -195,7 +198,7 @@ pub(crate) fn about(
                     inherited
                 })
                 .collect();
-            facts
+            Some(facts)
         })
         .collect();
     ods_web::about::AboutInput::new(
@@ -773,5 +776,36 @@ mod tests {
         );
         let none = show(&Plugins::none(), None, "x", None).unwrap_err();
         assert_eq!(none.hint.as_deref(), Some("this ods runs with no plugins"));
+    }
+
+    #[test]
+    fn secret_providers_are_shown_by_scheme_and_kind() {
+        let mut plugins = Plugins::builtin();
+        plugins
+            .add_secret_provider(
+                crate::plugins::Origin::new("my-secrets", "1.0.0"),
+                std::sync::Arc::new(ods_provider_fake::FakeSecrets::new("vault")),
+            )
+            .unwrap();
+        let env = show(&plugins, None, "env", Some("secret_provider")).unwrap();
+        assert_eq!(env.plugin.kind, PluginKind::SecretProvider);
+        assert!(env.plugin.builtin);
+        assert_eq!(env.plugin.features[0].contract, Some("secret_provider"));
+        assert_eq!(
+            env.plugin.features[0].detail.as_deref(),
+            Some("environment variables")
+        );
+        let vault = show(&plugins, None, "vault", None).unwrap();
+        assert_eq!(vault.plugin.from, "my-secrets 1.0.0");
+        assert!(!vault.plugin.builtin);
+        assert!(show(&plugins, None, "vault", Some("warehouse")).is_err());
+        // The About page doesn't list them yet.
+        let about = about(&plugins, None);
+        assert!(
+            about
+                .plugins
+                .iter()
+                .all(|p| p.name != "env" && p.name != "vault")
+        );
     }
 }
