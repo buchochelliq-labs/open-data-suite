@@ -1,4 +1,4 @@
-# ADR-0033: Read-only immutable producing-code retrieval
+# ADR-0034: Read-only immutable producing-code retrieval
 
 - **Status:** Proposed
 - **Date:** 2026-11-03

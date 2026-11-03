@@ -14,6 +14,7 @@ mod lock;
 mod observed_lineage;
 mod privileges;
 mod relation_link;
+mod secrets;
 mod sql_lineage;
 mod state_store;
 
@@ -26,6 +27,7 @@ pub use lock::{FakeLockFactory, FakeLockProvider};
 pub use observed_lineage::FakeObservedLineageSource;
 pub use privileges::FakeRelationPrivileges;
 pub use relation_link::FakeRelationLinker;
+pub use secrets::{FakeSecrets, SecretFailure};
 pub use sql_lineage::FakeSqlLineageAnalyzer;
 pub use state_store::FakeStateStore;
 

@@ -28,7 +28,9 @@
 //! | `EventSink` | #8 | planned |
 //! | `UsageProvider` | #55 | planned |
 //! | `SchemaProvider` (ERD) | #60 | planned |
-//! | `SecretProvider` | #126 | planned |
+//! | [`SecretProvider`](secrets::SecretProvider) | #126 | defined (ADR-0032) |
+//! | [`ProducingCodeSource`](producing_code::ProducingCodeSource) | #462 | defined (ADR-0033) |
+//! | [`CodeReader`](code_reader::CodeReader) | #462 | defined (ADR-0034) |
 //! | `LlmProvider` | #33 | planned |
 
 pub mod changes;
@@ -42,6 +44,7 @@ pub mod probe;
 pub mod relation_link;
 pub mod relations;
 pub mod run_events;
+pub mod secrets;
 pub mod sql_lineage;
 pub mod state_store;
 

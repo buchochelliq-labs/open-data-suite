@@ -1,4 +1,4 @@
-# ADR-0032: Scoped producing-code references
+# ADR-0033: Scoped producing-code references
 
 - **Status:** Proposed
 - **Date:** 2026-11-03

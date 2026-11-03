@@ -41,6 +41,8 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 async-trait = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+# Windows paths without the verbatim `\\?\` prefix canonicalize adds, which Git rejects.
+dunce = "1"
 # Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
 csv = "1"
 # Streams for the dashboard's Server-Sent Events (#322). MIT/Apache-2.0; axum already
@@ -79,6 +81,8 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"
+# Resolved secrets: zeroized on drop, never Debug-printed (#126, ADR-0032).
+secrecy = "0.10"
 supports-hyperlinks = "3"
 url = "2"
 # Terminal rendering; only ods-cli may depend on these (ADR-0003, enforced by

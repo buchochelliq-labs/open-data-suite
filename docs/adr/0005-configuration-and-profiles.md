@@ -117,7 +117,9 @@ still unchecked until their providers use them.
 ### 4. Secrets
 - A credential is written as a **reference**: `token = { secret = "env:DATABRICKS_TOKEN" }`.
   The form is `<scheme>:<name>`. Which schemes exist, and how references are resolved,
-  is decided by `SecretProvider`s in #126.
+  is decided by `SecretProvider`s in #126. *Amended 2026-11-03 (#126):* references
+  are resolved in memory, where a credential is used, by one secret provider per
+  scheme; `env:` is built in ([ADR-0032](0032-secret-providers.md)).
 - Anywhere in the configuration, any value at or under a key named like a credential
   **must** be a reference. Credential-like names are `token`, `password`, `passwd`,
   `passphrase`, `secret`, `api_key`, `private_key`, `credentials`, `client_secret`,

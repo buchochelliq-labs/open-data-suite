@@ -55,12 +55,8 @@ impl LocalGitCode {
             .repositories
             .get(&location.repository)
             .ok_or(CodeReadError::RepositoryNotAllowed)?;
-        let root = tokio::fs::canonicalize(root)
-            .await
-            .map_err(|e| io_error(&e))?;
-        let git_dir = tokio::fs::canonicalize(root.join(".git"))
-            .await
-            .map_err(|e| io_error(&e))?;
+        let root = canonical(root).await?;
+        let git_dir = canonical(&root.join(".git")).await?;
         if !tokio::fs::metadata(&git_dir)
             .await
             .map_err(|e| io_error(&e))?
@@ -69,9 +65,7 @@ impl LocalGitCode {
         {
             return Err(CodeReadError::UnsupportedEntry);
         }
-        let objects = tokio::fs::canonicalize(git_dir.join("objects"))
-            .await
-            .map_err(|e| io_error(&e))?;
+        let objects = canonical(&git_dir.join("objects")).await?;
         if !objects.starts_with(&git_dir)
             || tokio::fs::try_exists(git_dir.join("objects/info/alternates"))
                 .await
@@ -253,6 +247,17 @@ impl Drop for Running {
         }
     }
 }
+/// `path`, absolute with links resolved. On Windows, `canonicalize` gives a verbatim
+/// path (`\\?\D:\…`), which Git doesn't accept as `--git-dir`; it is turned back into
+/// the ordinary form when that names the same file (`dunce`), so the containment
+/// checks and Git see the same path.
+async fn canonical(path: &Path) -> Result<PathBuf, CodeReadError> {
+    let resolved = tokio::fs::canonicalize(path)
+        .await
+        .map_err(|e| io_error(&e))?;
+    Ok(dunce::simplified(&resolved).to_path_buf())
+}
+
 fn io_error(error: &std::io::Error) -> CodeReadError {
     if error.kind() == std::io::ErrorKind::PermissionDenied {
         CodeReadError::PermissionDenied

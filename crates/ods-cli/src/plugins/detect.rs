@@ -14,6 +14,8 @@ use ods_sdk::contracts::observed_lineage::OBSERVED_LINEAGE_SOURCE;
 use ods_sdk::contracts::privileges::RELATION_PRIVILEGES;
 use ods_sdk::contracts::probe::{ProbeReport, ProbeRequest, ProbeTarget, RelationProbe};
 use ods_sdk::contracts::relation_link::{NoRelationLink, RELATION_LINKER};
+use ods_sdk::contracts::secrets::{SECRET_PROVIDER, SecretProvider};
+use ods_sdk::secrets::EnvSecrets;
 use ods_sdk::{Contract, Provider, ProviderError, ProviderInfo};
 use serde::Serialize;
 
@@ -28,6 +30,8 @@ pub enum PluginKind {
     HealthCheck,
     /// What ODS knows about a warehouse (ADR-0031 §3).
     Warehouse,
+    /// Where `{ secret = "<scheme>:<name>" }` references are read from (ADR-0032).
+    SecretProvider,
 }
 
 impl PluginKind {
@@ -36,6 +40,7 @@ impl PluginKind {
         match self {
             Self::HealthCheck => "health_check",
             Self::Warehouse => "warehouse",
+            Self::SecretProvider => "secret_provider",
         }
     }
 }
@@ -180,5 +185,29 @@ pub(super) fn check(check: &dyn HealthCheck, origin: &Origin, builtin: bool) -> 
         from: origin.to_string(),
         builtin,
         features: vec![Feature::new("health_check", Some(HEALTH_CHECK))],
+    }
+}
+
+/// The built-in `env:` secret provider.
+pub(super) fn env_secrets() -> Detected {
+    let mut feature = Feature::new("secrets", Some(SECRET_PROVIDER));
+    feature.detail = Some("environment variables".to_owned());
+    Detected {
+        name: EnvSecrets::SCHEME.to_owned(),
+        kind: PluginKind::SecretProvider,
+        from: format!("ods-sdk {}", env!("CARGO_PKG_VERSION")),
+        builtin: true,
+        features: vec![feature],
+    }
+}
+
+/// A secret provider a custom build added: its scheme.
+pub(super) fn secrets(provider: &dyn SecretProvider, origin: &Origin) -> Detected {
+    Detected {
+        name: provider.scheme().to_owned(),
+        kind: PluginKind::SecretProvider,
+        from: origin.to_string(),
+        builtin: false,
+        features: vec![Feature::new("secrets", Some(SECRET_PROVIDER))],
     }
 }
