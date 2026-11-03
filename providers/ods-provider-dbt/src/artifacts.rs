@@ -230,6 +230,8 @@ struct RawNode {
     #[serde(default)]
     config: serde_json::Value,
     #[serde(default)]
+    meta: serde_json::Value,
+    #[serde(default)]
     columns: BTreeMap<String, RawColumn>,
     #[serde(default)]
     checksum: RawChecksum,
@@ -408,6 +410,8 @@ pub struct ManifestNode {
     pub version: Option<String>,
     /// Scheduling configuration, as resolved by dbt.
     pub config: DbtConfig,
+    /// User-defined node metadata from the public manifest schema.
+    pub meta: serde_json::Value,
     /// For data tests: which test, on what.
     pub test: Option<DbtTest>,
     /// Contract constraints, model- and column-level (column-level ones name their
@@ -1079,6 +1083,7 @@ fn manifest_node(n: RawNode, config: RawConfig) -> ManifestNode {
             serde_json::Value::Number(n) => Some(n.to_string()),
             _ => None,
         }),
+        meta: n.meta,
         config: DbtConfig {
             state: config.state.filter(|v| !v.is_null()),
             freshness: config.freshness.filter(|v| !v.is_null()),

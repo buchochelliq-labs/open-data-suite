@@ -33,3 +33,6 @@ pub use state_store::FakeStateStore;
 
 /// The `kind` fakes are registered under in configuration.
 pub const KIND: &str = "fake";
+
+mod producing_code;
+pub use producing_code::FakeProducingCodeSource;

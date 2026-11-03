@@ -29,6 +29,7 @@
 //! | `UsageProvider` | #55 | planned |
 //! | `SchemaProvider` (ERD) | #60 | planned |
 //! | [`SecretProvider`](secrets::SecretProvider) | #126 | defined (ADR-0032) |
+//! | [`ProducingCodeSource`](producing_code::ProducingCodeSource) | #462 | defined (ADR-0033) |
 //! | `LlmProvider` | #33 | planned |
 
 pub mod changes;
@@ -45,3 +46,5 @@ pub mod run_events;
 pub mod secrets;
 pub mod sql_lineage;
 pub mod state_store;
+
+pub mod producing_code;
