@@ -12,13 +12,6 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
-### Breaking
-
-- An unknown setting under a `[providers.<name>]` with `kind = "databricks"` is now a
-  configuration error (`ODS-E0102`, exit 4) instead of being ignored: fix or remove
-  the key the message names. The settings are listed in
-  [docs/databricks.md](docs/databricks.md#settings) (#297).
-
 ### Added
 
 - The crates are published to crates.io with each release, at the release's version
@@ -74,6 +67,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   crates.io. The Homebrew formula and the Chocolatey package are made by release-kit
   from the same templates. Maintainers: see "For maintainers" in `docs/install.md` for the new
   `crates-io` environment and the `release-*` tags.
+
+### Deprecated
+
+- An unknown setting under a `[providers.<name>]` with `kind = "databricks"` is still
+  ignored, but now with a warning on stderr that names it; from 0.2.0 it is a
+  configuration error (`ODS-E0102`). Fix or remove the key the warning names. The
+  settings are listed in [docs/databricks.md](docs/databricks.md#settings) (#297).
 
 ## [0.1.2] - 2026-11-03
 

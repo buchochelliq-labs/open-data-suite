@@ -54,7 +54,8 @@ pub use unity_catalog::UnityCatalog;
 pub const KIND: &str = "databricks";
 
 /// The settings a `[providers.<name>]` with `kind = "databricks"` may have, each with
-/// what it is for (ADR-0021). Any other key is refused when configuration is loaded.
+/// what it is for (ADR-0021). Any other key is reported with a warning when
+/// configuration is loaded (an error from 0.2.0).
 /// `profile`, `cli_path` and `audience` are ADR-0021's later methods: known, and
 /// refused with "isn't supported yet" when signing in.
 pub const CONFIG_SETTINGS: [(&str, &str); 10] = [

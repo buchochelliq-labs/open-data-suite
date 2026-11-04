@@ -148,6 +148,10 @@ where
         ColorChoice::Auto => io.stderr_is_terminal && !io.no_color && !io.dumb_terminal,
     };
     logging::init(level, log_ansi);
+    // Deprecated configuration keeps working, with a warning on stderr (ADR-0019 §4).
+    for warning in crate::plugins::settings_warnings(&loaded) {
+        tracing::warn!("{warning}");
+    }
     tracing::debug!(command = name, mode = ?settings.mode, "dispatching");
 
     let Some(module) = registry.get(name) else {
