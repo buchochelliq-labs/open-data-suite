@@ -164,6 +164,8 @@ version (ADR-0019). The tag starts `.github/workflows/release.yml`, which:
 5. publishes the wheels to PyPI;
 6. packs the Chocolatey package for the release, installs it on Windows, and pushes it
    to the Chocolatey community repository (`.github/workflows/chocolatey.yml`).
+7. publishes `ods-erd`, the one crate on crates.io (ADR-0032), at the release's version,
+   unless crates.io already has it.
 
 Run the workflow by hand (**Actions → Release → Run workflow**) for a dry run: it builds
 and tests everything, uploads the result as workflow artifacts, and publishes nothing.
@@ -176,6 +178,15 @@ One-time setup, by a repository and PyPI admin:
   `open-data-suite`, workflow `release.yml`, environment `pypi`. No API token is stored.
 - **The `pypi` environment.** Create it under **Settings → Environments**, restrict it
   to `v*` tags, and add required reviewers so each upload waits for approval.
+- **crates.io.** `ods-erd` is published from the `crates-io` environment (create it
+  like `pypi`, restricted to `v*` tags). Trusted Publishing works only for a crate that
+  exists, so the first version needs a token: a crates.io owner creates an API token
+  scoped to publishing `ods-erd`, and adds it as the `CARGO_REGISTRY_TOKEN` secret of
+  the `crates-io` environment. After that first release, add the crate's
+  [trusted publisher](https://crates.io/docs/trusted-publishing) on crates.io (owner
+  `buchochelliq-labs`, repository `open-data-suite`, workflow `release.yml`,
+  environment `crates-io`) and delete the secret: later releases use short-lived
+  tokens.
 - **Tag protection.** Add a ruleset for `v*` tags so only maintainers can create them.
 - **Homebrew tap.** The public repository `buchochelliq-labs/homebrew-tap` holds the
   formula. After each release, copy the release's `ods.rb` asset to `Formula/ods.rb`

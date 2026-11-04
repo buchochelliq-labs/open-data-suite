@@ -343,6 +343,54 @@ jobs:
         with:
           packages-dir: dist/
 
+  crates-io:
+    # ods-erd, the one crate on crates.io (ADR-0032), at the product version. Trusted
+    # Publishing: no stored token, once the crate exists. The first version needs an
+    # owner's token as the CARGO_REGISTRY_TOKEN secret of the `crates-io` environment
+    # (docs/install.md, "For maintainers"); remove the secret after. CI packages the
+    # crate on every PR (`cargo publish --dry-run`), so packaging problems show early.
+    if: needs.plan.outputs.publish == 'true'
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/ods-erd/${{ needs.plan.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      FIRST_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: due
+        name: Skip a version crates.io already has
+        run: |
+          code=$(curl -s -o index.txt -w '%{http_code}' https://index.crates.io/od/s-/ods-erd)
+          if [ "$code" = 200 ] && grep -q "\"vers\":\"$VERSION\"" index.txt; then
+            echo "ods-erd $VERSION is already on crates.io" >> "$GITHUB_STEP_SUMMARY"
+            echo "due=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          fi
+      - id: auth
+        name: Trusted Publishing token
+        if: steps.due.outputs.due == 'true' && env.FIRST_TOKEN == ''
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish
+        if: steps.due.outputs.due == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || env.FIRST_TOKEN }}
+        run: |
+          cargo publish -p ods-erd --locked
+          for _ in $(seq 1 30); do
+            curl -sf https://index.crates.io/od/s-/ods-erd | grep -q "\"vers\":\"$VERSION\"" && exit 0
+            sleep 10
+          done
+          echo "::error::ods-erd $VERSION was published but crates.io's index doesn't list it after 5 minutes"
+          exit 1
+
   chocolatey:
     # Pushes with the CHOCOLATEY_API_KEY secret of the `chocolatey` environment
     # (docs/install.md, "For maintainers").

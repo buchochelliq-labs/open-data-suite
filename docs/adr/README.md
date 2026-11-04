@@ -40,5 +40,6 @@ To write one, use the `adr` skill (`.claude/skills/adr`) or copy
 | [0029](0029-build-timings-and-the-run-ledger.md) | Build timings and the run ledger: what reuse saved | Accepted | #210 |
 | [0030](0030-configurable-and-pluggable-health-checks.md) | Configurable and pluggable health checks: config, probes, scripts and plugins | Accepted | #392, #354, #117 |
 | [0031](0031-plugin-registry-and-loading.md) | Plugins: an in-process registry and out-of-process plugins | Accepted | #392, #387 |
+| [0032](0032-publish-ods-erd-to-crates-io.md) | Publish `ods-erd` to crates.io | Proposed | |
 
 ADR-0007 (the clean-room and licensing policy, #10) is planned and not written yet; until it is, the rule is `AGENTS.md` rule 8, and `deny.toml` checks dependency licences. Each ADR's status line notes what of its decision isn't built yet.

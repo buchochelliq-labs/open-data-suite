@@ -14,6 +14,9 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 
+- `ods-erd`, the ERD model behind `ods erd`, is published to crates.io with each
+  release, at the release's version (ADR-0032), so other Rust tools can read ODS's ERD
+  output with the same types.
 - The docs site has a *Meet the gang* page (Project): Memo, the purple elephant who is
   ODS's mascot, her daughter Tui, and Tui's Nana and Grandpa. Tui also keeps the site's
   404 page.
