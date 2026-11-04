@@ -1,0 +1,28 @@
+name: release plan
+description: >-
+  The build matrix for the packages a release gate selected: one job per
+  artifact (and target) declared in release-kit.yml.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+outputs:
+  jobs:
+    description: JSON list of build jobs, for a matrix's `include`.
+    value: ${{ steps.plan.outputs.jobs }}
+  count:
+    description: The number of build jobs.
+    value: ${{ steps.plan.outputs.count }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: python3 -m pip install --quiet pyyaml
+    - id: plan
+      shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" plan --selection "$SELECTION"

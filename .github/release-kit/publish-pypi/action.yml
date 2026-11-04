@@ -1,0 +1,57 @@
+name: publish to PyPI
+description: >-
+  Upload the built distributions with Trusted Publishing (the calling job
+  needs `id-token: write` and the PyPI publisher configured for the calling
+  workflow), then wait until PyPI serves the version and install it into a fresh
+  virtualenv.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  dir:
+    description: >-
+      Where the build artifacts were downloaded (pattern `release--*`, not
+      merged); the selected PyPI packages' wheels and sdists are taken from
+      <dir>/release--<package>--*/.
+    default: dist
+  verify-only:
+    description: '"true" to skip the upload and only verify (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" preflight --registry pypi --selection "$SELECTION"
+    - id: gather
+      if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+        DIR: ${{ inputs.dir }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        out="$RUNNER_TEMP/pypi-dist"
+        mkdir -p "$out"
+        for slug in $(jq -r '.[] | select(.registry == "pypi") | .slug' <<<"$SELECTION"); do
+          for file in "$DIR"/release--"$slug"--*/*; do
+            case "$file" in *.whl|*.tar.gz) cp "$file" "$out/" ;; esac
+          done
+        done
+        if [ -z "$(ls -A "$out")" ]; then echo "::error::no wheels or sdists in $DIR/release--<package>--*/"; exit 1; fi
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
+    - if: inputs.verify-only != 'true'
+      uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+      with:
+        packages-dir: ${{ steps.gather.outputs.dir }}
+    - shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        python3 "$kit" verify --registry pypi --selection "$SELECTION"
+        python3 "$kit" consume --registry pypi --selection "$SELECTION"

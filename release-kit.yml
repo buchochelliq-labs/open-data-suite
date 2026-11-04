@@ -1,0 +1,145 @@
+# Every channel an ODS release publishes to, for release-kit
+# (https://github.com/buchochelliq-labs/release-kit; ADR-0019). Everything is released
+# together at the workspace version: the release PR bumps `workspace.package.version`
+# (and the internal crates' `=X.Y.Z` requirements in Cargo.toml), then runs
+# `python3 .github/release-kit/scripts/release.py sync` to copy it here.
+#
+# `python3 .github/release-kit/scripts/release.py tag` on main tags the release:
+# `release-X.Y.Z` starts .github/workflows/release.yml, which runs CI on the tagged
+# commit, builds, and publishes what isn't published yet. Homebrew and Chocolatey are
+# release.yml's own jobs, after the GitHub release.
+release:
+  name_from: ods
+
+packages:
+  # The crates, on crates.io, each after the crates it depends on. `cargo install
+  # ods-cli` and `cargo binstall ods-cli` install `ods` from here.
+  - name: ods-core
+    registry: crates.io
+    manifest: crates/ods-core/Cargo.toml
+    version: "0.1.2"
+  - name: ods-config
+    registry: crates.io
+    manifest: crates/ods-config/Cargo.toml
+    version: "0.1.2"
+  - name: ods-erd
+    registry: crates.io
+    manifest: crates/ods-erd/Cargo.toml
+    version: "0.1.2"
+  - name: ods-sdk
+    registry: crates.io
+    manifest: crates/ods-sdk/Cargo.toml
+    version: "0.1.2"
+  - name: ods-health
+    registry: crates.io
+    manifest: crates/ods-health/Cargo.toml
+    version: "0.1.2"
+  - name: ods-lineage
+    registry: crates.io
+    manifest: crates/ods-lineage/Cargo.toml
+    version: "0.1.2"
+  - name: ods-mcp
+    registry: crates.io
+    manifest: crates/ods-mcp/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-databricks
+    registry: crates.io
+    manifest: providers/ods-provider-databricks/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-dbt
+    registry: crates.io
+    manifest: providers/ods-provider-dbt/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-duckdb
+    registry: crates.io
+    manifest: providers/ods-provider-duckdb/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-process
+    registry: crates.io
+    manifest: providers/ods-provider-process/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-sqlparser
+    registry: crates.io
+    manifest: providers/ods-provider-sqlparser/Cargo.toml
+    version: "0.1.2"
+  - name: ods-state
+    registry: crates.io
+    manifest: crates/ods-state/Cargo.toml
+    version: "0.1.2"
+  - name: ods-store-sqlite
+    registry: crates.io
+    manifest: providers/ods-store-sqlite/Cargo.toml
+    version: "0.1.2"
+  - name: ods-web
+    registry: crates.io
+    manifest: crates/ods-web/Cargo.toml
+    version: "0.1.2"
+  - name: ods-cli
+    registry: crates.io
+    manifest: crates/ods-cli/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-fake
+    registry: crates.io
+    manifest: providers/ods-provider-fake/Cargo.toml
+    version: "0.1.2"
+  - name: ods-provider-git
+    registry: crates.io
+    manifest: providers/ods-provider-git/Cargo.toml
+    version: "0.1.2"
+
+  # The GitHub release on vX.Y.Z (the tag the install docs, the Homebrew formula,
+  # Chocolatey and cargo-binstall download from): static archives of `ods` for each
+  # platform, SHA256SUMS, build provenance, and the version's CHANGELOG section as notes.
+  - name: ods
+    registry: github
+    manifest: crates/ods-cli/Cargo.toml
+    version: "0.1.2"
+    tag: "v{version}"
+    paths: ["crates/**", "providers/**", "Cargo.toml", "Cargo.lock", "about.toml", "about.hbs", "LICENSE", "README.md"]
+    notes: scripts/release-notes.sh "$VERSION"
+    checksums: SHA256SUMS
+    attest: true
+    artifacts:
+      - kind: rust-binary
+        bin: ods
+        crate: ods-cli
+        prepare: scripts/release-notices.sh
+        include: [LICENSE, README.md, CHANGELOG.md, THIRD-PARTY-LICENSES.html]
+        # Linux archives are static musl binaries, so they run on any distribution.
+        targets:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-pc-windows-msvc
+        # Each archive holds the binary, the licence and the notices, and the binary
+        # runs (where the runner can run it: not the cross-compiled Intel macOS one).
+        test:
+          run: scripts/release-test-archive.sh
+          targets: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-pc-windows-msvc]
+
+  # PyPI: wheels whose only content is `ods` (maturin `bin` bindings), so `pip install
+  # opendatasuite` puts it on PATH. glibc wheels for pip on most Linux, musllinux ones
+  # for Alpine. No sdist: building one needs the whole Rust workspace.
+  - name: opendatasuite
+    registry: pypi
+    manifest: pyproject.toml
+    version: "0.1.2"
+    paths: ["crates/**", "providers/**", "Cargo.toml", "Cargo.lock", "about.toml", "about.hbs", "LICENSE", "README.md", "pyproject.toml"]
+    artifacts:
+      - kind: maturin
+        prepare: scripts/release-notices.sh
+        sdist: false
+        targets:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          # Cross-compiled in maturin-action's container, as before release-kit.
+          - {target: aarch64-unknown-linux-musl, runner: ubuntu-latest}
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-pc-windows-msvc
+        # pip installs the wheel into a new virtualenv and `ods version` reports it.
+        test:
+          run: scripts/release-test-wheel.sh
+          targets: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-pc-windows-msvc]

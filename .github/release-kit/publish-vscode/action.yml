@@ -1,0 +1,51 @@
+name: publish to the VS Code Marketplace
+description: >-
+  Publish each selected extension's packaged .vsix (named <name>-<version>.vsix)
+  to the Visual Studio Marketplace, and to Open VSX when a token is given;
+  then wait until the Marketplace serves the version.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  dir:
+    description: >-
+      Where the build artifacts were downloaded (pattern `release--*`, not
+      merged); each extension's .vsix is taken from <dir>/release--<package>--*/.
+    default: dist
+  vsce-token:
+    description: A Visual Studio Marketplace personal access token.
+    required: true
+  ovsx-token:
+    description: An Open VSX token; empty skips Open VSX.
+    default: ""
+  verify-only:
+    description: '"true" to skip the upload and only verify (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+        DIR: ${{ inputs.dir }}
+        VSCE_PAT: ${{ inputs.vsce-token }}
+        OVSX_PAT: ${{ inputs.ovsx-token }}
+        VERIFY_ONLY: ${{ inputs.verify-only }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        if [ "$VERIFY_ONLY" = true ]; then
+          python3 "$kit" verify --registry vscode --selection "$SELECTION"
+          exit 0
+        fi
+        python3 "$kit" preflight --registry vscode --selection "$SELECTION"
+        shopt -s nullglob
+        jq -r '.[] | select(.registry == "vscode") | "\(.name)\t\(.version)\t\(.slug)"' <<<"$SELECTION" |
+        while IFS=$'\t' read -r id version slug; do
+          found=( "$DIR"/release--"$slug"--*/"${id#*.}-$version.vsix" )
+          if [ ${#found[@]} -ne 1 ]; then echo "::error::expected one ${id#*.}-$version.vsix in $DIR/release--$slug--*/"; exit 1; fi
+          file="${found[0]}"
+          npx --yes @vscode/vsce publish --packagePath "$file"
+          if [ -n "$OVSX_PAT" ]; then npx --yes ovsx publish "$file"; fi
+        done
+        python3 "$kit" verify --registry vscode --selection "$SELECTION"

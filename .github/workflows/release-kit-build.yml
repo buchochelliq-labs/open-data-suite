@@ -1,0 +1,64 @@
+name: release-kit build
+
+# Installed by release-kit (`release.py install`) as
+# .github/workflows/release-kit-build.yml; do not edit, reinstall instead.
+#
+# Builds the artifacts release-kit.yml declares for the packages a release
+# gate selected, from the tagged commit: one job per artifact (and target),
+# each on the runner it needs. Every job uploads its files as the artifact
+# `release--<package slug>--<job id>`, which the publish actions pick up.
+# Building needs no credentials; publishing stays in release.yml's own jobs.
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: The tagged commit (the gate's `sha` output)
+        type: string
+        required: true
+      selection:
+        description: The gate's `selection` output
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - id: plan
+        uses: ./.github/release-kit/plan
+        with:
+          selection: ${{ inputs.selection }}
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    name: build ${{ matrix.id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.jobs) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/release-kit/build
+        with:
+          job: ${{ toJSON(matrix) }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release--${{ matrix.slug }}--${{ matrix.id }}
+          path: dist/*
+          if-no-files-found: error

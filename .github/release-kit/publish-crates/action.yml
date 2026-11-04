@@ -1,0 +1,50 @@
+name: publish to crates.io
+description: >-
+  Publish the selected crates in release-kit.yml order: package and verify
+  them all with one dry run, then upload each run of crates sharing a
+  credential (Trusted Publishing for crates already on crates.io, a token for
+  a crate's first version). Then wait until crates.io serves every version,
+  and use each as a stranger would. Run `release.py preflight --registry
+  crates.io` first (see templates/release.yml): it refuses a version already
+  out and says which crates are new.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  new-crates:
+    description: The preflight's `new_crates` output (a JSON list); "[]" when none.
+    default: "[]"
+  token:
+    description: >-
+      The Trusted Publishing token (the output of rust-lang/crates-io-auth-action),
+      for crates already on crates.io. Needed when any selected crate exists.
+    default: ""
+  new-crate-token:
+    description: >-
+      A crates.io API token (the environment's CARGO_REGISTRY_TOKEN secret), for
+      a crate's first version. Needed only when a selected crate is new.
+    default: ""
+  verify-only:
+    description: '"true" to skip the upload and only verify (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+        NEW_CRATES: ${{ inputs.new-crates }}
+        RELEASE_TRUSTED_TOKEN: ${{ inputs.token }}
+        RELEASE_NEW_CRATE_TOKEN: ${{ inputs.new-crate-token }}
+      # Cargo publishes several packages of a workspace in dependency order,
+      # verifying each against the earlier ones' packages.
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" publish-crates --selection "$SELECTION" --new-crates "$NEW_CRATES"
+    - shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        python3 "$kit" verify --registry crates.io --selection "$SELECTION"
+        python3 "$kit" consume --registry crates.io --selection "$SELECTION"
