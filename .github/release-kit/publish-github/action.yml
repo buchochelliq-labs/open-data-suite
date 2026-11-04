@@ -32,6 +32,9 @@ runs:
       if: inputs.verify-only != 'true'
       shell: bash
       env:
+        # preflight reads the release with it (a private repository's is not public).
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
         SELECTION: ${{ inputs.selection }}
         FILES: ${{ inputs.files }}
         DIR: ${{ inputs.dir }}
