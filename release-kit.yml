@@ -6,8 +6,8 @@
 #
 # `python3 .github/release-kit/scripts/release.py tag` on main tags the release:
 # `release-X.Y.Z` starts .github/workflows/release.yml, which runs CI on the tagged
-# commit, builds, and publishes what isn't published yet. Homebrew and Chocolatey are
-# release.yml's own jobs, after the GitHub release.
+# commit, builds, and publishes what isn't published yet; Homebrew and Chocolatey follow
+# the GitHub release.
 release:
   name_from: ods
 
@@ -99,6 +99,15 @@ packages:
     notes: scripts/release-notes.sh "$VERSION"
     checksums: SHA256SUMS
     attest: true
+    # Made from the release once it is out: the formula (attached as ods.rb, and a pull
+    # request on the tap) and the Chocolatey package, installed and tested on Windows.
+    homebrew:
+      tap: buchochelliq-labs/homebrew-tap
+      formula: packaging/homebrew/ods.rb.tmpl
+    chocolatey:
+      package: packaging/chocolatey
+      test: >-
+        ods version --output json | grep -q "\"ods_version\": \"$VERSION\""
     artifacts:
       - kind: rust-binary
         bin: ods

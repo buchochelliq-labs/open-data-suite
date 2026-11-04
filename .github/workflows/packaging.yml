@@ -13,8 +13,6 @@ on:
       - "deny.toml"
       - "packaging/**"
       - "scripts/changelog-section.py"
-      - "scripts/render-homebrew-formula.py"
-      - "scripts/render-chocolatey-package.py"
       - "scripts/release-*.sh"
       - "release-kit.yml"
       - ".github/release-kit/**"
@@ -25,7 +23,6 @@ on:
       - ".github/workflows/packaging.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/release-kit-build.yml"
-      - ".github/workflows/chocolatey.yml"
   workflow_dispatch:
 
 permissions:
@@ -60,15 +57,21 @@ jobs:
             scripts/release-notes.sh "$version" | tee notes.md
             grep -q "pip install opendatasuite==$version" notes.md
           fi
-      - run: python3 scripts/render-homebrew-formula.py --self-test
-      - run: python3 scripts/render-chocolatey-package.py --self-test
-      - name: The rendered formula is valid Ruby
+      # The Homebrew formula and the Chocolatey package render as release-kit renders them
+      # for a release (every placeholder filled), from made-up checksums.
+      - name: The formula and the Chocolatey package render
         run: |
+          python3 -m pip install --quiet pyyaml
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
           for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
-            echo "$(printf '0%.0s' $(seq 64))  ods-v0.0.0-$t.tar.gz"
+            echo "$(printf '0%.0s' $(seq 64))  ods-v$version-$t.tar.gz"
           done > sums
-          python3 scripts/render-homebrew-formula.py --version 0.0.0 --sums sums > ods.rb
-          ruby -c ods.rb
+          echo "$(printf '1%.0s' $(seq 64))  ods-v$version-x86_64-pc-windows-msvc.zip" >> sums
+          kit=.github/release-kit/scripts/release.py
+          formula=$(python3 "$kit" render --name ods --channel homebrew --sums sums --out rendered/homebrew)
+          ruby -c "$formula"
+          python3 "$kit" render --name ods --channel chocolatey --sums sums --out rendered/chocolatey
+          python3 -c 'import sys, xml.etree.ElementTree as ET; ET.parse(sys.argv[1])' rendered/chocolatey/opendatasuite.nuspec
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about
@@ -109,11 +112,3 @@ jobs:
         run: |
           DIST="$PWD/wheels" VERSION="$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')" \
             scripts/release-test-wheel.sh
-
-  chocolatey:
-    # Packs the current templates for the latest release and installs the package on
-    # Windows; publishes nothing.
-    uses: ./.github/workflows/chocolatey.yml
-    with:
-      version: latest
-      publish: false

@@ -64,7 +64,8 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   (ADR-0019 §5). The GitHub release, its `vX.Y.Z` tag, its archives, `SHA256SUMS`,
   attestations and `ods.rb` are as before, but wheels are now on PyPI only, not
   attached to the GitHub release, and `cargo binstall ods-cli` finds the archives from
-  crates.io. Maintainers: see "For maintainers" in `docs/install.md` for the new
+  crates.io. The Homebrew formula and the Chocolatey package are made by release-kit
+  from the same templates. Maintainers: see "For maintainers" in `docs/install.md` for the new
   `crates-io` environment and the `release-*` tags.
 
 ## [0.1.2] - 2026-11-03

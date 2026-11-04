@@ -1,0 +1,82 @@
+name: publish to a Homebrew tap
+description: >-
+  For each selected github package with `homebrew`: render its formula from
+  its template and the published release's checksums, attest it (with
+  `attest: true`), attach it to the release, and open a pull request on the
+  tap that puts it in Formula/. Prereleases are left out. Without a tap token
+  the formula is still attached, and a notice says the tap was not updated.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  token:
+    description: A token with contents write on this repository (to attach the formula).
+    default: ${{ github.token }}
+  tap-token:
+    description: >-
+      A token with contents and pull-requests write on the tap. Empty: the tap
+      is not updated, only a notice says so.
+    default: ""
+  verify-only:
+    description: '"true" to do nothing (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - id: render
+      if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        SELECTION: ${{ inputs.selection }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        root="$RUNNER_TEMP/homebrew"
+        rm -rf "$root" && mkdir -p "$root"
+        attest=false
+        : > "$root/formulas"
+        while IFS=$'\t' read -r name version tag slug; do
+          shape="$(python3 "$kit" github-release --name "$name" --stage "$root" --notes-out /dev/null --options-only)"
+          [ "$(jq -r '.homebrew | length' <<<"$shape")" != 0 ] || continue
+          if [[ "$version" == *-* ]]; then echo "::notice::$name $version is a prerelease: the Homebrew tap is left alone"; continue; fi
+          # The checksums of what the release serves, from its .sha256 assets.
+          mkdir -p "$root/$slug"
+          gh release download "$tag" --pattern '*.sha256' --dir "$root/$slug/sums"
+          cat "$root/$slug/sums"/*.sha256 > "$root/$slug/SHA256SUMS"
+          formula="$(python3 "$kit" render --name "$name" --channel homebrew --sums "$root/$slug/SHA256SUMS" --out "$root/$slug/formula")"
+          if command -v ruby >/dev/null; then ruby -c "$formula"; fi
+          printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$version" "$tag" "$formula" "$(jq -r .homebrew.tap <<<"$shape")" >> "$root/formulas"
+          [ "$(jq -r .attest <<<"$shape")" = true ] && attest=true
+        done < <(jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION")
+        echo "root=$root" >> "$GITHUB_OUTPUT"
+        echo "attest=$attest" >> "$GITHUB_OUTPUT"
+        echo "subjects=$root/*/formula/*.rb" >> "$GITHUB_OUTPUT"
+    # Needs `id-token: write` and `attestations: write` on the calling job.
+    - if: inputs.verify-only != 'true' && steps.render.outputs.attest == 'true'
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-path: ${{ steps.render.outputs.subjects }}
+    - if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        TAP_TOKEN: ${{ inputs.tap-token }}
+        ROOT: ${{ steps.render.outputs.root }}
+        SERVER: ${{ github.server_url }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        while IFS=$'\t' read -r _ version tag formula tap; do
+          gh release upload "$tag" "$formula" --clobber
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::No tap token: $tap is not updated. Copy the release's $(basename "$formula") to $tap's Formula/, or pass tap-token."
+            continue
+          fi
+          checkout="$ROOT/tap-$(basename "$formula" .rb)"
+          git clone --quiet "https://x-access-token:$TAP_TOKEN@${SERVER#https://}/$tap.git" "$checkout"
+          GH_TOKEN="$TAP_TOKEN" python3 "$kit" homebrew-tap --tap "$checkout" --formula "$formula" --repo "$tap" \
+            --version "$version" --release-url "$SERVER/$GH_REPO/releases/tag/$tag"
+        done < "$ROOT/formulas"

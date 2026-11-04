@@ -183,16 +183,21 @@ workspace version.
        provenance attestations, with the version's changelog section as notes
        (`scripts/release-notes.sh`; the run fails if the section is missing);
     5. publishes the wheels to PyPI, then installs the version from PyPI;
-    6. renders the Homebrew formula from `SHA256SUMS`, attests it, attaches `ods.rb` to
-       the release and opens a pull request on the tap (not for prereleases);
-    7. packs the Chocolatey package, installs it on Windows, and pushes it
-       (`.github/workflows/chocolatey.yml`).
+    6. renders the Homebrew formula (`packaging/homebrew/ods.rb.tmpl`) from the
+       release's checksums, attests it, attaches `ods.rb` to the release and opens a
+       pull request on the tap (not for prereleases);
+    7. renders the Chocolatey package (`packaging/chocolatey/`), packs it, installs it
+       on Windows from the release's archive, checks `ods version`, and pushes it.
+
+   Homebrew and Chocolatey are release-kit's `homebrew` and `chocolatey` settings on
+   the `ods` package in `release-kit.yml`.
 4. **A failed release** is finished by running `release.py tag` again: it publishes
    only what is still due. See release-kit's
    [recovery guide](https://github.com/buchochelliq-labs/release-kit/blob/main/docs/recovery.md).
 
 Pull requests that change packaging files run the `Packaging` workflow, which runs the
-same notices, wheel test and notes scripts, and the formula and Chocolatey templates.
+same notices, wheel test and notes scripts, and renders the formula and the Chocolatey
+package as a release would (`release.py render`).
 
 One-time setup, by a repository, crates.io and PyPI admin. Every environment below must
 allow `release-*` tags, which is what starts the run:
@@ -224,14 +229,12 @@ allow `release-*` tags, which is what starts the run:
   expires, the job fails: renew it and re-run the job.
 - **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
   secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
-  required reviewers, like `pypi`. To push an existing release by hand (**Actions →
-  Chocolatey → Run workflow**, `publish` on), the environment must also allow the
-  branch the workflow runs from. Each push goes through Chocolatey's automated checks,
-  and the package's first version through human moderation, before it is listed. While
-  a version is still in moderation, Chocolatey refuses newer ones with
-  **403 Forbidden**, so the release's `publish-chocolatey / push` job fails until the
-  earlier version is approved. Then push the newer release by hand as above (v0.0.2
-  waited this way for v0.0.1).
+  required reviewers, like `pypi`. Each push goes through Chocolatey's automated
+  checks, and the package's first version through human moderation, before it is
+  listed. While a version is still in moderation, Chocolatey refuses newer ones with
+  **403 Forbidden**, so the release's `publish-chocolatey` job fails until the earlier
+  version is approved. Then re-run that job (**Re-run failed jobs** on the release run;
+  v0.0.2 waited this way for v0.0.1).
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,

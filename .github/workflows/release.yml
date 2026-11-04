@@ -1,6 +1,7 @@
 # Releases ODS (ADR-0019) with release-kit (https://github.com/buchochelliq-labs/release-kit):
 # what is published, and where, is release-kit.yml. Everything under .github/release-kit/
-# and release-kit-build.yml is the installed kit; this file is ODS's own.
+# and release-kit-build.yml is the installed kit; this file is ODS's own, release-kit's
+# template without the npm and VS Code jobs.
 #
 # `python3 .github/release-kit/scripts/release.py tag` on main pushes the tags; the
 # `release-X.Y.Z` tag starts this run. It checks the tag once, runs CI once on the tagged
@@ -11,7 +12,7 @@
 #   the version's CHANGELOG section as notes;
 # - the wheels on PyPI;
 # - then, from the GitHub release, the Homebrew formula (attached to the release, and a
-#   pull request on the tap) and the Chocolatey package.
+#   pull request on the tap) and the Chocolatey package (installed on Windows, then pushed).
 #
 # Admin setup (the crates-io, pypi, chocolatey and homebrew environments, each allowing
 # `release-*` tags) is in docs/install.md, "For maintainers".
@@ -54,6 +55,8 @@ jobs:
       github: ${{ steps.gate.outputs.github }}
       crates-io: ${{ steps.gate.outputs.crates-io }}
       pypi: ${{ steps.gate.outputs.pypi }}
+      homebrew: ${{ steps.gate.outputs.homebrew }}
+      chocolatey: ${{ steps.gate.outputs.chocolatey }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -117,6 +120,57 @@ jobs:
         with:
           selection: ${{ needs.gate.outputs.selection }}
           verify-only: ${{ needs.gate.outputs.verify-only }}
+
+  # From the GitHub release, once it is out: a github package's `homebrew`
+  # formula, attached to the release and proposed to the tap with the
+  # environment's HOMEBREW_TAP_TOKEN (without it, only a notice).
+  publish-homebrew:
+    needs: [gate, publish-github]
+    if: >-
+      !cancelled() && needs.gate.outputs.homebrew == 'true' && needs.publish-github.result == 'success'
+      && needs.gate.outputs.verify-only != 'true'
+    runs-on: ubuntu-latest
+    environment: homebrew
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --quiet pyyaml
+      - uses: ./.github/release-kit/publish-homebrew
+        with:
+          selection: ${{ needs.gate.outputs.selection }}
+          tap-token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # A github package's `chocolatey` package, installed from the release on
+  # Windows and pushed with the environment's CHOCOLATEY_API_KEY.
+  publish-chocolatey:
+    needs: [gate, publish-github]
+    if: >-
+      !cancelled() && needs.gate.outputs.chocolatey == 'true' && needs.publish-github.result == 'success'
+      && needs.gate.outputs.verify-only != 'true'
+    runs-on: windows-latest
+    environment: chocolatey
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet pyyaml
+      - uses: ./.github/release-kit/publish-chocolatey
+        with:
+          selection: ${{ needs.gate.outputs.selection }}
+          api-key: ${{ secrets.CHOCOLATEY_API_KEY }}
 
   # crates.io publishes from source. Crates already on crates.io upload with
   # Trusted Publishing; a crate's first version cannot (crates.io offers it
@@ -195,80 +249,3 @@ jobs:
         with:
           selection: ${{ needs.gate.outputs.selection }}
           verify-only: ${{ needs.gate.outputs.verify-only }}
-
-  # The Homebrew formula, rendered from the release's SHA256SUMS: attested and attached to
-  # the release, then a pull request on buchochelliq-labs/homebrew-tap, with the
-  # HOMEBREW_TAP_TOKEN secret of the `homebrew` environment. Without the secret it only
-  # says so: the formula is on the release, to copy by hand. Prereleases leave it alone.
-  publish-homebrew:
-    needs: [gate, publish-github]
-    if: >-
-      !cancelled() && needs.publish-github.result == 'success'
-      && needs.gate.outputs.verify-only != 'true' && !contains(needs.gate.outputs.release, '-')
-    runs-on: ubuntu-latest
-    environment: homebrew
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    env:
-      VERSION: ${{ needs.gate.outputs.release }}
-      TAP: buchochelliq-labs/homebrew-tap
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.gate.outputs.sha }}
-          persist-credentials: false
-          path: ods
-      - name: Render the formula
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p dist
-          gh release download "v$VERSION" --pattern SHA256SUMS --dir dist
-          python3 ods/scripts/render-homebrew-formula.py --self-test
-          python3 ods/scripts/render-homebrew-formula.py --version "$VERSION" --sums dist/SHA256SUMS > dist/ods.rb
-          ruby -c dist/ods.rb
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/ods.rb
-      - name: Attach it to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "v$VERSION" dist/ods.rb --clobber
-      - id: token
-        name: Check for the tap token
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::notice::No HOMEBREW_TAP_TOKEN in the homebrew environment, so the tap isn't updated. Copy the release's ods.rb to $TAP's Formula/ods.rb, or set the token up (docs/install.md, \"For maintainers\")."
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.token.outputs.present == 'true'
-        with:
-          repository: ${{ env.TAP }}
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: tap
-      - name: Open the tap's pull request
-        if: steps.token.outputs.present == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: ods/scripts/update-homebrew-tap.sh --tap tap --formula dist/ods.rb --version "$VERSION" --repo "$TAP"
-
-  # Packs, installs and pushes the Chocolatey package, which downloads the release's
-  # Windows archive: the CHOCOLATEY_API_KEY secret of the `chocolatey` environment.
-  publish-chocolatey:
-    needs: [gate, publish-github]
-    if: >-
-      !cancelled() && needs.publish-github.result == 'success'
-      && needs.gate.outputs.verify-only != 'true'
-    uses: ./.github/workflows/chocolatey.yml
-    with:
-      version: ${{ needs.gate.outputs.release }}
-      publish: true
-    secrets: inherit

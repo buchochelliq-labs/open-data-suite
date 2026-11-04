@@ -40,6 +40,12 @@ outputs:
   vscode:
     description: '"true" when a VS Code Marketplace extension is due.'
     value: ${{ steps.gate.outputs.vscode }}
+  homebrew:
+    description: '"true" when a due github package has a Homebrew formula.'
+    value: ${{ steps.gate.outputs.homebrew }}
+  chocolatey:
+    description: '"true" when a due github package has a Chocolatey package.'
+    value: ${{ steps.gate.outputs.chocolatey }}
 runs:
   using: composite
   steps:

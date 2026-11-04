@@ -49,6 +49,12 @@ Commands (the gate action, in CI):
                 write its `checksums` file into DIR, its `notes` into FILE,
                 and print what the publish action should do (JSON).
 
+    render --name NAME --channel homebrew|chocolatey --sums FILE --out DIR
+                render a github package's Homebrew formula or Chocolatey
+                package from its templates and its release's checksums.
+    homebrew-tap --tap DIR --formula FILE --repo OWNER/TAP --version V --release-url URL
+                put the formula on a branch of the tap and open a pull request.
+
 Commands (installing):
     install     from a release-kit checkout, copy the kit into the repository
                 you are in: .github/release-kit/ (this script and the actions)
@@ -214,8 +220,14 @@ def load(read):
 # The keys a `github` package takes to shape its release: `notes`, a command
 # whose output is the release's notes (else GitHub generates them);
 # `checksums`, the name of one file listing every asset's SHA-256; `attest`,
-# whether to attest the assets' build provenance.
-GITHUB_OPTIONS = ("notes", "checksums", "attest")
+# whether to attest the assets' build provenance. And the channels made from
+# the release once it is out: `homebrew` (a formula, and a pull request on a
+# tap) and `chocolatey` (a package pushed to the community repository).
+GITHUB_OPTIONS = ("notes", "checksums", "attest", "homebrew", "chocolatey")
+CHANNEL_KEYS = {
+    "homebrew": ({"tap", "formula"}, {"name"}),
+    "chocolatey": ({"package"}, {"test"}),
+}
 
 
 def github_option_errors(package):
@@ -232,6 +244,22 @@ def github_option_errors(package):
             errors.append(f"{package.name}: checksums is a file name, e.g. SHA256SUMS")
     if "attest" in options and not isinstance(options["attest"], bool):
         errors.append(f"{package.name}: attest is true or false")
+    for channel, (required, optional) in CHANNEL_KEYS.items():
+        if channel not in options:
+            continue
+        settings = options[channel]
+        if not isinstance(settings, dict):
+            errors.append(f"{package.name}: {channel} is a mapping ({', '.join(sorted(required))})")
+            continue
+        if missing := required - settings.keys():
+            errors.append(f"{package.name}: {channel} needs {', '.join(sorted(missing))}")
+        if unknown := settings.keys() - required - optional:
+            errors.append(f"{package.name}: {channel} does not take {', '.join(sorted(unknown))}")
+        if not all(isinstance(v, str) and v.strip() for v in settings.values()):
+            errors.append(f"{package.name}: {channel}'s settings are text")
+        tap = settings.get("tap") if channel == "homebrew" else None
+        if isinstance(tap, str) and not re.fullmatch(r"[\w.-]+/[\w.-]+", tap):
+            errors.append(f"{package.name}: homebrew tap is owner/repository, e.g. org/homebrew-tap")
     return errors
 
 
@@ -648,7 +676,8 @@ def github_release(name, stage, notes_out, read=None, runner=None, options_only=
     options = dict(package.github)
     stage = Path(stage)
     sums = options.get("checksums") or ""
-    shape = {"notes": bool(options.get("notes")), "attest": options.get("attest") is True, "checksums": sums}
+    shape = {"notes": bool(options.get("notes")), "attest": options.get("attest") is True, "checksums": sums,
+             "homebrew": dict(options.get("homebrew") or {}), "chocolatey": dict(options.get("chocolatey") or {})}
     if options_only:
         return shape
     if sums:
@@ -667,6 +696,133 @@ def github_release(name, stage, notes_out, read=None, runner=None, options_only=
             raise RuntimeError(f"{name}: the notes command printed nothing")
         Path(notes_out).write_text(result.stdout, encoding="utf-8")
     return shape
+
+
+# ---------------------------------------------------------------------------
+# Homebrew and Chocolatey: made from a published GitHub release
+
+# `${name}` placeholders only, so a template's own `$var`, `#{var}` or
+# PowerShell `${env:X}` is left alone.
+PLACEHOLDER = re.compile(r"\$\{([a-z0-9_]+)\}")
+SUM_LINE = re.compile(r"^([0-9a-f]{64}) [ *](\S+)$")
+
+
+def parse_sums(text):
+    """{file name: sha256} from `sha256sum` output (or .sha256 files, joined)."""
+    sums = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        match = SUM_LINE.match(line.strip())
+        if not match:
+            raise ValueError(f"not a sha256sum line: {line!r}")
+        sums[PurePosixPath(match[2]).name] = match[1]
+    return sums
+
+
+def channel_values(package, sums, repo):
+    """The placeholders a template can use: `version`, `tag`, `repository`,
+    `base_url` (the release's download URL), and for each archive of a
+    rust-binary (`<bin>-v<version>-<target>.tar.gz|.zip`) `url_<target>` and
+    `sha256_<target>`, with the target's `-` as `_`."""
+    base = f"https://github.com/{repo}/releases/download/{package.tag}"
+    values = {"version": package.version, "tag": package.tag, "repository": repo, "base_url": base}
+    archive = re.compile(rf"(.+?)-v{re.escape(package.version)}-([a-z0-9_]+(?:-[a-z0-9_]+){{2,3}})\.(?:tar\.gz|zip)")
+    for name, sha in sorted(sums.items()):
+        if match := archive.fullmatch(name):
+            key = match[2].replace("-", "_")
+            if f"sha256_{key}" in values:
+                raise ValueError(f"two archives for {match[2]}: name the one each template means")
+            values[f"sha256_{key}"] = sha
+            values[f"url_{key}"] = f"{base}/{name}"
+    return values
+
+
+def render_template(text, values, where):
+    """Fill every `${name}`; one without a value is an error, never left in."""
+    def fill(match):
+        if match[1] not in values:
+            raise ValueError(f"{where}: no value for ${{{match[1]}}} (there are: {', '.join(sorted(values))})")
+        return values[match[1]]
+    return PLACEHOLDER.sub(fill, text)
+
+
+def render_channel(name, channel, sums_text, out, read=None, repo=None):
+    """Render a github package's `homebrew` formula or `chocolatey` package
+    from its release's checksums into `out`. Returns the files written."""
+    release = load(read or files_on_disk())
+    package = next((p for p in release.packages if p.registry == "github" and p.name == name), None)
+    settings = dict(package.github).get(channel) if package else None
+    if not settings:
+        raise ValueError(f"{CONFIG}: github package {name!r} has no {channel}")
+    values = channel_values(package, parse_sums(sums_text), repo or repository())
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    if channel == "homebrew":
+        template = Path(settings["formula"])
+        formula = settings.get("name") or template.name.removesuffix(".tmpl").removesuffix(".rb")
+        target = out / f"{formula}.rb"
+        target.write_text(render_template(template.read_text(encoding="utf-8"), values, str(template)),
+                          encoding="utf-8")
+        return [target]
+    source = Path(settings["package"])
+    if not source.is_dir():
+        raise ValueError(f"{name}: chocolatey package {source} is not a directory")
+    written = []
+    for file in sorted(f for f in source.rglob("*") if f.is_file()):
+        relative = file.relative_to(source)
+        target = out / str(relative).removesuffix(".tmpl")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if file.name.endswith(".tmpl"):
+            target.write_text(render_template(file.read_text(encoding="utf-8"), values, str(file)),
+                              encoding="utf-8")
+        else:
+            shutil.copy2(file, target)
+        written.append(target)
+    if len([f for f in written if f.suffix == ".nuspec"]) != 1:
+        raise ValueError(f"{name}: chocolatey package {source} needs exactly one .nuspec (or .nuspec.tmpl)")
+    return written
+
+
+def open_tap_pr(repo, branch, base, title, body):
+    """Open (or find) the tap's pull request with the GitHub CLI."""
+    found = subprocess.run(["gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "open",
+                            "--json", "url", "--jq", '.[0].url // ""'],
+                           check=True, text=True, capture_output=True).stdout.strip()
+    if found:
+        return found
+    return subprocess.run(["gh", "pr", "create", "--repo", repo, "--base", base, "--head", branch,
+                           "--title", title, "--body", body],
+                          check=True, text=True, capture_output=True).stdout.strip()
+
+
+def update_tap(tap, formula, repo, version, release_url, open_pr=open_tap_pr):
+    """Put `formula` in the tap checkout `tap` as Formula/<file>, on the
+    branch `<formula name>-<version>`, and open a pull request for it.
+    Re-running replaces that branch and reuses the open pull request; a tap
+    that already has the formula is left alone. Returns the PR URL or None."""
+    tap, formula = Path(tap), Path(formula)
+    name = formula.stem
+    git_tap = lambda *args, **kw: git("-C", str(tap), *args, **kw)  # noqa: E731
+    base = git_tap("rev-parse", "--abbrev-ref", "HEAD")
+    (tap / "Formula").mkdir(exist_ok=True)
+    shutil.copy2(formula, tap / "Formula" / formula.name)
+    if not git_tap("status", "--porcelain", "--", f"Formula/{formula.name}"):
+        print(f"the tap's {base} already has {name} {version}", flush=True)
+        return None
+    branch = f"{name}-{version}"
+    git_tap("checkout", "--quiet", "-B", branch)
+    git_tap("add", f"Formula/{formula.name}")
+    git_tap("-c", "user.name=github-actions[bot]",
+            "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+            "commit", "--quiet", "-m", f"{name} {version}")
+    # The branch is the release's own, named for the version: a re-run replaces it.
+    git_tap("push", "--quiet", "--force", "origin", f"HEAD:refs/heads/{branch}")
+    url = open_pr(repo, branch, base, f"{name} {version}",
+                  f"The Homebrew formula for [{name} {version}]({release_url}), rendered by its release run "
+                  "(release-kit).")
+    print(f"tap pull request for {name} {version}: {url}", flush=True)
+    return url
 
 
 def run(command, cwd=None, env=None, shell=False):
@@ -945,6 +1101,10 @@ def gate_outputs(sha, release, chosen, verify_only, output=None):
     }
     for registry in REGISTRIES:
         outputs[registry.replace(".", "-")] = str(any(p.registry == registry for p in chosen)).lower()
+    # Channels made from a GitHub release: whether a selected github package has one.
+    for channel in CHANNEL_KEYS:
+        outputs[channel] = str(any(p.registry == "github" and dict(p.github).get(channel)
+                                   for p in chosen)).lower()
     target = output or os.environ.get("GITHUB_OUTPUT")
     if target:
         with open(target, "a", encoding="utf-8") as handle:
@@ -1482,6 +1642,17 @@ def main(argv=None):
     shaper.add_argument("--stage", required=True, help="the directory holding the release's files")
     shaper.add_argument("--notes-out", required=True, help="where to write the notes, if the package has some")
     shaper.add_argument("--options-only", action="store_true", help="only print what release-kit.yml says")
+    renderer = commands.add_parser("render")
+    renderer.add_argument("--name", required=True)
+    renderer.add_argument("--channel", required=True, choices=sorted(CHANNEL_KEYS))
+    renderer.add_argument("--sums", required=True, help="the release's checksums, in sha256sum format")
+    renderer.add_argument("--out", required=True)
+    tapper = commands.add_parser("homebrew-tap")
+    tapper.add_argument("--tap", required=True, help="a checkout of the tap")
+    tapper.add_argument("--formula", required=True)
+    tapper.add_argument("--repo", required=True, help="the tap, owner/name")
+    tapper.add_argument("--version", required=True)
+    tapper.add_argument("--release-url", required=True)
     builder = commands.add_parser("build")
     builder.add_argument("--job", required=True)
     builder.add_argument("--out", default="dist")
@@ -1523,6 +1694,12 @@ def main(argv=None):
         elif args.command == "github-release":
             print(json.dumps(github_release(args.name, args.stage, args.notes_out,
                                             options_only=args.options_only)))
+        elif args.command == "render":
+            for path in render_channel(args.name, args.channel, Path(args.sums).read_text(encoding="utf-8"),
+                                       args.out):
+                print(path)
+        elif args.command == "homebrew-tap":
+            update_tap(args.tap, args.formula, args.repo, args.version, args.release_url)
         elif args.command == "build":
             build(args.job, Path(args.out))
         elif args.command == "install":
