@@ -48,7 +48,10 @@ runs:
         command: sdist
         args: --out dist${{ fromJSON(inputs.job).cargo != '' && format(' -m {0}', fromJSON(inputs.job).cargo) || '' }}
         working-directory: ${{ fromJSON(inputs.job).dir || '.' }}
+    # Only a ci-artifact job gets the token: it reads this repository's CI
+    # artifacts (actions: read). Every other kind builds with no credentials.
     - shell: bash
       env:
         JOB: ${{ inputs.job }}
+        GH_TOKEN: ${{ fromJSON(inputs.job).kind == 'ci-artifact' && github.token || '' }}
       run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" build --job "$JOB" --out dist

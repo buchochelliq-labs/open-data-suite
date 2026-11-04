@@ -84,6 +84,11 @@ jobs:
   build:
     needs: [gate, ci]
     if: needs.gate.outputs.verify-only != 'true'
+    # The build workflow asks for actions: read (for release-kit's ci-artifact kind,
+    # unused here); a called workflow gets no more than its caller grants.
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/release-kit-build.yml
     with:
       sha: ${{ needs.gate.outputs.sha }}

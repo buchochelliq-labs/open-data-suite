@@ -7,7 +7,9 @@ name: release-kit build
 # gate selected, from the tagged commit: one job per artifact (and target),
 # each on the runner it needs. Every job uploads its files as the artifact
 # `release--<package slug>--<job id>`, which the publish actions pick up.
-# Building needs no credentials; publishing stays in release.yml's own jobs.
+# Building needs no credentials, except that a ci-artifact job reads this
+# repository's CI artifacts (actions: read); publishing stays in release.yml's
+# own jobs.
 
 on:
   workflow_call:
@@ -23,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  actions: read     # ci-artifact: read the pinned CI artifact
 
 jobs:
   plan:

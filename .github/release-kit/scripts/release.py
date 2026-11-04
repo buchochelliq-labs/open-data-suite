@@ -64,7 +64,7 @@ Commands (installing):
                 only by installing again.
 
 Registries: github (GitHub Releases), crates.io, pypi, npm, vscode (Visual
-Studio Marketplace). Artifact kinds: rust-binary, python, maturin, vsix and
+Studio Marketplace). Artifact kinds: rust-binary, python, maturin, vsix, ci-artifact and
 command. Requires Python 3.11+, git and PyYAML (for release-kit.yml); `tag`
 follows runs with the GitHub CLI (`gh`) when it is installed.
 """
@@ -78,6 +78,7 @@ import argparse
 from dataclasses import dataclass, field
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import posixpath
@@ -92,7 +93,7 @@ import tomllib
 import zipfile
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 CONFIG = "release-kit.yml"
 REGISTRIES = ("github", "crates.io", "pypi", "npm", "vscode")
@@ -500,6 +501,9 @@ KINDS = {
     "maturin": ({"pypi", "github"}, set(), {"targets", "sdist", "test", "prepare"}),
     "vsix": ({"vscode", "github"}, set(), {"dir", "test", "prepare"}),
     "command": ({"github", "pypi", "vscode"}, {"run", "outputs"}, {"os", "test", "prepare"}),
+    # Promote the exact files a CI run already built and tested, instead of
+    # building them again: the artifact id and its SHA-256 are pinned.
+    "ci-artifact": ({"github", "pypi", "vscode"}, {"artifact", "sha256", "files"}, {"test"}),
 }
 # Registries that publish from source need no artifacts; the others do.
 FROM_SOURCE = {"crates.io", "npm"}
@@ -561,6 +565,14 @@ def artifact_errors(package):
             errors.append(f"{where}: {kind} is not built per target; give test as a command")
         if "prepare" in artifact and not (isinstance(artifact["prepare"], str) and artifact["prepare"].strip()):
             errors.append(f"{where}: prepare is a command")
+        if kind == "ci-artifact":
+            if not (isinstance(artifact.get("artifact"), int) and not isinstance(artifact.get("artifact"), bool)
+                    and artifact["artifact"] > 0):
+                errors.append(f"{where}: artifact is the CI artifact's numeric id")
+            if not (isinstance(artifact.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])):
+                errors.append(f"{where}: sha256 is the artifact archive's SHA-256, 64 lowercase hex digits")
+            if not (isinstance(artifact.get("files"), str) and artifact["files"].strip()):
+                errors.append(f"{where}: files is a glob of the archive members to publish")
         if kind in ("rust-binary", "maturin"):
             for target, runner in targets_of(artifact):
                 if not runner:
@@ -615,6 +627,10 @@ def plan(selection, read=None, output=None):
                 jobs.append({**base, "id": job_id(package.slug, kind, index), "kind": kind,
                              "os": artifact.get("os", "ubuntu-latest"), "target": "",
                              "run": artifact["run"], "outputs": artifact["outputs"], "test": test_of(artifact)})
+            elif kind == "ci-artifact":
+                jobs.append({**base, "id": job_id(package.slug, kind, index), "kind": kind,
+                             "os": "ubuntu-latest", "target": "", "artifact": artifact["artifact"],
+                             "sha256": artifact["sha256"], "files": artifact["files"], "test": test_of(artifact)})
     ids = [j["id"] for j in jobs]
     if len(ids) != len(set(ids)):
         raise ValueError("two artifacts plan the same build job; give them different targets")
@@ -844,6 +860,99 @@ def run(command, cwd=None, env=None, shell=False):
                    env={**os.environ, **(env or {})}, check=True)
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def github_api(path, accept="application/vnd.github+json"):
+    """(status, headers, body) of a GET on the GitHub API with the job's token,
+    without following redirects: an artifact's /zip answers with a signed URL
+    that must be fetched without the token."""
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise RuntimeError("ci-artifact needs GH_TOKEN (a token with actions: read) to read CI artifacts")
+    request = Request(f"https://api.github.com{path}", headers={
+        "User-Agent": USER_AGENT, "Accept": accept, "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28"})
+    try:
+        with build_opener(_NoRedirect).open(request, timeout=60) as response:
+            return response.status, dict(response.headers), response.read()
+    except HTTPError as error:
+        return error.code, dict(error.headers or {}), error.read()
+
+
+def download(url):
+    """The bytes at a signed URL, fetched with no credentials."""
+    with urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=300) as response:
+        return response.read()
+
+
+def tree_of(commit):
+    """The tree of a commit in this repository, from the GitHub API: the CI
+    run's commit need not be in the release checkout."""
+    status, _, body = github_api(f"/repos/{repository()}/git/commits/{commit}")
+    if status != 200:
+        raise RuntimeError(f"cannot read commit {commit} of {repository()} (HTTP {status})")
+    return json.loads(body)["tree"]["sha"]
+
+
+def promote(job, out, tagged_tree=None):
+    """Copy the files of one pinned CI artifact into `out`, unchanged, after
+    proving they are the reviewed bytes of this release: the archive has the
+    pinned SHA-256, has not expired, and was built from a commit whose tree is
+    the tagged commit's tree (rule 4: a release is one commit's files)."""
+    ident, pinned = job["artifact"], job["sha256"]
+    where = f"{job['package']}: CI artifact {ident}"
+    status, _, body = github_api(f"/repos/{repository()}/actions/artifacts/{ident}")
+    if status != 200:
+        raise RuntimeError(f"{where}: not found in {repository()} (HTTP {status})")
+    meta = json.loads(body)
+    if meta.get("expired"):
+        raise RuntimeError(f"{where} has expired; pin a newer run's artifact")
+    if meta.get("digest") and meta["digest"] != f"sha256:{pinned}":
+        raise RuntimeError(f"{where}: GitHub records {meta['digest']}, release-kit.yml pins sha256:{pinned}")
+    built = (meta.get("workflow_run") or {}).get("head_sha")
+    if not built:
+        raise RuntimeError(f"{where}: GitHub does not say which commit built it")
+    tagged = tagged_tree or git("rev-parse", "HEAD^{tree}")
+    if tree_of(built) != tagged:
+        raise RuntimeError(f"{where} was built from {built[:12]}, whose files differ from the tagged commit's: "
+                           "a release is one commit. Pin an artifact built from these files.")
+    status, headers, body = github_api(f"/repos/{repository()}/actions/artifacts/{ident}/zip")
+    location = {k.lower(): v for k, v in headers.items()}.get("location")
+    if status in (301, 302, 303, 307, 308) and location:
+        data = download(location)
+    elif status == 200:
+        data = body
+    else:
+        raise RuntimeError(f"{where}: download refused (HTTP {status})")
+    if hashlib.sha256(data).hexdigest() != pinned:
+        raise RuntimeError(f"{where}: the archive's SHA-256 is {hashlib.sha256(data).hexdigest()}, "
+                           f"release-kit.yml pins {pinned}")
+    version = pep440(job["version"]) if job["registry"] == "pypi" else job["version"]
+    copied = []
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for info in archive.infolist():
+            name = info.filename
+            if info.is_dir() or not fnmatch.fnmatchcase(name, job["files"]):
+                continue
+            parts = PurePosixPath(name).parts
+            if name.startswith("/") or "\\" in name or ".." in parts:
+                raise RuntimeError(f"{where}: unsafe path {name!r} in the archive")
+            target = out / parts[-1]
+            if target.exists():
+                raise RuntimeError(f"{where}: two members are named {parts[-1]}")
+            if version not in parts[-1]:
+                raise RuntimeError(f"{where}: {parts[-1]} is not version {version} of {job['package']}")
+            target.write_bytes(archive.read(info))
+            copied.append(target)
+    if not copied:
+        raise RuntimeError(f"{where}: no member matches {job['files']!r}")
+    print(f"promoted {where} ({built[:12]}): " + ", ".join(p.name for p in copied), flush=True)
+    return copied
+
+
 def build(job, out=Path("dist")):
     """Build one planned job into `out`; for GitHub Releases, add a .sha256
     beside every file. maturin jobs are built by maturin-action before this
@@ -874,6 +983,8 @@ def build(job, out=Path("dist")):
         for path in Path().glob(job["outputs"]):
             if path.is_file() and path.resolve().parent != out:
                 shutil.copy2(path, out / path.name)
+    elif kind == "ci-artifact":
+        promote(job, out)
     elif kind in ("maturin", "maturin-sdist"):
         # maturin-action wrote into <dir>/dist; collect what it left elsewhere.
         built = Path(job.get("dir") or ".") / "dist"
