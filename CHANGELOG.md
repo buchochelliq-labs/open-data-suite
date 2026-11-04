@@ -12,6 +12,13 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+### Breaking
+
+- An unknown setting under a `[providers.<name>]` with `kind = "databricks"` is now a
+  configuration error (`ODS-E0102`, exit 4) instead of being ignored: fix or remove
+  the key the message names. The settings are listed in
+  [docs/databricks.md](docs/databricks.md#settings) (#297).
+
 ### Added
 
 - The crates are published to crates.io with each release, at the release's version

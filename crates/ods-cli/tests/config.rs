@@ -104,6 +104,56 @@ fn invalid_config_exits_4_in_the_active_output_mode() {
 }
 
 #[test]
+fn an_unknown_databricks_setting_is_a_config_error() {
+    let dir = Dir::new();
+    // A misspelt `host`: refused when configuration loads, before any command runs.
+    dir.write(
+        "ods.toml",
+        "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhots = \"https://dbc-1.cloud.databricks.com\"\n",
+    );
+    let out = ods(&dir, dir.path(), &["version"], &[]);
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error[ODS-E0102]")
+            && stderr.contains("providers.uc.settings.hots")
+            && stderr.contains("unknown databricks setting")
+            && stderr.contains("host"),
+        "{stderr}"
+    );
+    let out = ods(&dir, dir.path(), &["--json", "version"], &[]);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON document");
+    assert_eq!(value["diagnostics"][0]["code"], "ODS-E0102");
+
+    // Every documented setting loads, inline or as a table, secrets included.
+    dir.write(
+        "ods.toml",
+        "[providers.uc]\nkind = \"databricks\"\n\
+         settings = { host = \"https://dbc-1.cloud.databricks.com\", workspace_id = 42, auth = \"m2m\", \
+         client_id = \"app\", client_secret = { secret = \"env:S\" }, scopes = [\"sql\"] }\n\
+         [providers.pat]\nkind = \"databricks\"\n[providers.pat.settings]\nauth = \"pat\"\n\
+         token = { secret = \"env:T\" }\n",
+    );
+    let out = ods(&dir, dir.path(), &["version"], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Another kind's settings aren't Databricks's to check.
+    dir.write(
+        "ods.toml",
+        "[providers.pg]\nkind = \"postgres\"\n[providers.pg.settings]\nanything = \"x\"\n",
+    );
+    assert_eq!(
+        ods(&dir, dir.path(), &["version"], &[]).status.code(),
+        Some(0)
+    );
+}
+
+#[test]
 fn warehouses_that_extend_each_other_are_a_config_error() {
     let dir = Dir::new();
     // `databricks` is built on `spark` (its plugin says so); `spark` back on it is a cycle.

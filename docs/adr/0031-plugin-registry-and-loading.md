@@ -148,6 +148,12 @@ what ODS can know about that warehouse.
 `SecretResolver` and resolves references only when a token is needed (ADR-0032); the
 rule below that a plugin is never handed a resolved secret stands.
 
+*Amended 2026-11-04 (#297):* a plugin may list the keys a `[providers.<name>]` of its
+kind may set under `settings` (`settings`, each with what it is for). With a list,
+configuration that sets any other key is refused when it loads (`ODS-E0102`), as
+ADR-0005 has providers validate their own settings; without one, nothing is checked.
+Databricks lists its own (`ods_provider_databricks::CONFIG_SETTINGS`).
+
 ```rust
 pub trait WarehousePlugin: Send + Sync {
     // §3: origin, warehouse, provides, changes, privileges.

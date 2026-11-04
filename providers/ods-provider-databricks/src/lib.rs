@@ -52,3 +52,44 @@ pub use unity_catalog::UnityCatalog;
 
 /// The `kind` Databricks providers are registered under in configuration.
 pub const KIND: &str = "databricks";
+
+/// The settings a `[providers.<name>]` with `kind = "databricks"` may have, each with
+/// what it is for (ADR-0021). Any other key is refused when configuration is loaded.
+/// `profile`, `cli_path` and `audience` are ADR-0021's later methods: known, and
+/// refused with "isn't supported yet" when signing in.
+pub const CONFIG_SETTINGS: [(&str, &str); 10] = [
+    (
+        "audience",
+        "the token audience for `auth = \"federated\"` (not supported yet)",
+    ),
+    ("auth", "how ODS signs in: `m2m` or `pat`"),
+    (
+        "cli_path",
+        "the `databricks` CLI for `auth = \"cli\"` (not supported yet)",
+    ),
+    (
+        "client_id",
+        "the service principal's application id (`auth = \"m2m\"`)",
+    ),
+    (
+        "client_secret",
+        "a secret reference to its OAuth secret (`auth = \"m2m\"`)",
+    ),
+    ("host", "the workspace URL; `DATABRICKS_HOST` comes first"),
+    (
+        "profile",
+        "a Databricks CLI profile for `auth = \"cli\"` (not supported yet)",
+    ),
+    (
+        "scopes",
+        "the OAuth scopes to ask for, narrowest first (`auth = \"m2m\"`)",
+    ),
+    (
+        "token",
+        "a secret reference to a personal access token (`auth = \"pat\"`)",
+    ),
+    (
+        "workspace_id",
+        "the workspace's numeric id, for Catalog Explorer links",
+    ),
+];

@@ -154,6 +154,14 @@ pub trait WarehousePlugin: Send + Sync {
         None
     }
 
+    /// The keys a `[providers.<name>]` of this kind may set under `settings`, each with
+    /// what it is for. Configuration with any other key is refused when it is loaded
+    /// (`ODS-E0102`), so a misspelt setting isn't silently ignored. `None`, the default,
+    /// checks nothing.
+    fn settings(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        None
+    }
+
     /// Its engine's own error patterns (ADR-0025): consulted before dbt's, which adds
     /// its steps to what this recognises. Patterns several warehouses share stay in
     /// dbt's catalogue.
@@ -657,13 +665,16 @@ impl Plugins {
 }
 
 /// Refuses configuration whose `[warehouses.<kind>] extends` make a cycle, with the
-/// installed plugins' own parents (ADR-0031 §3b): a configuration error (exit 4).
+/// installed plugins' own parents (ADR-0031 §3b), or whose warehouse providers set a
+/// key their plugin doesn't know ([`WarehousePlugin::settings`]): a configuration
+/// error (exit 4).
 ///
 /// # Errors
-/// The cycle, at the first `extends` on it.
+/// The first unknown setting, or the cycle at the first `extends` on it.
 pub(crate) fn validate_warehouses(
     config: &ods_config::Loaded,
 ) -> Result<(), ods_config::ConfigError> {
+    installed().validate_settings(config)?;
     let warehouses = &config.config.warehouses;
     let Some(cycle) = installed().cycle(warehouses) else {
         return Ok(());
@@ -682,6 +693,43 @@ pub(crate) fn validate_warehouses(
         origin: Box::new(origin),
         message: format!("the warehouses it extends make a cycle: {cycle}"),
     })
+}
+
+impl Plugins {
+    /// Refuses a key under `[providers.<name>].settings` that the plugin of the
+    /// provider's `kind` doesn't list, when it lists its settings.
+    fn validate_settings(
+        &self,
+        config: &ods_config::Loaded,
+    ) -> Result<(), ods_config::ConfigError> {
+        for (key, setting) in config.effective_settings() {
+            let [providers, name, settings, first, ..] = key.as_slice() else {
+                continue;
+            };
+            if providers != "providers" || settings != "settings" {
+                continue;
+            }
+            let Some(kind) = config.config.providers.get(name).map(|p| p.kind.as_str()) else {
+                continue;
+            };
+            let Some(known) = self.warehouses.get(kind).and_then(|(p, _)| p.settings()) else {
+                continue;
+            };
+            if known.iter().any(|(k, _)| k == first) {
+                continue;
+            }
+            let names: Vec<&str> = known.iter().map(|(k, _)| *k).collect();
+            return Err(ods_config::ConfigError::Schema {
+                key: format!("providers.{name}.settings.{first}"),
+                origin: Box::new(setting.source.clone()),
+                message: format!(
+                    "unknown {kind} setting; expected one of {}",
+                    names.join(", ")
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Refuses a plugin whose dialect the SQL parser doesn't know.
