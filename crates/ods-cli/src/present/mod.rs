@@ -4,6 +4,7 @@
 //! [`ViewNode`] tree for the human backends, or wraps it in the versioned JSON envelope.
 
 pub mod backend;
+pub mod live;
 pub mod view;
 
 use std::io::{self, Write};
@@ -11,7 +12,9 @@ use std::io::{self, Write};
 use ods_core::SchemaVersion;
 use serde::Serialize;
 
-pub use view::{Level, Line, Link, Span, Tone, TreeItem, ViewNode, engine_line};
+pub use view::{
+    DiagnosticView, Level, Line, Link, Span, Tone, TreeItem, ViewNode, engine_line, plain_text,
+};
 
 use crate::exit::CliError;
 use crate::output::{Mode, OutputSettings};
@@ -152,6 +155,18 @@ pub fn emit_with_error<T: Present>(
         hint: error.hint.clone(),
     });
     write_envelope(out, T::COMMAND, Some(result), &diagnostics)
+}
+
+/// A command's failure as a view: a diagnostic with its code and hint (ADR-0003 §9), or
+/// for plain output the same `error[…]: …` text the error displays as.
+pub fn error_view(error: &CliError) -> ViewNode {
+    let mut diagnostic = DiagnosticView::new(Level::Error, error.message.clone());
+    diagnostic.code = Some(error.code.to_owned());
+    diagnostic.help = error.hint.iter().cloned().collect();
+    ViewNode::Diagnostic {
+        diagnostic: Box::new(diagnostic),
+        plain: Box::new(ViewNode::Paragraph(vec![Span::plain(error.to_string())])),
+    }
 }
 
 /// Writes a failed command's JSON envelope: `result` is `null` and the error is the

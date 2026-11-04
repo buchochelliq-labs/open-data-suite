@@ -30,6 +30,7 @@ EXACT = {
     "ods-web": EDGE,
     "ods-mcp": EDGE,
     "ods-cli": BINARY,
+    "ods-provider-git": PROVIDER,  # ADR-0033: approved local source retrieval.
 }
 MODULES = {"ods-lineage", "ods-state", "ods-erd", "ods-health", "ods-usage", "ods-ci", "ods-lsp", "ods-agent", "ods-mesh", "ods-synthetic"}
 PROVIDER_PREFIXES = ("ods-provider-", "ods-store-")

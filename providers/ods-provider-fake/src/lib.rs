@@ -7,6 +7,7 @@
 
 mod changes;
 mod clock;
+mod credentials;
 mod error_catalogue;
 mod executor;
 mod health_check;
@@ -14,11 +15,13 @@ mod lock;
 mod observed_lineage;
 mod privileges;
 mod relation_link;
+mod secrets;
 mod sql_lineage;
 mod state_store;
 
 pub use changes::{FakeChangeProvider, FakeRelationProbe};
 pub use clock::FakeClock;
+pub use credentials::FakeCredentials;
 pub use error_catalogue::FakeErrorCatalogue;
 pub use executor::FakeExecutor;
 pub use health_check::{FakeHealthCheck, Misbehaviour};
@@ -26,8 +29,15 @@ pub use lock::{FakeLockFactory, FakeLockProvider};
 pub use observed_lineage::FakeObservedLineageSource;
 pub use privileges::FakeRelationPrivileges;
 pub use relation_link::FakeRelationLinker;
+pub use secrets::{FakeSecrets, SecretFailure};
 pub use sql_lineage::FakeSqlLineageAnalyzer;
 pub use state_store::FakeStateStore;
 
 /// The `kind` fakes are registered under in configuration.
 pub const KIND: &str = "fake";
+
+mod producing_code;
+pub use producing_code::FakeProducingCodeSource;
+
+mod code_reader;
+pub use code_reader::FakeCodeReader;

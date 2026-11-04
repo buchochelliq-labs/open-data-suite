@@ -9,8 +9,8 @@ on:
     paths:
       - "docs/**"
       - "overrides/**"
-      - "mkdocs.yml"
-      - "scripts/mkdocs_hooks.py"
+      - "zensical.toml"
+      - "scripts/ods_markdown.py"
       - "requirements-docs.txt"
       - ".github/workflows/docs.yml"
       - "fixtures/dbt/**"
@@ -33,10 +33,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-docs.txt
+      - name: Check the site's Markdown extension
+        run: python scripts/ods_markdown.py
+      # `python -m` puts the repository root on the import path, for that extension.
       - name: Build the site
-        env:
-          NO_MKDOCS_2_WARNING: "1"
-        run: mkdocs build --strict
+        run: python -m zensical build --strict --clean
       # The roadmap was also published at /roadmap/ until it became one page,
       # docs/ROADMAP.md. Keep the old URL working with a redirect page. It is written
       # here rather than in docs/ (or by a redirect plugin) because roadmap/ and

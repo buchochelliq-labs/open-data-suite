@@ -32,19 +32,19 @@ against snapshot 3 · dry run, nothing built
 TO BUILD
 6
 TO REUSE
-7
+8
 RELATIONS CHECKED
 not checked
-0 of 7 reused relations · planned offline · ods state build --dry-run checks them
+0 of 8 reused relations · planned offline · ods state build --dry-run checks them
 ods state build
 plans again, then builds only what's marked Build, and records the run
 Copy
 All
-13
+14
 Build
 6
 Reuse
-7
+8
 Node	Type	Action	Why
 orders	model	BUILD	code changed since <run>: sql
 customer_order_rank	model	BUILD	upstream code changed: orders will be rebuilt
@@ -59,6 +59,7 @@ stg_customers	model	REUSE	code and inputs unchanged since <run>
 stg_orders	model	REUSE	code and inputs unchanged since <run>
 stg_payments	model	REUSE	code and inputs unchanged since <run>
 order_events	model	REUSE	code and inputs unchanged since <run>
+payment_totals	model	REUSE	code and inputs unchanged since <run>
 WHY IT BUILDS
 customers
 Explanation

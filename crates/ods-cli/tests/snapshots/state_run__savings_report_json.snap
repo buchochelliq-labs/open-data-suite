@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/state_run.rs
+assertion_line: 4918
 expression: "serde_json::to_string_pretty(&stable).unwrap()"
 ---
 {
@@ -13,11 +14,11 @@ expression: "serde_json::to_string_pretty(&stable).unwrap()"
       "run_id": "<run>",
       "finished_at": "<time>",
       "outcome": "succeeded",
-      "reused": 9,
+      "reused": 10,
       "built": 4,
-      "timed": 9,
+      "timed": 10,
       "untimed": 0,
-      "avoided_ms": 2250,
+      "avoided_ms": 2500,
       "timed_by": [
         "<run>"
       ]
@@ -26,11 +27,11 @@ expression: "serde_json::to_string_pretty(&stable).unwrap()"
       "run_id": "<run>",
       "finished_at": "<time>",
       "outcome": "nothing_to_build",
-      "reused": 13,
+      "reused": 14,
       "built": 0,
-      "timed": 13,
+      "timed": 14,
       "untimed": 0,
-      "avoided_ms": 3250,
+      "avoided_ms": 3500,
       "timed_by": [
         "<run>"
       ]
@@ -40,7 +41,7 @@ expression: "serde_json::to_string_pretty(&stable).unwrap()"
       "finished_at": "<time>",
       "outcome": "succeeded",
       "reused": 0,
-      "built": 13,
+      "built": 14,
       "timed": 0,
       "untimed": 0,
       "avoided_ms": 0,
@@ -48,11 +49,11 @@ expression: "serde_json::to_string_pretty(&stable).unwrap()"
     }
   ],
   "totals": {
-    "reused": 22,
-    "built": 17,
-    "timed": 22,
+    "reused": 24,
+    "built": 18,
+    "timed": 24,
     "untimed": 0,
-    "avoided_ms": 5500,
+    "avoided_ms": 6000,
     "timed_by": "<runs>"
   }
 }

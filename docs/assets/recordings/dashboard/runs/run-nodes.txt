@@ -42,7 +42,7 @@ from its run journal
 BUILT
 2
 KEPT EARLIER BUILD
-9
+10
 not in this run: reused or not selected
 WALL CLOCK
 <took>
@@ -131,6 +131,9 @@ model
 orders
 model
 	kept	not in this run: kept the build of <run>
+payment_totals
+model
+	kept	not in this run: kept the build of <run>
 customer_order_rank
 model
 	kept	not in this run: kept the build of <run>
@@ -168,7 +171,7 @@ reads customers, which was rebuilt
 Earlier runs on dev
 <run>
 succeeded
-13 built, 0 kept, <took> · <clock>
+14 built, 0 kept, <took> · <clock>
 Copy as JSON
 Download log
 PLANNED

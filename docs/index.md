@@ -95,9 +95,9 @@ Open source (Apache-2.0) · written in Rust · no account, no telemetry · pre-a
 ## See it run
 
 After an edit to one staging model, `ods state build` builds the 8 nodes that depend on
-it, reuses the other 5, and says why each one ran:
+it, reuses the other 6, and says why each one ran:
 
-![ods state build after an edit to stg_orders: 8 nodes build, 5 are reused, with each node's time, rows and reason](assets/recordings/state-build/state-build.gif)
+![ods state build after an edit to stg_orders: 8 nodes build, 6 are reused, with each node's time, rows and reason](assets/recordings/state-build/state-build.gif)
 
 ## Try it in five minutes
 

@@ -46,7 +46,7 @@ Remove
 Simulate
 Add another column
 Results
-6 must run · 2 known to break · 1 unknown · 0 skipped · 7 not downstream
+6 must run · 2 known to break · 1 unknown · 0 skipped · 8 not downstream
 JSON
 MUST RUN
 6 nodes
@@ -77,7 +77,7 @@ Reads customer_segments, whose lineage is unknown, so it is assumed affected.
 SKIPPED
 0 nodes, with reason
 No reader of a changed model can be skipped: each one uses what changed.
-7 other nodes are upstream of the change or are unrelated to it, so they can't be reached.
+8 other nodes are upstream of the change or are unrelated to it, so they can't be reached.
 Column trail
 orders.amount → customer_order_rank.amount direct
 orders.amount → customer_order_rank.running_amount transformation

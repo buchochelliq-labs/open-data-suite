@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/state_run.rs
+assertion_line: 3814
 expression: redact(&plain)
 ---
 Run
@@ -8,8 +9,8 @@ run: <run>
 scope: jaffle_ods/default
 started: <time>
 outcome: failed
-totals: <took> · 9 built · 1 failed · 3 skipped
-rows: at least 6 (9 nodes didn't report rows)
+totals: <took> · 10 built · 1 failed · 3 skipped
+rows: at least 6 (10 nodes didn't report rows)
 stats: reported as it ran
 journal: <project>/.ods/state.db.runs/<run>.jsonl
 
@@ -22,6 +23,7 @@ stg_orders	built	250ms	—	Thread-1 (worker)
 stg_payments	built	250ms	—	Thread-1 (worker)	
 order_events	built	250ms	—	Thread-1 (worker)	
 orders	built	250ms	—	Thread-1 (worker)	
+payment_totals	built	250ms	—	Thread-1 (worker)	
 customer_order_rank	built	250ms	—	Thread-1 (worker)	
 customers	failed	250ms	—	Thread-1 (worker)	Conversion Error: Could not convert string [value removed] to INT32
 customer_segments	skipped	—	—	Thread-1 (worker)	

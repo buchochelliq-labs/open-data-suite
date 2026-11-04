@@ -42,7 +42,7 @@ fn reads_the_fixture_manifest_and_catalog() {
         .iter()
         .filter(|n| n.resource_type == ResourceType::Seed)
         .count();
-    assert_eq!((models, seeds), (10, 3));
+    assert_eq!((models, seeds), (11, 3));
     let python = manifest
         .nodes
         .iter()
@@ -189,7 +189,7 @@ fn data_tests_read_the_same_from_every_format() {
             .unwrap()
             .manifest,
     );
-    assert_eq!(v1.len(), 12);
+    assert_eq!(v1.len(), 14);
     assert_eq!(v1, v2_json);
     assert_eq!(v1, v2_parquet);
     let relationship = v1

@@ -6,7 +6,7 @@ members = ["crates/*", "providers/*"]
 exclude = ["fuzz", "examples"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 # Raised from 1.85 by ADR-0003: rs-rich requires 1.90.
 rust-version = "1.90"
@@ -27,6 +27,7 @@ ods-provider-databricks = { path = "providers/ods-provider-databricks" }
 ods-provider-dbt = { path = "providers/ods-provider-dbt" }
 ods-provider-duckdb = { path = "providers/ods-provider-duckdb" }
 ods-provider-fake = { path = "providers/ods-provider-fake" }
+ods-provider-git = { path = "providers/ods-provider-git" }
 ods-provider-process = { path = "providers/ods-provider-process" }
 ods-provider-sqlparser = { path = "providers/ods-provider-sqlparser" }
 ods-store-sqlite = { path = "providers/ods-store-sqlite" }
@@ -35,11 +36,15 @@ ods-health = { path = "crates/ods-health" }
 
 # Shared third-party crates (see ADR-0002)
 anyhow = "1"
+# Base64, e.g. to check an HTTP Basic header in tests.
+base64 = "0.22"
 # HTTP server for the hostable explorer; confined to ods-web (ADR-0009).
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+# Windows paths without the verbatim `\\?\` prefix canonicalize adds, which Git rejects.
+dunce = "1"
 # Reads CSV exports of catalog lineage tables (Unity Catalog, #74).
 csv = "1"
 # Streams for the dashboard's Server-Sent Events (#322). MIT/Apache-2.0; axum already
@@ -78,6 +83,12 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 # Data parallelism for CPU-bound analysis (ADR-0008).
 rayon = "1"
+# HTTPS to warehouse APIs (Databricks' token endpoint, #297, ADR-0021). rustls with
+# ring and the OS's root certificates: no OpenSSL, no aws-lc (its licence includes
+# OpenSSL's) and no webpki-roots (CDLA-Permissive), which deny.toml doesn't allow.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+# Resolved secrets: zeroized on drop, never Debug-printed (#126, ADR-0032).
+secrecy = "0.10"
 supports-hyperlinks = "3"
 url = "2"
 # Terminal rendering; only ods-cli may depend on these (ADR-0003, enforced by

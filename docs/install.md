@@ -1,7 +1,7 @@
 # Install
 
 !!! note "Versions"
-    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.0.2` as the
+    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.1.2` as the
     example version; the [releases](https://github.com/buchochelliq-labs/open-data-suite/releases)
     list the latest.
 
@@ -83,7 +83,7 @@ the licences of the open-source software built into `ods`.
 === "Linux"
 
     ```sh
-    version=0.0.2 target=x86_64-unknown-linux-musl
+    version=0.1.2 target=x86_64-unknown-linux-musl
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     sha256sum --check --ignore-missing SHA256SUMS
@@ -94,7 +94,7 @@ the licences of the open-source software built into `ods`.
 === "macOS"
 
     ```sh
-    version=0.0.2 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
+    version=0.1.2 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     shasum -a 256 --check --ignore-missing SHA256SUMS
@@ -105,7 +105,7 @@ the licences of the open-source software built into `ods`.
 === "Windows (PowerShell)"
 
     ```powershell
-    $version = "0.0.2"; $name = "ods-v$version-x86_64-pc-windows-msvc"
+    $version = "0.1.2"; $name = "ods-v$version-x86_64-pc-windows-msvc"
     $base = "https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version"
     Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
@@ -125,7 +125,7 @@ a signed statement that the release workflow built it from the tagged commit. Wi
 [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify ods-v0.0.2-x86_64-unknown-linux-musl.tar.gz \
+gh attestation verify ods-v0.1.2-x86_64-unknown-linux-musl.tar.gz \
   --repo buchochelliq-labs/open-data-suite
 ```
 
@@ -141,9 +141,9 @@ cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suit
 
 `ods version` prints the ODS version and the versions of the interfaces other tools rely
 on (the plugin SDK and the JSON output). Before 1.0, a minor release may include breaking
-changes. **While versions are 0.0.x, every release may**, even though 0.0.1 → 0.0.2
-looks like a patch: it may change interfaces or migrate the state store, so read the
-changelog before upgrading. Each break is listed under **Breaking** in the
+changes and migrate the state store, so read the changelog before upgrading; a patch
+release (0.1.1 → 0.1.2) never does. In the 0.0.x series every release could, even
+though 0.0.1 → 0.0.2 looks like a patch. Each break is listed under **Breaking** in the
 [changelog](https://github.com/buchochelliq-labs/open-data-suite/blob/main/CHANGELOG.md),
 with what to do. The release notes of each version are its changelog section.
 [ADR-0019](adr/0019-release-and-versioning.md) has the full policy.
@@ -164,8 +164,10 @@ version (ADR-0019). The tag starts `.github/workflows/release.yml`, which:
 5. publishes the wheels to PyPI;
 6. packs the Chocolatey package for the release, installs it on Windows, and pushes it
    to the Chocolatey community repository (`.github/workflows/chocolatey.yml`).
-7. publishes `ods-erd`, the one crate on crates.io (ADR-0032), at the release's version,
-   unless crates.io already has it.
+7. opens a pull request on the Homebrew tap that puts the release's `ods.rb` in
+   `Formula/ods.rb` (not for prereleases).
+8. publishes every crate to crates.io at the release's version (ADR-0035), in dependency
+   order, skipping any crate whose version crates.io already has.
 
 Run the workflow by hand (**Actions → Release → Run workflow**) for a dry run: it builds
 and tests everything, uploads the result as workflow artifacts, and publishes nothing.
@@ -178,21 +180,26 @@ One-time setup, by a repository and PyPI admin:
   `open-data-suite`, workflow `release.yml`, environment `pypi`. No API token is stored.
 - **The `pypi` environment.** Create it under **Settings → Environments**, restrict it
   to `v*` tags, and add required reviewers so each upload waits for approval.
-- **crates.io.** `ods-erd` is published from the `crates-io` environment (create it
+- **crates.io.** The crates are published from the `crates-io` environment (create it
   like `pypi`, restricted to `v*` tags). Trusted Publishing works only for a crate that
-  exists, so the first version needs a token: a crates.io owner creates an API token
-  scoped to publishing `ods-erd`, and adds it as the `CARGO_REGISTRY_TOKEN` secret of
-  the `crates-io` environment. After that first release, add the crate's
-  [trusted publisher](https://crates.io/docs/trusted-publishing) on crates.io (owner
-  `buchochelliq-labs`, repository `open-data-suite`, workflow `release.yml`,
-  environment `crates-io`) and delete the secret: later releases use short-lived
-  tokens.
+  exists, so a crate's first version needs a token: a crates.io owner creates an API
+  token with the `publish-new` and `publish-update` scopes, and adds it as the
+  `CARGO_REGISTRY_TOKEN` secret of the `crates-io` environment. After the release, add
+  each crate's [trusted publisher](https://crates.io/docs/trusted-publishing) on
+  crates.io (owner `buchochelliq-labs`, repository `open-data-suite`, workflow
+  `release.yml`, environment `crates-io`) and delete the secret: later releases use
+  short-lived tokens. A release that adds a new crate needs the secret again.
 - **Tag protection.** Add a ruleset for `v*` tags so only maintainers can create them.
 - **Homebrew tap.** The public repository `buchochelliq-labs/homebrew-tap` holds the
-  formula. After each release, copy the release's `ods.rb` asset to `Formula/ods.rb`
-  there and commit it.
-  Automating this needs a token with write access to the tap, stored as a secret; it
-  isn't set up yet.
+  formula. The release opens a pull request there with the new `Formula/ods.rb`;
+  merging it publishes the release to `brew upgrade`. For that, create a fine-grained
+  personal access token with access to `buchochelliq-labs/homebrew-tap` only and the
+  **Contents** and **Pull requests** permissions set to read and write. Then create
+  the `homebrew` environment, restricted to `v*` tags, with the token as its
+  `HOMEBREW_TAP_TOKEN` secret. Without the secret the release's `homebrew-tap` job
+  only prints a notice, and you copy the release's `ods.rb` asset to `Formula/ods.rb`
+  in the tap by hand. When the token expires, the job fails: renew it and re-run the
+  job.
 - **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
   secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
   required reviewers, like `pypi`. The release pushes from its `v*` tag. To push an

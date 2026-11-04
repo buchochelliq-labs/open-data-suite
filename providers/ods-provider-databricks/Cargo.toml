@@ -11,19 +11,24 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 csv.workspace = true
+ods-config.workspace = true
 ods-core.workspace = true
 ods-sdk.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 # The fake probe DeltaVersions is tested over; test-only, so no provider depends on
 # another at run time (ADR-0001).
 ods-provider-fake.workspace = true
 ods-sdk = { workspace = true, features = ["conformance"] }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+# A token endpoint on loopback, for the HTTP client's tests (no network).
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util", "sync"] }
 
 [lints]
 workspace = true

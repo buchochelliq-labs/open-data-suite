@@ -14,33 +14,74 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 
-- `ods-erd`, the ERD model behind `ods erd`, is published to crates.io with each
-  release, at the release's version (ADR-0032), so other Rust tools can read ODS's ERD
-  output with the same types.
-- The docs site has a *Meet the gang* page (Project): Memo, the purple elephant who is
-  ODS's mascot, her daughter Tui, and Tui's Nana and Grandpa. Tui also keeps the site's
-  404 page.
+- The crates are published to crates.io with each release, at the release's version
+  ([ADR-0035](docs/adr/0035-publish-crates-to-crates-io.md)): `ods-cli` (`cargo install
+  ods-cli` installs `ods`), the SDK, the modules and the providers, so Rust tools can
+  use ODS's types, such as `ods-erd`'s ERD model, and plugin authors can build against
+  `ods-sdk`.
+- The Databricks provider can sign in to the workspace itself (#297,
+  [ADR-0021](docs/adr/0021-databricks-authentication.md), now accepted): with a
+  service principal's OAuth secret (`auth = "m2m"`, narrowest scope first) or a static
+  token (`auth = "pat"`). Secrets are references, tokens stay in memory, and only
+  HTTPS hosts are used. No command signs in yet; `ods doctor` will show it next.
+- SDK 0.11: the `credentials` contract 0.1 (how a provider signs in, never its token),
+  its conformance suite (`ods_sdk::conformance::credentials`) and `FakeCredentials`.
+- Secret references are resolved by secret providers, one per scheme (#126,
+  [ADR-0032](docs/adr/0032-secret-providers.md)). `env:` is built in. A custom `ods`
+  adds others, such as an OS keychain or a cloud secret store, with
+  `Ods::secret_provider`. A value is resolved only where its credential is used, kept
+  in memory for that use alone, and never written to configuration, state, logs or
+  output; a missing or empty secret is an error, never an empty credential.
+  Nothing reads a credential through them yet: Databricks authentication (#297) is
+  the first.
+- `ods version`, `ods plugin list` and `ods doctor` (`capabilities.plugins`) list
+  secret providers, `env` among them.
+- SDK 0.10: the `secret_provider` contract 0.1, its conformance suite
+  (`ods_sdk::conformance::secrets`) and `FakeSecrets` in `ods-provider-fake`.
+- Provider-neutral producing-code references, scoped declared mappings and a dbt
+  source metadata adapter (part of #462,
+  [ADR-0033](docs/adr/0033-producing-code-references.md)). Metadata lookup only; process-plugin
+  transport is not yet implemented. Local retrieval is available through the separate
+  reader contract.
+- Opt-in immutable code retrieval through a provider-neutral reader and approved
+  local Git repositories or credential-free HTTPS fetches, with run/revision
+  checks, byte limits and deadlines (part of #462,
+  [ADR-0034](docs/adr/0034-local-immutable-code-retrieval.md)). No push API or
+  worktree source reads; private authentication requires read-only credentials.
+
+## [0.1.2] - 2026-11-03
+
+The first M2 release: failures are drawn as diagnostics and run progress is drawn live
+on a terminal, the docs site moves to Zensical, and releases update the Homebrew tap.
+Plain and JSON output are unchanged, so nothing here breaks a script.
 
 ### Changed
 
-- `ods health trust` highlights each probe's SQL on a terminal: keywords, strings,
-  comments and dbt's Jinja blocks in the standard terminal colours. Plain and JSON
-  output are unchanged.
-- The docs site has a new look and layout: top-level tabs (Get started, Guides,
-  Reference, Architecture, Contributing, Project) in place of one long sidebar, a slate
-  and teal theme with a logo, a new home page, and one dismissible pre-alpha banner.
+- The docs site is built with Zensical, the successor to Material for MkDocs, in place
+  of MkDocs and Material (`zensical.toml` replaces `mkdocs.yml`;
+  `python -m zensical serve` to preview). Its pages, links and look carry over, with
+  Zensical's header and search.
+- On a terminal, failures are drawn as diagnostics (#447): `error[code]: what failed`,
+  the file it is about (`--> models/….sql`), then `note:` and `help:` lines with the
+  same redacted facts as before. When several nodes fail, a summary by file comes
+  first. An error ODS reports itself is drawn the same way, its hint as `help:`.
+  Plain and JSON output, and what the MCP tools return, are unchanged.
+- On a terminal, `ods state build` (and `run`, `seed`, `snapshot`, `compile`) draws
+  its progress live (#446): each dbt command and its nodes in a tree redrawn in place,
+  dbt's lines printed above it, and a summary of the nodes (succeeded, failed, skipped)
+  when the run ends. Piped or redirected, and with `-q` or `-v`, progress is the plain
+  `ods ▸` lines it was. The report, JSON output, run events and journal are unchanged.
+- Releases open a pull request on the Homebrew tap with the new formula, so
+  `brew upgrade ods` gets each release once that is merged (maintainers set up a token:
+  see "For maintainers" in `docs/install.md`).
 
-### Fixed
-
-- The docs site's CLI reference showed a backslash before each `|` in table cells
-  (`ods state compile\|run`); it shows `ods state compile|run`, as on GitHub.
-
-## [0.1.0] - 2026-10-19
+## [0.1.1] - 2026-11-01
 
 The dashboard is complete: every screen in its design is built (#309), so this is the
-first 0.1 release (ADR-0019 §1a). Beside it, health checks become configurable and
-pluggable, and ODS takes plugins, built into a custom `ods` or run as programs of their
-own. **It changes SDK contracts and the health record's format:** see **Breaking**.
+first 0.1 release (ADR-0019 §1a). 0.1.0 was prepared but never released; 0.1.1 is that
+release, with security updates to its dependencies and a new look for the docs site.
+Beside the dashboard, health checks become configurable and pluggable, and ODS takes
+plugins, built into a custom `ods` or run as programs of their own. **It changes SDK contracts and the health record's format:** see **Breaking**.
 
 - **The rest of the dashboard:** Settings and About, the Semantic layer placeholder,
   the Run page's Threads tab with the critical path, saved table versions as freshness
@@ -288,6 +329,9 @@ own. **It changes SDK contracts and the health record's format:** see **Breaking
   Catalog. The "how" text names those checks and when they ran, `/api/home` and
   `/api/catalog` give the time as `health_recorded_at`, and a node the record doesn't
   cover is *unknown* for them, never healthy. A new record reloads the page.
+- The docs site has a *Meet the gang* page (Project): Memo, the purple elephant who is
+  ODS's mascot, her daughter Tui, and Tui's Nana and Grandpa. Tui also keeps the site's
+  404 page.
 
 ### Changed
 - The dashboard meets WCAG AA contrast on every screen, light and dark (#353). Three
@@ -312,11 +356,26 @@ own. **It changes SDK contracts and the health record's format:** see **Breaking
   each other. `/roadmap/` redirects to `/ROADMAP/`.
 - The README, the docs' Home and Install pages and the roadmap say v0.0.2 is released;
   the install commands use `0.0.2` as the example version.
+- `ods health trust` highlights each probe's SQL on a terminal: keywords, strings,
+  comments and dbt's Jinja blocks in the standard terminal colours. Plain and JSON
+  output are unchanged.
+- The docs site has a new look and layout: top-level tabs (Get started, Guides,
+  Reference, Architecture, Contributing, Project) in place of one long sidebar, a slate
+  and teal theme with a logo, a new home page, and one dismissible pre-alpha banner.
 
 ### Fixed
 - `ods serve` bound to loopback but behind a proxy (`--allow-host`) no longer shows
   local paths, configuration values or error text: requests may come from elsewhere,
   so every page treats it as beyond loopback (#351).
+- The docs site's CLI reference showed a backslash before each `|` in table cells
+  (`ods state compile\|run`); it shows `ods state compile|run`, as on GitHub.
+
+### Security
+
+- Dependencies with RustSec advisories published since 0.0.2 are updated: tokio 1.54.1
+  (RUSTSEC-2026-0386), zstd 0.14.3, zstd-safe 8.2.0 and zstd-sys 2.1.2
+  (RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403, RUSTSEC-2026-0410), and
+  pulldown-cmark 0.13.6 (RUSTSEC-2026-0414).
 
 ## [0.0.2] - 2026-10-06
 

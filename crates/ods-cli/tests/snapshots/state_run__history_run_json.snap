@@ -1,5 +1,6 @@
 ---
 source: crates/ods-cli/tests/state_run.rs
+assertion_line: 3795
 expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
 ---
 {
@@ -90,6 +91,16 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
       "tests": null
     },
     {
+      "node": "model.jaffle_ods.payment_totals",
+      "status": "success",
+      "duration_ms": 250,
+      "rows_affected": null,
+      "adapter": null,
+      "error": null,
+      "blocked_by": null,
+      "tests": null
+    },
+    {
       "node": "model.jaffle_ods.customer_order_rank",
       "status": "success",
       "duration_ms": 250,
@@ -149,12 +160,12 @@ expression: "redact(&serde_json::to_string_pretty(&stable).unwrap())"
   "totals": {
     "duration_ms": "<ms>",
     "by_status": {
-      "success": 9,
+      "success": 10,
       "error": 1,
       "skipped": 3
     },
     "rows_affected": 6,
-    "rows_unreported": 9,
+    "rows_unreported": 10,
     "rows_at_least": true
   }
 }

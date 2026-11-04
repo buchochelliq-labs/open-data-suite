@@ -29,7 +29,7 @@ To write one, use the `adr` skill (`.claude/skills/adr`) or copy
 | [0018](0018-state-store-migrations-and-recovery.md) | State store migrations, integrity and recovery | Accepted | #188 |
 | [0019](0019-release-and-versioning.md) | Release and versioning strategy | Accepted | #101, #212 |
 | [0020](0020-dbt-state-interop-and-favor-state.md) | dbt state interop: export a state that `--favor-state` can trust, and import dbt runs | Accepted | #296 |
-| [0021](0021-databricks-authentication.md) | Databricks authentication: U2M first, M2M for CI, tokens never persisted | Proposed | #297 |
+| [0021](0021-databricks-authentication.md) | Databricks authentication: U2M first, M2M for CI, tokens never persisted | Accepted | #297 |
 | [0022](0022-delta-table-versions-as-source-evidence.md) | Delta table versions as source change evidence, read through dbt | Accepted | #17, #16 |
 | [0023](0023-ods-doctor-diagnostics.md) | `ods doctor`: typed health checks, stable codes and exit semantics | Accepted | #181 |
 | [0024](0024-run-events-node-stats-and-run-journal.md) | Run events, per-node run stats and the run journal | Accepted | #322 |
@@ -40,6 +40,9 @@ To write one, use the `adr` skill (`.claude/skills/adr`) or copy
 | [0029](0029-build-timings-and-the-run-ledger.md) | Build timings and the run ledger: what reuse saved | Accepted | #210 |
 | [0030](0030-configurable-and-pluggable-health-checks.md) | Configurable and pluggable health checks: config, probes, scripts and plugins | Accepted | #392, #354, #117 |
 | [0031](0031-plugin-registry-and-loading.md) | Plugins: an in-process registry and out-of-process plugins | Accepted | #392, #387 |
-| [0032](0032-publish-ods-erd-to-crates-io.md) | Publish `ods-erd` to crates.io | Proposed | |
+| [0032](0032-secret-providers.md) | Secret providers: references resolved in memory, at the point of use | Accepted | #126 |
+| [0033](0033-producing-code-references.md) | Scoped producing-code references | Proposed | #462 |
+| [0034](0034-local-immutable-code-retrieval.md) | Read-only immutable producing-code retrieval | Proposed | #462 |
+| [0035](0035-publish-crates-to-crates-io.md) | Publish the crates to crates.io at the product version | Proposed | |
 
 ADR-0007 (the clean-room and licensing policy, #10) is planned and not written yet; until it is, the rule is `AGENTS.md` rule 8, and `deny.toml` checks dependency licences. Each ADR's status line notes what of its decision isn't built yet.

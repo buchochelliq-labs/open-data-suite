@@ -61,6 +61,13 @@ expression: "render(Mode::Json)"
         "name": "duckdb",
         "from": "ods-provider-duckdb [ods-version]",
         "builtin": true
+      },
+      {
+        "contract": "secret_provider",
+        "contract_version": "0.1",
+        "name": "env",
+        "from": "ods-sdk [ods-version]",
+        "builtin": true
       }
     ]
   },

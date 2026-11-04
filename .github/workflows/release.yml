@@ -4,16 +4,17 @@ name: Release
 #
 # - A `vX.Y.Z` tag on `main` builds, tests and publishes: a GitHub release whose notes are
 #   the version's CHANGELOG.md section, archives, wheels, SHA256SUMS, build provenance
-#   attestations and a rendered Homebrew formula; then the wheels go to PyPI and the
-#   Chocolatey package is pushed (chocolatey.yml).
+#   attestations and a rendered Homebrew formula; then the wheels go to PyPI, the
+#   Chocolatey package is pushed (chocolatey.yml), and the formula goes to the Homebrew
+#   tap as a pull request.
 # - Running it by hand (workflow_dispatch) is a dry run: everything is built, tested and
 #   uploaded as workflow artifacts, and nothing is published. The notes are the
 #   `[Unreleased]` section, or the workspace version's when that is empty.
 #
 # One compile per target produces both the wheel (maturin `bin` bindings) and the
 # archive, so pip, Homebrew, cargo-binstall and direct downloads ship the same binary.
-# Admin setup (PyPI trusted publisher, the `pypi` and `chocolatey` environments, the
-# Homebrew tap) is described in docs/install.md, "For maintainers".
+# Admin setup (PyPI trusted publisher, the `pypi`, `chocolatey` and `homebrew`
+# environments) is described in docs/install.md, "For maintainers".
 on:
   push:
     tags: ["v*"]
@@ -401,3 +402,51 @@ jobs:
       version: ${{ needs.plan.outputs.version }}
       publish: true
     secrets: inherit
+
+  homebrew-tap:
+    # Opens a pull request on buchochelliq-labs/homebrew-tap with the release's formula,
+    # using the HOMEBREW_TAP_TOKEN secret of the `homebrew` environment (docs/install.md,
+    # "For maintainers"). Without the secret it only says so: the release still stands,
+    # and the formula can be copied by hand. Prereleases leave the tap alone.
+    if: needs.plan.outputs.publish == 'true' && !contains(needs.plan.outputs.version, '-')
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    environment: homebrew
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAP: buchochelliq-labs/homebrew-tap
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - id: token
+        name: Check for the tap token
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::notice::No HOMEBREW_TAP_TOKEN in the homebrew environment, so the tap isn't updated. Copy the release's ods.rb to $TAP's Formula/ods.rb, or set the token up (docs/install.md, \"For maintainers\")."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          sparse-checkout: scripts/update-homebrew-tap.sh
+          sparse-checkout-cone-mode: false
+          path: ods
+      # The formula the release attested and published, not a fresh rendering.
+      - uses: actions/download-artifact@v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          name: release-bundle
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          repository: ${{ env.TAP }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Open the tap's pull request
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: ods/scripts/update-homebrew-tap.sh --tap tap --formula dist/ods.rb --version "$VERSION" --repo "$TAP"

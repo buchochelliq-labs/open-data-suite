@@ -368,7 +368,7 @@ fn without_a_state_store_home_says_how_to_record_a_first_run() {
     assert_eq!(home["state"], "no_store", "{home}");
     assert_eq!(home["scope"], "jaffle_ods/default");
     assert_eq!(home["empty"]["commands"][0]["command"], "ods state build");
-    assert_eq!(home["tiles"][0]["value"], 13, "{home}");
+    assert_eq!(home["tiles"][0]["value"], 14, "{home}");
     let (_, body) = get(&server, "api/shell");
     let shell: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(shell["project"], "jaffle_ods");
@@ -424,7 +424,7 @@ fn home_shows_the_runs_the_state_store_recorded_and_changes_nothing() {
     assert_eq!(home["state"], "recorded", "{home}");
     assert_eq!(home["runs"].as_array().unwrap().len(), 1, "{home}");
     assert_eq!(home["runs"][0]["snapshot"], 1);
-    assert_eq!(home["runs"][0]["built"], 13, "{home}");
+    assert_eq!(home["runs"][0]["built"], 14, "{home}");
     assert_eq!(home["runs"][0]["outcome"], "recorded");
     assert_eq!(home["plan"]["build"], 0, "nothing changed since: {home}");
     let opaque: Vec<&Value> = home["attention"]
@@ -440,7 +440,7 @@ fn home_shows_the_runs_the_state_store_recorded_and_changes_nothing() {
     assert_eq!(shell["snapshot"]["id"], 1, "{shell}");
     let (status, page) = get(&server, "");
     assert_eq!(status, 200);
-    assert!(page.contains("13 built"), "{page}");
+    assert!(page.contains("14 built"), "{page}");
     drop(server);
     assert_eq!(fs::read(&db).unwrap(), before, "the dashboard only reads");
 }
@@ -719,7 +719,7 @@ fn journal_rows(runs: &Value) -> &Value {
     assert_eq!(failed["outcome"], "failed", "{failed}");
     assert_eq!(failed["from_last_run"], true, "{failed}");
     assert_eq!(failed["kept_state"], 1, "{failed}");
-    assert_eq!(runs["runs"][1]["built"], 13);
+    assert_eq!(runs["runs"][1]["built"], 14);
     assert_eq!(runs["runs"][1]["outcome"], "succeeded");
     assert_eq!(runs["runs"][1]["outcome_from"], "journal");
     assert!(runs["runs"][1]["duration"].is_string(), "{runs}");

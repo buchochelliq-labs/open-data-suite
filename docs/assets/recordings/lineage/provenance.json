@@ -3,7 +3,7 @@
   "tape_fnv1a64": "ca74456a49842e9b",
   "recorder": "rs-rich-record 0.0.8",
   "rich": "rich (rs-rich-cli) 0.0.20",
-  "commit": "0b47aaff789b35c1c909f202601c70942f9aad73",
+  "commit": "074b933e9eae4b2c72922140901b76e116eba7ef",
   "screenshots": [
     "lineage-columns",
     "lineage-impact"

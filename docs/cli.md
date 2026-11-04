@@ -247,6 +247,12 @@ format = "json"
   - Malformed references are rejected too.
   - Error messages never repeat configured values, and the configuration never holds
     a secret's value.
+  - `env:VAR` reads the environment variable `VAR` (and so CI secrets). A custom build
+    can add other schemes, such as an OS keychain or a cloud secret store
+    ([plugins](plugins.md#a-custom-ods-in-process-plugins), ADR-0032). A reference is
+    resolved only where its credential is used, and its value is kept in memory for
+    that use alone: never written to configuration, state, logs or output. A variable
+    that is unset or empty counts as missing.
 - **Explain:** `ods config explain [KEY]` shows each effective value, where it came
   from and what it overrode (`--json` for machines):
 
@@ -269,10 +275,13 @@ What a plugin offers is found by asking it, never as it declares (ADR-0031 §3c)
 feature's factory is called with a connection that refuses every statement, so listing
 runs nothing and connects to nothing. Whether a feature it offers can be used is judged
 with this project's configuration, as a run would use it: one that can't says why (e.g.
-Databricks' links without a `host`). A health check and a warehouse may share a name;
-`--kind warehouse` or `--kind health_check` says which to show.
+Databricks' links without a `host`). Secret providers are listed by their scheme
+(`env` is built in; ADR-0032). Plugins of different kinds may share a name;
+`--kind warehouse`, `--kind health_check` or `--kind secret_provider` says which to
+show.
 
-`--json` gives each plugin's `name`, `kind` (`warehouse` or `health_check`), `from`,
+`--json` gives each plugin's `name`, `kind` (`warehouse`, `health_check` or
+`secret_provider`), `from`,
 `builtin`, `features` (`name`, `contract`, `contract_version`, `detail`, `unavailable`)
 and, for a warehouse, `parents`, `parents_from` (`plugin`, or `configuration` when
 `[warehouses.<kind>] extends` sets them) and `inherited`. The MCP tool
@@ -2052,8 +2061,8 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
   ods ▸ 1/5 dbt source freshness: how new each source's data is
   ods ▸ 2/5 dbt compile: the code as it is now, for the plan
   ods ▸ 3/5 dbt compile --inline: which target dbt builds in
-  ods ▸ 4/5 dbt show: are the tables of 5 nodes ODS would reuse still there?
-  ods ▸ plan: 8 to build, 5 to reuse
+  ods ▸ 4/5 dbt show: are the tables of 6 nodes ODS would reuse still there?
+  ods ▸ plan: 8 to build, 6 to reuse
   ods ▸   code changed: stg_orders
   ods ▸   upstream code changed: order_events, orders, customer_order_rank, customers, …
   ods ▸ 5/5 dbt build: 8 nodes and their tests
@@ -2065,6 +2074,15 @@ dbt command's step line counts the sources whose tests run with it, e.g. `dbt bu
 
   When nothing needs building, the last line is `ods ▸ nothing to build, so dbt
   doesn't run again`. `-q` turns them off.
+
+  **On a terminal**, `ods state build` (and `run`, `seed`, `snapshot`, `compile`) draws
+  the same steps live instead (#446): each dbt command in a tree redrawn in place, with
+  each node under the command that builds it as it queues, starts and finishes
+  (`stg_orders  built in 250ms, 99 rows`). dbt's lines and the plan's notes are printed
+  above the tree, and when the run ends the tree gives way to a summary of the nodes:
+  how many succeeded, failed and were skipped, and which failed. Piped, redirected,
+  with `-q`, or with `-v` and more (whose log lines would write through the drawing),
+  progress is the plain lines above. Either way the report on stdout is the same.
 - **dbt's output** (its log lines: `1 of 13 START …`, `OK created …`, the summary)
   streams to **stderr** as dbt writes it. For the build or test itself, ODS asks dbt
   for its structured log (`--log-format json --log-level debug`) to read each node's
@@ -2144,7 +2162,7 @@ kept while the build is reused (#210, [ADR-0029](adr/0029-build-timings-and-the-
 reuses builds says what that saved:
 
 ```text
-saved: ~2.3s of build time (estimate, serial: 9 of 13 nodes reused)
+saved: ~2.3s of build time (estimate, serial: 10 of 14 nodes reused)
 ```
 
 It is an estimate: the sum of each reused node's last measured build, so it overstates

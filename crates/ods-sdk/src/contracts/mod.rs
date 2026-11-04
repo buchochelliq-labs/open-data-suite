@@ -19,6 +19,7 @@
 //! | [`ErrorCatalogue`](error_catalogue::ErrorCatalogue) | #323 | defined (ADR-0025) |
 //! | [`RelationInspector`](relations::RelationInspector) | #230 | defined (ADR-0016) |
 //! | [`ChangeProvider`](changes::ChangeProvider) | #16, #17 | defined (ADR-0022) |
+//! | [`Credentials`](credentials::Credentials) | #297 | defined (ADR-0021) |
 //! | [`RelationProbe`](probe::RelationProbe) | #17, #392 | defined (ADR-0022, ADR-0030 §5) |
 //! | [`RelationPrivileges`](privileges::RelationPrivileges) | #392 | defined (ADR-0030 §4c) |
 //! | [`RelationLinker`](relation_link::RelationLinker) | #329 | defined (ADR-0006 §7) |
@@ -28,10 +29,13 @@
 //! | `EventSink` | #8 | planned |
 //! | `UsageProvider` | #55 | planned |
 //! | `SchemaProvider` (ERD) | #60 | planned |
-//! | `SecretProvider` | #126 | planned |
+//! | [`SecretProvider`](secrets::SecretProvider) | #126 | defined (ADR-0032) |
+//! | [`ProducingCodeSource`](producing_code::ProducingCodeSource) | #462 | defined (ADR-0033) |
+//! | [`CodeReader`](code_reader::CodeReader) | #462 | defined (ADR-0034) |
 //! | `LlmProvider` | #33 | planned |
 
 pub mod changes;
+pub mod credentials;
 pub mod error_catalogue;
 pub mod executor;
 pub mod health_check;
@@ -42,5 +46,10 @@ pub mod probe;
 pub mod relation_link;
 pub mod relations;
 pub mod run_events;
+pub mod secrets;
 pub mod sql_lineage;
 pub mod state_store;
+
+pub mod producing_code;
+
+pub mod code_reader;

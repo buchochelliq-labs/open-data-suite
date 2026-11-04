@@ -20,7 +20,7 @@ use rich::{Console, ConsoleOptions, HorizontalAlign, Justify};
 
 #[cfg(all(test, unix))]
 use super::super::view::Link;
-use super::super::view::{Level, Span, Tone, TreeItem, ViewNode, sanitize};
+use super::super::view::{DiagnosticView, Level, Span, Tone, TreeItem, ViewNode, sanitize};
 use crate::output::{ColorChoice, term_is_dumb};
 
 /// Theme key for a tone. Keys are namespaced so they never collide with rich's own styles.
@@ -281,6 +281,24 @@ fn renderable(node: &ViewNode) -> Shared {
                     .padding((0, 1, 0, 1)),
             )
         }
+        ViewNode::Diagnostic { diagnostic, .. } => Box::new(rich_diagnostic(diagnostic)),
+        ViewNode::Diagnostics(children) => {
+            let diagnostics: Vec<_> = children
+                .iter()
+                .filter_map(|child| match child {
+                    ViewNode::Diagnostic { diagnostic, .. } => Some(rich_diagnostic(diagnostic)),
+                    _ => None,
+                })
+                .collect();
+            let mut dashboard = rich_ext::dashboard::DiagnosticsDashboard::new();
+            dashboard.extend(diagnostics.iter().cloned());
+            let mut parts: Vec<Shared> = vec![Box::new(dashboard)];
+            for diagnostic in diagnostics {
+                parts.push(Box::new(Text::new("")));
+                parts.push(Box::new(diagnostic));
+            }
+            stacked(parts)
+        }
         ViewNode::Group(children) => {
             let mut parts: Vec<Shared> = Vec::new();
             for (i, child) in children.iter().enumerate() {
@@ -292,6 +310,34 @@ fn renderable(node: &ViewNode) -> Shared {
             stacked(parts)
         }
     }
+}
+
+/// A diagnostic as rs-rich-ext draws it (ADR-0003 §9). Every string is sanitized, as
+/// every span is, and passed as text: rs-rich-ext writes them as segments, never as
+/// markup.
+fn rich_diagnostic(view: &DiagnosticView) -> rich_ext::diagnostic::Diagnostic {
+    use rich_ext::diagnostic::{Diagnostic, Level as DiagnosticLevel, Location};
+    let level = match view.level {
+        Level::Error => DiagnosticLevel::Error,
+        Level::Warning => DiagnosticLevel::Warning,
+        Level::Info => DiagnosticLevel::Info,
+    };
+    let mut diagnostic = Diagnostic::new(sanitize(&view.message))
+        .level(level)
+        .view(rich_ext::event::EventView::Expanded);
+    if let Some(code) = &view.code {
+        diagnostic = diagnostic.code(sanitize(code));
+    }
+    if let Some((path, line)) = &view.location {
+        diagnostic = diagnostic.location(Location::new(sanitize(path), *line, None));
+    }
+    for note in &view.notes {
+        diagnostic = diagnostic.note(sanitize(note));
+    }
+    for help in &view.help {
+        diagnostic = diagnostic.help(sanitize(help));
+    }
+    diagnostic
 }
 
 /// How a level is labelled and coloured.
@@ -646,5 +692,53 @@ mod tests {
         ]));
         // "表" is two cells wide, the same as "ab", so neither key is padded.
         assert_eq!(out, "表  wide\nab  narrow\n");
+    }
+
+    fn failure(message: &str, path: &str) -> ViewNode {
+        let mut diagnostic = DiagnosticView::new(Level::Error, message);
+        diagnostic.code = Some("ODS-E0404".to_owned());
+        diagnostic.location = Some((path.to_owned(), Some(3)));
+        diagnostic.notes = vec!["a note".to_owned()];
+        diagnostic.help = vec!["what to try".to_owned()];
+        ViewNode::Diagnostic {
+            diagnostic: Box::new(diagnostic),
+            plain: Box::new(ViewNode::Paragraph(vec![Span::plain("plain text")])),
+        }
+    }
+
+    /// A diagnostic draws its header, where, notes and help (ADR-0003 §9).
+    #[test]
+    fn a_diagnostic_draws_its_code_location_notes_and_help() {
+        let out = RichRenderer::with_environment(ColorChoice::Never, Some(80), false)
+            .render(&failure("orders failed", "models/orders.sql"));
+        insta::assert_snapshot!(out, @r"
+        error[ODS-E0404]: orders failed
+          --> models/orders.sql:3
+        note: a note
+        help: what to try
+        ");
+    }
+
+    /// Several diagnostics are summed up first, then shown one after another.
+    #[test]
+    fn diagnostics_are_summed_up_before_they_are_shown() {
+        let out = RichRenderer::with_environment(ColorChoice::Never, Some(80), false).render(
+            &ViewNode::Diagnostics(vec![
+                failure("orders failed", "models/orders.sql"),
+                failure("customers failed", "models/customers.sql"),
+            ]),
+        );
+        assert!(out.starts_with("2 errors in 2 files"), "{out}");
+        assert!(out.contains("error[ODS-E0404]: orders failed"), "{out}");
+        assert!(out.contains("error[ODS-E0404]: customers failed"), "{out}");
+    }
+
+    /// Nothing in a diagnostic is read as markup or reaches the terminal as a control.
+    #[test]
+    fn a_diagnostic_cant_drive_the_terminal() {
+        let out = RichRenderer::with_environment(ColorChoice::Never, Some(80), false)
+            .render(&failure("[bold]x\x1b[31m\x07", "a\x1b]8;;b"));
+        assert!(!out.chars().any(|c| c.is_control() && c != '\n'), "{out:?}");
+        assert!(out.contains("[bold]x"), "{out}");
     }
 }

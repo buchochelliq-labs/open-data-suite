@@ -3,7 +3,7 @@ Column lineage
 
 artifacts  target
 dialect    duckdb
-models     9 analyzed, 1 opaque, 6 dependency waves, <n> ms
+models     10 analyzed, 1 opaque, 6 dependency waves, <n> ms
 
 customers
 ├── customer_id

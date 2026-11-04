@@ -40,3 +40,6 @@ pub use artifacts::{
 };
 pub use runs::{NodeResult, ResultDetails, RunResults, RunStatus, SourceFreshness};
 pub use target::strip_credentials;
+
+mod producing_code;
+pub use producing_code::DbtProducingCode;

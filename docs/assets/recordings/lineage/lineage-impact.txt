@@ -3,7 +3,7 @@ Downstream impact
 
 artifacts  target
 dialect    duckdb
-models     9 analyzed, 1 opaque, 6 dependency waves, <n> ms
+models     10 analyzed, 1 opaque, 6 dependency waves, <n> ms
 
 changes   1
 must run  6

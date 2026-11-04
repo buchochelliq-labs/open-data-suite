@@ -32,10 +32,10 @@ Run page
 Project health
 Last run: <run> · snapshot 3 · recorded
 NODES
-13
-10 models · 3 seeds
+14
+11 models · 3 seeds
 KEPT EARLIER BUILD
-11
+12
 not rebuilt by the last run
 BUILT LAST RUN
 2
@@ -47,13 +47,13 @@ Recent runs
 All runs
 Snapshot	Command	Built · kept earlier build	Outcome
 3 · <run>	—
-2 built · 11 kept
+2 built · 12 kept
 	recorded
 2 · <run>	—
-2 built · 11 kept
+2 built · 12 kept
 	recorded
 1 · <run>	—
-13 built
+14 built
 	recorded
 Built
 Kept earlier build
@@ -67,7 +67,7 @@ Python model: column lineage unknown
 The plan builds 6 nodes (ods state plan): 5 upstream code changed · 1 code changed
 Health
 Healthy
-7
+8
 Warning
 6
 Failing
@@ -81,14 +81,14 @@ Runs with failures
 last run: unfinished
 Coverage
 Models with tests
-5 / 10
+6 / 11
 5 without
 Models with descriptions
-1 / 10
-9 without
+1 / 11
+10 without
 Models with constraints
-2 / 10
-8 without
+2 / 11
+9 without
 Sources with freshness
 not measured
 Modules

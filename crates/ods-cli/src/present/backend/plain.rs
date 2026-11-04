@@ -59,7 +59,8 @@ fn write_node(out: &mut String, node: &ViewNode) {
             push_line(out, &text(title));
             write_node(out, body);
         }
-        ViewNode::Group(children) => {
+        ViewNode::Diagnostic { plain, .. } => write_node(out, plain),
+        ViewNode::Diagnostics(children) | ViewNode::Group(children) => {
             for (i, child) in children.iter().enumerate() {
                 if i > 0 {
                     out.push('\n');

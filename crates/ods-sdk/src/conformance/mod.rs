@@ -15,6 +15,7 @@
 //! A failing case panics with the case name.
 
 pub mod changes;
+pub mod credentials;
 pub mod error_catalogue;
 pub mod executor;
 pub mod health_check;
@@ -24,6 +25,7 @@ pub mod privileges;
 pub mod probe;
 pub mod relation_link;
 pub mod relations;
+pub mod secrets;
 pub mod sql_lineage;
 pub mod state_store;
 
@@ -35,3 +37,7 @@ pub struct Report {
     /// Cases that were skipped, with the reason.
     pub skipped: Vec<(&'static str, String)>,
 }
+
+pub mod producing_code;
+
+pub mod code_reader;

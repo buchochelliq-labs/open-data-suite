@@ -124,7 +124,7 @@ where
         Ok(loaded) => loaded,
         Err(err) => {
             let settings = globals.output.resolve(io.stdout_is_terminal);
-            return report(&err, name, &settings, io.out, io.err);
+            return report(&err, name, &settings, io.stderr_is_terminal, io.out, io.err);
         }
     };
     let settings = OutputSettings::resolve(&loaded.config.output, io.stdout_is_terminal);
@@ -139,7 +139,7 @@ where
                 format!("invalid ODS_LOG value `{value}`"),
             )
             .with_hint("use one of off, error, warn, info, debug, trace");
-            return report(&err, name, &settings, io.out, io.err);
+            return report(&err, name, &settings, io.stderr_is_terminal, io.out, io.err);
         }
     };
     let log_ansi = match settings.color {
@@ -157,6 +157,12 @@ where
     let progress = ProgressSettings {
         enabled: level >= LevelFilter::WARN,
         ansi: log_ansi,
+        live: live_progress(
+            settings.mode,
+            level,
+            io.stderr_is_terminal,
+            io.dumb_terminal,
+        ),
     };
     let mut ctx = Context::new(settings, &loaded, io.out, &root)
         .with_progress(progress)
@@ -168,8 +174,15 @@ where
     match result {
         Ok(()) => ExitStatus::Success,
         Err(err) if err.is_broken_pipe() => ExitStatus::Success,
-        Err(err) => report(&err, name, &settings, io.out, io.err),
+        Err(err) => report(&err, name, &settings, io.stderr_is_terminal, io.out, io.err),
     }
+}
+
+/// Whether a run's progress is drawn live (ADR-0003 §9): only for human output, on a
+/// terminal, at the default log level. `--output plain` and JSON get the plain lines,
+/// and info or debug log lines would write through the drawing.
+fn live_progress(mode: Mode, level: LevelFilter, stderr_is_terminal: bool, dumb: bool) -> bool {
+    mode == Mode::Human && level == LevelFilter::WARN && stderr_is_terminal && !dumb
 }
 
 /// Loads configuration (ADR-0005). A module that diagnoses configuration itself
@@ -384,6 +397,7 @@ fn report(
     err: &CliError,
     command: &str,
     settings: &OutputSettings,
+    stderr_is_terminal: bool,
     out: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitStatus {
@@ -404,9 +418,19 @@ fn report(
     {
         return err.status;
     }
+    // On a terminal, human output draws the error as a diagnostic (ADR-0003 §9);
+    // anywhere else it is the one `error[…]: …` line plain output has always had.
+    // `--color` decides colour only; `always` also says a terminal is reading.
+    let drawn = settings.mode == Mode::Human
+        && (stderr_is_terminal || settings.color == ColorChoice::Always);
     // Ignored: there is nowhere left to report it, and the exit status still carries
     // the outcome.
-    let _ = writeln!(stderr, "{err}");
+    if drawn {
+        let renderer = present::backend::rich::RichRenderer::new(settings.color, settings.width);
+        let _ = write!(stderr, "{}", renderer.render(&present::error_view(err)));
+    } else {
+        let _ = writeln!(stderr, "{err}");
+    }
     err.status
 }
 
@@ -442,6 +466,10 @@ mod tests {
     }
 
     fn invoke_with(args: &[&str], ods_log: Option<&str>) -> Outcome {
+        invoke_on(args, ods_log, false)
+    }
+
+    fn invoke_on(args: &[&str], ods_log: Option<&str>, stderr_is_terminal: bool) -> Outcome {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let status = run(
             &default_registry(),
@@ -450,7 +478,7 @@ mod tests {
                 out: &mut out,
                 err: &mut err,
                 stdout_is_terminal: false,
-                stderr_is_terminal: false,
+                stderr_is_terminal,
                 ods_log: ods_log.map(str::to_owned),
                 no_color: false,
                 dumb_terminal: false,
@@ -466,6 +494,17 @@ mod tests {
         }
     }
 
+    /// Only human output on a terminal, at the default level, is drawn live.
+    #[test]
+    fn only_human_output_on_a_terminal_is_drawn_live() {
+        assert!(live_progress(Mode::Human, LevelFilter::WARN, true, false));
+        assert!(!live_progress(Mode::Plain, LevelFilter::WARN, true, false));
+        assert!(!live_progress(Mode::Json, LevelFilter::WARN, true, false));
+        assert!(!live_progress(Mode::Human, LevelFilter::INFO, true, false));
+        assert!(!live_progress(Mode::Human, LevelFilter::WARN, false, false));
+        assert!(!live_progress(Mode::Human, LevelFilter::WARN, true, true));
+    }
+
     #[test]
     fn root_command_is_valid() {
         root_command(&default_registry()).debug_assert();
@@ -479,6 +518,24 @@ mod tests {
         insta::assert_snapshot!(o.err, @r"
         error[ODS-E0003]: `ods usage` is not implemented yet
           hint: planned for M3 ERD & Usage (v0.3.0); see docs/ROADMAP.md
+        ");
+    }
+
+    /// On a terminal, human output draws the error as a diagnostic (ADR-0003 §9); the
+    /// plain line above stays what plain output and pipes get.
+    #[test]
+    fn an_error_is_a_diagnostic_on_a_terminal() {
+        let o = invoke_on(
+            &[
+                "-o", "human", "--color", "never", "usage", "--select", "+orders",
+            ],
+            None,
+            true,
+        );
+        assert_eq!(o.status, ExitStatus::NotImplemented);
+        insta::assert_snapshot!(o.err, @r"
+        error[ODS-E0003]: `ods usage` is not implemented yet
+        help: planned for M3 ERD & Usage (v0.3.0); see docs/ROADMAP.md
         ");
     }
 
