@@ -155,9 +155,9 @@ pub trait WarehousePlugin: Send + Sync {
     }
 
     /// The keys a `[providers.<name>]` of this kind may set under `settings`, each with
-    /// what it is for. Configuration with any other key is refused when it is loaded
-    /// (`ODS-E0102`), so a misspelt setting isn't silently ignored. `None`, the default,
-    /// checks nothing.
+    /// what it is for. Any other key is reported with a warning when configuration is
+    /// loaded, so a misspelt setting isn't silently ignored; from 0.2.0 it is a
+    /// configuration error (`ODS-E0102`). `None`, the default, checks nothing.
     fn settings(&self) -> Option<&'static [(&'static str, &'static str)]> {
         None
     }
@@ -665,16 +665,13 @@ impl Plugins {
 }
 
 /// Refuses configuration whose `[warehouses.<kind>] extends` make a cycle, with the
-/// installed plugins' own parents (ADR-0031 §3b), or whose warehouse providers set a
-/// key their plugin doesn't know ([`WarehousePlugin::settings`]): a configuration
-/// error (exit 4).
+/// installed plugins' own parents (ADR-0031 §3b): a configuration error (exit 4).
 ///
 /// # Errors
-/// The first unknown setting, or the cycle at the first `extends` on it.
+/// The cycle, at the first `extends` on it.
 pub(crate) fn validate_warehouses(
     config: &ods_config::Loaded,
 ) -> Result<(), ods_config::ConfigError> {
-    installed().validate_settings(config)?;
     let warehouses = &config.config.warehouses;
     let Some(cycle) = installed().cycle(warehouses) else {
         return Ok(());
@@ -695,13 +692,19 @@ pub(crate) fn validate_warehouses(
     })
 }
 
+/// The keys under `[providers.<name>].settings` that the installed plugin of the
+/// provider's `kind` doesn't list ([`WarehousePlugin::settings`]), as warnings. They are
+/// ignored for now, and deprecated: from 0.2.0 they are a configuration error
+/// (`ODS-E0102`), after the warning has shipped in a release (ADR-0019 §4).
+pub(crate) fn settings_warnings(config: &ods_config::Loaded) -> Vec<String> {
+    installed().unknown_settings(config)
+}
+
 impl Plugins {
-    /// Refuses a key under `[providers.<name>].settings` that the plugin of the
-    /// provider's `kind` doesn't list, when it lists its settings.
-    fn validate_settings(
-        &self,
-        config: &ods_config::Loaded,
-    ) -> Result<(), ods_config::ConfigError> {
+    /// Each key under `[providers.<name>].settings` that the plugin of the provider's
+    /// `kind` doesn't list, when it lists its settings, as a warning naming it.
+    fn unknown_settings(&self, config: &ods_config::Loaded) -> Vec<String> {
+        let mut warnings = Vec::new();
         for (key, setting) in config.effective_settings() {
             let [providers, name, settings, first, ..] = key.as_slice() else {
                 continue;
@@ -719,16 +722,18 @@ impl Plugins {
                 continue;
             }
             let names: Vec<&str> = known.iter().map(|(k, _)| *k).collect();
-            return Err(ods_config::ConfigError::Schema {
-                key: format!("providers.{name}.settings.{first}"),
-                origin: Box::new(setting.source.clone()),
-                message: format!(
-                    "unknown {kind} setting; expected one of {}",
-                    names.join(", ")
-                ),
-            });
+            let warning = format!(
+                "providers.{name}.settings.{first} (from {}): unknown {kind} setting, ignored; \
+                 it will be a configuration error from 0.2.0. Expected one of {}",
+                setting.source,
+                names.join(", ")
+            );
+            // A table value (e.g. a secret reference) is several settings under one key.
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
         }
-        Ok(())
+        warnings
     }
 }
 

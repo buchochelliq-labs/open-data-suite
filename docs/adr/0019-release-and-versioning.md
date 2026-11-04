@@ -139,6 +139,29 @@ formats) is covered by the rows above.
 - **Release notes:** the version's changelog section, copied verbatim into the GitHub
   release by the #212 workflow, followed by the checksums and install commands.
 
+### 4. Deprecation policy
+- Deprecation is announced before removal:
+  - Deprecated behaviour keeps working and prints a warning on stderr, where ADR-0003
+    sends warnings, so JSON on stdout stays parseable.
+  - It is listed under **Deprecated** in the changelog, naming the replacement.
+- **Before 1.0:** removal is allowed in the next minor at the earliest (in the 0.0.x
+  series, the next release). The warning must have shipped in at least one release.
+- **From 1.0:** removal is allowed in the next major only.
+- **Persisted formats are never deprecated away.** State written by any `ods` since
+  0.0.1, the first release, stays readable by every later `ods`, whatever the version:
+  - every earlier store schema keeps its migration;
+  - every earlier document major keeps a reader that upgrades it to the current one.
+
+  Support is never removed, so history can always be explained (AGENTS.md rule 4).
+- **SDK contracts.**
+  - **Before 1.0,** a provider must match the host's contract minor exactly (ADR-0006
+    §6), so there is no window. A contract change is listed under **Breaking**, and
+    out-of-process plugins must be rebuilt for the release. In-process providers are
+    compiled with the host and need nothing.
+  - **From 1.0,** the host accepts providers built against earlier minors, so a
+    contract's successor ships alongside it and the deprecation window above applies.
+    The old contract is removed only in a major.
+
 ### 5. Release tooling: release-kit (amended 2026-11-04)
 Releases are cut with [release-kit](https://github.com/buchochelliq-labs/release-kit),
 the buchochelliq-labs release tooling, instead of a hand-written workflow.

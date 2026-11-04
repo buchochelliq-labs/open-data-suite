@@ -150,8 +150,9 @@ rule below that a plugin is never handed a resolved secret stands.
 
 *Amended 2026-11-04 (#297):* a plugin may list the keys a `[providers.<name>]` of its
 kind may set under `settings` (`settings`, each with what it is for). With a list,
-configuration that sets any other key is refused when it loads (`ODS-E0102`), as
-ADR-0005 has providers validate their own settings; without one, nothing is checked.
+configuration that sets any other key is reported with a warning when it loads, as
+ADR-0005 has providers validate their own settings, and is a configuration error
+(`ODS-E0102`) from 0.2.0 (ADR-0019 §4); without one, nothing is checked.
 Databricks lists its own (`ods_provider_databricks::CONFIG_SETTINGS`).
 
 ```rust

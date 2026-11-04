@@ -104,26 +104,29 @@ fn invalid_config_exits_4_in_the_active_output_mode() {
 }
 
 #[test]
-fn an_unknown_databricks_setting_is_a_config_error() {
+fn an_unknown_databricks_setting_is_a_deprecation_warning() {
     let dir = Dir::new();
-    // A misspelt `host`: refused when configuration loads, before any command runs.
+    // A misspelt `host`: still loads (deprecated, ADR-0019 §4), with a warning on stderr
+    // that names it; it becomes a configuration error in 0.2.0.
     dir.write(
         "ods.toml",
         "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhots = \"https://dbc-1.cloud.databricks.com\"\n",
     );
     let out = ods(&dir, dir.path(), &["version"], &[]);
-    assert_eq!(out.status.code(), Some(4));
+    assert_eq!(out.status.code(), Some(0));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[ODS-E0102]")
-            && stderr.contains("providers.uc.settings.hots")
-            && stderr.contains("unknown databricks setting")
+        stderr.contains("providers.uc.settings.hots")
+            && stderr.contains("unknown databricks setting, ignored")
+            && stderr.contains("0.2.0")
             && stderr.contains("host"),
         "{stderr}"
     );
+    // JSON on stdout stays one parseable document; the warning is on stderr.
     let out = ods(&dir, dir.path(), &["--json", "version"], &[]);
-    let value: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON document");
-    assert_eq!(value["diagnostics"][0]["code"], "ODS-E0102");
+    assert_eq!(out.status.code(), Some(0));
+    let _: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON document");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("providers.uc.settings.hots"));
 
     // Every documented setting loads, inline or as a table, secrets included.
     dir.write(

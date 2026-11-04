@@ -150,9 +150,9 @@ Only `https://` hosts are accepted and redirects are not followed. `auth = "cli"
 
 ## Settings
 
-A `[providers.<name>]` with `kind = "databricks"` takes these settings. Any other key is
-a configuration error (`ODS-E0102`, exit 4) that names it, so a misspelling such as
-`hots` is reported instead of ignored.
+A `[providers.<name>]` with `kind = "databricks"` takes these settings. Any other key,
+such as a misspelt `hots`, is ignored with a warning on stderr that names it and lists
+these. It is deprecated: from 0.2.0 it is a configuration error (`ODS-E0102`, exit 4).
 
 | Setting | For |
 |---|---|

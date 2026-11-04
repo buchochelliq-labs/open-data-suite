@@ -124,9 +124,9 @@ that runs the released CLI with your plugins added
     it is given only when a token is needed. Building it does no I/O;
     `ods doctor --connect` calls its `status` (`connectivity.warehouse_login`);
   - `settings`: the keys a `[providers.<name>]` of its kind may set under `settings`,
-    each with what it is for. With a list, any other key is refused when configuration
-    loads (`ODS-E0102`), so a misspelt setting isn't silently ignored; without one,
-    nothing is checked.
+    each with what it is for. With a list, any other key is reported with a warning on
+    stderr when configuration loads, so a misspelt setting isn't silently ignored (from
+    0.2.0 it is a configuration error, `ODS-E0102`); without one, nothing is checked.
 
   A plugin can also name the warehouses it is built on, nearest first (`parents`, as a
   dbt adapter names the adapters it depends on). Their plugins' error patterns and
