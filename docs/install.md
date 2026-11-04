@@ -1,7 +1,7 @@
 # Install
 
 !!! note "Versions"
-    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.1.2` as the
+    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.1.3` as the
     example version; the [releases](https://github.com/buchochelliq-labs/open-data-suite/releases)
     list the latest.
 
@@ -73,8 +73,8 @@ prebuilt binary instead of compiling:
 cargo binstall ods-cli
 ```
 
-The crates are on [crates.io](https://crates.io/crates/ods-cli) from the first release
-after 0.1.2. For 0.1.2 and earlier, name the repository:
+The crates are on [crates.io](https://crates.io/crates/ods-cli) from 0.1.3. For earlier
+releases, name the repository:
 `cargo binstall --git https://github.com/buchochelliq-labs/open-data-suite ods-cli`.
 
 ## Direct download
@@ -87,7 +87,7 @@ the licences of the open-source software built into `ods`.
 === "Linux"
 
     ```sh
-    version=0.1.2 target=x86_64-unknown-linux-musl
+    version=0.1.3 target=x86_64-unknown-linux-musl
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     sha256sum --check --ignore-missing SHA256SUMS
@@ -98,7 +98,7 @@ the licences of the open-source software built into `ods`.
 === "macOS"
 
     ```sh
-    version=0.1.2 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
+    version=0.1.3 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     shasum -a 256 --check --ignore-missing SHA256SUMS
@@ -109,7 +109,7 @@ the licences of the open-source software built into `ods`.
 === "Windows (PowerShell)"
 
     ```powershell
-    $version = "0.1.2"; $name = "ods-v$version-x86_64-pc-windows-msvc"
+    $version = "0.1.3"; $name = "ods-v$version-x86_64-pc-windows-msvc"
     $base = "https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version"
     Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
@@ -126,11 +126,11 @@ the licences of the open-source software built into `ods`.
 Every archive, `SHA256SUMS` and `ods.rb` on a GitHub release has a
 [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations):
 a signed statement that the release workflow built it from the tagged commit. (Releases
-up to 0.1.2 also attached the wheels; from the next one, wheels are on PyPI only, with
+up to 0.1.1 also attached the wheels; from 0.1.3, wheels are on PyPI only, with
 PyPI's own attestations.) With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify ods-v0.1.2-x86_64-unknown-linux-musl.tar.gz \
+gh attestation verify ods-v0.1.3-x86_64-unknown-linux-musl.tar.gz \
   --repo buchochelliq-labs/open-data-suite
 ```
 
@@ -150,7 +150,7 @@ Or the latest `main`:
 `ods version` prints the ODS version and the versions of the interfaces other tools rely
 on (the plugin SDK and the JSON output). Before 1.0, a minor release may include breaking
 changes and migrate the state store, so read the changelog before upgrading; a patch
-release (0.1.1 → 0.1.2) never does. In the 0.0.x series every release could, even
+release (0.1.1 → 0.1.3) never does. In the 0.0.x series every release could, even
 though 0.0.1 → 0.0.2 looks like a patch. Each break is listed under **Breaking** in the
 [changelog](https://github.com/buchochelliq-labs/open-data-suite/blob/main/CHANGELOG.md),
 with what to do. The release notes of each version are its changelog section.

@@ -12,6 +12,17 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-04
+
+The first M2 release: failures are drawn as diagnostics and run progress live on a
+terminal, the Databricks provider signs in to the workspace (`ods doctor --connect`),
+secret references are resolved by secret providers, producing code can be referenced
+and retrieved, and the crates are published to crates.io. Releases are cut with
+release-kit. Nothing here breaks a script; unknown Databricks settings are deprecated.
+
+0.1.2 was prepared (its version and notes were merged on 2026-11-03) but never
+published; its changes are in this release, under Changed.
+
 ### Added
 
 - The crates are published to crates.io with each release, at the release's version
@@ -60,29 +71,6 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Changed
 
-- Releases are cut with [release-kit](https://github.com/buchochelliq-labs/release-kit)
-  (ADR-0019 §5). The GitHub release, its `vX.Y.Z` tag, its archives, `SHA256SUMS`,
-  attestations and `ods.rb` are as before, but wheels are now on PyPI only, not
-  attached to the GitHub release, and `cargo binstall ods-cli` finds the archives from
-  crates.io. The Homebrew formula and the Chocolatey package are made by release-kit
-  from the same templates. Maintainers: see "For maintainers" in `docs/install.md` for the new
-  `crates-io` environment and the `release-*` tags.
-
-### Deprecated
-
-- An unknown setting under a `[providers.<name>]` with `kind = "databricks"` is still
-  ignored, but now with a warning on stderr that names it; from 0.2.0 it is a
-  configuration error (`ODS-E0102`). Fix or remove the key the warning names. The
-  settings are listed in [docs/databricks.md](docs/databricks.md#settings) (#297).
-
-## [0.1.2] - 2026-11-03
-
-The first M2 release: failures are drawn as diagnostics and run progress is drawn live
-on a terminal, the docs site moves to Zensical, and releases update the Homebrew tap.
-Plain and JSON output are unchanged, so nothing here breaks a script.
-
-### Changed
-
 - The docs site is built with Zensical, the successor to Material for MkDocs, in place
   of MkDocs and Material (`zensical.toml` replaces `mkdocs.yml`;
   `python -m zensical serve` to preview). Its pages, links and look carry over, with
@@ -100,6 +88,20 @@ Plain and JSON output are unchanged, so nothing here breaks a script.
 - Releases open a pull request on the Homebrew tap with the new formula, so
   `brew upgrade ods` gets each release once that is merged (maintainers set up a token:
   see "For maintainers" in `docs/install.md`).
+- Releases are cut with [release-kit](https://github.com/buchochelliq-labs/release-kit)
+  (ADR-0019 §5). The GitHub release, its `vX.Y.Z` tag, its archives, `SHA256SUMS`,
+  attestations and `ods.rb` are as before, but wheels are now on PyPI only, not
+  attached to the GitHub release, and `cargo binstall ods-cli` finds the archives from
+  crates.io. The Homebrew formula and the Chocolatey package are made by release-kit
+  from the same templates. Maintainers: see "For maintainers" in `docs/install.md` for the new
+  `crates-io` environment and the `release-*` tags.
+
+### Deprecated
+
+- An unknown setting under a `[providers.<name>]` with `kind = "databricks"` is still
+  ignored, but now with a warning on stderr that names it; from 0.2.0 it is a
+  configuration error (`ODS-E0102`). Fix or remove the key the warning names. The
+  settings are listed in [docs/databricks.md](docs/databricks.md#settings) (#297).
 
 ## [0.1.1] - 2026-11-01
 
