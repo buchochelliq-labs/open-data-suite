@@ -467,7 +467,10 @@ def published_on(package):
         headers = {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}
         status, body = http_status(f"https://api.github.com/repos/{repository()}/releases/tags/{quote(package.tag)}",
                                    headers=headers)
-        return status == 200 and bool(json.loads(body).get("assets"))
+        # The release is created as a draft and published once every file is up
+        # and checked: a draft (which this endpoint does not serve) is unfinished.
+        release = json.loads(body) if status == 200 else {}
+        return bool(release.get("assets")) and not release.get("draft")
     raise ValueError(f"unknown registry {package.registry!r}")
 
 
@@ -689,8 +692,7 @@ def github_release(name, stage, notes_out, read=None, runner=None, options_only=
         (stage / sums).write_text("".join(lines), encoding="utf-8")
     if command := options.get("notes"):
         result = (runner or subprocess.run)(
-            command, shell=True, check=True, text=True, capture_output=True,
-            executable=shutil.which("bash"),
+            bash_command(command), check=True, text=True, capture_output=True,
             env={**os.environ, "VERSION": package.version, "PACKAGE": package.name, "TAG": package.tag})
         if not result.stdout.strip():
             raise RuntimeError(f"{name}: the notes command printed nothing")
@@ -825,11 +827,21 @@ def update_tap(tap, formula, repo, version, release_url, open_pr=open_tap_pr):
     return url
 
 
+def bash_command(command):
+    """`command` as an argument list that runs it in bash. Commands run in bash
+    everywhere (GitHub's Windows runners have Git's bash). Not `shell=True`
+    with `executable=bash`: on Windows that still builds `<shell> /c "..."`,
+    which bash cannot read."""
+    bash = shutil.which("bash")
+    if not bash:
+        raise RuntimeError("bash is not on PATH")
+    return [bash, "-c", command]
+
+
 def run(command, cwd=None, env=None, shell=False):
     print(f"$ {command if shell else ' '.join(command)}", flush=True)
-    # `command` artifacts run in bash everywhere (GitHub's Windows runners have Git's bash).
-    subprocess.run(command, cwd=cwd, env={**os.environ, **(env or {})}, check=True, shell=shell,
-                   executable=shutil.which("bash") if shell else None)
+    subprocess.run(bash_command(command) if shell else command, cwd=cwd,
+                   env={**os.environ, **(env or {})}, check=True)
 
 
 def build(job, out=Path("dist")):

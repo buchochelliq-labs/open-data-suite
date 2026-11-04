@@ -115,10 +115,13 @@ runs:
           notes=(--generate-notes)
           if [ "$(jq -r .notes <<<"$shape")" = true ]; then notes=(--notes-file "$ROOT/$slug/notes.md"); fi
           prerelease=(); [[ "$version" == *-* ]] && prerelease=(--prerelease)
+          # A draft until every file is up and checked: a run that stops halfway
+          # leaves a draft (not published), which the next run finishes.
           gh release view "$tag" >/dev/null 2>&1 ||
-            gh release create "$tag" --verify-tag --title "$name $version" "${notes[@]}" "${prerelease[@]}"
+            gh release create "$tag" --draft --verify-tag --title "$name $version" "${notes[@]}" "${prerelease[@]}"
           gh release upload "$tag" "$ROOT/$slug/files"/* --clobber
           check_release "$tag" "$(jq -r .checksums <<<"$shape")"
+          gh release edit "$tag" --draft=false
           echo "$name $version: published on $tag"
         done
         python3 "$kit" verify --registry github --selection "$SELECTION" --timeout 120
