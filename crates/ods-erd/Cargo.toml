@@ -6,8 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-# The one crate on crates.io (ADR-0032): open-data-suite-ontology depends on its types.
-publish = true
 readme = "README.md"
 keywords = ["dbt", "erd", "data-modeling", "opendatasuite"]
 categories = ["data-structures"]

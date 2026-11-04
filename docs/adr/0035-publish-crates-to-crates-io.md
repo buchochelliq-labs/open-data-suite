@@ -1,80 +1,94 @@
-# ADR-0032: Publish `ods-erd` to crates.io
+# ADR-0035: Publish the crates to crates.io at the product version
 
 - **Status:** Proposed
 - **Date:** 2026-11-04
-- **Issues:** none yet (requested by the maintainer for
-  `buchochelliq-labs/open-data-suite-ontology`)
+- **Issues:** none yet (requested by the maintainer; unblocks
+  `buchochelliq-labs/open-data-suite-ontology` on crates.io)
 - **Deciders:** @n1ckyb
 
 ## Context
 ADR-0019 says every crate has `publish = false` and nothing is on crates.io: only the
-`ods` binary reaches users. That still holds for the product, but there is now a
-downstream Rust consumer. `open-data-suite-ontology` (`onto`) reads ODS's ERD output
-with `ods-erd`'s typed model (`Erd`, `Entity`, `Relationship`, `Key`, `Basis`), so it
-doesn't re-derive ODS's types. It depends on `ods-erd` from git at a tag.
+`ods` binary reaches users. Two things have changed:
+- **A downstream Rust consumer.** `open-data-suite-ontology` (`onto`) reads ODS's ERD
+  output with `ods-erd`'s types (`Erd`, `Entity`, `Relationship`, `Key`, `Basis`), so
+  it doesn't re-derive ODS's model. It depends on `ods-erd` from git, which crates.io
+  rejects, so `onto` can't be published there either.
+- **Plugins.** ADR-0031 lets third parties write plugins against `ods-sdk`'s
+  contracts, and ADR-0006 gives each contract a fake and a conformance suite. Without
+  published crates, a plugin author can only depend on ODS from git.
 
-crates.io rejects packages with git dependencies. So `onto` can't be published there
-while `ods-erd` isn't.
+ADR-0019 rejected publishing (its Option B) for independent per-crate versions: a
+compatibility matrix and release tooling for every crate. Publishing every crate at the
+**one product version** avoids both.
 
-`ods-erd` is the one crate this needs, and it is a leaf in ADR-0001's layering: it
-depends only on `serde` and `serde_json`. Publishing it publishes no other ODS crate and
-no ODS internals.
+Nothing else blocks publishing:
+- every crate name is free on crates.io;
+- no crate embeds files from outside its directory;
+- the one git dependency, `rs-rich` and `rs-rich-ext` (for `ods-cli`'s rendering), is
+  on crates.io with the features ODS uses (`rs-rich` 0.0.14, `rs-rich-ext` 0.0.21 with
+  `sql` and `markdown`).
 
 ## Options considered
-### Option A — Publish `ods-erd` alone, at the product version (chosen)
+### Option A — Publish every crate at the product version (chosen)
 - Pros:
-  - The smallest change that unblocks the consumer. One crate, with no ODS dependencies.
-  - Keeps ADR-0019's single product version: `ods-erd` X.Y.Z is the ERD model of
-    `ods` X.Y.Z, published by the same `vX.Y.Z` tag.
-  - Its serialized form is already versioned (the ERD JSON's `schema_version`), so
-    consumers have a compatibility signal beyond the crate version.
+  - One rule, and ADR-0019's single version kept: `ods-*` X.Y.Z are the crates of
+    `ods` X.Y.Z, published by the `vX.Y.Z` tag. No compatibility matrix.
+  - `cargo install ods-cli` installs `ods`, alongside pip, Homebrew and Chocolatey.
+  - Consumers (`onto`) and plugin authors (`ods-sdk`, `ods-provider-fake`) depend on
+    released code.
 - Cons:
-  - A crate version that moves with the product, even when `ods-erd` didn't change.
-  - The crates.io name and Trusted Publisher need one-time setup by an owner.
+  - A crate's version moves with the product even when it didn't change.
+  - Every internal path dependency carries the version, so a release bumps it in one
+    more place. Cargo refuses a mismatch, so it can't be forgotten silently.
+  - Names and published versions are permanent: a crate can be yanked, never removed.
 
-### Option B — Publish every crate
+### Option B — Publish only `ods-erd`
+`ods-erd` is a leaf crate (serde only).
 - Pros:
-  - Anyone can depend on any part of ODS.
+  - The smallest change that unblocks `onto`.
 - Cons:
-  - It is ADR-0019's Option B: the compatibility matrix and release tooling for about
-    15 crates, before SDK 1.0 invites third-party plugins. Still premature.
+  - It answers one consumer, not the plugin story. The next consumer, or the first
+    plugin author, needs this decision again.
 
-### Option C — The consumer drops the typed dependency
-`onto` would parse ODS's ERD JSON with its own types.
-- Pros:
-  - No change to ODS.
+### Option C — Independent SemVer per crate
 - Cons:
-  - The consumer duplicates ODS's model and drifts from it silently. The point of
-    depending on `ods-erd` is that the compiler catches a changed model.
+  - ADR-0019's Option B. Still premature before SDK 1.0.
 
 ## Decision
-**`ods-erd` is published to crates.io at the product version by each `vX.Y.Z` release.**
-- `ods-erd` alone sets `publish = true`. Every other crate keeps `publish = false`.
-- Its dependencies must stay published, third-party crates. If it ever needs another ODS
-  crate, that crate is published too, or this ADR is revisited.
-- `.github/workflows/release.yml` publishes it after the GitHub release, in the
-  `crates-io` environment, with crates.io Trusted Publishing. A dry run packages it with
-  `cargo publish --dry-run`.
-- A version already on crates.io is skipped, so re-running a release is safe.
+**Every workspace crate is published to crates.io at the product version by each `vX.Y.Z`
+release.**
+- `workspace.package.publish = true`. Internal dependencies in
+  `[workspace.dependencies]` carry `version` equal to `workspace.package.version`, and
+  the release PR bumps both.
+- No crate may depend on git. Every dependency must be on crates.io, or be another
+  workspace crate.
+- `.github/workflows/release.yml` publishes them after the GitHub release, from the
+  `crates-io` environment, in one `cargo publish` of every crate whose version
+  crates.io doesn't have yet. Cargo orders them by dependency. Trusted Publishing is
+  used once each crate exists; a crate's first version uses an owner's token.
+- CI packages every crate on each PR (`cargo publish --workspace --dry-run`).
+- Interfaces keep ADR-0019's own versions (SDK, contracts, JSON schema, store schema).
+  The crate version is the product version.
 
-This amends ADR-0019's "nothing is on crates.io" for this one crate. It does not change
-ADR-0019's single product version.
+This amends ADR-0019's "nothing is on crates.io". It keeps ADR-0019's single version.
 
 ## Consequences
 - Positive:
-  - `onto` can depend on `ods-erd` from crates.io and be published there itself.
-  - Packaging problems surface in the release's dry run, before a tag.
+  - `onto` and plugin authors depend on released crates.
+  - `cargo install ods-cli` is one more way to install.
+  - Packaging problems show on PRs, not at release.
 - Negative / trade-offs:
-  - A published crate can't be unpublished, only yanked. `ods-erd`'s public types become
-    an interface. It follows ADR-0019's rules for the product (before 1.0 a minor may
-    break; while 0.0.x every release may break), and breaking changes are listed under
-    **Breaking**.
-  - One-time setup by a crates.io owner: the first version needs a token, because
-    Trusted Publishing is configured on an existing crate.
+  - Every public item of every crate is now visible API. ADR-0019's rules apply to the
+    product as a whole: before 1.0 a minor may break, and breaks are listed under
+    **Breaking**. Crate APIs get no guarantee beyond that.
+  - One-time setup by a crates.io owner (a first-version token, then Trusted
+    Publishers). A release that adds a new crate needs the token again.
+  - The release takes a few minutes longer.
 - Follow-up issues:
-  - Decide, with SDK 1.0, whether `ods-sdk` and the contracts are published (ADR-0019's
-    superseding ADR).
+  - With SDK 1.0, decide whether `ods-sdk` gets its own version (ADR-0019's superseding
+    ADR).
 
 ## References
-- ADR-0019 (release and versioning), ADR-0001 (layering).
+- ADR-0019 (release and versioning), ADR-0001 (layering), ADR-0006 and ADR-0031
+  (contracts and plugins), ADR-0003 (rs-rich).
 - crates.io Trusted Publishing: https://crates.io/docs/trusted-publishing

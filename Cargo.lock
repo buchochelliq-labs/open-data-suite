@@ -253,6 +253,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "castaway"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,6 +361,20 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "compact_str"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dfdd1c2274d9aa354115b09dc9a901d6c5576818cdf70d14cae2bdb47df00ab"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa",
+ "rustversion",
+ "ryu",
+ "static_assertions",
+]
 
 [[package]]
 name = "console"
@@ -2183,10 +2206,12 @@ dependencies = [
 
 [[package]]
 name = "rs-rich"
-version = "0.0.11"
-source = "git+https://github.com/buchochelliq-labs/rs-rich-cli?rev=c25f65e943a6c992cf830ec1f9649ff7663414ac#c25f65e943a6c992cf830ec1f9649ff7663414ac"
+version = "0.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75ccb8b08299d5735ed560459d2043a7343808428aa7b01d89b4034ac221816d"
 dependencies = [
  "anstyle-query",
+ "compact_str",
  "fancy-regex",
  "pulldown-cmark",
  "serde_json",
@@ -2195,8 +2220,9 @@ dependencies = [
 
 [[package]]
 name = "rs-rich-ext"
-version = "0.0.18"
-source = "git+https://github.com/buchochelliq-labs/rs-rich-cli?rev=c25f65e943a6c992cf830ec1f9649ff7663414ac#c25f65e943a6c992cf830ec1f9649ff7663414ac"
+version = "0.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "057e7acbbe96faec430e3a27a123bf9373b221216927f734bf502a0fa0773dc9"
 dependencies = [
  "fancy-regex",
  "libc",
@@ -2209,8 +2235,9 @@ dependencies = [
 
 [[package]]
 name = "rs-rich-plugin-api"
-version = "0.0.5"
-source = "git+https://github.com/buchochelliq-labs/rs-rich-cli?rev=c25f65e943a6c992cf830ec1f9649ff7663414ac#c25f65e943a6c992cf830ec1f9649ff7663414ac"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb83641bb296722d543c2ae25bd3d312adec58709968ee09d700de4232b1038f"
 dependencies = [
  "inventory",
  "rs-rich",
@@ -2655,6 +2682,12 @@ dependencies = [
  "psm",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strsim"
