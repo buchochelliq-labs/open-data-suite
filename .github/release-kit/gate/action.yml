@@ -1,0 +1,68 @@
+name: release gate
+description: >-
+  Check a release tag before anything is built: annotated, on the default
+  branch, recording its release and commit, not splitting its release, and
+  with something not yet published. Outputs what to publish.
+inputs:
+  tag:
+    description: The release tag (release-X.Y.Z), as pushed or dispatched.
+    required: true
+  verify-only:
+    description: >-
+      "true" for a verify-only run: select the release's published packages to
+      verify them again, and build and upload nothing.
+    default: "false"
+outputs:
+  sha:
+    description: The tagged commit.
+    value: ${{ steps.gate.outputs.sha }}
+  release:
+    description: The release's name (its version).
+    value: ${{ steps.gate.outputs.release }}
+  selection:
+    description: JSON list of the packages to publish (name, registry, version, manifest, tag), in order.
+    value: ${{ steps.gate.outputs.selection }}
+  verify-only:
+    description: '"true" in a verify-only run.'
+    value: ${{ steps.gate.outputs.verify-only }}
+  github:
+    description: '"true" when a GitHub Releases package is due.'
+    value: ${{ steps.gate.outputs.github }}
+  crates-io:
+    description: '"true" when a crates.io package is due.'
+    value: ${{ steps.gate.outputs.crates-io }}
+  pypi:
+    description: '"true" when a PyPI package is due.'
+    value: ${{ steps.gate.outputs.pypi }}
+  npm:
+    description: '"true" when an npm package is due.'
+    value: ${{ steps.gate.outputs.npm }}
+  vscode:
+    description: '"true" when a VS Code Marketplace extension is due.'
+    value: ${{ steps.gate.outputs.vscode }}
+  homebrew:
+    description: '"true" when a due github package has a Homebrew formula.'
+    value: ${{ steps.gate.outputs.homebrew }}
+  chocolatey:
+    description: '"true" when a due github package has a Chocolatey package.'
+    value: ${{ steps.gate.outputs.chocolatey }}
+runs:
+  using: composite
+  steps:
+    # release.py reads release-kit.yml with PyYAML.
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: python3 -m pip install --quiet pyyaml
+    # The caller checks out the tag with full history (fetch-depth: 0), so the
+    # default branch and the other packages' tagged commits can be compared.
+    - id: gate
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        VERIFY_ONLY: ${{ inputs.verify-only }}
+      run: |
+        set -euo pipefail
+        flags=(); [ "$VERIFY_ONLY" = true ] && flags=(--verify-only)
+        python3 "$GITHUB_ACTION_PATH/../scripts/release.py" gate "$RELEASE_TAG" "${flags[@]}"

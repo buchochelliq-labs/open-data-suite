@@ -70,8 +70,12 @@ With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), Rust users 
 prebuilt binary instead of compiling:
 
 ```sh
-cargo binstall --git https://github.com/buchochelliq-labs/open-data-suite ods-cli
+cargo binstall ods-cli
 ```
+
+The crates are on [crates.io](https://crates.io/crates/ods-cli) from the first release
+after 0.1.2. For 0.1.2 and earlier, name the repository:
+`cargo binstall --git https://github.com/buchochelliq-labs/open-data-suite ods-cli`.
 
 ## Direct download
 
@@ -119,10 +123,11 @@ the licences of the open-source software built into `ods`.
 
 ### Verify where a file came from
 
-Every archive, wheel and `SHA256SUMS` has a
+Every archive, `SHA256SUMS` and `ods.rb` on a GitHub release has a
 [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations):
-a signed statement that the release workflow built it from the tagged commit. With the
-[GitHub CLI](https://cli.github.com):
+a signed statement that the release workflow built it from the tagged commit. (Releases
+up to 0.1.2 also attached the wheels; from the next one, wheels are on PyPI only, with
+PyPI's own attestations.) With the [GitHub CLI](https://cli.github.com):
 
 ```sh
 gh attestation verify ods-v0.1.2-x86_64-unknown-linux-musl.tar.gz \
@@ -134,8 +139,11 @@ gh attestation verify ods-v0.1.2-x86_64-unknown-linux-musl.tar.gz \
 With Rust 1.90 or newer ([rustup.rs](https://rustup.rs)):
 
 ```sh
-cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suite ods-cli
+cargo install --locked ods-cli
 ```
+
+Or the latest `main`:
+`cargo install --locked --git https://github.com/buchochelliq-labs/open-data-suite ods-cli`.
 
 ## Versions and upgrades
 
@@ -150,66 +158,83 @@ with what to do. The release notes of each version are its changelog section.
 
 ## For maintainers
 
-A release is a `vX.Y.Z` tag on `main`, pushed after the release PR has bumped
-`workspace.package.version` and moved `[Unreleased]` in `CHANGELOG.md` under the new
-version (ADR-0019). The tag starts `.github/workflows/release.yml`, which:
+Releases use [release-kit](https://github.com/buchochelliq-labs/release-kit) (ADR-0019):
+`release-kit.yml` lists every channel, `.github/release-kit/` is the installed kit, and
+`.github/workflows/release.yml` runs it. Everything is released together at the
+workspace version.
 
-1. checks that the tag matches the workspace version and is on `main`, and takes the
-   release notes from the version's changelog section (`scripts/changelog-section.py`);
-   the run fails if the section is missing;
-2. builds each target once with `maturin`, producing both the wheel and the archive;
-3. installs the wheels with pip and runs `ods version` on Linux, macOS and Windows;
-4. writes `SHA256SUMS`, renders the Homebrew formula `ods.rb`, attests provenance, and
-   creates the GitHub release;
-5. publishes the wheels to PyPI;
-6. packs the Chocolatey package for the release, installs it on Windows, and pushes it
-   to the Chocolatey community repository (`.github/workflows/chocolatey.yml`).
-7. opens a pull request on the Homebrew tap that puts the release's `ods.rb` in
-   `Formula/ods.rb` (not for prereleases).
-8. publishes every crate to crates.io at the release's version (ADR-0035), in dependency
-   order, skipping any crate whose version crates.io already has.
+1. **The release PR** bumps `workspace.package.version` and the internal crates'
+   `version = "X.Y.Z"` requirements in `Cargo.toml` (ADR-0035), moves `[Unreleased]` in
+   `CHANGELOG.md` under the new version, and runs
+   `python3 .github/release-kit/scripts/release.py sync` to copy the version into
+   `release-kit.yml`. CI's `release.py check` fails until they agree.
+2. **Once it is merged**, on an up-to-date `main`:
+   `python3 .github/release-kit/scripts/release.py tag`. It pushes an annotated record
+   tag per package that is due (`ods-core-vX.Y.Z`, …, `vX.Y.Z` for the GitHub release,
+   `opendatasuite-vX.Y.Z` for PyPI), then `release-X.Y.Z`, which starts the release
+   run, and waits for it. `release.py status` shows what is published.
+3. **The release run**:
+    1. checks the tag once and runs CI (`ci.yml`) on the tagged commit;
+    2. builds the archives (static musl on Linux) and the wheels, each with the licence
+       notices (`scripts/release-notices.sh`), and tests each where its runner can run
+       it (`scripts/release-test-archive.sh`, `scripts/release-test-wheel.sh`);
+    3. publishes the crates to crates.io, in dependency order (ADR-0035);
+    4. creates the GitHub release on `vX.Y.Z`: the archives, `SHA256SUMS` and build
+       provenance attestations, with the version's changelog section as notes
+       (`scripts/release-notes.sh`; the run fails if the section is missing);
+    5. publishes the wheels to PyPI, then installs the version from PyPI;
+    6. renders the Homebrew formula (`packaging/homebrew/ods.rb.tmpl`) from the
+       release's checksums, attests it, attaches `ods.rb` to the release and opens a
+       pull request on the tap (not for prereleases);
+    7. renders the Chocolatey package (`packaging/chocolatey/`), packs it, installs it
+       on Windows from the release's archive, checks `ods version`, and pushes it.
 
-Run the workflow by hand (**Actions → Release → Run workflow**) for a dry run: it builds
-and tests everything, uploads the result as workflow artifacts, and publishes nothing.
+   Homebrew and Chocolatey are release-kit's `homebrew` and `chocolatey` settings on
+   the `ods` package in `release-kit.yml`.
+4. **A failed release** is finished by running `release.py tag` again: it publishes
+   only what is still due. See release-kit's
+   [recovery guide](https://github.com/buchochelliq-labs/release-kit/blob/main/docs/recovery.md).
 
-One-time setup, by a repository and PyPI admin:
+Pull requests that change packaging files run the `Packaging` workflow, which runs the
+same notices, wheel test and notes scripts, and renders the formula and the Chocolatey
+package as a release would (`release.py render`).
 
-- **PyPI.** Create the `opendatasuite` project's
-  [trusted publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)
-  (a "pending publisher" before the first upload): owner `buchochelliq-labs`, repository
-  `open-data-suite`, workflow `release.yml`, environment `pypi`. No API token is stored.
-- **The `pypi` environment.** Create it under **Settings → Environments**, restrict it
-  to `v*` tags, and add required reviewers so each upload waits for approval.
-- **crates.io.** The crates are published from the `crates-io` environment (create it
-  like `pypi`, restricted to `v*` tags). Trusted Publishing works only for a crate that
-  exists, so a crate's first version needs a token: a crates.io owner creates an API
-  token with the `publish-new` and `publish-update` scopes, and adds it as the
-  `CARGO_REGISTRY_TOKEN` secret of the `crates-io` environment. After the release, add
-  each crate's [trusted publisher](https://crates.io/docs/trusted-publishing) on
-  crates.io (owner `buchochelliq-labs`, repository `open-data-suite`, workflow
-  `release.yml`, environment `crates-io`) and delete the secret: later releases use
-  short-lived tokens. A release that adds a new crate needs the secret again.
-- **Tag protection.** Add a ruleset for `v*` tags so only maintainers can create them.
+One-time setup, by a repository, crates.io and PyPI admin. Every environment below must
+allow `release-*` tags, which is what starts the run:
+
+- **crates.io.** Create the `crates-io` environment with a `CARGO_REGISTRY_TOKEN`
+  secret: a crates.io API token with the `publish-new` and `publish-update` scopes. It
+  publishes each crate's first version (crates.io offers Trusted Publishing only for a
+  crate that exists). crates.io allows a burst of new crates and then one every few
+  minutes, so the first release of all 18 crates takes about two hours; release-kit
+  waits it out. After that release, add a
+  [Trusted Publisher](https://crates.io/docs/trusted-publishing) to each crate
+  (repository `buchochelliq-labs/open-data-suite`, workflow `release.yml`, environment
+  `crates-io`), and the token is only used for new crates.
+- **PyPI.** The `opendatasuite` project's
+  [trusted publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/):
+  owner `buchochelliq-labs`, repository `open-data-suite`, workflow `release.yml`,
+  environment `pypi`. No API token is stored.
+- **The `pypi` environment**, with required reviewers so each upload waits for approval.
+- **Tag protection.** A ruleset for `release-*` and `v*` tags (and the crates' record
+  tags, `ods-*-v*` and `opendatasuite-v*`) so only maintainers can create them.
 - **Homebrew tap.** The public repository `buchochelliq-labs/homebrew-tap` holds the
   formula. The release opens a pull request there with the new `Formula/ods.rb`;
   merging it publishes the release to `brew upgrade`. For that, create a fine-grained
   personal access token with access to `buchochelliq-labs/homebrew-tap` only and the
   **Contents** and **Pull requests** permissions set to read and write. Then create
-  the `homebrew` environment, restricted to `v*` tags, with the token as its
-  `HOMEBREW_TAP_TOKEN` secret. Without the secret the release's `homebrew-tap` job
-  only prints a notice, and you copy the release's `ods.rb` asset to `Formula/ods.rb`
-  in the tap by hand. When the token expires, the job fails: renew it and re-run the
-  job.
+  the `homebrew` environment with the token as its `HOMEBREW_TAP_TOKEN` secret. Without
+  the secret the release's `publish-homebrew` job only prints a notice, and you copy the
+  release's `ods.rb` asset to `Formula/ods.rb` in the tap by hand. When the token
+  expires, the job fails: renew it and re-run the job.
 - **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
   secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
-  required reviewers, like `pypi`. The release pushes from its `v*` tag. To push an
-  existing release by hand (**Actions → Chocolatey → Run workflow**, `publish` on), the
-  environment must also allow the branch the workflow runs from. Each push goes through
-  Chocolatey's automated checks, and the package's first version through human
-  moderation, before it is listed. While a version is still in moderation, Chocolatey
-  refuses newer ones with **403 Forbidden**, so the release's `chocolatey / push` job
-  fails until the earlier version is approved. Then push the newer release by hand as
-  above (v0.0.2 waited this way for v0.0.1).
+  required reviewers, like `pypi`. Each push goes through Chocolatey's automated
+  checks, and the package's first version through human moderation, before it is
+  listed. While a version is still in moderation, Chocolatey refuses newer ones with
+  **403 Forbidden**, so the release's `publish-chocolatey` job fails until the earlier
+  version is approved. Then re-run that job (**Re-run failed jobs** on the release run;
+  v0.0.2 waited this way for v0.0.1).
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,

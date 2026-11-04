@@ -1,0 +1,83 @@
+name: publish to Chocolatey
+description: >-
+  For each selected github package with `chocolatey` (on a Windows runner):
+  render its package from its templates and the published release's
+  checksums, pack it, install it from the packed file (the install downloads
+  the release's archive and checks it), run its `test`, uninstall it, and push
+  it to the Chocolatey community repository.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  token:
+    description: A token that can read this repository's releases.
+    default: ${{ github.token }}
+  api-key:
+    description: The chocolatey.org API key of the account that owns the package.
+    default: ""
+  push:
+    description: '"false" to pack and test only.'
+    default: "true"
+  verify-only:
+    description: '"true" to do nothing (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        SELECTION: ${{ inputs.selection }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        py="$(command -v python3 || command -v python)"
+        root="$RUNNER_TEMP/chocolatey"
+        rm -rf "$root" && mkdir -p "$root"
+        : > "$root/packages"
+        while IFS=$'\t' read -r name version tag slug; do
+          shape="$("$py" "$kit" github-release --name "$name" --stage "$root" --notes-out "$root/unused" --options-only)"
+          [ "$(jq -r '.chocolatey | length' <<<"$shape")" != 0 ] || continue
+          mkdir -p "$root/$slug"
+          gh release download "$tag" --pattern '*.sha256' --dir "$root/$slug/sums"
+          cat "$root/$slug/sums"/*.sha256 > "$root/$slug/SHA256SUMS"
+          "$py" "$kit" render --name "$name" --channel chocolatey --sums "$root/$slug/SHA256SUMS" --out "$root/$slug/package" > /dev/null
+          printf '%s\t%s\t%s\t%s\n' "$name" "$version" "$slug" "$(jq -r '.chocolatey.test // ""' <<<"$shape")" >> "$root/packages"
+        done < <(jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION")
+    - if: inputs.verify-only != 'true'
+      shell: pwsh
+      env:
+        CHOCOLATEY_API_KEY: ${{ inputs.api-key }}
+        PUSH: ${{ inputs.push }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $root = Join-Path $env:RUNNER_TEMP chocolatey
+        foreach ($line in Get-Content (Join-Path $root packages)) {
+          $name, $version, $slug, $test = $line -split "`t", 4
+          $dir = Join-Path $root $slug
+          $nuspec = (Get-ChildItem (Join-Path $dir package) -Filter *.nuspec).FullName
+          $id = ([xml](Get-Content $nuspec)).package.metadata.id
+          choco pack $nuspec --outputdirectory (Join-Path $dir out)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Installed as a user would: the package downloads the release's archive
+          # and checks its sha256.
+          choco install $id --source (Join-Path $dir out) --version $version --prerelease --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($test) {
+            $env:VERSION = $version
+            & bash -c $test
+            if ($LASTEXITCODE -ne 0) { throw "$id ${version}: the test failed: $test" }
+          }
+          choco uninstall $id --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:PUSH -ne 'true') { Write-Output "$id ${version}: packed and tested, not pushed"; continue }
+          if (-not $env:CHOCOLATEY_API_KEY) { throw "no api-key: $id $version cannot be pushed" }
+          # Each version goes through Chocolatey's checks (and a new package through
+          # moderation) before it is listed; the push only submits it.
+          $package = (Get-ChildItem (Join-Path $dir out) -Filter *.nupkg).FullName
+          choco push $package --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output "$id ${version}: pushed"
+        }

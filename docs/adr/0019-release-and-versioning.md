@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-04). The policy is in force, and the release flow has been exercised by a real tag: v0.0.1 (#356) was published to GitHub Releases and PyPI on 2026-10-04, and v0.0.2 on 2026-10-06. The Homebrew formula is in the public tap `buchochelliq-labs/homebrew-tap`. Reporting the store schema in `ods version` is a follow-up. Amended by ADR-0035: the crates are published to crates.io at the product version.
 - **Date:** 2026-09-27 (amended 2026-09-29: first release is 0.0.1; 0.1.0 means the
-  dashboard design is complete)
+  dashboard design is complete; amended 2026-11-04: §5, releases through release-kit)
 - **Issues:** #101, #212, #309
 - **Deciders:** @n1ckyb
 
@@ -30,7 +30,7 @@ them intact:
 - **Configuration** (ADR-0005): `ods.toml`.
 
 All crates have `publish = false`. Nothing is on crates.io, and only the binary reaches
-users.
+users. (Superseded by ADR-0035: every crate is published to crates.io.)
 
 ## Options considered
 ### Option A — One product version, plus a version per interface (chosen)
@@ -139,28 +139,27 @@ formats) is covered by the rows above.
 - **Release notes:** the version's changelog section, copied verbatim into the GitHub
   release by the #212 workflow, followed by the checksums and install commands.
 
-### 4. Deprecation policy
-- Deprecation is announced before removal:
-  - Deprecated behaviour keeps working and prints a warning on stderr, where ADR-0003
-    sends warnings, so JSON on stdout stays parseable.
-  - It is listed under **Deprecated** in the changelog, naming the replacement.
-- **Before 1.0:** removal is allowed in the next minor at the earliest (in the 0.0.x
-  series, the next release). The warning must have shipped in at least one release.
-- **From 1.0:** removal is allowed in the next major only.
-- **Persisted formats are never deprecated away.** State written by any `ods` since
-  0.0.1, the first release, stays readable by every later `ods`, whatever the version:
-  - every earlier store schema keeps its migration;
-  - every earlier document major keeps a reader that upgrades it to the current one.
-
-  Support is never removed, so history can always be explained (AGENTS.md rule 4).
-- **SDK contracts.**
-  - **Before 1.0,** a provider must match the host's contract minor exactly (ADR-0006
-    §6), so there is no window. A contract change is listed under **Breaking**, and
-    out-of-process plugins must be rebuilt for the release. In-process providers are
-    compiled with the host and need nothing.
-  - **From 1.0,** the host accepts providers built against earlier minors, so a
-    contract's successor ships alongside it and the deprecation window above applies.
-    The old contract is removed only in a major.
+### 5. Release tooling: release-kit (amended 2026-11-04)
+Releases are cut with [release-kit](https://github.com/buchochelliq-labs/release-kit),
+the buchochelliq-labs release tooling, instead of a hand-written workflow.
+`release-kit.yml` lists every channel; `.github/release-kit/` is an installed,
+unmodified copy (CI runs `release.py check` and `release.py vendored`).
+- **What is published, all at the product version (§1):**
+  - every workspace crate, on crates.io, in dependency order (ADR-0035);
+  - the GitHub release on `vX.Y.Z`: archives, `SHA256SUMS`, provenance attestations,
+    and the changelog section as notes (§3);
+  - the wheels, on PyPI as `opendatasuite`;
+  - Homebrew and Chocolatey, which release-kit makes from the GitHub release, from
+    ODS's templates in `packaging/`.
+- **Tags.** `release.py tag` pushes an annotated record tag per package that is due:
+  `<crate>-vX.Y.Z`, `vX.Y.Z` for the GitHub release, and `opendatasuite-vX.Y.Z`. Then it
+  pushes `release-X.Y.Z`, which alone starts the release run. `vX.Y.Z` keeps naming the
+  GitHub release, so download URLs, the Homebrew formula, Chocolatey and cargo-binstall
+  are unchanged. A run that fails is finished by tagging again: what is published is
+  never published again.
+- **What changes for users:**
+  - Wheels are on PyPI only, no longer on the GitHub release.
+  - Linux archives and wheels are separate compiles of the same commit, each tested.
 
 ## Consequences
 - Positive:
@@ -171,8 +170,8 @@ formats) is covered by the rows above.
   - Reviewers get a concrete list of what counts as breaking.
 - Negative / trade-offs:
   - Two kinds of version numbers to explain; §2's table is the reference.
-  - Modules can't be released on their own. That is revisited when crates are published
-    or SDK 1.0 arrives, in a superseding ADR.
+  - Modules can't be released on their own. That is revisited when SDK 1.0 arrives, in a
+    superseding ADR. (The crates are published since ADR-0035, but in lockstep.)
   - Every user-visible PR needs a changelog entry, which is a small tax on each PR.
 - Follow-up issues:
   - #212: the release workflow uses the `vX.Y.Z` tag, attaches the changelog section,

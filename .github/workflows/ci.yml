@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release run (release.yml, release-kit) runs CI once on the tagged commit.
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to check out (the release's tagged commit)
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -22,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -35,7 +44,12 @@ jobs:
       - run: python3 scripts/check-vendor-neutral.py --self-test
       - run: python3 scripts/check-vendor-neutral.py
       - run: python3 scripts/changelog-section.py --self-test
-      - run: scripts/update-homebrew-tap.sh --self-test
+      # release-kit.yml matches every manifest, and the installed kit is unmodified.
+      - name: release-kit
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 .github/release-kit/scripts/release.py check
+          python3 .github/release-kit/scripts/release.py vendored
       - name: Validate repo metadata
         run: |
           jq empty .github/*.json
@@ -49,6 +63,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
@@ -67,6 +83,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
@@ -129,6 +147,8 @@ jobs:
       RICH_VERSION: 0.0.20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Cache the rich CLI (rs-rich-cli)
@@ -195,6 +215,8 @@ jobs:
         working-directory: examples/custom-ods
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -209,6 +231,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@1.90
       - uses: Swatinem/rust-cache@v2
       # `+1.90` overrides rust-toolchain.toml, which would otherwise select stable.
@@ -218,4 +242,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: EmbarkStudios/cargo-deny-action@v2

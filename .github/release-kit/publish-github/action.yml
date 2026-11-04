@@ -1,0 +1,127 @@
+name: publish to GitHub Releases
+description: >-
+  Create the GitHub release on each selected package's tag, attach its files,
+  then download them again and check every `.sha256` (and the package's
+  `checksums` file, if it has one) against its file. A package's `notes`,
+  `checksums` and `attest` in release-kit.yml shape its release.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  dir:
+    description: >-
+      Where the build artifacts were downloaded (actions/download-artifact with
+      pattern `release--*`, not merged): each package's files are taken from
+      <dir>/release--<package>--*/.
+    default: dist
+  files:
+    description: A glob of files to attach instead (relative to the workspace); only for a single GitHub package.
+    default: ""
+  token:
+    description: A token with contents write on this repository.
+    default: ${{ github.token }}
+  verify-only:
+    description: '"true" to skip the upload and only verify (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    # Each package's files, staged in one directory with its checksums file
+    # and notes, so what is attested is exactly what is uploaded.
+    - id: stage
+      if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        # preflight reads the release with it (a private repository's is not public).
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        SELECTION: ${{ inputs.selection }}
+        FILES: ${{ inputs.files }}
+        DIR: ${{ inputs.dir }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        python3 "$kit" preflight --registry github --selection "$SELECTION"
+        shopt -s nullglob
+        root="$RUNNER_TEMP/github-release"
+        rm -rf "$root" && mkdir -p "$root"
+        attest=false
+        subjects="$root/subjects"
+        : > "$subjects"
+        while IFS=$'\t' read -r name slug; do
+          # The input is a glob: expanding it is the point.
+          # shellcheck disable=SC2206
+          if [ -n "$FILES" ]; then files=( $FILES ); else files=( "$DIR"/release--"$slug"--*/* ); fi
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::no files for $name (looked in $DIR/release--$slug--*/)"; exit 1; fi
+          mkdir -p "$root/$slug/files"
+          cp "${files[@]}" "$root/$slug/files/"
+          shape="$(python3 "$kit" github-release --name "$name" --stage "$root/$slug/files" --notes-out "$root/$slug/notes.md")"
+          echo "$shape" > "$root/$slug/shape.json"
+          if [ "$(jq -r .attest <<<"$shape")" = true ]; then
+            attest=true
+            for file in "$root/$slug/files"/*; do
+              case "$file" in *.sha256) ;; *) echo "$file" >> "$subjects" ;; esac
+            done
+          fi
+        done < <(jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.slug)"' <<<"$SELECTION")
+        echo "root=$root" >> "$GITHUB_OUTPUT"
+        echo "attest=$attest" >> "$GITHUB_OUTPUT"
+        {
+          echo "subjects<<RELEASE_KIT_SUBJECTS"
+          cat "$subjects"
+          echo "RELEASE_KIT_SUBJECTS"
+        } >> "$GITHUB_OUTPUT"
+    # Needs `id-token: write` and `attestations: write` on the calling job.
+    - if: inputs.verify-only != 'true' && steps.stage.outputs.attest == 'true'
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-path: ${{ steps.stage.outputs.subjects }}
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        SELECTION: ${{ inputs.selection }}
+        ROOT: ${{ steps.stage.outputs.root }}
+        VERIFY_ONLY: ${{ inputs.verify-only }}
+      run: |
+        set -euo pipefail
+        kit="$GITHUB_ACTION_PATH/../scripts/release.py"
+        # Verify as a stranger would: download what the release serves and check
+        # every .sha256 and checksums file against its files. A verify-only run
+        # repeats this too, so a run that failed here is not passed by re-running it.
+        check_release() {
+          local tag=$1 sums=$2 check
+          check="$(mktemp -d)"
+          gh release download "$tag" --dir "$check"
+          ( cd "$check" && for sum in *.sha256; do
+              [ -e "$sum" ] || continue
+              read -r digest file < "$sum"
+              echo "$digest  ${file#\*}" | sha256sum -c -
+            done
+            if [ -n "$sums" ]; then sha256sum -c "$sums"; fi )
+        }
+        if [ "$VERIFY_ONLY" = true ]; then
+          python3 "$kit" verify --registry github --selection "$SELECTION"
+          jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.tag)"' <<<"$SELECTION" |
+          while IFS=$'\t' read -r name tag; do
+            sums="$(python3 "$kit" github-release --name "$name" --stage "$(mktemp -d)" --notes-out /dev/null --options-only | jq -r .checksums)"
+            check_release "$tag" "$sums"
+          done
+          exit 0
+        fi
+        jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION" |
+        while IFS=$'\t' read -r name version tag slug; do
+          shape="$(cat "$ROOT/$slug/shape.json")"
+          notes=(--generate-notes)
+          if [ "$(jq -r .notes <<<"$shape")" = true ]; then notes=(--notes-file "$ROOT/$slug/notes.md"); fi
+          prerelease=(); [[ "$version" == *-* ]] && prerelease=(--prerelease)
+          # A draft until every file is up and checked: a run that stops halfway
+          # leaves a draft (not published), which the next run finishes.
+          gh release view "$tag" >/dev/null 2>&1 ||
+            gh release create "$tag" --draft --verify-tag --title "$name $version" "${notes[@]}" "${prerelease[@]}"
+          gh release upload "$tag" "$ROOT/$slug/files"/* --clobber
+          check_release "$tag" "$(jq -r .checksums <<<"$shape")"
+          gh release edit "$tag" --draft=false
+          echo "$name $version: published on $tag"
+        done
+        python3 "$kit" verify --registry github --selection "$SELECTION" --timeout 120

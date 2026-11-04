@@ -340,6 +340,11 @@ pinned commit in the workspace `Cargo.toml`.
 - **Publishing:** nothing is lost, as every ODS crate has `publish = false` (ADR-0019).
 - **Upgrades:** both crates move together, by changing the one `rev` in a PR of its own.
   Once a release carries `sql`, ODS returns to crates.io versions.
+- **Update (2026-11-04):** that release came (rs-rich 0.0.14, rs-rich-ext 0.0.21, both
+  containing the pinned commit). Both now come from crates.io, and `deny.toml` allows no
+  git source, because ODS's own crates are published (ADR-0035). They still move
+  together, in a PR of their own. `rs-rich-diagram` (below), when it is added, comes
+  from crates.io too.
 
 **How it is used.**
 - **A new tone:** `Tone::Sql` marks a span as SQL. The rich backend appends the span's

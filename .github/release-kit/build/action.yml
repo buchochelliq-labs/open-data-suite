@@ -1,0 +1,57 @@
+name: release build
+description: >-
+  Build one planned job (a matrix entry of the plan) into dist/, with a
+  .sha256 beside every file for GitHub Releases. Sets up what the kind needs:
+  Rust, Node or maturin.
+inputs:
+  job:
+    description: The matrix entry, as JSON (toJSON(matrix)).
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    - if: fromJSON(inputs.job).kind == 'rust-binary'
+      # Pinned by commit; the toolchain is an input, so it stays stable.
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      with:
+        toolchain: stable
+        targets: ${{ fromJSON(inputs.job).target }}
+    # A static musl binary links C code (ring, zstd, ...) with musl-gcc.
+    - if: fromJSON(inputs.job).kind == 'rust-binary' && contains(fromJSON(inputs.job).target, 'linux-musl') && runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+    - if: fromJSON(inputs.job).kind == 'vsix'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: "24"
+    # The artifact's own preparation (generated files, tools), before any build.
+    - if: fromJSON(inputs.job).prepare != ''
+      shell: bash
+      env:
+        JOB: ${{ inputs.job }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" prepare --job "$JOB"
+    # maturin runs in `dir`: with `cargo` empty, it finds the crate from
+    # pyproject.toml's [tool.maturin] manifest-path itself.
+    - if: fromJSON(inputs.job).kind == 'maturin'
+      uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+      with:
+        target: ${{ fromJSON(inputs.job).target }}
+        args: --release --locked --out dist${{ fromJSON(inputs.job).cargo != '' && format(' -m {0}', fromJSON(inputs.job).cargo) || '' }}
+        manylinux: auto
+        working-directory: ${{ fromJSON(inputs.job).dir || '.' }}
+    - if: fromJSON(inputs.job).kind == 'maturin-sdist'
+      uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+      with:
+        command: sdist
+        args: --out dist${{ fromJSON(inputs.job).cargo != '' && format(' -m {0}', fromJSON(inputs.job).cargo) || '' }}
+        working-directory: ${{ fromJSON(inputs.job).dir || '.' }}
+    # Only a ci-artifact job gets the token: it reads this repository's CI
+    # artifacts (actions: read). Every other kind builds with no credentials.
+    - shell: bash
+      env:
+        JOB: ${{ inputs.job }}
+        GH_TOKEN: ${{ fromJSON(inputs.job).kind == 'ci-artifact' && github.token || '' }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" build --job "$JOB" --out dist
