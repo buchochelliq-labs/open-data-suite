@@ -111,8 +111,11 @@ backtick, or a name that is `.` or `..`), which is never repaired.
 ## Sign in to the workspace
 
 ODS can sign in to the workspace itself, for the Databricks features that will call its
-APIs ([ADR-0021](adr/0021-databricks-authentication.md)). No command uses it yet: dbt
-still connects with its own profile, and `ods doctor` will show the sign-in next.
+APIs ([ADR-0021](adr/0021-databricks-authentication.md)). dbt still connects with its
+own profile. `ods doctor --connect` signs in and shows how
+(`connectivity.warehouse_login`): the method, who it signs in as, the scopes, when the
+token expires and whether the workspace accepted it, never the token. A provider
+without `auth` is one ODS doesn't sign in to (e.g. one set up for links only).
 
 Two methods so far, each used only when named with `auth`:
 

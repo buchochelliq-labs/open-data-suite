@@ -57,6 +57,10 @@ pub struct Context<'a> {
     /// Why the configuration couldn't be loaded, for a module that
     /// [diagnoses it](Module::diagnoses_config); `config` then holds the flags alone.
     pub config_failure: Option<ConfigFailure>,
+    /// The environment `ods` runs in (UTF-8 variables), for what reads it where it is
+    /// used: `env:` secret references (ADR-0032) and warehouse defaults such as a
+    /// workspace host (ADR-0021 §3). Empty unless set.
+    pub env: &'a [(String, String)],
 }
 
 /// Why the configuration couldn't be loaded. The message never holds a configured value
@@ -107,7 +111,15 @@ impl<'a> Context<'a> {
             root,
             progress: ProgressSettings::default(),
             config_failure: None,
+            env: &[],
         }
+    }
+
+    /// Sets the environment commands read (see [`Context::env`]).
+    #[must_use]
+    pub fn with_env(mut self, env: &'a [(String, String)]) -> Self {
+        self.env = env;
+        self
     }
 
     /// Records why the configuration couldn't be loaded (see [`Module::diagnoses_config`]).

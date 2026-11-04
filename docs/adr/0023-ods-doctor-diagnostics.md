@@ -115,6 +115,8 @@ identifies the finding.
   (project), `ODS-E0501` (the doctor's verdict), `E0502`, `E0503`, `W0504`, `U0505`,
   `E0506`, `U0507`, `U0508` (dbt and its adapter), `E0509` (target), `W0601`, `W0602`,
   `E0603`, `E0604`, `U0605`, `W0606`, `U0607` (capabilities, live checks).
+- *Amended 2026-11-04 (#297):* `ODS-E0608`, `E0609`, `E0610`, `U0611` (signing in to
+  the warehouse: can't be set up, refused, unreachable, not verified).
 
 `docs/cli.md` lists every code with its hint; a test fails if one is missing there.
 
@@ -196,12 +198,16 @@ connection (no credential in ODS):
 |---|---|---|
 | `connectivity.relations` | the relation check (`dbt show`, ADR-0016) over every model, seed and snapshot | dbt |
 | `connectivity.table_versions` | the table-version probe (ADR-0022) over every source; `skipped` for adapters without table versions, `unknown` (`ODS-U0507`) when the manifest names no adapter | by adapter* |
+| `connectivity.warehouse_login` | signs in to each provider that sets `auth` (ADR-0021, amended 2026-11-04, #297): its method, principal, scopes, expiry and whether it was verified, never a token; `skipped` when no provider signs in | the configured provider† |
 
 A failure there is an error (`ODS-E0603`, `ODS-E0604`) with a hint. A check that ran
 but couldn't conclude isn't a pass: a relation check that couldn't tell about some
 relations is `unknown` (`ODS-U0605`); a probe that found no table version for some
 sources warns (`ODS-W0606`), and for none is `unknown` (`ODS-U0607`). Without
 `--connect` both are `skipped`, so it is visible that they didn't run.
+
+† `databricks` when a Databricks provider is configured, `plugin` when a custom build's
+warehouse plugin signs in.
 
 **Filters.** `--project` keeps the project checks; `--provider dbt|databricks|sqlite`
 keeps the checks that concern that provider. Both together keep their intersection.

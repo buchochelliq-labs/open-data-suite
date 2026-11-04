@@ -111,6 +111,7 @@ impl Module for Doctor {
             ctx.config_failure.clone(),
             options.connect,
         )
+        .with_env(ctx.env)
         .run(&options);
         let report = DoctorReport::new(&options, checks);
         match report.failure() {

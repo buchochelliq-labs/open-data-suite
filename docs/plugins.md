@@ -118,7 +118,11 @@ that runs the released CLI with your plugins added
     when a node fails; dbt's steps come with what it recognises
     ([error patterns](reference/error-patterns.md#warehouse-plugins-patterns));
   - `dialect`: the SQL dialect column lineage parses its SQL in, by the shared
-    parser's name for it (a name the parser doesn't know refuses the plugin).
+    parser's name for it (a name the parser doesn't know refuses the plugin);
+  - `credentials`: how ODS signs in to the warehouse itself, a `Credentials` for one
+    configured provider, with secret references resolved through the `SecretResolver`
+    it is given only when a token is needed. Building it does no I/O;
+    `ods doctor --connect` calls its `status` (`connectivity.warehouse_login`).
 
   A plugin can also name the warehouses it is built on, nearest first (`parents`, as a
   dbt adapter names the adapters it depends on). Their plugins' error patterns and

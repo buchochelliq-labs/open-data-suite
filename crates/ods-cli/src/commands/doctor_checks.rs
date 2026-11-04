@@ -22,6 +22,7 @@ use ods_provider_dbt::{
 };
 use ods_sdk::Provider;
 use ods_sdk::contracts::changes::{ChangeProvider, RequestedSource};
+use ods_sdk::contracts::credentials::{AuthStatus, CredentialError};
 use ods_sdk::contracts::executor::RequestedNode;
 use ods_sdk::contracts::relations::{RelationInspector, RelationPresence};
 use ods_sdk::contracts::state_store::ProblemKind;
@@ -32,6 +33,7 @@ use super::state_settings::{Setting, StateSettings};
 use super::state_versions::{change_provider, has_change_provider, versions};
 use crate::exit::CliError;
 use crate::module::ConfigFailure;
+use crate::plugins::WarehouseSettings;
 
 /// Stable codes of `ods doctor`'s findings (ADR-0023 §2). Findings that mean what an
 /// existing command error means reuse its code (`ODS-E0101`–`E0104`, `E0201`, `E0401`,
@@ -81,10 +83,19 @@ pub(super) mod codes {
     pub const SOME_TABLE_VERSIONS: &str = "ODS-W0606";
     /// The live table-version probe ran, but no source has a table version.
     pub const NO_TABLE_VERSIONS: &str = "ODS-U0607";
+    /// Signing in to the warehouse is configured, but can't be set up (a setting or a
+    /// secret).
+    pub const SIGN_IN_SETUP: &str = "ODS-E0608";
+    /// The warehouse refused to sign in.
+    pub const SIGN_IN_REFUSED: &str = "ODS-E0609";
+    /// The warehouse couldn't be reached to sign in.
+    pub const SIGN_IN_UNREACHABLE: &str = "ODS-E0610";
+    /// Signed in with a credential nothing checked (a static token).
+    pub const SIGN_IN_UNVERIFIED: &str = "ODS-U0611";
 
     /// Every code `ods doctor` reports, reused ones included, for the docs test.
     #[cfg(test)]
-    pub const ALL: [&str; 29] = [
+    pub const ALL: [&str; 33] = [
         BLOCKED,
         "ODS-E0101",
         "ODS-E0102",
@@ -114,6 +125,10 @@ pub(super) mod codes {
         RELATIONS_UNKNOWN,
         SOME_TABLE_VERSIONS,
         NO_TABLE_VERSIONS,
+        SIGN_IN_SETUP,
+        SIGN_IN_REFUSED,
+        SIGN_IN_UNREACHABLE,
+        SIGN_IN_UNVERIFIED,
     ];
 }
 
@@ -169,9 +184,14 @@ const SQLITE: &[&str] = &["sqlite"];
 /// the project's adapter (`databricks`, or a custom build's `plugin`), else dbt's
 /// `source freshness` (`dbt`).
 const BY_ADAPTER: &[&str] = &["dbt", "databricks", "plugin"];
+/// Signing in to a warehouse: it concerns the provider configured to sign in
+/// (`databricks`, or a custom build's `plugin`).
+const SIGNS_IN: &[&str] = &["databricks", "plugin"];
+/// The check that signs in.
+const WAREHOUSE_LOGIN: &str = "connectivity.warehouse_login";
 
 /// Every check, in display order within its category.
-const SPECS: [Spec; 16] = [
+const SPECS: [Spec; 17] = [
     spec("config.load", C::Config, NONE, true),
     spec("config.values", C::Config, NONE, false),
     spec("config.resolution", C::Config, NONE, true),
@@ -203,6 +223,7 @@ const SPECS: [Spec; 16] = [
         BY_ADAPTER,
         false,
     ),
+    spec(WAREHOUSE_LOGIN, C::Connectivity, SIGNS_IN, false),
 ];
 
 /// A check couldn't run because the check it names, a precondition, failed.
@@ -219,6 +240,8 @@ struct ManifestProblem {
 /// What the checks learn, each at most once.
 pub(super) struct Checks<'a> {
     config: &'a Loaded,
+    /// The environment `ods` runs in: `env:` secrets and warehouse defaults.
+    env: &'a [(String, String)],
     config_failure: Option<ConfigFailure>,
     settings: Result<StateSettings, CliError>,
     connect: bool,
@@ -238,6 +261,7 @@ impl<'a> Checks<'a> {
     ) -> Self {
         Self {
             config,
+            env: &[],
             config_failure,
             settings: StateSettings::resolve(args, config),
             connect,
@@ -245,6 +269,13 @@ impl<'a> Checks<'a> {
             dbt: OnceCell::new(),
             target: OnceCell::new(),
         }
+    }
+
+    /// With `env` as the environment `ods` runs in.
+    #[must_use]
+    pub(super) fn with_env(mut self, env: &'a [(String, String)]) -> Self {
+        self.env = env;
+        self
     }
 
     /// Runs the checks `options` selects, in display order.
@@ -260,6 +291,11 @@ impl<'a> Checks<'a> {
                     [one] => Some(*one),
                     // The adapter decides; if it can't be read, the check is shown
                     // under the provider asked for, so its failure isn't hidden.
+                    many if s.id == WAREHOUSE_LOGIN => Some(
+                        login_provider(&self.config.config)
+                            .or_else(|| wanted.and_then(|p| many.iter().copied().find(|m| *m == p)))
+                            .unwrap_or(many[0]),
+                    ),
                     many => Some(
                         self.adapter_provider()
                             .or_else(|| wanted.and_then(|p| many.iter().copied().find(|m| *m == p)))
@@ -310,6 +346,7 @@ impl<'a> Checks<'a> {
             "capabilities.plugins" => Ok(ods_plugins(s, crate::plugins::installed())),
             "connectivity.relations" => self.live_relations(s),
             "connectivity.table_versions" => self.live_versions(s),
+            WAREHOUSE_LOGIN => self.warehouse_login(s),
             other => unreachable!(
                 "`{other}` has no check: every id in SPECS has one (tests run them all)"
             ),
@@ -955,6 +992,200 @@ impl<'a> Checks<'a> {
     }
 }
 
+impl Checks<'_> {
+    /// Signs in to each configured warehouse whose plugin can (`--connect` only).
+    fn warehouse_login(&self, s: Spec) -> Result<CheckResult, Blocked> {
+        if !self.connect {
+            return Ok(not_connected(s));
+        }
+        if self.config_failure.is_some() {
+            return Err(Blocked("config.load"));
+        }
+        Ok(warehouse_login(
+            s,
+            crate::plugins::installed(),
+            &self.config.config,
+            self.env,
+        ))
+    }
+}
+
+/// Which provider the sign-in check concerns: `databricks` when a provider of that
+/// kind is configured, else `plugin` when any configured provider's warehouse plugin
+/// signs in.
+fn login_provider(config: &ods_config::Config) -> Option<&'static str> {
+    let kinds: Vec<&str> = config.providers.values().map(|p| p.kind.as_str()).collect();
+    if kinds.contains(&"databricks") {
+        return Some("databricks");
+    }
+    let plugins = crate::plugins::installed();
+    kinds
+        .iter()
+        .any(|kind| {
+            plugins
+                .credentials(
+                    Some(kind),
+                    &WarehouseSettings::empty(),
+                    ods_sdk::secrets::SecretResolver::new(),
+                )
+                .is_some()
+        })
+        .then_some("plugin")
+}
+
+/// What signing in to one provider came to.
+enum Login {
+    SignedIn(AuthStatus),
+    Failed(CredentialError, Option<String>),
+}
+
+/// Signs in to each `[providers.<name>]` whose warehouse plugin can, in name order.
+/// A provider with no `auth` set isn't one ODS signs in to.
+fn warehouse_login(
+    s: Spec,
+    plugins: &crate::plugins::Plugins,
+    config: &ods_config::Config,
+    env: &[(String, String)],
+) -> CheckResult {
+    let mut logins: Vec<(String, Login)> = Vec::new();
+    let mut without_auth = Vec::new();
+    for (name, provider) in &config.providers {
+        let settings = WarehouseSettings::from_config(config, &provider.kind)
+            .only(name)
+            .with_env(env.iter().cloned());
+        let Some(built) =
+            plugins.credentials(Some(&provider.kind), &settings, plugins.secrets(env))
+        else {
+            continue;
+        };
+        let login = match built {
+            Ok(credentials) => match block_on(credentials.status()) {
+                Ok(Ok(status)) => Login::SignedIn(status),
+                Ok(Err(e)) => Login::Failed(e, credentials.login_hint()),
+                Err(e) => Login::Failed(CredentialError::Unavailable { reason: e.message }, None),
+            },
+            Err(CredentialError::NotConfigured { setting }) if setting == "auth" => {
+                without_auth.push(name.clone());
+                continue;
+            }
+            Err(e) => Login::Failed(e, None),
+        };
+        logins.push((name.clone(), login));
+    }
+    if logins.is_empty() {
+        let message = if without_auth.is_empty() {
+            "no configured provider signs in to its warehouse".to_owned()
+        } else {
+            format!(
+                "no configured provider signs in: {} set no `auth`",
+                without_auth.join(", ")
+            )
+        };
+        return CheckResult::skipped(s.id, s.category, message);
+    }
+    let mut evidence = Vec::new();
+    let mut failed = None;
+    let mut unverified = Vec::new();
+    let mut signed_in = Vec::new();
+    for (name, login) in &logins {
+        match login {
+            Login::SignedIn(status) => {
+                evidence.extend(status_evidence(name, status));
+                if status.verified {
+                    signed_in.push(name.as_str());
+                } else {
+                    unverified.push(name.as_str());
+                }
+            }
+            Login::Failed(e, hint) => {
+                evidence.push(Evidence::new(format!("{name}.error"), qualified(name, e)));
+                if failed.is_none() {
+                    failed = Some((name.as_str(), e, hint.clone()));
+                }
+            }
+        }
+    }
+    let mut result = if let Some((name, e, hint)) = failed {
+        // Worth retrying (the warehouse, or a secret store, couldn't be reached) is
+        // unreachable, whichever part failed.
+        let code = match e {
+            CredentialError::Refused { .. } => codes::SIGN_IN_REFUSED,
+            e if e.is_retryable() => codes::SIGN_IN_UNREACHABLE,
+            _ => codes::SIGN_IN_SETUP,
+        };
+        let result = CheckResult::error(
+            s.id,
+            s.category,
+            code,
+            format!("`{name}` couldn't sign in: {}", qualified(name, e)),
+        );
+        match hint {
+            Some(hint) => result.hint(hint),
+            None => result,
+        }
+    } else if !unverified.is_empty() {
+        CheckResult::unknown(
+            s.id,
+            s.category,
+            codes::SIGN_IN_UNVERIFIED,
+            format!(
+                "{} sign in with a static token, which nothing checks until an API is called",
+                unverified.join(", ")
+            ),
+        )
+    } else {
+        CheckResult::ok(
+            s.id,
+            s.category,
+            format!("signed in: {}", signed_in.join(", ")),
+        )
+    };
+    if !without_auth.is_empty() {
+        evidence.push(Evidence::new("without_auth", without_auth.join(", ")));
+    }
+    result.evidence = evidence;
+    result
+}
+
+/// How a provider signed in, as evidence: never a token.
+fn status_evidence(name: &str, status: &AuthStatus) -> Vec<Evidence> {
+    let method = serde_json::to_value(&status.method)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    let mut evidence = vec![Evidence::new(format!("{name}.method"), method)];
+    if let Some(principal) = &status.principal {
+        evidence.push(Evidence::new(
+            format!("{name}.principal"),
+            principal.clone(),
+        ));
+    }
+    if !status.scopes.is_empty() {
+        evidence.push(Evidence::new(
+            format!("{name}.scopes"),
+            status.scopes.join(" "),
+        ));
+    }
+    if let Some(at) = status.expires_at {
+        evidence.push(Evidence::new(format!("{name}.expires_at"), at.to_string()));
+    }
+    evidence.push(Evidence::new(
+        format!("{name}.verified"),
+        status.verified.to_string(),
+    ));
+    evidence
+}
+
+/// `e`, with a setting it names qualified by the provider (`providers.<name>.settings.…`).
+fn qualified(name: &str, e: &CredentialError) -> String {
+    let key = |setting: &str| format!("providers.{name}.settings.{setting}");
+    match e {
+        CredentialError::NotConfigured { setting } => format!("`{}` isn't set", key(setting)),
+        CredentialError::InvalidSetting { setting, why } => format!("`{}` {why}", key(setting)),
+        other => other.to_string(),
+    }
+}
+
 /// The models, seeds and snapshots whose relations the live check asks about.
 fn relation_nodes(manifest: &Manifest) -> Vec<RequestedNode> {
     manifest
@@ -1205,6 +1436,7 @@ pub(super) fn dbt_capabilities(settings: &StateSettings) -> Vec<String> {
 pub(super) fn offline_checks(config: &Loaded, settings: &StateSettings) -> Vec<CheckResult> {
     let checks = Checks {
         config,
+        env: &[],
         config_failure: None,
         settings: Ok(settings.clone()),
         connect: false,
@@ -1323,6 +1555,7 @@ pub(super) fn configuration_checks(
     if let Some(config) = config {
         let checks = Checks {
             config,
+            env: &[],
             config_failure: None,
             settings: Ok(settings.clone()),
             connect: false,
@@ -1988,7 +2221,9 @@ mod tests {
             },
         );
         // The fixture is DuckDB: the source-version checks concern dbt, not Databricks.
-        assert!(checks.is_empty(), "{checks:?}");
+        // Signing in concerns the Databricks provider asked for; it needs --connect.
+        let ids: Vec<&str> = checks.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, [WAREHOUSE_LOGIN], "{checks:?}");
         let dbt = project.run(
             &[],
             &Options {
@@ -2012,7 +2247,8 @@ mod tests {
             ids,
             [
                 "capabilities.relation_versions",
-                "connectivity.table_versions"
+                "connectivity.table_versions",
+                WAREHOUSE_LOGIN
             ]
         );
         assert!(
@@ -2177,6 +2413,199 @@ mod tests {
                 !matches!(spec.category, C::Tools | C::Target | C::Connectivity),
                 "{id} runs dbt or connects"
             );
+        }
+    }
+
+    mod sign_in {
+        use std::sync::Arc;
+
+        use ods_provider_fake::FakeCredentials;
+        use ods_sdk::contracts::credentials::{AuthMethod, Credentials};
+        use ods_sdk::secrets::SecretResolver;
+
+        use super::*;
+        use crate::plugins::{Origin, Plugins, WarehousePlugin};
+
+        const MARKER: &str = "ods-test-token-7c1e";
+        const SPEC: Spec = SPECS[16];
+
+        /// A warehouse whose providers sign in as their `outcome` setting says.
+        struct Acme;
+
+        impl WarehousePlugin for Acme {
+            fn origin(&self) -> Origin {
+                Origin::new("acme", "1.0.0")
+            }
+            fn warehouse(&self) -> &'static str {
+                "acme"
+            }
+            fn credentials(
+                &self,
+                settings: &WarehouseSettings,
+                _secrets: SecretResolver,
+            ) -> Option<Result<Arc<dyn Credentials>, CredentialError>> {
+                let table = settings
+                    .providers()
+                    .values()
+                    .next()
+                    .cloned()
+                    .unwrap_or_default();
+                let status = |method, verified| {
+                    AuthStatus::new(
+                        method,
+                        Some("app-1".to_owned()),
+                        vec!["sql".to_owned()],
+                        Some(Timestamp::from_unix(0)),
+                        verified,
+                    )
+                };
+                let fake = match table.get("outcome").and_then(|v| v.as_str()) {
+                    None => {
+                        return Some(Err(CredentialError::NotConfigured {
+                            setting: "auth".to_owned(),
+                        }));
+                    }
+                    Some("m2m") => {
+                        FakeCredentials::signed_in(status(AuthMethod::ServiceSecret, true))
+                    }
+                    Some("pat") => {
+                        FakeCredentials::signed_in(status(AuthMethod::StaticToken, false))
+                    }
+                    Some("refused") => FakeCredentials::failing(CredentialError::Refused {
+                        reason: "HTTP 401: invalid_client".to_owned(),
+                    })
+                    .with_login_hint("check the client secret"),
+                    Some("offline") => FakeCredentials::failing(CredentialError::Unavailable {
+                        reason: "timed out".to_owned(),
+                    }),
+                    Some(_) => {
+                        return Some(Err(CredentialError::InvalidSetting {
+                            setting: "auth".to_owned(),
+                            why: "must be `m2m` or `pat`".to_owned(),
+                        }));
+                    }
+                };
+                Some(Ok(Arc::new(fake)))
+            }
+        }
+
+        fn plugins() -> Plugins {
+            let mut plugins = Plugins::none();
+            plugins.add_warehouse(Arc::new(Acme)).unwrap();
+            plugins
+        }
+
+        fn config(providers: &[(&str, &str)]) -> ods_config::Config {
+            use std::fmt::Write as _;
+            let mut text = String::new();
+            for (name, outcome) in providers {
+                let _ = writeln!(
+                    text,
+                    "[providers.{name}]\nkind = \"acme\"\n[providers.{name}.settings]"
+                );
+                if !outcome.is_empty() {
+                    let _ = writeln!(text, "outcome = \"{outcome}\"");
+                }
+            }
+            toml::from_str(&text).unwrap()
+        }
+
+        fn check(providers: &[(&str, &str)]) -> CheckResult {
+            warehouse_login(
+                SPEC,
+                &plugins(),
+                &config(providers),
+                &[("T".to_owned(), MARKER.to_owned())],
+            )
+        }
+
+        fn evidence<'a>(check: &'a CheckResult, key: &str) -> Option<&'a str> {
+            check
+                .evidence
+                .iter()
+                .find(|e| e.key == key)
+                .map(|e| e.value.as_str())
+        }
+
+        #[test]
+        fn a_signed_in_provider_reports_how_and_never_a_token() {
+            let ok = check(&[("uc", "m2m")]);
+            assert_eq!(ok.status, CheckStatus::Ok, "{ok:?}");
+            assert_eq!(ok.message, "signed in: uc");
+            assert_eq!(evidence(&ok, "uc.method"), Some("service_secret"));
+            assert_eq!(evidence(&ok, "uc.principal"), Some("app-1"));
+            assert_eq!(evidence(&ok, "uc.scopes"), Some("sql"));
+            assert_eq!(evidence(&ok, "uc.expires_at"), Some("1970-01-01T00:00:00Z"));
+            assert_eq!(evidence(&ok, "uc.verified"), Some("true"));
+            let shown = format!("{ok:?} {}", serde_json::to_string(&ok).unwrap());
+            assert!(!shown.contains(MARKER), "{shown}");
+        }
+
+        #[test]
+        fn a_static_token_is_unknown_and_failures_have_their_own_codes() {
+            let pat = check(&[("uc", "pat")]);
+            assert_eq!(pat.status, CheckStatus::Unknown);
+            assert_eq!(pat.code.as_deref(), Some(codes::SIGN_IN_UNVERIFIED));
+
+            let refused = check(&[("uc", "refused")]);
+            assert_eq!(refused.status, CheckStatus::Error);
+            assert_eq!(refused.code.as_deref(), Some(codes::SIGN_IN_REFUSED));
+            assert_eq!(refused.hint.as_deref(), Some("check the client secret"));
+            assert!(
+                refused
+                    .message
+                    .starts_with("`uc` couldn't sign in: sign-in was refused"),
+                "{refused:?}"
+            );
+
+            let offline = check(&[("uc", "offline")]);
+            assert_eq!(offline.code.as_deref(), Some(codes::SIGN_IN_UNREACHABLE));
+
+            let invalid = check(&[("uc", "nonsense")]);
+            assert_eq!(invalid.code.as_deref(), Some(codes::SIGN_IN_SETUP));
+            assert!(
+                invalid
+                    .message
+                    .contains("`providers.uc.settings.auth` must be"),
+                "{invalid:?}"
+            );
+
+            // The first failure, in name order, decides; the others are evidence.
+            let mixed = check(&[("b", "offline"), ("a", "m2m"), ("c", "refused")]);
+            assert_eq!(mixed.code.as_deref(), Some(codes::SIGN_IN_UNREACHABLE));
+            assert_eq!(evidence(&mixed, "a.verified"), Some("true"));
+            assert!(evidence(&mixed, "c.error").is_some());
+        }
+
+        #[test]
+        fn providers_without_auth_or_a_plugin_that_signs_in_are_left_out() {
+            let none = check(&[("uc", "")]);
+            assert_eq!(none.status, CheckStatus::Skipped);
+            assert_eq!(
+                none.message,
+                "no configured provider signs in: uc set no `auth`"
+            );
+            let some = check(&[("uc", ""), ("prod", "m2m")]);
+            assert_eq!(some.status, CheckStatus::Ok);
+            assert_eq!(evidence(&some, "without_auth"), Some("uc"));
+            let other: ods_config::Config =
+                toml::from_str("[providers.wh]\nkind = \"elsewhere\"\n").unwrap();
+            let skipped = warehouse_login(SPEC, &plugins(), &other, &[]);
+            assert_eq!(
+                skipped.message,
+                "no configured provider signs in to its warehouse"
+            );
+        }
+
+        #[test]
+        fn the_check_runs_only_with_connect() {
+            assert_eq!(SPEC.id, WAREHOUSE_LOGIN);
+            let config = ods_config::load(&ods_config::Inputs::default()).unwrap();
+            let matches = matches(["doctor"]);
+            let offline = Checks::new(&matches, &config, None, false).run(&Options::default());
+            let login = only(WAREHOUSE_LOGIN, &offline);
+            assert_eq!(login.status, CheckStatus::Skipped);
+            assert_eq!(login.message, "a live check: pass --connect to run it");
         }
     }
 }

@@ -81,6 +81,51 @@ jobs:
           # Exactly the pinned packages: nothing resolved at install time.
           ~/dbt-databricks-venv/bin/pip install --no-deps -r .github/dbt/requirements-databricks.txt
           ~/dbt-databricks-venv/bin/pip check
+      # ODS signs in by itself (M2M, #297, ADR-0021), before ci.py exports a token:
+      # `ods doctor --connect` asks the workspace for a token with the service
+      # principal's secret and reports how it signed in, never the token.
+      - name: ods signs in with the service principal (M2M)
+        env:
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: |
+          if [ -z "$DATABRICKS_CLIENT_SECRET" ] || [ -z "$DATABRICKS_CLIENT_ID" ]; then
+            echo "::notice::No DATABRICKS_CLIENT_SECRET or DATABRICKS_CLIENT_ID: ODS's M2M sign-in isn't checked."
+            exit 0
+          fi
+          dir=$(mktemp -d)
+          # Values are quoted as TOML strings by Python (json.dumps), so a quote in a
+          # variable can't break the file; the secret goes in only as a reference.
+          python3 - "$dir/ods.toml" <<'PY'
+          import json, os, sys
+          scopes = os.environ.get("DATABRICKS_OAUTH_SCOPES", "").replace(",", " ").split()
+          lines = [
+              "[providers.uc]",
+              'kind = "databricks"',
+              "[providers.uc.settings]",
+              'auth = "m2m"',
+              "client_id = " + json.dumps(os.environ["DATABRICKS_CLIENT_ID"]),
+              'client_secret = { secret = "env:DATABRICKS_CLIENT_SECRET" }',
+          ]
+          if scopes:
+              lines.append("scopes = [" + ", ".join(json.dumps(s) for s in scopes) + "]")
+          open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+          PY
+          # The other Databricks checks need a dbt project, so doctor's own verdict isn't
+          # the test: the sign-in check's is.
+          status=0
+          (cd "$dir" && "$ODS" doctor --connect --provider databricks --output json > doctor.json) || status=$?
+          python3 - "$dir/doctor.json" "$status" <<'PY'
+          import json, sys
+          try:
+              checks = json.load(open(sys.argv[1]))["result"]["checks"]
+          except (OSError, ValueError, KeyError) as e:
+              sys.exit(f"ods doctor (exit {sys.argv[2]}) wrote no report: {e}")
+          login = next(c for c in checks if c["id"] == "connectivity.warehouse_login")
+          shown = {e["key"]: e["value"] for e in login.get("evidence", [])}
+          print(login["status"], login["message"], shown)
+          if login["status"] != "ok" or shown.get("uc.verified") != "true":
+              sys.exit("ODS couldn't sign in with M2M: " + login["message"])
+          PY
       - name: Authenticate (federation, else service principal secret)
         env:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}

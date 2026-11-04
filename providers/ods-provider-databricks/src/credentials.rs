@@ -47,10 +47,13 @@ impl DatabricksCredentials {
         env: &[(String, String)],
         secrets: SecretResolver,
     ) -> Result<Self, CredentialError> {
+        // Settings first: a configuration that can't sign in is told so without the
+        // TLS stack (and the system's root certificates) being set up for nothing.
+        let settings = Settings::parse(settings, env)?;
         let transport = Https::new().map_err(|reason| CredentialError::Unavailable { reason })?;
         Ok(Self::with_transport(
             instance,
-            Settings::parse(settings, env)?,
+            settings,
             secrets,
             Arc::new(transport),
         ))
