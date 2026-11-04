@@ -1,15 +1,21 @@
-name: release-kit build
+name: rab build
 
-# Installed by release-kit (`release.py install`) as
-# .github/workflows/release-kit-build.yml; do not edit, reinstall instead.
+# Installed by rab, the Release Asset Bundle (`release.py install`), as
+# .github/workflows/rab-build.yml; do not edit, reinstall instead.
 #
-# Builds the artifacts release-kit.yml declares for the packages a release
+# Builds the artifacts rab.yml declares for the packages a release
 # gate selected, from the tagged commit: one job per artifact (and target),
 # each on the runner it needs. Every job uploads its files as the artifact
 # `release--<package slug>--<job id>`, which the publish actions pick up.
 # Building needs no credentials, except that a ci-artifact job reads this
 # repository's CI artifacts (actions: read); publishing stays in release.yml's
 # own jobs.
+#
+# Each job checks out a record tag the gate checked (a package's
+# `<name> <version>` tag, on the tagged commit) and stops before anything from
+# it runs unless the tag still names `sha`: what is built is the commit the
+# gate found on the default branch, and a tag moved during the run builds
+# nothing. Nothing here writes to the Actions cache (see docs/workflow.md).
 
 on:
   workflow_call:
@@ -34,12 +40,24 @@ jobs:
       jobs: ${{ steps.plan.outputs.jobs }}
       count: ${{ steps.plan.outputs.count }}
     steps:
+      # The first selected package's record tag; the gate put it on `sha`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.sha }}
+          ref: refs/tags/${{ fromJSON(inputs.selection)[0].tag }}
           persist-credentials: false
+      - name: Check the tag still names the gated commit
+        shell: bash
+        env:
+          TAG: ${{ fromJSON(inputs.selection)[0].tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          at=$(git rev-parse HEAD)
+          if [ "$at" != "$SHA" ]; then
+            echo "::error::$TAG is at $at, not $SHA, the commit the gate checked; nothing is built"
+            exit 1
+          fi
       - id: plan
-        uses: ./.github/release-kit/plan
+        uses: ./.github/rab/plan
         with:
           selection: ${{ inputs.selection }}
 
@@ -53,11 +71,23 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.jobs) }}
     runs-on: ${{ matrix.os }}
     steps:
+      # This package's record tag, checked as in `plan`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.sha }}
+          ref: refs/tags/${{ matrix.tag }}
           persist-credentials: false
-      - uses: ./.github/release-kit/build
+      - name: Check the tag still names the gated commit
+        shell: bash
+        env:
+          TAG: ${{ matrix.tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          at=$(git rev-parse HEAD)
+          if [ "$at" != "$SHA" ]; then
+            echo "::error::$TAG is at $at, not $SHA, the commit the gate checked; nothing is built"
+            exit 1
+          fi
+      - uses: ./.github/rab/build
         with:
           job: ${{ toJSON(matrix) }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

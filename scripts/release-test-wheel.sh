@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release-kit's test for each wheel (release-kit.yml), run in its build job with DIST
+# rab's test for each wheel (rab.yml), run in its build job with DIST
 # (the wheel's directory) and VERSION set: the wheel ships the licence and the notices,
 # and `pip install` puts an `ods` on PATH that reports the version (#212).
 set -euo pipefail

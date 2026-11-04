@@ -158,18 +158,18 @@ with what to do. The release notes of each version are its changelog section.
 
 ## For maintainers
 
-Releases use [release-kit](https://github.com/buchochelliq-labs/release-kit) (ADR-0019):
-`release-kit.yml` lists every channel, `.github/release-kit/` is the installed kit, and
+Releases use [rab](https://github.com/buchochelliq-labs/release-asset-bundle), the Release Asset Bundle (ADR-0019):
+`rab.yml` lists every channel, `.github/rab/` is the installed kit, and
 `.github/workflows/release.yml` runs it. Everything is released together at the
 workspace version.
 
 1. **The release PR** bumps `workspace.package.version` and the internal crates'
    `version = "X.Y.Z"` requirements in `Cargo.toml` (ADR-0035), moves `[Unreleased]` in
    `CHANGELOG.md` under the new version, and runs
-   `python3 .github/release-kit/scripts/release.py sync` to copy the version into
-   `release-kit.yml`. CI's `release.py check` fails until they agree.
+   `python3 .github/rab/scripts/release.py sync` to copy the version into
+   `rab.yml`. CI's `release.py check` fails until they agree.
 2. **Once it is merged**, on an up-to-date `main`:
-   `python3 .github/release-kit/scripts/release.py tag`. It pushes an annotated record
+   `python3 .github/rab/scripts/release.py tag`. It pushes an annotated record
    tag per package that is due (`ods-core-vX.Y.Z`, …, `vX.Y.Z` for the GitHub release,
    `opendatasuite-vX.Y.Z` for PyPI), then `release-X.Y.Z`, which starts the release
    run, and waits for it. `release.py status` shows what is published.
@@ -189,11 +189,14 @@ workspace version.
     7. renders the Chocolatey package (`packaging/chocolatey/`), packs it, installs it
        on Windows from the release's archive, checks `ods version`, and pushes it.
 
-   Homebrew and Chocolatey are release-kit's `homebrew` and `chocolatey` settings on
-   the `ods` package in `release-kit.yml`.
+   Homebrew and Chocolatey are rab's `homebrew` and `chocolatey` settings on
+   the `ods` package in `rab.yml`.
 4. **A failed release** is finished by running `release.py tag` again: it publishes
-   only what is still due. See release-kit's
-   [recovery guide](https://github.com/buchochelliq-labs/release-kit/blob/main/docs/recovery.md).
+   only what is still due, including a Homebrew pull request or a Chocolatey push that
+   failed after the GitHub release was out. A Chocolatey version that was rejected is
+   final: publish a new version. Each run also leaves a `release-record` artifact
+   saying what was published. See rab's
+   [recovery guide](https://github.com/buchochelliq-labs/release-asset-bundle/blob/main/docs/recovery.md).
 
 Pull requests that change packaging files run the `Packaging` workflow, which runs the
 same notices, wheel test and notes scripts, and renders the formula and the Chocolatey
@@ -206,7 +209,7 @@ allow `release-*` tags, which is what starts the run:
   secret: a crates.io API token with the `publish-new` and `publish-update` scopes. It
   publishes each crate's first version (crates.io offers Trusted Publishing only for a
   crate that exists). crates.io allows a burst of new crates and then one every few
-  minutes, so the first release of all 18 crates takes about two hours; release-kit
+  minutes, so the first release of all 18 crates takes about two hours; rab
   waits it out. After that release, add a
   [Trusted Publisher](https://crates.io/docs/trusted-publishing) to each crate
   (repository `buchochelliq-labs/open-data-suite`, workflow `release.yml`, environment
@@ -226,15 +229,15 @@ allow `release-*` tags, which is what starts the run:
   the `homebrew` environment with the token as its `HOMEBREW_TAP_TOKEN` secret. Without
   the secret the release's `publish-homebrew` job only prints a notice, and you copy the
   release's `ods.rb` asset to `Formula/ods.rb` in the tap by hand. When the token
-  expires, the job fails: renew it and re-run the job.
+  expires, the job fails: renew it and run `release.py tag` again.
 - **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
   secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
   required reviewers, like `pypi`. Each push goes through Chocolatey's automated
   checks, and the package's first version through human moderation, before it is
   listed. While a version is still in moderation, Chocolatey refuses newer ones with
   **403 Forbidden**, so the release's `publish-chocolatey` job fails until the earlier
-  version is approved. Then re-run that job (**Re-run failed jobs** on the release run;
-  v0.0.2 waited this way for v0.0.1).
+  version is approved. Then run `release.py tag` again, which pushes it (v0.0.2 waited
+  this way for v0.0.1).
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,

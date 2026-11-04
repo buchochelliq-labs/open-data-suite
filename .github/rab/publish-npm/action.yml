@@ -1,6 +1,6 @@
-name: publish to npm
+name: "rab: publish to npm"
 description: >-
-  Publish the selected npm packages in release-kit.yml order, each from its
+  Publish the selected npm packages in rab.yml order, each from its
   manifest's directory, with provenance; then wait until npm serves them.
   Trusted Publishing needs `id-token: write` and npm 11.5 or later; without
   it, pass a token.

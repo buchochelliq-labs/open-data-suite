@@ -1,6 +1,7 @@
-"""The buchochelliq-labs release driver: release-kit.yml, checked, built, tagged and gated.
+"""rab (Release Asset Bundle, formerly release-kit), the buchochelliq-labs release
+driver: rab.yml, checked, built, tagged and gated.
 
-release-kit.yml lists every package a repository publishes, on which registry,
+rab.yml lists every package a repository publishes, on which registry,
 from which manifest, at which version, in publication order, and the
 artifacts each one is built into. A release is cut from one commit of the
 default branch and named by one package's version (the last, unless
@@ -16,12 +17,18 @@ release_cohort.py; the rules are the same:
   - A failed release is finished by running `tag` again: a run that provably
     published nothing has its tags moved or pushed again; a run that published
     part of the release is pushed again and publishes only what is still due.
+    Each channel has a retry policy (RETRY): a registry's version is published
+    once; a Homebrew formula or Chocolatey package made from a published GitHub
+    release is published again until it is done, read live from the tap or
+    the community repository.
 
 Commands (person):
-    check       release-kit.yml matches every manifest, names no package twice,
+    check       rab.yml matches every manifest, names no package twice,
                 lists each package after the listed packages it depends on,
-                and declares artifacts each registry can publish.
-    sync        rewrite release-kit.yml's versions from the manifests.
+                and declares artifacts each registry can publish; and no
+                crates.io package has what `cargo publish` would refuse.
+                --offline, --publish-dry-run.
+    sync        rewrite rab.yml's versions from the manifests.
     status      each package: version, tag, and whether it is published.
     tag         tag the release and wait for it: an annotated record tag per
                 package due (which starts nothing), then the release tag,
@@ -33,7 +40,8 @@ Commands (the gate action, in CI):
                 Writes sha, release, selection and per-registry flags to
                 GITHUB_OUTPUT.
     preflight --registry R --selection JSON
-                refuse, before uploading, any selected package of R already on R.
+                refuse, before uploading, any selected package of R already on R
+                (and, for crates.io, any crate `check` finds not ready).
     verify --registry R --selection JSON
                 wait until every selected package of R is on R.
     plan --selection JSON
@@ -45,28 +53,41 @@ Commands (the gate action, in CI):
                 build one planned job into dist/, with a .sha256 per file for
                 GitHub Releases.
     github-release --name NAME --stage DIR --notes-out FILE
-                shape a github package's release as release-kit.yml says:
+                shape a github package's release as rab.yml says:
                 write its `checksums` file into DIR, its `notes` into FILE,
                 and print what the publish action should do (JSON).
 
     render --name NAME --channel homebrew|chocolatey --sums FILE --out DIR
                 render a github package's Homebrew formula or Chocolatey
                 package from its templates and its release's checksums.
+    chocolatey-refused --name NAME --log FILE
+                after a failed `choco push`: succeed when the community
+                repository refused it only because it already has the version
+                (and has not rejected it), else fail.
     homebrew-tap --tap DIR --formula FILE --repo OWNER/TAP --version V --release-url URL
                 put the formula on a branch of the tap and open a pull request.
+    record --tag TAG --sha SHA --selection JSON --verify-only B --needs JSON
+                the run's release record (release-record.json): the release,
+                its commit, the run, and each package's outcome, files and
+                registry URL. The workflow's last job writes it, always.
 
 Commands (installing):
-    install     from a release-kit checkout, copy the kit into the repository
-                you are in: .github/release-kit/ (this script and the actions)
-                and .github/workflows/release-kit-build.yml, with a manifest of
-                checksums; and a starter release.yml if it has none.
+    install     from a rab checkout, copy the kit into the repository you
+                are in: .github/rab/ (this script and the actions) and
+                .github/workflows/rab-build.yml, with a manifest of checksums;
+                and a starter release.yml if it has none. A repository with
+                the release-kit 1.x layout is migrated to the new names.
     vendored    the installed copy is unmodified (run it in CI): it changes
                 only by installing again.
 
 Registries: github (GitHub Releases), crates.io, pypi, npm, vscode (Visual
-Studio Marketplace). Artifact kinds: rust-binary, python, maturin, vsix, ci-artifact and
-command. Requires Python 3.11+, git and PyYAML (for release-kit.yml); `tag`
+Studio Marketplace, and Open VSX with `open-vsx: true`). Artifact kinds:
+rust-binary, python, maturin, vsix, ci-artifact and command. Requires Python 3.11+, git and PyYAML (for rab.yml); `tag`
 follows runs with the GitHub CLI (`gh`) when it is installed.
+
+Names from release-kit 1.x still work until rab 3.0.0, each with a warning:
+the config release-kit.yml (when there is no rab.yml), an installed copy at
+.github/release-kit/, and RELEASE_KIT_OFFLINE.
 """
 
 import sys
@@ -75,6 +96,7 @@ if sys.version_info < (3, 11):
     sys.exit(f"release.py needs Python 3.11 or newer (for tomllib); this is {sys.version.split()[0]}")
 
 import argparse
+import base64
 from dataclasses import dataclass, field
 import fnmatch
 import hashlib
@@ -95,14 +117,17 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-CONFIG = "release-kit.yml"
+VERSION = "2.0.0"
+CONFIG = "rab.yml"
+# release-kit 1.x's name for it: still read, with a warning, until rab 3.0.0.
+OLD_CONFIG = "release-kit.yml"
 REGISTRIES = ("github", "crates.io", "pypi", "npm", "vscode")
 NUMBER = r"(?:0|[1-9][0-9]*)"
 PRERELEASE = rf"(?:{NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
 SEMVER = rf"{NUMBER}\.{NUMBER}\.{NUMBER}(?:-{PRERELEASE}(?:\.{PRERELEASE})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 # PyPI versions follow PEP 440 (1.2.0rc1, 1.2.0.post1), not SemVer.
 PEP440 = r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?"
-USER_AGENT = "buchochelliq-labs-release-kit (https://github.com/buchochelliq-labs/release-kit)"
+USER_AGENT = f"buchochelliq-labs-rab/{VERSION} (https://github.com/buchochelliq-labs/release-asset-bundle)"
 
 
 def root():
@@ -125,7 +150,57 @@ def files_at(commit):
 
 
 # ---------------------------------------------------------------------------
-# release-kit.yml
+# rab.yml (release-kit.yml in release-kit 1.x)
+
+_warned = set()
+
+
+def warn_once(message):
+    """Print a warning once per run, as a GitHub annotation in Actions."""
+    if message not in _warned:
+        _warned.add(message)
+        prefix = "::warning::" if os.environ.get("GITHUB_ACTIONS") == "true" else "warning: "
+        print(prefix + message, file=sys.stderr, flush=True)
+
+
+def old_config_warning():
+    return (f"{OLD_CONFIG} is release-kit 1.x's name for {CONFIG}; rename it (git mv {OLD_CONFIG} {CONFIG}, "
+            f"or install rab again, which migrates it). The old name is read until rab 3.0.0.")
+
+
+def read_config(read):
+    """(name, text) of the release configuration through `read`: rab.yml,
+    else release-kit.yml with a warning. Both present is refused: which one
+    is meant is a guess. Neither: whatever reading rab.yml raised."""
+    found, missing = {}, None
+    for name in (CONFIG, OLD_CONFIG):
+        try:
+            found[name] = read(name)
+        except (OSError, KeyError, subprocess.CalledProcessError) as error:
+            missing = missing or error
+    if len(found) == 2:
+        raise ValueError(f"both {CONFIG} and {OLD_CONFIG} exist: keep {CONFIG} (rab 2.x's name) and delete "
+                         f"{OLD_CONFIG}")
+    if OLD_CONFIG in found:
+        warn_once(old_config_warning())
+        return OLD_CONFIG, found[OLD_CONFIG]
+    if CONFIG in found:
+        return CONFIG, found[CONFIG]
+    raise missing
+
+
+def config_path(base=None):
+    """The configuration file on disk: rab.yml, else release-kit.yml (with a
+    warning, and refused when both exist); rab.yml when there is neither."""
+    base = Path(base) if base else root()
+    new, old = base / CONFIG, base / OLD_CONFIG
+    if new.is_file() and old.is_file():
+        raise ValueError(f"both {CONFIG} and {OLD_CONFIG} exist: keep {CONFIG} (rab 2.x's name) and delete "
+                         f"{OLD_CONFIG}")
+    if old.is_file() and not new.is_file():
+        warn_once(old_config_warning())
+        return old
+    return new
 
 
 @dataclass(frozen=True)
@@ -139,6 +214,9 @@ class Package:
     artifacts: tuple = field(default=(), compare=False, hash=False)
     # `github` packages only: how the GitHub release is made (GITHUB_OPTIONS).
     github: tuple = field(default=(), compare=False, hash=False)
+    # `vscode` packages only: `open-vsx: true` publishes to Open VSX too, and
+    # the version counts as published only once both registries have it.
+    open_vsx: object = field(default=False, compare=False, hash=False)
 
     @property
     def slug(self):
@@ -190,7 +268,7 @@ def parse_config(text):
 
 
 def load(read):
-    data = parse_config(read(CONFIG))
+    data = parse_config(read_config(read)[1])
     entries = data.get("packages") or []
     if not entries:
         raise ValueError(f"{CONFIG} lists no packages")
@@ -209,7 +287,8 @@ def load(read):
         options = {key: entry[key] for key in GITHUB_OPTIONS if key in entry}
         packages.append(Package(entry["name"], entry["registry"], entry["manifest"], entry["version"],
                                 entry.get("tag", "{name}-v{version}"), tuple(entry.get("paths") or ()),
-                                tuple(artifacts), tuple(sorted(options.items()))))
+                                tuple(artifacts), tuple(sorted(options.items())),
+                                entry.get("open-vsx", False)))
     settings = data.get("release") or {}
     name_from = settings.get("name_from", packages[-1].name)
     if name_from not in {p.name for p in packages}:
@@ -262,6 +341,17 @@ def github_option_errors(package):
         if isinstance(tap, str) and not re.fullmatch(r"[\w.-]+/[\w.-]+", tap):
             errors.append(f"{package.name}: homebrew tap is owner/repository, e.g. org/homebrew-tap")
     return errors
+
+
+def open_vsx_errors(package):
+    """What is wrong with a package's `open-vsx` option, as messages."""
+    if package.open_vsx is False:
+        return []
+    if package.registry != "vscode":
+        return [f"{package.name}: open-vsx only applies to a vscode package"]
+    if not isinstance(package.open_vsx, bool):
+        return [f"{package.name}: open-vsx is true or false"]
+    return []
 
 
 def version_key(version):
@@ -346,7 +436,7 @@ def manifest_info(read, package):
 
 
 def check(read):
-    """Every way release-kit.yml can disagree with the repository, as messages."""
+    """Every way rab.yml can disagree with the repository, as messages."""
     try:
         release = load(read)
     except (ValueError, tomllib.TOMLDecodeError, KeyError) as error:
@@ -381,6 +471,7 @@ def check(read):
     for package in release.packages:
         errors.extend(artifact_errors(package))
         errors.extend(github_option_errors(package))
+        errors.extend(open_vsx_errors(package))
     # Each package after the listed packages of its own registry it depends on.
     position = {(p.registry, p.name): i for i, p in enumerate(release.packages)}
     for package in release.packages:
@@ -392,12 +483,20 @@ def check(read):
 
 
 def sync(read=None, path=None):
-    """Rewrite each version in release-kit.yml from its manifest, keeping the
-    file's comments and layout. Returns the changes made."""
-    path = path or root() / CONFIG
+    """Rewrite each version in rab.yml (or rab.yml) from its
+    manifest, keeping the file's comments and layout. Returns the changes made."""
+    path = path or config_path()
     read = read or files_on_disk(path.parent)
     text = path.read_text(encoding="utf-8")
-    release = load(lambda name: text if name == CONFIG else read(name))
+
+    def reading(name):
+        if name in (CONFIG, OLD_CONFIG):
+            if name != path.name:
+                raise FileNotFoundError(name)
+            return text
+        return read(name)
+
+    release = load(reading)
     # One `version:` line per package, in order (artifacts carry none).
     lines = text.splitlines(keepends=True)
     found = [i for i, line in enumerate(lines) if re.match(r"^\s*(?:-\s+)?version:", line)]
@@ -456,13 +555,8 @@ def published_on(package):
     if package.registry == "npm":
         return http_status(f"https://registry.npmjs.org/{quote(name, safe='@')}/{quote(version)}")[0] == 200
     if package.registry == "vscode":
-        query = {"filters": [{"criteria": [{"filterType": 7, "value": name}]}], "flags": 0x1}
-        status, body = http_status(
-            "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
-            data=json.dumps(query).encode(),
-            headers={"Content-Type": "application/json", "Accept": "application/json;api-version=7.2-preview.1"})
-        results = json.loads(body or b"{}").get("results", [{}])[0].get("extensions", [])
-        return any(v.get("version") == version for e in results for v in e.get("versions", []))
+        # With `open-vsx: true`, Open VSX is part of the publication.
+        return on_marketplace(package) and (package.open_vsx is not True or on_open_vsx(package))
     if package.registry == "github":
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
         headers = {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}
@@ -475,8 +569,26 @@ def published_on(package):
     raise ValueError(f"unknown registry {package.registry!r}")
 
 
+def on_marketplace(package):
+    """Whether the Visual Studio Marketplace lists the extension's version."""
+    query = {"filters": [{"criteria": [{"filterType": 7, "value": package.name}]}], "flags": 0x1}
+    status, body = http_status(
+        "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
+        data=json.dumps(query).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json;api-version=7.2-preview.1"})
+    results = json.loads(body or b"{}").get("results", [{}])[0].get("extensions", [])
+    return any(v.get("version") == package.version for e in results for v in e.get("versions", []))
+
+
+def on_open_vsx(package):
+    """Whether Open VSX serves the extension's version (<publisher>.<name>)."""
+    publisher, _, name = package.name.partition(".")
+    url = f"https://open-vsx.org/api/{quote(publisher)}/{quote(name)}/{quote(package.version)}"
+    return http_status(url)[0] == 200
+
+
 # ---------------------------------------------------------------------------
-# Artifacts: what each package is built into, declared in release-kit.yml
+# Artifacts: what each package is built into, declared in rab.yml
 
 # Rust targets and the GitHub runner that builds each. Intel macOS is
 # cross-compiled on Apple Silicon (GitHub retired the Intel runners).
@@ -589,13 +701,14 @@ def plan(selection, read=None, output=None):
     """The build matrix for the selected packages: one job per artifact, or per
     artifact and target. Writes `jobs` (JSON) and `count` to GITHUB_OUTPUT."""
     release = load(read or files_on_disk())
-    wanted = {(s["registry"], s["name"]) for s in json.loads(selection)}
+    # A package selected only to finish the channels made from it builds nothing.
+    wanted = {(s["registry"], s["name"]) for s in json.loads(selection) if due_on(s, s["registry"])}
     jobs = []
     for package in release.packages:
         if (package.registry, package.name) not in wanted:
             continue
         base = {"package": package.name, "slug": package.slug, "version": package.version,
-                "registry": package.registry, "manifest": package.manifest}
+                "registry": package.registry, "manifest": package.manifest, "tag": package.tag}
         for index, artifact in enumerate(package.artifacts):
             kind = artifact["kind"]
             base["prepare"] = artifact.get("prepare") or ""
@@ -683,7 +796,7 @@ def prepare(job):
 
 
 def github_release(name, stage, notes_out, read=None, runner=None, options_only=False):
-    """Shape a `github` package's release from release-kit.yml: write its
+    """Shape a `github` package's release from rab.yml: write its
     `checksums` file into `stage` (over every file there but the `.sha256`
     ones), and run its `notes` command into `notes_out`. Returns
     {"notes": bool, "attest": bool, "checksums": name or ""}; with
@@ -778,8 +891,7 @@ def render_channel(name, channel, sums_text, out, read=None, repo=None):
     out.mkdir(parents=True, exist_ok=True)
     if channel == "homebrew":
         template = Path(settings["formula"])
-        formula = settings.get("name") or template.name.removesuffix(".tmpl").removesuffix(".rb")
-        target = out / f"{formula}.rb"
+        target = out / f"{formula_name(settings)}.rb"
         target.write_text(render_template(template.read_text(encoding="utf-8"), values, str(template)),
                           encoding="utf-8")
         return [target]
@@ -838,9 +950,187 @@ def update_tap(tap, formula, repo, version, release_url, open_pr=open_tap_pr):
     git_tap("push", "--quiet", "--force", "origin", f"HEAD:refs/heads/{branch}")
     url = open_pr(repo, branch, base, f"{name} {version}",
                   f"The Homebrew formula for [{name} {version}]({release_url}), rendered by its release run "
-                  "(release-kit).")
+                  "(rab, the Release Asset Bundle).")
     print(f"tap pull request for {name} {version}: {url}", flush=True)
     return url
+
+
+# ---------------------------------------------------------------------------
+# Retry policy: which publications can be run again
+#
+# Defined by rab, not configured: it is what each channel allows.
+#   once            a version is permanent: never uploaded again (rule 1).
+#   finish          an unfinished one (a draft GitHub release) is completed;
+#                   a published one is never touched again.
+#   idempotent      publishing again is harmless: done again until done.
+#   until-accepted  can be pushed again until the channel has accepted it
+#                   (accepted includes "in moderation": pushing again would
+#                   only replace the version under review), or rejected it
+#                   (a rejected version can never be pushed again).
+# The registries say themselves whether a version is published (`published_on`);
+# the channels made from a GitHub release have their own state, read live
+# (`channel_state`), so `tag` and the gate can select a published package
+# again for the channels it still lacks.
+RETRY = {"github": "finish", "crates.io": "once", "pypi": "once", "npm": "once", "vscode": "once",
+         "homebrew": "idempotent", "chocolatey": "until-accepted"}
+# Channel states that count as done. Homebrew: `merged` (the tap's default
+# branch has the version), `proposed` (an open pull request from the
+# release's branch: merging it is the tap's maintainers' step), `prerelease`
+# (prereleases are left out of the tap). Chocolatey: `listed` (approved), and
+# `submitted` (in its checks or moderation, which can take days). Anything
+# else (`due`) is due, except a terminal state.
+DONE = {"merged", "proposed", "prerelease", "listed", "submitted"}
+# Channel states that end the version on that channel: neither done nor due,
+# and never retried. Chocolatey's `rejected`: the community repository keeps a
+# rejected version and refuses every push of it ("Package versions that are
+# approved, rejected, or exempted cannot be modified"), so only a new version
+# can reach Chocolatey. {state: what to tell the maintainer}.
+TERMINAL = {"rejected": "rejected: publish a new version"}
+
+
+def state_text(state):
+    """A channel state as `status` and `tag` print it."""
+    return TERMINAL.get(state, state)
+
+
+def channels_of(package):
+    """Every channel `package` publishes to: its registry, then the channels
+    made from its GitHub release, in CHANNEL_KEYS order."""
+    options = dict(package.github)
+    return [package.registry] + [c for c in CHANNEL_KEYS if package.registry == "github" and options.get(c)]
+
+
+def formula_name(settings):
+    """A `homebrew` setting's formula name: `name`, else the template's file
+    name without .tmpl and .rb."""
+    return settings.get("name") or PurePosixPath(settings["formula"]).name.removesuffix(".tmpl").removesuffix(".rb")
+
+
+def github_headers():
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    return {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}
+
+
+def homebrew_state(package, settings, fetch=http_status):
+    """`merged`, `proposed`, `prerelease` or `due`: whether the tap's default
+    branch has Formula/<name>.rb at this version, else whether a pull request
+    from the release's branch `<name>-<version>` is open on the tap."""
+    if "-" in package.version:
+        return "prerelease"
+    tap, name = settings["tap"], formula_name(settings)
+    status, body = fetch(f"https://api.github.com/repos/{tap}/contents/Formula/{quote(name)}.rb",
+                         headers=github_headers())
+    if status == 200:
+        content = base64.b64decode(json.loads(body).get("content") or "").decode("utf-8", "replace")
+        if version_in(content, package.version):
+            return "merged"
+    head = f"{tap.split('/')[0]}:{name}-{package.version}"
+    status, body = fetch(f"https://api.github.com/repos/{tap}/pulls?state=open&head={quote(head)}",
+                         headers=github_headers())
+    return "proposed" if status == 200 and json.loads(body) else "due"
+
+
+def chocolatey_id(directory, commit=None):
+    """The `<id>` in a chocolatey package directory's one .nuspec (or
+    .nuspec.tmpl), at `commit` or else in the working tree."""
+    directory = directory.rstrip("/")
+    if commit:
+        names = git("ls-tree", "-r", "--name-only", commit, "--", f"{directory}/").splitlines()
+        texts = {n: git("show", f"{commit}:{n}") for n in names if n.endswith((".nuspec", ".nuspec.tmpl"))}
+    else:
+        texts = {str(p): p.read_text(encoding="utf-8") for p in (root() / directory).rglob("*")
+                 if p.is_file() and p.name.endswith((".nuspec", ".nuspec.tmpl"))}
+    ids = [m[1].strip() for m in (re.search(r"<id>([^<]+)</id>", t) for t in texts.values()) if m]
+    if len(ids) != 1 or "${" in ids[0]:
+        raise ValueError(f"chocolatey package {directory} needs exactly one .nuspec with a literal <id>")
+    return ids[0]
+
+
+def chocolatey_state(package, settings, fetch=http_status, commit=None):
+    """`listed`, `submitted`, `rejected` or `due`, from the community
+    repository's API: the version's PackageStatus (Approved or Exempted is
+    listed; Submitted, in checks or moderation, is submitted), or due when it
+    has never been pushed."""
+    ident = chocolatey_id(settings["package"], commit)
+    status, body = fetch(f"https://community.chocolatey.org/api/v2/Packages(Id='{quote(ident)}',"
+                         f"Version='{quote(package.version)}')")
+    if status != 200:
+        return "due"
+    text = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
+    found = re.search(r"<d:PackageStatus>([^<]*)</d:PackageStatus>", text)
+    state = found[1].strip().lower() if found else ""
+    if state == "rejected":
+        return "rejected"
+    if state in ("approved", "exempted"):
+        return "listed"
+    if not state:
+        approved = re.search(r"<d:IsApproved[^>]*>([^<]*)</d:IsApproved>", text)
+        return "listed" if approved is None or approved[1].strip() == "true" else "submitted"
+    return "submitted"
+
+
+def channel_state(package, channel, commit=None, fetch=http_status):
+    """The live state of a channel made from `package`'s GitHub release."""
+    settings = dict(dict(package.github).get(channel) or {})
+    if channel == "homebrew":
+        return homebrew_state(package, settings, fetch)
+    if channel == "chocolatey":
+        return chocolatey_state(package, settings, fetch, commit)
+    raise ValueError(f"{channel} is not a channel made from a release")
+
+
+# What the community repository answers a push of a version it already has
+# and will not replace (approved, exempted or rejected; a version still in its
+# checks or moderation is replaced by a new push): NuGetGallery's "A package
+# with ID '<id>' and version '<version>' already exists and cannot be
+# modified.", which choco 2.x rewrites as "This package version already exists
+# on the repository and cannot be modified." (choco's NugetPush.cs). Only this
+# phrase: choco's generic "It's possible the package version already exists"
+# (any 406 or 409, an invalid nuspec too) is not matched.
+CHOCOLATEY_EXISTS = re.compile(r"already exists (?:on the repository )?and cannot be modified", re.I)
+
+
+def chocolatey_refused(name, log, state_of=None, read=None):
+    """After `choco push` failed for package `name` (log: its output): the
+    channel's state when the push was refused only because the community
+    repository already has the version, which counts as pushed (a re-run
+    after a push whose answer was lost, or a version listed since the
+    gate looked). Raises otherwise, and when the version was rejected: a
+    rejected version cannot be pushed again, so it needs a new version."""
+    if not CHOCOLATEY_EXISTS.search(log):
+        raise RuntimeError(f"{name}: choco push failed (its output is above)")
+    package = next((p for p in load(read or files_on_disk()).packages if p.name == name), None)
+    if package is None:
+        raise RuntimeError(f"{name} is not a package of {CONFIG}")
+    try:
+        state = (state_of or channel_state)(package, "chocolatey")
+    except (RuntimeError, OSError, ValueError) as error:
+        print(f"{package}: cannot read its Chocolatey state ({error})", flush=True)
+        state = "unknown"
+    if state in TERMINAL:
+        raise RuntimeError(f"{package}: Chocolatey {TERMINAL[state]} (a rejected version cannot be pushed "
+                           "again: fix the package and release a new version)")
+    print(f"{package}: the community repository already has this version ({state}); counted as pushed",
+          flush=True)
+    return state
+
+
+def pending_channels(package, state_of, ended=None):
+    """{channel: state} of the channels made from a published `package` that
+    are not done and may be run again (`idempotent` or `until-accepted`).
+    `state_of(package, channel)` reads a channel's state. A channel in a
+    TERMINAL state is not pending: it goes into `ended` ({channel: state}),
+    when given."""
+    pending = {}
+    for channel in channels_of(package)[1:]:
+        if RETRY[channel] in ("idempotent", "until-accepted"):
+            state = state_of(package, channel)
+            if state in TERMINAL:
+                if ended is not None:
+                    ended[channel] = state
+            elif state not in DONE:
+                pending[channel] = state
+    return pending
 
 
 def bash_command(command):
@@ -888,20 +1178,32 @@ def download(url):
         return response.read()
 
 
-def tree_of(commit):
-    """The tree of a commit in this repository, from the GitHub API: the CI
-    run's commit need not be in the release checkout."""
-    status, _, body = github_api(f"/repos/{repository()}/git/commits/{commit}")
+def changes_since(built, tagged):
+    """How `tagged` relates to `built` in this repository, from the GitHub API
+    (the CI run's commit need not be in the release checkout): the compare
+    status (`identical`, `ahead`, `behind` or `diverged`) and the files that
+    differ between them."""
+    status, _, body = github_api(f"/repos/{repository()}/compare/{built}...{tagged}")
     if status != 200:
-        raise RuntimeError(f"cannot read commit {commit} of {repository()} (HTTP {status})")
-    return json.loads(body)["tree"]["sha"]
+        raise RuntimeError(f"cannot compare {built} with {tagged} in {repository()} (HTTP {status})")
+    data = json.loads(body)
+    return data.get("status"), [entry["filename"] for entry in data.get("files") or []]
 
 
-def promote(job, out, tagged_tree=None):
+def version_in(name, version):
+    """Whether a file name carries exactly `version` (optionally as `v1.0`, as
+    rust-binary archives do): not `11.0` or `1.0.1` for `1.0`, nor its
+    pre-release `1.0rc1` or a local `1.0+x`."""
+    return re.search(rf"(?<![0-9A-Za-z.])v?{re.escape(version)}(?![0-9A-Za-z+]|\.[0-9])", name) is not None
+
+
+def promote(job, out, tagged=None):
     """Copy the files of one pinned CI artifact into `out`, unchanged, after
     proving they are the reviewed bytes of this release: the archive has the
-    pinned SHA-256, has not expired, and was built from a commit whose tree is
-    the tagged commit's tree (rule 4: a release is one commit's files)."""
+    pinned SHA-256 and has not expired, and the tagged commit is the commit
+    that built it, or a descendant that changes nothing but `rab.yml`
+    (rule 4: a release is one commit's files). The pin cannot be in the commit
+    the artifact was built from, so the commit that records it is allowed."""
     ident, pinned = job["artifact"], job["sha256"]
     where = f"{job['package']}: CI artifact {ident}"
     status, _, body = github_api(f"/repos/{repository()}/actions/artifacts/{ident}")
@@ -911,14 +1213,19 @@ def promote(job, out, tagged_tree=None):
     if meta.get("expired"):
         raise RuntimeError(f"{where} has expired; pin a newer run's artifact")
     if meta.get("digest") and meta["digest"] != f"sha256:{pinned}":
-        raise RuntimeError(f"{where}: GitHub records {meta['digest']}, release-kit.yml pins sha256:{pinned}")
+        raise RuntimeError(f"{where}: GitHub records {meta['digest']}, rab.yml pins sha256:{pinned}")
     built = (meta.get("workflow_run") or {}).get("head_sha")
     if not built:
         raise RuntimeError(f"{where}: GitHub does not say which commit built it")
-    tagged = tagged_tree or git("rev-parse", "HEAD^{tree}")
-    if tree_of(built) != tagged:
-        raise RuntimeError(f"{where} was built from {built[:12]}, whose files differ from the tagged commit's: "
-                           "a release is one commit. Pin an artifact built from these files.")
+    tagged = tagged or git("rev-parse", "HEAD")
+    relation, changed = changes_since(built, tagged)
+    if relation not in ("identical", "ahead"):
+        raise RuntimeError(f"{where} was built from {built[:12]}, which the tagged commit does not descend from "
+                           f"({relation}): a release is one commit. Pin an artifact built on this branch.")
+    if other := [name for name in changed if name not in (CONFIG, OLD_CONFIG)]:
+        raise RuntimeError(f"{where} was built from {built[:12]}; since then {', '.join(other[:5])}"
+                           f"{' and more' if len(other) > 5 else ''} changed: a release is one commit. "
+                           f"Only {CONFIG} (the pin itself) may change after the build.")
     status, headers, body = github_api(f"/repos/{repository()}/actions/artifacts/{ident}/zip")
     location = {k.lower(): v for k, v in headers.items()}.get("location")
     if status in (301, 302, 303, 307, 308) and location:
@@ -929,7 +1236,7 @@ def promote(job, out, tagged_tree=None):
         raise RuntimeError(f"{where}: download refused (HTTP {status})")
     if hashlib.sha256(data).hexdigest() != pinned:
         raise RuntimeError(f"{where}: the archive's SHA-256 is {hashlib.sha256(data).hexdigest()}, "
-                           f"release-kit.yml pins {pinned}")
+                           f"rab.yml pins {pinned}")
     version = pep440(job["version"]) if job["registry"] == "pypi" else job["version"]
     copied = []
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -943,7 +1250,7 @@ def promote(job, out, tagged_tree=None):
             target = out / parts[-1]
             if target.exists():
                 raise RuntimeError(f"{where}: two members are named {parts[-1]}")
-            if version not in parts[-1]:
+            if not version_in(parts[-1], version):
                 raise RuntimeError(f"{where}: {parts[-1]} is not version {version} of {job['package']}")
             target.write_bytes(archive.read(info))
             copied.append(target)
@@ -1105,18 +1412,18 @@ def not_its_own(release, existing, sha, remote, packages=None):
 def foreign_error(packages, existing):
     lines = [f"  {p.tag} at {existing[p.tag][:12]}: not {p}'s record" for p in packages]
     return ("these tags already exist for something else:\n" + "\n".join(lines) + "\n"
-            "Give the package a tag format of its own in release-kit.yml (for example "
+            "Give the package a tag format of its own in rab.yml (for example "
             "`tag: \"python-v{version}\"` for a PyPI package named like a crate), or bump its version.")
 
 
 def release_at(commit, package=None):
-    """The release configured at `commit`; a commit without release-kit.yml
-    (a tag from before the repository adopted release-kit) is refused."""
+    """The release configured at `commit`; a commit without rab.yml or
+    rab.yml (a tag from before the repository adopted the kit) is refused."""
     try:
         return load(files_at(commit))
     except subprocess.CalledProcessError:
         what = f"{package.tag} is on {commit[:12]}, which" if package else f"{commit[:12]}"
-        raise RuntimeError(f"{what} has no {CONFIG}: the tag predates release-kit. Bump the package's "
+        raise RuntimeError(f"{what} has no {CONFIG} (nor {OLD_CONFIG}): the tag predates the kit. Bump the package's "
                            "version, or delete the stale tag if nothing was published from it.") from None
 
 
@@ -1160,9 +1467,13 @@ def trailers(tag_name):
 # The gate (CI)
 
 
-def gate(tag_name, remote="origin", status=published_on, output=None, verify_only=False):
+def gate(tag_name, remote="origin", status=published_on, output=None, verify_only=False,
+         channel_status=channel_state):
     """Everything a release run must hold before building, from the checked-out
-    tag. Returns the outputs written to GITHUB_OUTPUT."""
+    tag. Returns the outputs written to GITHUB_OUTPUT. A published package
+    whose release's derived channels (Homebrew, Chocolatey) are not done is
+    selected for those channels only: `channel_status(package, channel,
+    commit)` reads their state."""
     ref = f"refs/tags/{tag_name}"
     if git("cat-file", "-t", ref) != "tag":
         raise RuntimeError(f"{tag_name} must be an annotated tag (release.py tag makes them)")
@@ -1192,13 +1503,25 @@ def gate(tag_name, remote="origin", status=published_on, output=None, verify_onl
         return verify_selection(tag_name, release, sha, existing, status, output)
     if split := split_from(release, existing, sha, lambda package, tagged: True):
         raise RuntimeError(split_error(sha, split))
-    due = []
+    due, channels = [], {}
     for package in release.packages:
-        if status(package):
-            print(f"{package}: already published; not selected", flush=True)
-        else:
+        if not status(package):
             print(f"{package}: not yet published; selected", flush=True)
             due.append(package)
+            channels[package] = channels_of(package)
+            continue
+        pending, ended = {}, {}
+        if existing.get(package.tag) == sha:
+            pending = pending_channels(package, lambda p, c: channel_status(p, c, sha), ended)
+        for channel, state in ended.items():
+            print(f"{package}: {channel} is {TERMINAL[state]}; not selected for it", flush=True)
+        if pending:
+            print(f"{package}: already published; selected for "
+                  + ", ".join(f"{c} ({state})" for c, state in pending.items()), flush=True)
+            due.append(package)
+            channels[package] = list(pending)
+        else:
+            print(f"{package}: already published; not selected", flush=True)
     if not due:
         raise RuntimeError(f"{tag_name}: every package of release {release.name} is already published")
     untagged = [f"{p.tag} ({'missing' if p.tag not in existing else 'at ' + existing[p.tag][:12]})"
@@ -1208,26 +1531,33 @@ def gate(tag_name, remote="origin", status=published_on, output=None, verify_onl
                            "release.py tag pushes them.")
     if plain := lightweight(remote, [p.tag for p in due]):
         raise RuntimeError(f"record tags must be annotated: {', '.join(sorted(plain))}")
-    outputs = gate_outputs(sha, release, due, False, output)
+    outputs = gate_outputs(sha, release, due, False, output, channels)
     print(f"{tag_name} -> {sha} (release {release.name}): publishing "
-          + ", ".join(str(p) for p in due), flush=True)
+          + ", ".join(f"{p}: {', '.join(channels[p])}" if channels[p] != channels_of(p) else str(p)
+                      for p in due), flush=True)
     return outputs
 
 
-def gate_outputs(sha, release, chosen, verify_only, output=None):
+def gate_outputs(sha, release, chosen, verify_only, output=None, channels=None):
+    """The gate's outputs. `channels` maps each chosen package to the channels
+    due for it (default: all of them); the selection carries them, and each
+    registry's or channel's flag is true when a chosen package has it due."""
+    channels = channels or {p: channels_of(p) for p in chosen}
     outputs = {
         "sha": sha,
         "release": release.name,
         "selection": json.dumps([{"name": p.name, "registry": p.registry, "version": p.version,
-                                  "manifest": p.manifest, "tag": p.tag, "slug": p.slug} for p in chosen]),
+                                  "manifest": p.manifest, "tag": p.tag, "slug": p.slug,
+                                  "channels": channels[p],
+                                  **({"open-vsx": True} if p.open_vsx is True else {})} for p in chosen]),
         "verify-only": str(verify_only).lower(),
     }
     for registry in REGISTRIES:
-        outputs[registry.replace(".", "-")] = str(any(p.registry == registry for p in chosen)).lower()
-    # Channels made from a GitHub release: whether a selected github package has one.
+        outputs[registry.replace(".", "-")] = str(any(p.registry == registry and registry in channels[p]
+                                                      for p in chosen)).lower()
+    # Channels made from a GitHub release: whether a chosen package has one due.
     for channel in CHANNEL_KEYS:
-        outputs[channel] = str(any(p.registry == "github" and dict(p.github).get(channel)
-                                   for p in chosen)).lower()
+        outputs[channel] = str(any(channel in channels[p] for p in chosen)).lower()
     target = output or os.environ.get("GITHUB_OUTPUT")
     if target:
         with open(target, "a", encoding="utf-8") as handle:
@@ -1253,9 +1583,18 @@ def verify_selection(tag_name, release, sha, existing, status, output):
 
 def selected(registry, selection):
     """The packages of `registry` in a gate's selection (JSON), in order. The
-    selection carries each package's rendered tag, which serves as its format."""
-    return [Package(s["name"], s["registry"], s["manifest"], s["version"], s.get("tag", "{name}-v{version}"))
-            for s in json.loads(selection) if s["registry"] == registry]
+    selection carries each package's rendered tag, which serves as its format.
+    A package selected only for the channels made from its release (its own
+    upload is done) is left out."""
+    return [Package(s["name"], s["registry"], s["manifest"], s["version"], s.get("tag", "{name}-v{version}"),
+                    open_vsx=s.get("open-vsx", False))
+            for s in json.loads(selection) if s["registry"] == registry and due_on(s, registry)]
+
+
+def due_on(entry, channel):
+    """Whether a selection entry has `channel` due: one of its `channels`, or,
+    in a selection from before channels were selected, any channel."""
+    return channel in entry.get("channels", [channel])
 
 
 def crate_exists(name):
@@ -1263,16 +1602,32 @@ def crate_exists(name):
     return http_status(f"https://crates.io/api/v1/crates/{quote(name)}")[0] == 200
 
 
-def preflight(registry, selection, status=published_on, exists=crate_exists, output=None):
+def preflight(registry, selection, status=published_on, exists=crate_exists, output=None, ovsx_token=False,
+              ready=None):
     """Refuse, just before uploading, any selected version already published:
     another run may have published it since the gate. For crates.io, also
     say which selected crates are new (their first version needs a token,
     since Trusted Publishing needs the crate to exist): writes `new_crates`
-    (JSON), `new_crate` and `existing_crate` to GITHUB_OUTPUT."""
+    (JSON), `new_crate` and `existing_crate` to GITHUB_OUTPUT, after `ready`
+    (crates_io_readiness, for the selected names) finds nothing that would
+    stop `cargo publish`. For vscode, writes `uploads`: which of the two
+    registries each extension still lacks."""
     chosen = selected(registry, selection)
     if out := [str(p) for p in chosen if status(p)]:
         raise RuntimeError(f"already on {registry}: {', '.join(out)}; a published version is permanent")
+    if registry == "crates.io" and ready and chosen:
+        errors, warnings = ready({p.name for p in chosen})
+        for warning in warnings:
+            print(f"warning: {warning}", flush=True)
+        if errors:
+            raise RuntimeError("not ready for crates.io:\n  " + "\n  ".join(errors))
     print(f"to publish on {registry}: " + (", ".join(str(p) for p in chosen) or "nothing"), flush=True)
+    if registry == "vscode":
+        uploads = vscode_uploads(chosen, ovsx_token)
+        target = output or os.environ.get("GITHUB_OUTPUT")
+        if target:
+            with open(target, "a", encoding="utf-8") as handle:
+                handle.write(f"uploads={json.dumps(uploads)}\n")
     if registry == "crates.io":
         new = [p.name for p in chosen if not exists(p.name)]
         outputs = {"new_crates": json.dumps(new), "new_crate": str(bool(new)).lower(),
@@ -1285,6 +1640,26 @@ def preflight(registry, selection, status=published_on, exists=crate_exists, out
         if new:
             print("first versions (published with the new-crate token): " + ", ".join(new), flush=True)
     return chosen
+
+
+def vscode_uploads(chosen, ovsx_token, marketplace=on_marketplace, open_vsx=on_open_vsx):
+    """[{name, version, marketplace, open-vsx}]: whether each extension is
+    still to be uploaded to each registry. A registry that already has the
+    version is skipped, so a re-run uploads only what is missing. An Open VSX
+    upload needs its token."""
+    uploads = []
+    for package in chosen:
+        upload = {"name": package.name, "version": package.version, "marketplace": not marketplace(package),
+                  "open-vsx": package.open_vsx is True and not open_vsx(package)}
+        for registry, label in (("marketplace", "the Marketplace"), ("open-vsx", "Open VSX")):
+            if not upload[registry] and (registry == "marketplace" or package.open_vsx is True):
+                print(f"{package}: already on {label}; not uploaded there again", flush=True)
+        uploads.append(upload)
+    missing = [u["name"] for u in uploads if u["open-vsx"]]
+    if missing and not ovsx_token:
+        raise RuntimeError(f"{', '.join(missing)}: {CONFIG} says open-vsx: true, but no Open VSX token was "
+                           "given (the ovsx-token input, from the OVSX_PAT secret)")
+    return uploads
 
 
 def publish_groups(chosen, new):
@@ -1423,7 +1798,7 @@ def consume(registry, selection, runner=None, read=None, tries=10, sleep=time.sl
                 sleep(30)
 
     for package in chosen:
-        with tempfile.TemporaryDirectory(prefix="release-kit-consume-") as scratch:
+        with tempfile.TemporaryDirectory(prefix="rab-consume-") as scratch:
             here = Path(scratch)
             if registry == "crates.io" and has_binary(package.manifest, read):
                 attempt(lambda: runner(["cargo", "install", package.name, "--version", f"={package.version}",
@@ -1451,30 +1826,756 @@ def consume(registry, selection, runner=None, read=None, tries=10, sleep=time.sl
 
 
 # ---------------------------------------------------------------------------
+# The release record: one JSON file per run, for coordinators
+
+# Its schema, versioned: `schema_version` changes only when a field is removed,
+# renamed or changes meaning; new fields may appear without it, so readers
+# ignore what they do not know. docs/release-record.schema.json is this, as
+# `release.py record --schema` prints it (a test keeps them equal).
+RECORD_VERSION = 1
+OUTCOMES = ("published", "already-published", "failed", "skipped", "unknown")
+RESULTS = ("complete", "partial", "nothing-published", "unknown")
+JOB_RESULTS = ("success", "failure", "cancelled", "skipped")
+# The release.yml job that publishes each registry, and those that make a
+# github package's channels.
+PUBLISH_JOBS = {"github": "publish-github", "crates.io": "publish-crates", "pypi": "publish-pypi",
+                "npm": "publish-npm", "vscode": "publish-vscode"}
+CHANNEL_JOBS = {"homebrew": "publish-homebrew", "chocolatey": "publish-chocolatey"}
+RECORD_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://buchochelliq-labs.github.io/release-asset-bundle/release-record.schema.json",
+    "title": "rab release record",
+    "description": "What one release run set out to publish, and what came of it.",
+    "type": "object",
+    "required": ["schema_version", "repository", "release", "tag", "commit", "verify_only", "run",
+                 "result", "jobs", "packages"],
+    "properties": {
+        "schema_version": {"const": RECORD_VERSION},
+        "repository": {"type": "string", "description": "owner/name"},
+        "release": {"type": ["string", "null"],
+                    "description": "the release's name; null if rab.yml could not be read"},
+        "tag": {"type": "string", "description": "the release tag the run was for"},
+        "commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$",
+                   "description": "the tagged commit; null if the tag could not be resolved"},
+        "verify_only": {"type": "boolean"},
+        "run": {
+            "type": "object",
+            "required": ["id", "attempt", "url"],
+            "properties": {
+                "id": {"type": ["integer", "null"]},
+                "attempt": {"type": ["integer", "null"]},
+                "url": {"type": ["string", "null"]},
+            },
+        },
+        "result": {"enum": list(RESULTS),
+                   "description": "complete: every selected package is on its registry, its publish "
+                                  "job and the jobs of the channels due for it succeeded; partial: this run published some of them; "
+                                  "nothing-published: this run published none; unknown: a registry did "
+                                  "not answer"},
+        "jobs": {"type": "object", "description": "the result of each job the record job needs",
+                 "additionalProperties": {"enum": list(JOB_RESULTS)}},
+        "packages": {
+            "type": "array",
+            "description": "every package of rab.yml at the tagged commit, in its order",
+            "items": {
+                "type": "object",
+                "required": ["name", "registry", "version", "tag", "selected", "outcome", "job", "url",
+                             "files"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "registry": {"enum": list(REGISTRIES)},
+                    "version": {"type": "string"},
+                    "tag": {"type": "string", "description": "its record tag"},
+                    "selected": {"type": "boolean", "description": "whether the gate selected it"},
+                    "outcome": {"enum": list(OUTCOMES)},
+                    "job": {"enum": [*JOB_RESULTS, None],
+                            "description": "its publish job's result; null when not selected, or "
+                                           "selected only to finish its channels"},
+                    "url": {"type": ["string", "null"],
+                            "description": "where its registry serves this version; null when it does not"},
+                    "files": {
+                        "type": "array",
+                        "description": "the files this run built for it, from the build artifacts",
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "sha256", "size"],
+                            "properties": {
+                                "name": {"type": "string"},
+                                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                                "size": {"type": "integer", "minimum": 0},
+                            },
+                        },
+                    },
+                    "open_vsx_url": {"type": ["string", "null"],
+                                     "description": "a vscode package with open-vsx: true: where Open VSX "
+                                                    "serves this version; null when it does not"},
+                    "channels": {"type": "object",
+                                 "description": "a selected github package's homebrew and chocolatey "
+                                                "jobs, those due for it in this run: their results",
+                                 "additionalProperties": {"enum": list(JOB_RESULTS)}},
+                },
+            },
+        },
+    },
+}
+_JSON_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool, "null": type(None)}
+
+
+def _is_type(value, kind):
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, _JSON_TYPES[kind]) and (kind == "boolean" or not isinstance(value, bool))
+
+
+def schema_errors(value, schema, where="record"):
+    """What in `value` breaks `schema`, as messages: the JSON Schema keywords
+    RECORD_SCHEMA uses (type, const, enum, pattern, minimum, required,
+    properties, additionalProperties, items), so release.py needs no library."""
+    kinds = schema["type"] if isinstance(schema.get("type"), list) else [schema["type"]] if "type" in schema else []
+    if kinds and not any(_is_type(value, kind) for kind in kinds):
+        return [f"{where}: {value!r} is not {' or '.join(kinds)}"]
+    errors = []
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{where}: {value!r} is not {schema['const']!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{where}: {value!r} is not one of {', '.join(map(str, schema['enum']))}")
+    if "pattern" in schema and isinstance(value, str) and not re.search(schema["pattern"], value):
+        errors.append(f"{where}: {value!r} does not match {schema['pattern']}")
+    if "minimum" in schema and _is_type(value, "integer") and value < schema["minimum"]:
+        errors.append(f"{where}: {value} is below {schema['minimum']}")
+    if isinstance(value, dict):
+        errors += [f"{where}: {key} is missing" for key in schema.get("required", []) if key not in value]
+        for key, item in value.items():
+            if key in schema.get("properties", {}):
+                errors += schema_errors(item, schema["properties"][key], f"{where}.{key}")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                errors += schema_errors(item, schema["additionalProperties"], f"{where}.{key}")
+    if isinstance(value, list) and "items" in schema:
+        for index, item in enumerate(value):
+            errors += schema_errors(item, schema["items"], f"{where}[{index}]")
+    return errors
+
+
+def registry_url(package, repo):
+    """The page where `package`'s registry serves its version."""
+    name, version = package.name, package.version
+    return {
+        "github": f"https://github.com/{repo}/releases/tag/{quote(package.tag)}",
+        "crates.io": f"https://crates.io/crates/{quote(name)}/{quote(version)}",
+        "pypi": f"https://pypi.org/project/{quote(name)}/{quote(pep440(version))}/",
+        "npm": f"https://www.npmjs.com/package/{quote(name, safe='@/')}/v/{quote(version)}",
+        "vscode": f"https://marketplace.visualstudio.com/items?itemName={quote(name)}",
+    }[package.registry]
+
+
+def open_vsx_url(package):
+    """The page where Open VSX serves an extension's version."""
+    publisher, _, name = package.name.partition(".")
+    return f"https://open-vsx.org/extension/{quote(publisher)}/{quote(name)}/{quote(package.version)}"
+
+
+def built_files(dist, slug):
+    """[{name, sha256, size}] of the files this run built for a package: every
+    file in `<dist>/release--<slug>--*/` but the `.sha256` ones, each checked
+    against its `.sha256` where the build wrote one (a github package's)."""
+    pattern = re.sub(r"([*?\[])", r"[\1]", f"release--{slug}--") + "*/*"
+    files = []
+    for path in Path(dist).glob(pattern):
+        if not path.is_file() or path.name.endswith(".sha256"):
+            continue
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        sums = Path(f"{path}.sha256")
+        if sums.exists() and parse_sums(sums.read_text(encoding="utf-8")).get(path.name) != sha:
+            raise RuntimeError(f"{path}: its .sha256 does not match the file (SHA-256 {sha})")
+        files.append({"name": path.name, "sha256": sha, "size": path.stat().st_size})
+    return sorted(files, key=lambda f: (f["name"], f["sha256"]))
+
+
+def job_results(needs):
+    """{job: result} from a job's `toJSON(needs)` ({job: {result, outputs}})."""
+    needs = json.loads(needs or "{}") if isinstance(needs, str) else needs
+    return {job: value.get("result") if isinstance(value, dict) else value for job, value in needs.items()}
+
+
+def run_info(repo):
+    """The run this is, from the Actions environment (nulls outside it)."""
+    ident, attempt = os.environ.get("GITHUB_RUN_ID", ""), os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    return {"id": int(ident) if ident.isdigit() else None,
+            "attempt": int(attempt) if attempt.isdigit() else None,
+            "url": f"{server}/{repo}/actions/runs/{ident}" if ident.isdigit() else None}
+
+
+def record(tag_name, sha, selection, verify_only, needs, dist="dist", read=None, status=published_on,
+           repo=None, run=None):
+    """The release record of one run (RECORD_SCHEMA): the release, its commit,
+    the run, its jobs' results, and every package of rab.yml with
+    what came of it. The release workflow's last job writes it whatever
+    happened before, so a coordinator can tell a run that published nothing
+    from one that published part of the release. `needs` is that job's
+    `toJSON(needs)`; `selection` and `sha` the gate's outputs (empty when
+    the gate failed). A selected package whose publish job did not succeed
+    is looked up on its registry: a job can fail after uploading. A package
+    the gate selected only to finish the channels made from its release
+    (its entry's `channels` leave out its registry) was already published:
+    its record is those channel jobs' results."""
+    jobs = job_results(needs)
+    repo = repo or repository()
+    gated = jobs.get("gate") == "success"
+    chosen = {(s["registry"], s["name"]): s for s in json.loads(selection or "[]")} if gated else {}
+    if not sha:
+        try:
+            sha = git("rev-parse", "--verify", f"refs/tags/{tag_name}^{{commit}}")
+        except subprocess.CalledProcessError:
+            sha = None
+    try:
+        release = load(read or files_at(sha)) if read or sha else None
+    except (ValueError, RuntimeError, subprocess.CalledProcessError, FileNotFoundError) as error:
+        print(f"cannot read {CONFIG} at {sha}: {error}", flush=True)
+        release = None
+    on_registry = "already-published" if verify_only else "published"
+    packages, done, published_any = [], [], False
+    for package in release.packages if release else ():
+        selected = (package.registry, package.name) in chosen
+        job, files, channels = None, [], {}
+        if selected:
+            entry = chosen[package.registry, package.name]
+            # Its due channels made from a release (all of them, in a selection from before #20).
+            channels = {channel: jobs.get(CHANNEL_JOBS[channel]) or "skipped"
+                        for channel in entry.get("channels", channels_of(package)) if channel in CHANNEL_JOBS}
+        if not selected:
+            # A normal run's gate selects every package that is not yet published.
+            outcome = "already-published" if gated and not verify_only else "skipped"
+        elif not due_on(entry, package.registry):
+            # Selected only to finish its channels: the gate saw it published.
+            outcome = "already-published"
+        else:
+            name = PUBLISH_JOBS[package.registry]
+            if name not in jobs:
+                raise RuntimeError(f"the record job does not need {name}, which publishes {package}: "
+                                   "add it to the job's `needs`")
+            job = jobs[name]
+            if job == "success":
+                outcome = on_registry
+            else:
+                try:
+                    there = status(package)
+                except (RuntimeError, OSError, ValueError) as error:
+                    print(f"{package}: cannot tell whether it is published: {error}", flush=True)
+                    there = None
+                outcome = ("unknown" if there is None else on_registry if there
+                           else "skipped" if job == "skipped" else "failed")
+            files = built_files(dist, package.slug)
+        if selected:
+            # Done: its own upload (when due) and, outside a verify-only run
+            # (which runs no channel job), every channel due for it.
+            own = job is None or (outcome == on_registry and job == "success")
+            done.append(own and (verify_only or all(r == "success" for r in channels.values())))
+            published_any |= outcome == "published" or (
+                not verify_only and any(r == "success" for r in channels.values()))
+        entry = {"name": package.name, "registry": package.registry, "version": package.version,
+                 "tag": package.tag, "selected": selected, "outcome": outcome, "job": job,
+                 "url": registry_url(package, repo) if outcome in ("published", "already-published") else None,
+                 "files": files}
+        if package.registry == "vscode" and package.open_vsx is True:
+            # Published means on both registries (published_on), so both pages serve it.
+            entry["open_vsx_url"] = open_vsx_url(package) if entry["url"] else None
+        if channels:
+            entry["channels"] = channels
+        packages.append(entry)
+    mine = [p for p in packages if p["selected"]]
+    if mine and all(done):
+        result = "complete"
+    elif published_any:
+        result = "partial"
+    elif any(p["outcome"] == "unknown" for p in mine):
+        result = "unknown"
+    else:
+        result = "nothing-published"
+    document = {"schema_version": RECORD_VERSION, "repository": repo,
+                "release": release.name if release else None, "tag": tag_name, "commit": sha or None,
+                "verify_only": bool(verify_only), "run": run or run_info(repo), "result": result,
+                "jobs": jobs, "packages": packages}
+    if errors := schema_errors(document, RECORD_SCHEMA):
+        raise RuntimeError("the release record breaks its schema:\n  " + "\n  ".join(errors))
+    return document
+
+
+def record_lines(document):
+    """The record for a person: one line for the run, one per package."""
+    lines = [f"release {document['release']} ({document['tag']}): {document['result']}"]
+    for package in document["packages"]:
+        job = f" (publish job: {package['job']})" if package["job"] else ""
+        if package.get("channels"):
+            job += " (" + ", ".join(f"{c}: {r}" for c, r in package["channels"].items()) + ")"
+        lines.append(f"  {package['name']} {package['version']} on {package['registry']}: "
+                     f"{package['outcome']}{job}")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# crates.io readiness: what would stop `cargo publish` after the tag, found
+# by `check` (and again by `preflight --registry crates.io`) before it.
+# Manifests are read with `cargo metadata`, so workspace inheritance and
+# renamed dependencies mean what cargo says they mean.
+
+OFFLINE = "RAB_OFFLINE"
+OLD_OFFLINE = "RELEASE_KIT_OFFLINE"  # release-kit 1.x's name: still read, with a warning
+LIBRARY_KINDS = {"lib", "rlib", "dylib", "proc-macro"}
+# include_str!("..."), include_bytes!("...") and include!("..."), relative to
+# the file, or concat!(env!("CARGO_MANIFEST_DIR"), "/..."), relative to the crate.
+EMBED = re.compile(r'\binclude(?:_str|_bytes)?!\s*\(\s*(concat!\s*\(\s*env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*)?'
+                   r'"([^"]+)"')
+# Packaged files that `cargo publish` does not build: their embeds cannot fail it.
+NOT_BUILT = ("tests/", "benches/", "examples/")
+# Nor does it build test code: an item under #[cfg(test)] or #[test].
+TEST_ITEM = re.compile(r"#\[\s*(?:test\s*\]|cfg\s*\(\s*(?:all\s*\(\s*)?test\b)")
+
+
+def offline():
+    """Whether checks that ask crates.io are skipped (RAB_OFFLINE=1; release-kit
+    1.x's RELEASE_KIT_OFFLINE is read too, with a warning, when RAB_OFFLINE is unset)."""
+    value = os.environ.get(OFFLINE)
+    if value is None and (value := os.environ.get(OLD_OFFLINE)) is not None:
+        warn_once(f"{OLD_OFFLINE} is release-kit 1.x's name: set {OFFLINE} instead (the old name is read "
+                  "until rab 3.0.0)")
+    return (value or "").strip().lower() in {"1", "true", "yes"}
+
+
+_last_api_call = [0.0]
+
+
+def polite_fetch(url):
+    """http_status, at most one crates.io API request a second (its data
+    access policy); the sparse index is a CDN and needs no spacing."""
+    if url.startswith("https://crates.io/api/"):
+        time.sleep(max(0.0, _last_api_call[0] + 1 - time.monotonic()))
+        _last_api_call[0] = time.monotonic()
+    return http_status(url)
+
+
+def cargo_run(args, cwd):
+    return subprocess.run(["cargo", *args], cwd=cwd, text=True, encoding="utf-8", capture_output=True)
+
+
+def cargo_failure(result):
+    lines = [line for line in (result.stderr or "").splitlines() if line.strip()]
+    errors = [line for line in lines if line.startswith("error")]
+    return (errors[0] if errors else lines[-1] if lines else f"exit {result.returncode}").strip()
+
+
+def index_url(name):
+    """The crate's file in crates.io's sparse index: every version, one JSON
+    object per line."""
+    name = name.lower()
+    prefix = {1: "1", 2: "2", 3: f"3/{name[:1]}"}.get(len(name), f"{name[:2]}/{name[2:4]}")
+    return f"https://index.crates.io/{prefix}/{quote(name)}"
+
+
+def crate_versions(name, fetch):
+    """The versions of `name` on crates.io that are not yanked, or None if
+    there is no such crate."""
+    status, body = fetch(index_url(name))
+    if status == 404:
+        return None
+    entries = [json.loads(line) for line in body.decode("utf-8").splitlines() if line.strip()]
+    return [e["vers"] for e in entries if not e.get("yanked") and e.get("name", name).lower() == name.lower()]
+
+
+def _semver(text):
+    """(major, minor, patch, pre) from a version, or a partial one (missing
+    parts are None); pre is a tuple of identifiers."""
+    match = re.fullmatch(r"(\d+|[*xX])(?:\.(\d+|[*xX]))?(?:\.(\d+|[*xX]))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?",
+                         text.strip())
+    if not match:
+        raise ValueError(f"not a version: {text!r}")
+    parts = [None if p is None or p in "*xX" else int(p) for p in match.groups()[:3]]
+    pre = tuple(match[4].split(".")) if match[4] else ()
+    return (*parts, pre)
+
+
+def _order(major, minor, patch, pre):
+    """A sort key in SemVer precedence: a pre-release sorts before its release."""
+    ids = tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in pre)
+    return (major, minor, patch, (0, ids) if pre else (1, ()))
+
+
+def _comparator(text):
+    """One comparator of a Cargo version requirement: its bounds (low,
+    low_inclusive, high, high_inclusive) over `_order` keys (None for
+    unbounded), and the (major, minor, patch) of the pre-release it names."""
+    match = re.fullmatch(r"\s*(\^|~|=|>=|<=|>|<)?\s*(.+?)\s*", text)
+    op, (major, minor, patch, pre) = match[1] or "^", _semver(match[2])
+    if re.search(r"[*xX]", match[2]):
+        op = "="   # 1.*, 1.2.x: like =1, =1.2
+    if major is None:
+        return (None, True, None, False), None
+    low = _order(major, minor or 0, patch or 0, pre)
+    named = (major, minor, patch) if pre else None
+
+    def up(*version):
+        return _order(*version, ())
+
+    # The first version past a partial one (1 -> 2.0.0, 1.2 -> 1.3.0).
+    past = up(major + 1, 0, 0) if minor is None else up(major, minor + 1, 0) if patch is None else None
+    if op == "^":
+        if past is None:
+            past = up(major + 1, 0, 0) if major else up(0, minor + 1, 0) if minor else up(0, 0, patch + 1)
+        elif minor is not None and major:
+            past = up(major + 1, 0, 0)
+        return (low, True, past, False), named
+    if op == "~":
+        return (low, True, past or up(major, minor + 1, 0), False), named
+    if op == "=":
+        return ((low, True, past, False) if past else (low, True, low, True)), named
+    if op == ">=":
+        return (low, True, None, False), named
+    if op == ">":
+        return ((past, True, None, False) if past else (low, False, None, False)), named
+    if op == "<":
+        return (None, True, low, False), named
+    return ((None, True, past, False) if past else (None, True, low, True)), named   # <=
+
+
+def requirement_matches(requirement, version):
+    """Whether `version` satisfies a Cargo version requirement (`^1.2`,
+    `~0.3.1`, `>=1, <2`, `=1.0.0`, `1.*`, ...). A pre-release matches only a
+    requirement that names a pre-release of the same major.minor.patch, as
+    in Cargo."""
+    major, minor, patch, pre = _semver(version)
+    key = _order(major, minor, patch, pre)
+    allowed = not pre
+    for text in requirement.split(","):
+        (low, low_inclusive, high, high_inclusive), named = _comparator(text)
+        allowed = allowed or named == (major, minor, patch)
+        if low is not None and (key < low or (key == low and not low_inclusive)):
+            return False
+        if high is not None and (key > high or (key == high and not high_inclusive)):
+            return False
+    return allowed
+
+
+def repository_of(url):
+    """(host, owner, name) of a repository URL, lower-cased, or None."""
+    match = re.match(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)[/:]([^/]+)/([^/#?]+?)(?:\.git)?/?(?:[#?].*)?$",
+                     (url or "").strip(), re.I)
+    return tuple(part.lower() for part in match.groups()) if match else None
+
+
+def owner_problem(name, repo, fetch):
+    """Whether this repository can publish `name` on crates.io, judged from
+    the public API: (None, None) when the name is free or ours, ("error",
+    message) when it belongs to someone else, ("warning", message) when it
+    cannot be told. The repository's owner (a GitHub user or organisation)
+    is ours when crates.io lists that user, or a team of that organisation
+    (github:<org>:<team>), among the crate's owners, or when the crate's
+    `repository` is on GitHub under that owner (a crate an organisation
+    member owns personally)."""
+    status, body = fetch(f"https://crates.io/api/v1/crates/{quote(name)}")
+    if status == 404:
+        return None, None
+    crate = json.loads(body).get("crate", {})
+    if crate.get("name", name) != name:
+        return "error", (f"{name}: crates.io has the crate {crate['name']}, and names that differ only in case, "
+                         f"`-` or `_` are the same name; rename the package (e.g. {name}-cli, keeping the command "
+                         f"with [[bin]] name = \"{name}\")")
+    owner = repo.split("/")[0].lower() if repo else None
+    declared = repository_of(crate.get("repository"))
+    if owner and declared and declared[0] == "github.com" and declared[1] == owner:
+        return None, None
+    _, body = fetch(f"https://crates.io/api/v1/crates/{quote(name)}/owners")
+    users = json.loads(body or b"{}").get("users", [])
+    logins = ", ".join(u.get("login", "?") for u in users) or "nobody listed"
+    if owner and any(u.get("login", "").lower() == owner or u.get("login", "").lower().startswith(f"github:{owner}:")
+                     for u in users):
+        return None, None
+    if owner and declared and declared[0] == "github.com":
+        return "error", (f"{name}: the name is taken on crates.io (owners: {logins}; repository "
+                         f"{crate.get('repository')}), and {repo} cannot publish it. Rename the package "
+                         f"(e.g. {name}-cli, keeping the command with [[bin]] name = \"{name}\"), or, if the crate "
+                         f"is yours, have an owner add {owner} (cargo owner --add {owner}, or "
+                         f"github:{owner}:<team> for an organisation)")
+    return "warning", (f"{name}: crates.io's {name} is owned by {logins}"
+                       + (f" (repository {crate['repository']})" if crate.get("repository") else "")
+                       + f"; rab cannot tell whether {repo or 'this repository'} may publish it. Make sure "
+                       "its Trusted Publisher names this repository, or that the token's account is an owner")
+
+
+def without_tests(source):
+    """Rust source without its test items (#[cfg(test)] or #[test], up to
+    the end of the braced block that follows), which `cargo publish` does
+    not compile. Braces are counted, not parsed: good enough for embeds."""
+    kept, at = [], 0
+    while match := TEST_ITEM.search(source, at):
+        kept.append(source[at:match.start()])
+        brace, semicolon = source.find("{", match.end()), source.find(";", match.end())
+        if brace < 0 or 0 <= semicolon < brace:
+            at = match.end()
+            continue
+        depth, at = 0, brace
+        while at < len(source):
+            depth += {"{": 1, "}": -1}.get(source[at], 0)
+            at += 1
+            if depth == 0:
+                break
+    return "".join(kept) + source[at:]
+
+
+def embed_problems(name, crate_dir, packaged):
+    """Files the crate's sources embed (include_str!, include_bytes!,
+    include!) that its package does not carry: a package holds only its
+    crate directory, so an embed from elsewhere fails `cargo publish`."""
+    problems, carried = [], set(packaged)
+    for file in sorted(packaged):
+        if not file.endswith(".rs") or file.startswith(NOT_BUILT):
+            continue
+        try:
+            text = (crate_dir / file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in without_tests(text).splitlines():
+            if line.lstrip().startswith("//"):
+                continue
+            for manifest_relative, literal in EMBED.findall(line):
+                start = "" if manifest_relative else posixpath.dirname(file)
+                resolved = posixpath.normpath(posixpath.join(start, literal.lstrip("/") if manifest_relative
+                                                             else literal))
+                if resolved == ".." or resolved.startswith("../"):
+                    problems.append(f"{name}: {file} embeds {literal}, outside the crate; a package carries only "
+                                    "its crate directory. Copy the file into the crate (and add a test that the "
+                                    "copy matches the original)")
+                elif resolved not in carried:
+                    problems.append(f"{name}: {file} embeds {literal}, which the package does not carry; add it "
+                                    "to `include` in Cargo.toml (or take it out of `exclude`)")
+    return problems
+
+
+def _workspaces(release, base, cargo, offline_mode):
+    """{manifest path (resolved): (metadata package, workspace metadata)}
+    for every Cargo.toml rab.yml names, plus the root workspace's
+    members; and the error each unreadable manifest gave."""
+    found, errors, seen = {}, {}, set()
+    manifests = [p.manifest for p in release.packages if PurePosixPath(p.manifest).name == "Cargo.toml"]
+    if (base / "Cargo.toml").is_file():
+        manifests.append("Cargo.toml")
+    for manifest in manifests:
+        path = (base / manifest).resolve()
+        if path in found or path in errors:
+            continue
+        args = ["metadata", "--format-version", "1", "--no-deps", "--manifest-path", str(path)]
+        result = cargo(args + (["--offline"] if offline_mode else []), base)
+        if result.returncode:
+            errors[path] = cargo_failure(result)
+            continue
+        metadata = json.loads(result.stdout)
+        if metadata["workspace_root"] in seen:
+            continue
+        seen.add(metadata["workspace_root"])
+        for package in metadata["packages"]:
+            found[Path(package["manifest_path"]).resolve()] = (package, metadata)
+    return found, errors
+
+
+def declared_crates(release, base, found):
+    """The crates rab.yml publishes in some form: crates.io packages,
+    any package whose manifest is a crate's, the crates maturin builds and
+    the crates a rust-binary names."""
+    names = {p.name for p in release.packages if p.registry == "crates.io"}
+    for package in release.packages:
+        manifests = [package.manifest]
+        if PurePosixPath(package.manifest).name == "pyproject.toml":
+            try:
+                manifests.append(maturin_manifest(files_on_disk(base), package.manifest)[0])
+            except (OSError, ValueError, tomllib.TOMLDecodeError):
+                pass
+        for manifest in manifests:
+            if hit := found.get((base / manifest).resolve()):
+                names.add(hit[0]["name"])
+        names.update(a["crate"] for a in package.artifacts if a.get("kind") == "rust-binary" and a.get("crate"))
+    return names
+
+
+def crates_io_readiness(release, base, only=None, fetch=None, cargo=None, repo=None, offline_mode=None):
+    """What would stop `cargo publish` for rab.yml's crates.io
+    packages (or the ones named in `only`), as (errors, warnings):
+
+    - the manifest says `publish = false`, or lists only other registries;
+    - a dependency (normal or build) by `git` or `path` has no `version`, or
+      comes from another registry;
+    - a dependency that publishing turns into a crates.io one (a `git` or
+      `path` dependency with a `version`) is not on crates.io at a matching
+      version, and is not a crates.io package listed before this one;
+    - the name is on crates.io and belongs to someone else (a warning when
+      that cannot be told);
+    - `cargo package --list` fails, or a source file embeds a file the
+      package does not carry.
+
+    With every package (no `only`), it also warns about the workspace's
+    library crates rab.yml does not publish. Checks that ask
+    crates.io are skipped offline (RAB_OFFLINE=1)."""
+    offline_mode = offline() if offline_mode is None else offline_mode
+    fetch = fetch or polite_fetch
+    if cargo is None:
+        if not shutil.which("cargo"):
+            return [], ["cargo is not installed: the crates.io checks (manifests, dependencies, packaging) "
+                        "were skipped"]
+        cargo = cargo_run
+    if repo is None:
+        try:
+            repo = repository()
+        except (RuntimeError, subprocess.CalledProcessError):
+            repo = ""
+    errors, warnings = [], []
+    if not repo and not offline_mode:
+        warnings.append("cannot tell this repository's GitHub owner (no GITHUB_REPOSITORY, and origin is not on "
+                        "GitHub): who owns each crate on crates.io was not checked")
+    found, unreadable = _workspaces(release, base, cargo, offline_mode)
+    crates = [p for p in release.packages if p.registry == "crates.io"]
+    position = {p.name: i for i, p in enumerate(crates)}
+    for package in crates:
+        if only is not None and package.name not in only:
+            continue
+        path = (base / package.manifest).resolve()
+        if path in unreadable:
+            errors.append(f"{package.name}: cargo metadata cannot read {package.manifest}: {unreadable[path]}")
+            continue
+        if path not in found:
+            continue   # `check` already says the manifest is missing
+        meta, _ = found[path]
+        problems = []
+        publish = meta.get("publish")
+        if publish == []:
+            problems.append(f"{package.name}: {package.manifest} says `publish = false`, so cargo will not publish "
+                            f"it; remove that line (or take the package out of {CONFIG} to keep the crate private)")
+        elif publish is not None and "crates-io" not in publish:
+            problems.append(f"{package.name}: {package.manifest} publishes only to {', '.join(publish)} "
+                            f"(`publish = [...]`); add \"crates-io\" to the list, or remove `publish`")
+        crate_dir = path.parent
+        checked = set()
+        for dep in meta["dependencies"]:
+            if dep.get("kind") == "dev" or dep["name"] in checked:
+                continue
+            checked.add(dep["name"])
+            source, local, requirement = dep.get("source") or "", dep.get("path"), dep.get("req") or "*"
+            what = f"{dep['name']} (renamed {dep['rename']})" if dep.get("rename") else dep["name"]
+            if dep.get("registry"):
+                problems.append(f"{package.name}: depends on {what} from the registry {dep['registry']}; crates.io "
+                                "accepts only dependencies on crates.io")
+                continue
+            if source.startswith("git+"):
+                if requirement == "*":
+                    problems.append(f"{package.name}: depends on {what} from git ({source[4:]}) with no version, "
+                                    f"and crates.io refuses git dependencies. Publish {dep['name']} to crates.io "
+                                    "first, then give the dependency a `version` (cargo builds from git locally "
+                                    "and from crates.io once published)")
+                    continue
+            elif local:
+                if requirement == "*":
+                    target = found.get((Path(local) / "Cargo.toml").resolve())
+                    version = target[0]["version"] if target else "X.Y.Z"
+                    relative = Path(os.path.relpath(local, crate_dir)).as_posix()
+                    problems.append(f"{package.name}: depends on {what} by path with no version; crates.io needs "
+                                    f"one: {dep.get('rename') or dep['name']} = {{ path = \"{relative}\", "
+                                    f"version = \"{version}\" }}")
+                    continue
+            else:
+                continue   # a crates.io dependency, resolved by the lockfile
+            # Published, a git or path dependency becomes a crates.io one.
+            if dep["name"] in position:
+                continue   # a package of this release: `check` orders it before this one
+            if offline_mode:
+                continue
+            versions = crate_versions(dep["name"], fetch)
+            fix = (f"publish {dep['name']} first (from its own repository), or list it in {CONFIG} "
+                   f"(registry: crates.io) before {package.name}")
+            if versions is None:
+                problems.append(f"{package.name}: depends on {what} {requirement}, which is not on crates.io; {fix}")
+            elif not any(requirement_matches(requirement, v) for v in versions):
+                newest = max(versions, key=lambda v: _order(*_semver(v))) if versions else "none"
+                problems.append(f"{package.name}: depends on {what} {requirement}, but crates.io has no matching "
+                                f"version (newest: {newest}); {fix}")
+        if not offline_mode and repo:
+            kind, message = owner_problem(package.name, repo, fetch)
+            (problems if kind == "error" else warnings).extend([message] if message else [])
+        args = ["package", "--list", "--allow-dirty", "--manifest-path", str(path)]
+        result = cargo(args + (["--offline"] if offline_mode else []), base)
+        if result.returncode:
+            if not problems:   # else most likely one of them
+                problems.append(f"{package.name}: `cargo package --list` fails: {cargo_failure(result)}")
+        else:
+            problems.extend(embed_problems(package.name, crate_dir, result.stdout.split()))
+        errors.extend(problems)
+    if only is None:
+        declared = declared_crates(release, base, found)
+        members = {}
+        for meta, workspace in found.values():
+            if meta["id"] in workspace.get("workspace_members", ()) and meta["name"] not in declared and any(
+                    LIBRARY_KINDS & set(t["kind"]) for t in meta["targets"]):
+                members[meta["name"]] = " (publish = false)" if meta.get("publish") == [] else ""
+        if members:
+            warnings.append(f"library crates {CONFIG} does not publish: "
+                            + ", ".join(f"{n}{note}" for n, note in sorted(members.items()))
+                            + ". To publish one, list it with registry: crates.io; a crate meant to stay "
+                            "private needs nothing")
+    return errors, warnings
+
+
+def publish_dry_run(release, base, runner=None):
+    """`cargo publish --dry-run --locked` over every crates.io package, as
+    the release will run it (one cargo call per workspace, so each crate is
+    verified against the others' packages). Builds every crate: slow, and
+    meant for CI. Returns an error message, or None."""
+    runner = runner or cargo_run
+    groups = {}
+    for package in release.packages:
+        if package.registry == "crates.io":
+            manifest = str((base / package.manifest).resolve())
+            located = runner(["locate-project", "--workspace", "--message-format", "plain",
+                              "--manifest-path", manifest], base)
+            workspace = Path(located.stdout.strip() if not located.returncode else manifest).parent
+            groups.setdefault(workspace, []).append(package.name)
+    for directory, names in groups.items():
+        args = ["publish", "--dry-run", "--locked", "--allow-dirty", *[a for n in names for a in ("-p", n)]]
+        print(f"$ cargo {' '.join(args)}", flush=True)
+        result = runner(args, directory)
+        if result.returncode:
+            print(result.stderr or "", end="", file=sys.stderr)
+            return f"`cargo publish --dry-run` fails for {', '.join(names)}: {cargo_failure(result)}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Installing: repositories use a copy of the kit, pinned and reviewable: a
 # repository's release changes only when it installs a newer kit.
 
 KIT = Path(__file__).resolve().parent.parent
-VENDOR = ".github/release-kit"
-BUILD_WORKFLOW = ".github/workflows/release-kit-build.yml"
+VENDOR = ".github/rab"
+BUILD_WORKFLOW = ".github/workflows/rab-build.yml"
 MANIFEST = f"{VENDOR}/manifest.json"
-NOTICE = """# release-kit (installed copy)
+# release-kit 1.x's layout: `vendored` still accepts a copy there, with a
+# warning, and `install` migrates it (until rab 3.0.0).
+OLD_VENDOR = ".github/release-kit"
+OLD_BUILD_WORKFLOW = ".github/workflows/release-kit-build.yml"
+OLD_MANIFEST = f"{OLD_VENDOR}/manifest.json"
+# What `install` rewrites in the repository's own workflows when it migrates.
+OLD_PATHS = ((f"{OLD_VENDOR}/", f"{VENDOR}/"), ("release-kit-build.yml", "rab-build.yml"))
+NOTICE = """# rab, the Release Asset Bundle (installed copy)
 
-Installed from buchochelliq-labs/release-kit {version} ({commit}) by
+Installed from buchochelliq-labs/release-asset-bundle {version} ({commit}) by
 `release.py install`. Do not edit these files: CI checks them against
-manifest.json (`python3 .github/release-kit/scripts/release.py vendored`).
-To update, install again from a newer release-kit checkout:
+manifest.json (`python3 .github/rab/scripts/release.py vendored`).
+To update, install again from a newer checkout of the kit:
 
-    python3 ../release-kit/scripts/release.py install
+    python3 ../release-asset-bundle/scripts/release.py install
 
-This repository's release is configured in release-kit.yml at its root.
+This repository's release is configured in rab.yml at its root.
 """
 
 
 def kit_files(kit=KIT):
     """{path in the repository: source file} for an install."""
     files = {f"{VENDOR}/scripts/release.py": kit / "scripts" / "release.py",
-             BUILD_WORKFLOW: kit / "workflows" / "release-kit-build.yml"}
+             BUILD_WORKFLOW: kit / "workflows" / "rab-build.yml"}
     for action in sorted(kit.glob("*/action.yml")):
         files[f"{VENDOR}/{action.parent.name}/action.yml"] = action
     return files
@@ -1484,18 +2585,62 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def migrate(target):
+    """Move a repository from release-kit 1.x's names to rab's: release-kit.yml
+    becomes rab.yml (`git mv` when git tracks it), the old installed copy and
+    build workflow are removed, and the old paths in the repository's own
+    workflows are rewritten. Refuses, changing nothing, when both config names
+    exist. Returns what it changed, as lines to print."""
+    target = Path(target)
+    new, old = target / CONFIG, target / OLD_CONFIG
+    if new.is_file() and old.is_file():
+        raise RuntimeError(f"both {CONFIG} and {OLD_CONFIG} exist in {target}: keep {CONFIG}, delete "
+                           f"{OLD_CONFIG}, and install again")
+    changes = []
+    if old.is_file():
+        tracked = subprocess.run(["git", "ls-files", "--error-unmatch", OLD_CONFIG], cwd=target,
+                                 capture_output=True, text=True).returncode == 0
+        if tracked:
+            subprocess.run(["git", "mv", OLD_CONFIG, CONFIG], cwd=target, check=True, capture_output=True)
+        else:
+            old.rename(new)
+        changes.append(f"renamed {OLD_CONFIG} -> {CONFIG}{' (git mv)' if tracked else ''}")
+    if (target / OLD_VENDOR).is_dir():
+        shutil.rmtree(target / OLD_VENDOR)
+        changes.append(f"removed {OLD_VENDOR}/ (replaced by {VENDOR}/)")
+    if (target / OLD_BUILD_WORKFLOW).is_file():
+        (target / OLD_BUILD_WORKFLOW).unlink()
+        changes.append(f"removed {OLD_BUILD_WORKFLOW} (replaced by {BUILD_WORKFLOW})")
+    workflows = target / ".github" / "workflows"
+    for workflow in sorted(workflows.glob("*.y*ml")) if workflows.is_dir() else ():
+        if workflow.name == PurePosixPath(BUILD_WORKFLOW).name:
+            continue
+        text = workflow.read_text(encoding="utf-8")
+        rewritten, count = text, 0
+        for before, after in OLD_PATHS:
+            count += rewritten.count(before)
+            rewritten = rewritten.replace(before, after)
+        if count:
+            workflow.write_text(rewritten, encoding="utf-8")
+            changes.append(f"rewrote {count} old path{'s' if count > 1 else ''} in "
+                           f"{workflow.relative_to(target).as_posix()} ({OLD_VENDOR}/ -> {VENDOR}/, "
+                           "release-kit-build.yml -> rab-build.yml)")
+    return changes
+
+
 def install(target=None, kit=KIT):
     """Copy the kit into the repository at `target` (default: the one you are
-    in). Returns the paths written."""
-    if not (kit / "workflows" / "release-kit-build.yml").exists():
-        raise RuntimeError("install runs from a release-kit checkout, not from an installed copy: "
-                           "git clone https://github.com/buchochelliq-labs/release-kit")
+    in), migrating a release-kit 1.x layout first. Returns the paths written."""
+    if not (kit / "workflows" / "rab-build.yml").exists():
+        raise RuntimeError("install runs from a checkout of the kit, not from an installed copy: "
+                           "git clone https://github.com/buchochelliq-labs/release-asset-bundle")
     target = Path(target) if target else root()
     if target.resolve() == kit.resolve():
-        raise RuntimeError("run install from the repository to install into, not from release-kit itself")
+        raise RuntimeError("run install from the repository to install into, not from the kit itself")
     version = subprocess.run(["git", "describe", "--tags", "--always", "--dirty"], cwd=kit, text=True,
-                             capture_output=True).stdout.strip() or "unversioned"
+                             capture_output=True).stdout.strip() or f"v{VERSION}"
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=kit, text=True, capture_output=True).stdout.strip()
+    migrated = migrate(target)
     vendor = target / VENDOR
     if vendor.exists():
         shutil.rmtree(vendor)  # a clean copy: files the new version dropped go too
@@ -1506,7 +2651,7 @@ def install(target=None, kit=KIT):
         shutil.copy2(source, destination)
         written.append(path)
     (vendor / "README.md").write_text(NOTICE.format(version=version, commit=commit[:12]), encoding="utf-8")
-    manifest = {"source": "buchochelliq-labs/release-kit", "version": version, "commit": commit,
+    manifest = {"source": "buchochelliq-labs/release-asset-bundle", "version": version, "commit": commit,
                 "files": {path: digest(target / path) for path in sorted(written)}}
     (target / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     written += [f"{VENDOR}/README.md", MANIFEST]
@@ -1514,31 +2659,46 @@ def install(target=None, kit=KIT):
     if not starter.exists():
         shutil.copy2(kit / "templates" / "release.yml", starter)
         written.append(".github/workflows/release.yml")
-    print(f"installed release-kit {version} into {target}:", flush=True)
+    if migrated:
+        print(f"migrated {target} from release-kit 1.x:", flush=True)
+        for line in migrated:
+            print(f"  {line}", flush=True)
+    print(f"installed rab {version} into {target}:", flush=True)
     for path in written:
         print(f"  {path}", flush=True)
+    if migrated:
+        print("Review the changes (git status, git diff) and commit them together.", flush=True)
     return written
 
 
 def vendored(target=None):
-    """Problems with the installed copy: files edited, missing, or added."""
+    """Problems with the installed copy: files edited, missing, or added. A
+    copy at release-kit 1.x's .github/release-kit/ is checked too, with a
+    warning, when there is none at .github/rab/."""
     target = Path(target) if target else root()
+    manifest_path, vendor = MANIFEST, VENDOR
+    if not (target / MANIFEST).exists() and (target / OLD_MANIFEST).exists():
+        manifest_path, vendor = OLD_MANIFEST, OLD_VENDOR
+        warn_once(f"the installed copy is at {OLD_VENDOR}/, release-kit 1.x's path; install rab again to "
+                  f"move it to {VENDOR}/ (the old path is accepted until rab 3.0.0)")
     try:
-        manifest = json.loads((target / MANIFEST).read_text(encoding="utf-8"))
+        manifest = json.loads((target / manifest_path).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return [f"{MANIFEST} is missing: install release-kit (release.py install)"]
+        return [f"{MANIFEST} is missing: install rab (release.py install)"]
     problems = []
+    if vendor == VENDOR and (target / OLD_VENDOR).exists():
+        problems.append(f"{OLD_VENDOR}/ is left from release-kit 1.x: delete it (install migrates it)")
     for path, expected in manifest["files"].items():
         file = target / path
         if not file.exists():
             problems.append(f"{path} is missing")
         elif digest(file) != expected:
-            problems.append(f"{path} was edited; release-kit's files change only by installing again")
-    known = set(manifest["files"]) | {MANIFEST, f"{VENDOR}/README.md"}
-    for file in sorted((target / VENDOR).rglob("*")):
+            problems.append(f"{path} was edited; the kit's files change only by installing again")
+    known = set(manifest["files"]) | {manifest_path, f"{vendor}/README.md"}
+    for file in sorted((target / vendor).rglob("*")):
         relative = file.relative_to(target).as_posix()
         if file.is_file() and relative not in known and "__pycache__" not in relative:
-            problems.append(f"{relative} is not part of release-kit {manifest['version']}")
+            problems.append(f"{relative} is not part of the kit {manifest['version']}")
     return problems
 
 
@@ -1554,14 +2714,16 @@ def releases_tagged(existing, release_tag_pattern):
             try:
                 found[commit] = load(files_at(commit))
             except (subprocess.CalledProcessError, ValueError, tomllib.TOMLDecodeError):
-                continue  # not a release-kit release (from before adoption): not resumed
+                continue  # not a release of the kit (from before adoption): not resumed
     return found
 
 
-def resolve(commit, wanted, remote, existing, binds, published):
+def resolve(commit, wanted, remote, existing, binds, published, finishing=None):
     """The commit to release: --commit; else where an unfinished release
     (--release, or the newest tagged) was started; else, for --release, the
-    last commit on the default branch naming it; else HEAD."""
+    last commit on the default branch naming it; else HEAD. A release is
+    unfinished while a package is unpublished, or while `finishing(release,
+    commit)` says a channel made from a published one is not done."""
     if commit:
         return git("rev-parse", "--verify", f"{commit}^{{commit}}"), "--commit"
     here = load(files_on_disk())
@@ -1575,7 +2737,7 @@ def resolve(commit, wanted, remote, existing, binds, published):
         mine = [p for p in release.packages if existing.get(p.tag) == candidate]
         if not any(binds(p, candidate) for p in mine) or split_from(release, existing, candidate, binds):
             continue
-        if wanted or any(not published(p) for p in release.packages):
+        if wanted or any(not published(p) for p in release.packages) or (finishing and finishing(release, candidate)):
             return candidate, f"release {target} is already tagged there"
     if wanted:
         branch = here.branch
@@ -1597,8 +2759,13 @@ def local_tag(name):
                           cwd=root(), text=True, capture_output=True).stdout.strip()
 
 
-def wait_for(tag_name, packages, timeout, status=published_on, run=run_of, sleep=time.sleep, stale=None):
-    """Return once the release run succeeded and every package is published."""
+def wait_for(tag_name, packages, timeout, status=published_on, run=run_of, sleep=time.sleep, stale=None,
+             channels=(), channel_status=None, settle=10):
+    """Return once the release run succeeded and every package is published.
+    `channels` are (package, channel) pairs made from a release; once the rest
+    is done they are polled up to `settle` more times, and any not done then is
+    named (a run that succeeds without finishing one, e.g. Homebrew without a
+    tap token, is not waited on for hours)."""
     deadline = time.monotonic() + timeout
     while True:
         missing = [p for p in packages if not status(p)]
@@ -1611,7 +2778,20 @@ def wait_for(tag_name, packages, timeout, status=published_on, run=run_of, sleep
                                "then run `release.py tag` again: it pushes the tag again and the new run "
                                "publishes only what is still due.")
         if not missing and (latest is None or latest["status"] == "completed"):
+            unfinished = [(p, c, state) for p, c in channels if (state := channel_status(p, c)) not in DONE]
+            # A terminal state will not change by waiting.
+            if any(s not in TERMINAL for _, _, s in unfinished) and settle > 0 and time.monotonic() <= deadline:
+                settle -= 1
+                sleep(30)
+                continue
             print(f"{tag_name}: published " + ", ".join(str(p) for p in packages), flush=True)
+            for package, channel, state in unfinished:
+                if state in TERMINAL:
+                    print(f"note   {channel} of {package} is {TERMINAL[state]}", flush=True)
+                    continue
+                print(f"note   {channel} of {package} is {state}, not done: see the run's publish-{channel} job. "
+                      "Fix the cause (a missing token or a rejected package), then run `release.py tag` again "
+                      f"to finish it.", flush=True)
             return
         if time.monotonic() > deadline:
             still = latest and latest["status"] != "completed"
@@ -1623,8 +2803,10 @@ def wait_for(tag_name, packages, timeout, status=published_on, run=run_of, sleep
 
 
 def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
-        status=published_on, run=run_of, wait=wait_for):
-    """Tag the release on its commit and wait for it to be published."""
+        status=published_on, run=run_of, wait=wait_for, channel_status=channel_state):
+    """Tag the release on its commit and wait for it to be published. A
+    published package whose derived channels (Homebrew, Chocolatey) are not
+    done is finished: the release tag is pushed again with only them due."""
     existing = remote_tags(remote)
 
     def binds(package, tagged):
@@ -1637,7 +2819,20 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
     if foreign := not_its_own(here, existing, None, remote, unpublished):
         raise RuntimeError(foreign_error(foreign, existing))
 
-    sha, why = resolve(commit, wanted, remote, existing, binds, status)
+    def finishing(release, candidate):
+        # A newer release on HEAD replaces an older one's formula and package:
+        # going back to finish them would publish a downgrade.
+        pending = {p: c for p in release.packages if existing.get(p.tag) == candidate and status(p)
+                   and (c := pending_channels(p, lambda q, ch: channel_status(q, ch, candidate)))}
+        if pending and version_key(here.name) > version_key(release.name):
+            print(f"note   release {release.name} has channels not done ("
+                  + "; ".join(f"{p}: {', '.join(c)}" for p, c in pending.items())
+                  + f"), but HEAD names release {here.name}: run `tag --release {release.name}` to finish them",
+                  flush=True)
+            return False
+        return bool(pending)
+
+    sha, why = resolve(commit, wanted, remote, existing, binds, status, finishing)
     read = files_at(sha)
     release = load(read)
     if subprocess.run(["git", "merge-base", "--is-ancestor", sha, f"{remote}/{release.branch}"],
@@ -1651,10 +2846,23 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
         raise RuntimeError(split_error(sha, split))
     print(f"Release {release.name} from {sha} ({why})", flush=True)
 
-    deletions, records, due = [], [], []
+    deletions, records, due, channels = [], [], [], {}
     for package in release.packages:
         if status(package):
-            print(f"skip   {package.tag}: {package} is already published", flush=True)
+            # Its upload is done; the channels made from it may not be. They
+            # are finished from the commit it was released from.
+            pending, ended = {}, {}
+            if existing.get(package.tag) == sha:
+                pending = pending_channels(package, lambda p, c: channel_status(p, c, sha), ended)
+            for channel, state in ended.items():
+                print(f"note   {channel} of {package} is {TERMINAL[state]}; not retried", flush=True)
+            if not pending:
+                print(f"skip   {package.tag}: {package} is already published", flush=True)
+                continue
+            print(f"finish {package.tag}: {package} is published; "
+                  + ", ".join(f"{c} is {state} ({RETRY[c]})" for c, state in pending.items()), flush=True)
+            due.append(package)
+            channels[package] = list(pending)
             continue
         tagged = existing.get(package.tag)
         if tagged and tagged != sha:
@@ -1675,6 +2883,7 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
             print(f"tag    {package.tag} at {sha[:12]} (a record)", flush=True)
             records.append((package.tag, tag_message(str(package), release, sha)))
         due.append(package)
+        channels[package] = channels_of(package)
     if not due:
         print(f"Every package of release {release.name} is published.")
         return
@@ -1690,7 +2899,10 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
               flush=True)
         deletions.append(release.tag)
         tagged = None
-    elif tagged and latest and latest["status"] == "completed" and latest["conclusion"] != "success":
+    elif tagged and latest and latest["status"] == "completed" and (
+            latest["conclusion"] != "success" or all(status(p) for p in due)):
+        # A run that succeeded is run again only to finish derived channels:
+        # everything due is published, so the new run uploads nothing else.
         print(f"retag  {release.tag}: its run ended {latest['conclusion']}; the new run publishes only what "
               "is still due", flush=True)
         deletions.append(release.tag)
@@ -1698,10 +2910,12 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
     if tagged:
         print(f"wait   {release.tag}: already tagged here", flush=True)
     else:
-        subjects = "".join(f"{p}\n" for p in due)
+        subjects = "".join(f"{p}\n" if channels[p] == channels_of(p) else f"{p}: {', '.join(channels[p])}\n"
+                           for p in due)
         start = (release.tag, tag_message(f"Release {release.name}\n\n{subjects}".rstrip(), release, sha))
         print(f"tag    {release.tag} at {sha[:12]} (starts the release run: "
-              + ", ".join(p.name for p in due) + ")", flush=True)
+              + ", ".join(p.name if channels[p] == channels_of(p) else f"{p.name} ({', '.join(channels[p])})"
+                          for p in due) + ")", flush=True)
 
     if dry_run:
         print("Dry run: nothing was tagged.")
@@ -1719,10 +2933,12 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
     if start:
         git("push", remote, f"refs/tags/{start[0]}", capture=False)
         print(f"pushed {start[0]}; waiting for the release run", flush=True)
-    wait(release.tag, due, timeout, status, stale=stale)
+    wait(release.tag, due, timeout, status, stale=stale,
+         channels=[(p, c) for p in due for c in channels[p] if c in CHANNEL_KEYS],
+         channel_status=lambda p, c: channel_status(p, c, sha))
 
 
-def status_lines(read=None, status=published_on, remote="origin"):
+def status_lines(read=None, status=published_on, remote="origin", channel_status=channel_state):
     release = load(read or files_on_disk())
     try:
         existing = remote_tags(remote)
@@ -1732,16 +2948,26 @@ def status_lines(read=None, status=published_on, remote="origin"):
              f"{existing[release.tag][:12] if release.tag in existing else 'not tagged'})"]
     for package in release.packages:
         tagged = existing.get(package.tag)
+        published = status(package)
         lines.append(f"  {str(package):<48} {package.tag:<28} "
                      f"{'tagged ' + tagged[:12] if tagged else 'untagged':<20} "
-                     f"{'published' if status(package) else 'due'}")
+                     f"{'published' if published else 'due'}")
+        # The channels made from its release: due until it is out, then read live.
+        for channel in channels_of(package)[1:]:
+            state = channel_status(package, channel, tagged) if published else "due"
+            lines.append(f"    {channel:<46} {RETRY[channel]:<49} {state_text(state)}")
     return lines
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="release.py", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--version", action="version", version=f"rab {VERSION}")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("check")
+    checker = commands.add_parser("check")
+    checker.add_argument("--offline", action="store_true",
+                         help=f"skip the checks that ask crates.io (also {OFFLINE}=1)")
+    checker.add_argument("--publish-dry-run", action="store_true",
+                         help="also run `cargo publish --dry-run` over the crates.io packages (builds them; for CI)")
     commands.add_parser("sync")
     commands.add_parser("status")
     tagger = commands.add_parser("tag")
@@ -1764,12 +2990,15 @@ def main(argv=None):
     shaper.add_argument("--name", required=True)
     shaper.add_argument("--stage", required=True, help="the directory holding the release's files")
     shaper.add_argument("--notes-out", required=True, help="where to write the notes, if the package has some")
-    shaper.add_argument("--options-only", action="store_true", help="only print what release-kit.yml says")
+    shaper.add_argument("--options-only", action="store_true", help="only print what rab.yml says")
     renderer = commands.add_parser("render")
     renderer.add_argument("--name", required=True)
     renderer.add_argument("--channel", required=True, choices=sorted(CHANNEL_KEYS))
     renderer.add_argument("--sums", required=True, help="the release's checksums, in sha256sum format")
     renderer.add_argument("--out", required=True)
+    refused = commands.add_parser("chocolatey-refused")
+    refused.add_argument("--name", required=True)
+    refused.add_argument("--log", required=True, help="the output of the failed `choco push`")
     tapper = commands.add_parser("homebrew-tap")
     tapper.add_argument("--tap", required=True, help="a checkout of the tap")
     tapper.add_argument("--formula", required=True)
@@ -1795,13 +3024,33 @@ def main(argv=None):
     publisher = commands.add_parser("publish-crates")
     publisher.add_argument("--selection", required=True)
     publisher.add_argument("--new-crates", default="[]", help="preflight's new_crates output (JSON)")
+    recorder = commands.add_parser("record")
+    recorder.add_argument("--tag", help="the release tag the run was for")
+    recorder.add_argument("--sha", default="", help="the gate's sha output (empty if the gate failed)")
+    recorder.add_argument("--selection", default="", help="the gate's selection output")
+    recorder.add_argument("--verify-only", default="", choices=["true", "false", ""],
+                          help="the gate's verify-only output")
+    recorder.add_argument("--needs", default="{}", help="the record job's toJSON(needs)")
+    recorder.add_argument("--dist", default="dist", help="where the build artifacts were downloaded")
+    recorder.add_argument("--out", default="release-record.json")
+    recorder.add_argument("--schema", action="store_true", help="print the record's JSON Schema and stop")
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
             if errors := check(files_on_disk()):
                 print("\n".join(errors), file=sys.stderr)
                 return 1
-            print(f"{CONFIG} matches the repository (release {load(files_on_disk()).name}).")
+            release = load(files_on_disk())
+            if any(p.registry == "crates.io" for p in release.packages) or (root() / "Cargo.toml").is_file():
+                errors, warnings = crates_io_readiness(release, root(), offline_mode=args.offline or offline())
+                for warning in warnings:
+                    print(f"warning: {warning}", file=sys.stderr)
+                if not errors and args.publish_dry_run:
+                    errors = [e for e in [publish_dry_run(release, root())] if e]
+                if errors:
+                    print("\n".join(errors), file=sys.stderr)
+                    return 1
+            print(f"{CONFIG} matches the repository (release {release.name}).")
         elif args.command == "sync":
             print("\n".join(sync()) or "Nothing to change.")
         elif args.command == "status":
@@ -1821,6 +3070,8 @@ def main(argv=None):
             for path in render_channel(args.name, args.channel, Path(args.sums).read_text(encoding="utf-8"),
                                        args.out):
                 print(path)
+        elif args.command == "chocolatey-refused":
+            chocolatey_refused(args.name, Path(args.log).read_text(encoding="utf-8", errors="replace"))
         elif args.command == "homebrew-tap":
             update_tap(args.tap, args.formula, args.repo, args.version, args.release_url)
         elif args.command == "build":
@@ -1831,10 +3082,13 @@ def main(argv=None):
             if problems := vendored():
                 print("\n".join(problems), file=sys.stderr)
                 return 1
-            manifest = json.loads((root() / MANIFEST).read_text(encoding="utf-8"))
-            print(f"release-kit {manifest['version']}: the installed copy is unmodified.")
+            where = MANIFEST if (root() / MANIFEST).exists() else OLD_MANIFEST
+            manifest = json.loads((root() / where).read_text(encoding="utf-8"))
+            print(f"rab {manifest['version']}: the installed copy is unmodified.")
         elif args.command == "preflight":
-            preflight(args.registry, args.selection)
+            # Only whether an Open VSX token is set; the token stays in the environment.
+            preflight(args.registry, args.selection, ovsx_token=bool(os.environ.get("OVSX_PAT")),
+                      ready=lambda names: crates_io_readiness(load(files_on_disk()), root(), only=names))
         elif args.command == "verify":
             verify(args.registry, args.selection, timeout=args.timeout)
         elif args.command == "consume":
@@ -1843,6 +3097,20 @@ def main(argv=None):
             # Tokens come from the environment, never the command line.
             publish_crates(args.selection, args.new_crates, os.environ.get("RELEASE_TRUSTED_TOKEN", ""),
                            os.environ.get("RELEASE_NEW_CRATE_TOKEN", ""))
+        elif args.command == "record":
+            if args.schema:
+                print(json.dumps(RECORD_SCHEMA, indent=2))
+                return 0
+            if not args.tag:
+                parser.error("record needs --tag")
+            document = record(args.tag, args.sha, args.selection, args.verify_only == "true", args.needs,
+                              args.dist)
+            Path(args.out).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            lines = record_lines(document)
+            print("\n".join(lines + [f"wrote {args.out}"]))
+            if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+                with open(summary, "a", encoding="utf-8") as handle:
+                    handle.write("### Release record\n\n```text\n" + "\n".join(lines) + "\n```\n")
     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

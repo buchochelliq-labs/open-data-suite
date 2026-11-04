@@ -1,4 +1,4 @@
-name: publish to a Homebrew tap
+name: "rab: publish to a Homebrew tap"
 description: >-
   For each selected github package with `homebrew`: render its formula from
   its template and the published release's checksums, attest it (with
@@ -49,7 +49,7 @@ runs:
           if command -v ruby >/dev/null; then ruby -c "$formula"; fi
           printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$version" "$tag" "$formula" "$(jq -r .homebrew.tap <<<"$shape")" >> "$root/formulas"
           [ "$(jq -r .attest <<<"$shape")" = true ] && attest=true
-        done < <(jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION")
+        done < <(jq -r '.[] | select(.registry == "github" and ((.channels // ["homebrew"]) | index("homebrew")) != null) | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION")
         echo "root=$root" >> "$GITHUB_OUTPUT"
         echo "attest=$attest" >> "$GITHUB_OUTPUT"
         echo "subjects=$root/*/formula/*.rb" >> "$GITHUB_OUTPUT"

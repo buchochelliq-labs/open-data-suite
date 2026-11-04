@@ -1,4 +1,4 @@
-name: release build
+name: "rab: release build"
 description: >-
   Build one planned job (a matrix entry of the plan) into dist/, with a
   .sha256 beside every file for GitHub Releases. Sets up what the kind needs:
@@ -23,10 +23,13 @@ runs:
     - if: fromJSON(inputs.job).kind == 'rust-binary' && contains(fromJSON(inputs.job).target, 'linux-musl') && runner.os == 'Linux'
       shell: bash
       run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+    # No cache: a release build neither restores nor saves one (setup-node
+    # caches npm by itself when package.json names npm as its packageManager).
     - if: fromJSON(inputs.job).kind == 'vsix'
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: "24"
+        package-manager-cache: false
     # The artifact's own preparation (generated files, tools), before any build.
     - if: fromJSON(inputs.job).prepare != ''
       shell: bash
@@ -41,11 +44,13 @@ runs:
         target: ${{ fromJSON(inputs.job).target }}
         args: --release --locked --out dist${{ fromJSON(inputs.job).cargo != '' && format(' -m {0}', fromJSON(inputs.job).cargo) || '' }}
         manylinux: auto
+        sccache: "false"
         working-directory: ${{ fromJSON(inputs.job).dir || '.' }}
     - if: fromJSON(inputs.job).kind == 'maturin-sdist'
       uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
       with:
         command: sdist
+        sccache: "false"
         args: --out dist${{ fromJSON(inputs.job).cargo != '' && format(' -m {0}', fromJSON(inputs.job).cargo) || '' }}
         working-directory: ${{ fromJSON(inputs.job).dir || '.' }}
     # Only a ci-artifact job gets the token: it reads this repository's CI

@@ -1,9 +1,9 @@
-name: publish to GitHub Releases
+name: "rab: publish to GitHub Releases"
 description: >-
   Create the GitHub release on each selected package's tag, attach its files,
   then download them again and check every `.sha256` (and the package's
   `checksums` file, if it has one) against its file. A package's `notes`,
-  `checksums` and `attest` in release-kit.yml shape its release.
+  `checksums` and `attest` in rab.yml shape its release.
 inputs:
   selection:
     description: The gate's selection output.
@@ -63,13 +63,13 @@ runs:
               case "$file" in *.sha256) ;; *) echo "$file" >> "$subjects" ;; esac
             done
           fi
-        done < <(jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.slug)"' <<<"$SELECTION")
+        done < <(jq -r '.[] | select(.registry == "github" and ((.channels // ["github"]) | index("github")) != null) | "\(.name)\t\(.slug)"' <<<"$SELECTION")
         echo "root=$root" >> "$GITHUB_OUTPUT"
         echo "attest=$attest" >> "$GITHUB_OUTPUT"
         {
-          echo "subjects<<RELEASE_KIT_SUBJECTS"
+          echo "subjects<<RAB_SUBJECTS"
           cat "$subjects"
-          echo "RELEASE_KIT_SUBJECTS"
+          echo "RAB_SUBJECTS"
         } >> "$GITHUB_OUTPUT"
     # Needs `id-token: write` and `attestations: write` on the calling job.
     - if: inputs.verify-only != 'true' && steps.stage.outputs.attest == 'true'
@@ -102,14 +102,14 @@ runs:
         }
         if [ "$VERIFY_ONLY" = true ]; then
           python3 "$kit" verify --registry github --selection "$SELECTION"
-          jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.tag)"' <<<"$SELECTION" |
+          jq -r '.[] | select(.registry == "github" and ((.channels // ["github"]) | index("github")) != null) | "\(.name)\t\(.tag)"' <<<"$SELECTION" |
           while IFS=$'\t' read -r name tag; do
             sums="$(python3 "$kit" github-release --name "$name" --stage "$(mktemp -d)" --notes-out /dev/null --options-only | jq -r .checksums)"
             check_release "$tag" "$sums"
           done
           exit 0
         fi
-        jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION" |
+        jq -r '.[] | select(.registry == "github" and ((.channels // ["github"]) | index("github")) != null) | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION" |
         while IFS=$'\t' read -r name version tag slug; do
           shape="$(cat "$ROOT/$slug/shape.json")"
           notes=(--generate-notes)

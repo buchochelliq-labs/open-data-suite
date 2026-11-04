@@ -1,10 +1,10 @@
-# Every channel an ODS release publishes to, for release-kit
-# (https://github.com/buchochelliq-labs/release-kit; ADR-0019). Everything is released
+# Every channel an ODS release publishes to, for rab
+# (https://github.com/buchochelliq-labs/release-asset-bundle; ADR-0019). Everything is released
 # together at the workspace version: the release PR bumps `workspace.package.version`
-# (and the internal crates' `=X.Y.Z` requirements in Cargo.toml), then runs
-# `python3 .github/release-kit/scripts/release.py sync` to copy it here.
+# (and the internal crates' `X.Y.Z` requirements in Cargo.toml), then runs
+# `python3 .github/rab/scripts/release.py sync` to copy it here.
 #
-# `python3 .github/release-kit/scripts/release.py tag` on main tags the release:
+# `python3 .github/rab/scripts/release.py tag` on main tags the release:
 # `release-X.Y.Z` starts .github/workflows/release.yml, which runs CI on the tagged
 # commit, builds, and publishes what isn't published yet; Homebrew and Chocolatey follow
 # the GitHub release.
@@ -143,7 +143,7 @@ packages:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
           - x86_64-unknown-linux-musl
-          # Cross-compiled in maturin-action's container, as before release-kit.
+          # Cross-compiled in maturin-action's container, as before rab.
           - {target: aarch64-unknown-linux-musl, runner: ubuntu-latest}
           - aarch64-apple-darwin
           - x86_64-apple-darwin

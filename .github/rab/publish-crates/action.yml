@@ -1,6 +1,6 @@
-name: publish to crates.io
+name: "rab: publish to crates.io"
 description: >-
-  Publish the selected crates in release-kit.yml order: package and verify
+  Publish the selected crates in rab.yml order: package and verify
   them all with one dry run, then upload each run of crates sharing a
   credential (Trusted Publishing for crates already on crates.io, a token for
   a crate's first version). Then wait until crates.io serves every version,

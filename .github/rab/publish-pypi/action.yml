@@ -1,4 +1,4 @@
-name: publish to PyPI
+name: "rab: publish to PyPI"
 description: >-
   Upload the built distributions with Trusted Publishing (the calling job
   needs `id-token: write` and the PyPI publisher configured for the calling

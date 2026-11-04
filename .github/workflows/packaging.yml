@@ -14,15 +14,15 @@ on:
       - "packaging/**"
       - "scripts/changelog-section.py"
       - "scripts/release-*.sh"
-      - "release-kit.yml"
-      - ".github/release-kit/**"
+      - "rab.yml"
+      - ".github/rab/**"
       - "crates/ods-cli/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/packaging.yml"
       - ".github/workflows/release.yml"
-      - ".github/workflows/release-kit-build.yml"
+      - ".github/workflows/rab-build.yml"
   workflow_dispatch:
 
 permissions:
@@ -49,7 +49,7 @@ jobs:
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
           python3 scripts/changelog-section.py "$version" > /dev/null || python3 scripts/changelog-section.py Unreleased > /dev/null
-      # What release-kit runs as the GitHub release's notes (release-kit.yml).
+      # What rab runs as the GitHub release's notes (rab.yml).
       - name: The release notes script
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
@@ -57,7 +57,7 @@ jobs:
             scripts/release-notes.sh "$version" | tee notes.md
             grep -q "pip install opendatasuite==$version" notes.md
           fi
-      # The Homebrew formula and the Chocolatey package render as release-kit renders them
+      # The Homebrew formula and the Chocolatey package render as rab renders them
       # for a release (every placeholder filled), from made-up checksums.
       - name: The formula and the Chocolatey package render
         run: |
@@ -67,7 +67,7 @@ jobs:
             echo "$(printf '0%.0s' $(seq 64))  ods-v$version-$t.tar.gz"
           done > sums
           echo "$(printf '1%.0s' $(seq 64))  ods-v$version-x86_64-pc-windows-msvc.zip" >> sums
-          kit=.github/release-kit/scripts/release.py
+          kit=.github/rab/scripts/release.py
           formula=$(python3 "$kit" render --name ods --channel homebrew --sums sums --out rendered/homebrew)
           ruby -c "$formula"
           python3 "$kit" render --name ods --channel chocolatey --sums sums --out rendered/chocolatey
@@ -75,7 +75,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about
-      # What release-kit runs before every build (release-kit.yml `prepare`).
+      # What rab runs before every build (rab.yml `prepare`).
       - name: Third-party licence notices
         run: scripts/release-notices.sh
 
@@ -97,7 +97,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about
-      # The steps release-kit runs for each wheel (release-kit.yml): the notices, the
+      # The steps rab runs for each wheel (rab.yml): the notices, the
       # build, then the wheel's test.
       - name: Third-party licence notices
         shell: bash
