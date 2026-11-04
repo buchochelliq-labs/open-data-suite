@@ -87,6 +87,10 @@ impl WarehousePlugin for Databricks {
         Some(Arc::new(DatabricksErrors::new()))
     }
 
+    fn settings(&self) -> Option<&'static [(&'static str, &'static str)]> {
+        Some(&ods_provider_databricks::CONFIG_SETTINGS)
+    }
+
     fn credentials(
         &self,
         settings: &WarehouseSettings,

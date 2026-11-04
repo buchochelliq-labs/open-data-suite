@@ -122,7 +122,11 @@ that runs the released CLI with your plugins added
   - `credentials`: how ODS signs in to the warehouse itself, a `Credentials` for one
     configured provider, with secret references resolved through the `SecretResolver`
     it is given only when a token is needed. Building it does no I/O;
-    `ods doctor --connect` calls its `status` (`connectivity.warehouse_login`).
+    `ods doctor --connect` calls its `status` (`connectivity.warehouse_login`);
+  - `settings`: the keys a `[providers.<name>]` of its kind may set under `settings`,
+    each with what it is for. With a list, any other key is refused when configuration
+    loads (`ODS-E0102`), so a misspelt setting isn't silently ignored; without one,
+    nothing is checked.
 
   A plugin can also name the warehouses it is built on, nearest first (`parents`, as a
   dbt adapter names the adapters it depends on). Their plugins' error patterns and

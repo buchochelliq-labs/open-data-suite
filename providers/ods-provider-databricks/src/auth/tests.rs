@@ -10,7 +10,7 @@ use ods_sdk::contracts::secrets::{SecretError, SecretValue};
 use ods_sdk::secrets::{EnvSecrets, SecretResolver};
 
 use super::http::{Https, Reply, Transport};
-use super::{Method, Settings};
+use super::{Method, NOT_YET, Settings};
 use crate::DatabricksCredentials;
 
 const SECRET: &str = "ods-test-secret-9d2f";
@@ -570,5 +570,28 @@ mod over_http {
             };
             assert!(error.contains("https://"), "{error}");
         });
+    }
+}
+
+#[test]
+fn every_setting_read_is_one_the_provider_lists() {
+    let listed: Vec<&str> = crate::CONFIG_SETTINGS.iter().map(|(k, _)| *k).collect();
+    let mut sorted = listed.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(listed, sorted, "CONFIG_SETTINGS is sorted and unique");
+    // What Settings::parse and the links read: a key missing from the list would be
+    // refused when configuration loads.
+    let read = [
+        "auth",
+        "host",
+        "client_id",
+        "client_secret",
+        "scopes",
+        "token",
+        "workspace_id",
+    ];
+    for key in read.iter().chain(NOT_YET.iter()) {
+        assert!(listed.contains(key), "{key} is read but not listed");
     }
 }

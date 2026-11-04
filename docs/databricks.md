@@ -148,6 +148,23 @@ Only `https://` hosts are accepted and redirects are not followed. `auth = "cli"
 `databricks auth login`) and federation come later; `profile`, `cli_path` and
 `audience` are refused until then.
 
+## Settings
+
+A `[providers.<name>]` with `kind = "databricks"` takes these settings. Any other key is
+a configuration error (`ODS-E0102`, exit 4) that names it, so a misspelling such as
+`hots` is reported instead of ignored.
+
+| Setting | For |
+|---|---|
+| `host` | the workspace URL; `DATABRICKS_HOST` comes first |
+| `workspace_id` | the workspace's numeric id, for Catalog Explorer links |
+| `auth` | how ODS signs in: `m2m` or `pat` |
+| `client_id` | the service principal's application id (`m2m`) |
+| `client_secret` | a secret reference to its OAuth secret (`m2m`) |
+| `scopes` | the OAuth scopes to ask for, narrowest first (`m2m`) |
+| `token` | a secret reference to a personal access token (`pat`) |
+| `profile`, `cli_path`, `audience` | ADR-0021's later methods: refused when signing in until they are supported |
+
 ## Next steps
 - **`ods state explain <node>`:** why a node was built or reused. See the [CLI reference](cli.md).
 - **`ods state retry --failed`:** after a failure, rebuild only what failed.
