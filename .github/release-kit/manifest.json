@@ -1,7 +1,7 @@
 {
   "source": "buchochelliq-labs/release-kit",
-  "version": "v1.3.0-3-g0017ba7",
-  "commit": "0017ba796c81daba7a7897c0360a7a50a34f7594",
+  "version": "v1.4.0",
+  "commit": "48bac50d9fa5319288f24acc25e15c76324da597",
   "files": {
     ".github/release-kit/build/action.yml": "f1506b1c708b73aab34612555f5f63db9e53228d2053153c1f80f54572ab49ec",
     ".github/release-kit/gate/action.yml": "cd8d39a9733d49eaa5cc89e3bc6920b14783309a57a1523555795f42b62dc745",
