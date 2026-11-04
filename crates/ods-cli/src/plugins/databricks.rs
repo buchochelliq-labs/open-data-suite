@@ -437,12 +437,20 @@ mod tests {
                 setting: "auth".to_owned()
             })
         );
-        assert_eq!(
-            err("", None),
-            Some(CredentialError::NotConfigured {
-                setting: "host".to_owned()
-            })
-        );
+        // Without `auth`, nothing else matters: no host, or a setting not supported
+        // yet, still means "doesn't sign in".
+        for no_auth in [
+            "",
+            "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nprofile = \"free\"\n",
+        ] {
+            assert_eq!(
+                err(no_auth, None),
+                Some(CredentialError::NotConfigured {
+                    setting: "auth".to_owned()
+                }),
+                "{no_auth}"
+            );
+        }
         // DATABRICKS_HOST is the default for `host`, as for links.
         assert_eq!(
             err(

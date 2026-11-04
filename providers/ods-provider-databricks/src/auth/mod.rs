@@ -88,11 +88,16 @@ pub(crate) struct Settings {
 
 impl Settings {
     /// Reads `settings`. `host` is `DATABRICKS_HOST` from `env` when set, else the
-    /// setting (ADR-0021 §3).
+    /// setting (ADR-0021 §3). Without `auth`, nothing else is read: a provider that
+    /// names no method is one ODS doesn't sign in to (e.g. one set up for links), so
+    /// that is what it is told, whatever else is missing.
     pub(crate) fn parse(
         settings: &toml::Table,
         env: &[(String, String)],
     ) -> Result<Self, CredentialError> {
+        let Some(auth) = text(settings, "auth")? else {
+            return Err(not_configured("auth"));
+        };
         let from_env = env
             .iter()
             .find(|(k, v)| k == "DATABRICKS_HOST" && !v.trim().is_empty())
@@ -111,9 +116,8 @@ impl Settings {
                 "isn't supported yet: use `auth = \"m2m\"` or `auth = \"pat\"`",
             ));
         }
-        let method = match text(settings, "auth")? {
-            None => return Err(not_configured("auth")),
-            Some("m2m") => Method::M2m {
+        let method = match auth {
+            "m2m" => Method::M2m {
                 client_id: text(settings, "client_id")?
                     .map(str::trim)
                     .filter(|id| !id.is_empty())
@@ -122,13 +126,13 @@ impl Settings {
                 client_secret: reference(settings, "client_secret")?,
                 scopes: scopes(settings)?,
             },
-            Some("pat") => Method::Pat {
+            "pat" => Method::Pat {
                 token: reference(settings, "token")?,
             },
-            Some("cli" | "federated") => {
+            "cli" | "federated" => {
                 return Err(invalid("auth", "isn't supported yet: use `m2m` or `pat`"));
             }
-            Some(_) => return Err(invalid("auth", "must be `m2m` or `pat`")),
+            _ => return Err(invalid("auth", "must be `m2m` or `pat`")),
         };
         Ok(Self { host, method })
     }

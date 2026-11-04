@@ -93,26 +93,33 @@ jobs:
             exit 0
           fi
           dir=$(mktemp -d)
-          scopes=""
-          if [ -n "$DATABRICKS_OAUTH_SCOPES" ]; then
-            scopes="scopes = [$(printf '%s' "$DATABRICKS_OAUTH_SCOPES" | python3 -c 'import sys; print(", ".join("\""+s+"\"" for s in sys.stdin.read().replace(",", " ").split()))')]"
-          fi
-          cat > "$dir/ods.toml" <<TOML
-          [providers.uc]
-          kind = "databricks"
-
-          [providers.uc.settings]
-          auth = "m2m"
-          client_id = "$DATABRICKS_CLIENT_ID"
-          client_secret = { secret = "env:DATABRICKS_CLIENT_SECRET" }
-          $scopes
-          TOML
-          # The other Databricks checks need a dbt project; only the sign-in is asserted.
-          (cd "$dir" && "$ODS" doctor --connect --provider databricks --output json > doctor.json) || true
-          python3 - "$dir/doctor.json" <<'PY'
+          # Values are quoted as TOML strings by Python (json.dumps), so a quote in a
+          # variable can't break the file; the secret goes in only as a reference.
+          python3 - "$dir/ods.toml" <<'PY'
+          import json, os, sys
+          scopes = os.environ.get("DATABRICKS_OAUTH_SCOPES", "").replace(",", " ").split()
+          lines = [
+              "[providers.uc]",
+              'kind = "databricks"',
+              "[providers.uc.settings]",
+              'auth = "m2m"',
+              "client_id = " + json.dumps(os.environ["DATABRICKS_CLIENT_ID"]),
+              'client_secret = { secret = "env:DATABRICKS_CLIENT_SECRET" }',
+          ]
+          if scopes:
+              lines.append("scopes = [" + ", ".join(json.dumps(s) for s in scopes) + "]")
+          open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+          PY
+          # The other Databricks checks need a dbt project, so doctor's own verdict isn't
+          # the test: the sign-in check's is.
+          status=0
+          (cd "$dir" && "$ODS" doctor --connect --provider databricks --output json > doctor.json) || status=$?
+          python3 - "$dir/doctor.json" "$status" <<'PY'
           import json, sys
-          report = json.load(open(sys.argv[1]))
-          checks = report["result"]["checks"] if "result" in report else report["checks"]
+          try:
+              checks = json.load(open(sys.argv[1]))["result"]["checks"]
+          except (OSError, ValueError, KeyError) as e:
+              sys.exit(f"ods doctor (exit {sys.argv[2]}) wrote no report: {e}")
           login = next(c for c in checks if c["id"] == "connectivity.warehouse_login")
           shown = {e["key"]: e["value"] for e in login.get("evidence", [])}
           print(login["status"], login["message"], shown)

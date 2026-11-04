@@ -1106,9 +1106,11 @@ fn warehouse_login(
         }
     }
     let mut result = if let Some((name, e, hint)) = failed {
+        // Worth retrying (the warehouse, or a secret store, couldn't be reached) is
+        // unreachable, whichever part failed.
         let code = match e {
             CredentialError::Refused { .. } => codes::SIGN_IN_REFUSED,
-            CredentialError::Unavailable { .. } => codes::SIGN_IN_UNREACHABLE,
+            e if e.is_retryable() => codes::SIGN_IN_UNREACHABLE,
             _ => codes::SIGN_IN_SETUP,
         };
         let result = CheckResult::error(

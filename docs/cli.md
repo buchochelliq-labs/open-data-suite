@@ -489,7 +489,7 @@ report in `result`, and `ODS-E0501` in `diagnostics`.
 | `ODS-U0607` | The live table-version probe ran, but no source has a table version. | As `ODS-W0606`; check that the sources are Delta tables. |
 | `ODS-E0608` | Signing in to the warehouse is configured, but can't be set up: a setting is missing or invalid, or a secret reference doesn't resolve. The value is never shown. | Fix the setting named, or set the secret's variable. |
 | `ODS-E0609` | The warehouse refused to sign in (e.g. a wrong client secret, or a principal without the scope). Its answer is shown, cut short and with the secret removed. | Check the client id and secret, and the scopes assigned to the principal. |
-| `ODS-E0610` | The warehouse couldn't be reached to sign in (network, TLS, a timeout, a rate limit or a server error). | Check the host and the network, and try again. |
+| `ODS-E0610` | The warehouse, or the store a secret is read from, couldn't be reached to sign in (network, TLS, a timeout, a rate limit or a server error). | Check the host and the network, and try again. |
 | `ODS-U0611` | Signed in with a static token, which nothing checks until an API is called. | Prefer `auth = "m2m"`, which the warehouse verifies. |
 
 ### Common failures
