@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::changes::ChangeProvider;
+use ods_sdk::contracts::credentials::{CredentialError, Credentials};
 use ods_sdk::contracts::error_catalogue::ErrorCatalogue;
 use ods_sdk::contracts::health_check::{CheckInfo, HealthCheck};
 use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
@@ -136,6 +137,20 @@ pub trait WarehousePlugin: Send + Sync {
         export: &Path,
     ) -> Option<Result<Arc<dyn ObservedLineageSource>, ProviderError>> {
         let _ = export;
+        None
+    }
+
+    /// How ODS signs in to the warehouse itself, for one configured provider
+    /// (`settings` holds at most one), with secret references resolved through
+    /// `secrets` when a token is needed (ADR-0021, ADR-0032). `None` when the plugin
+    /// doesn't sign in; `Err` when its settings can't be used. Building it does no I/O:
+    /// [`Credentials::status`] signs in.
+    fn credentials(
+        &self,
+        settings: &WarehouseSettings,
+        secrets: SecretResolver,
+    ) -> Option<Result<Arc<dyn Credentials>, CredentialError>> {
+        let _ = (settings, secrets);
         None
     }
 
@@ -422,6 +437,18 @@ impl Plugins {
                 warehouse: warehouse.map(str::to_owned),
             }),
         }
+    }
+
+    /// How ODS signs in to `warehouse` for one configured provider: see
+    /// [`WarehousePlugin::credentials`]. `None` when no plugin serves `warehouse`, or
+    /// its plugin doesn't sign in.
+    pub fn credentials(
+        &self,
+        warehouse: Option<&str>,
+        settings: &WarehouseSettings,
+        secrets: SecretResolver,
+    ) -> Option<Result<Arc<dyn Credentials>, CredentialError>> {
+        self.warehouse(warehouse)?.credentials(settings, secrets)
     }
 
     /// A reader for the observed lineage exported to `export`, with the warehouse whose
@@ -779,6 +806,7 @@ mod tests {
             [
                 ("change_provider", "databricks", true),
                 ("relation_privileges", "databricks", true),
+                ("credentials", "databricks", true),
                 ("relation_linker", "databricks", true),
                 ("observed_lineage_source", "databricks", true),
                 ("error_catalogue", "databricks", true),

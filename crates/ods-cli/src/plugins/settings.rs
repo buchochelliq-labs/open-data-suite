@@ -72,6 +72,21 @@ impl WarehouseSettings {
         self
     }
 
+    /// Only the provider `name` (none, if it isn't one of these), with the same
+    /// environment: for what is set up per provider, such as signing in.
+    #[must_use]
+    pub fn only(&self, name: &str) -> Self {
+        Self {
+            providers: self
+                .providers
+                .iter()
+                .filter(|(n, _)| *n == name)
+                .map(|(n, s)| (n.clone(), s.clone()))
+                .collect(),
+            env: self.env.clone(),
+        }
+    }
+
     /// The configured providers of this warehouse, by name, with their settings.
     pub fn providers(&self) -> &BTreeMap<String, toml::Table> {
         &self.providers

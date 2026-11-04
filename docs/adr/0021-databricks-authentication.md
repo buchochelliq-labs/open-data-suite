@@ -1,6 +1,6 @@
 # ADR-0021: Databricks authentication: U2M first, M2M for CI, tokens never persisted
 
-- **Status:** Accepted (2026-11-03, #297). Built: the `credentials` 0.1 contract, its conformance suite and fake; `auth = "m2m"` and `auth = "pat"` in `DatabricksCredentials`, with the token cache, scope fallback, HTTPS only and no redirects (§8). Not yet: a command that signs in (`ods doctor`, and the settings check), `auth = "cli"` and the `user_login` capability, `federated`, automatic method order, the 401 retry, and the live M2M proof in the `databricks` job.
+- **Status:** Accepted (2026-11-03, #297). Built: the `credentials` 0.1 contract, its conformance suite and fake; `auth = "m2m"` and `auth = "pat"` in `DatabricksCredentials`, with the token cache, scope fallback, HTTPS only and no redirects (§8); `WarehousePlugin::credentials` and `ods doctor --connect`'s `connectivity.warehouse_login`, which signs in and shows how (codes ODS-E0608–E0610, U0611); a step in the `databricks` job that signs in with M2M. Not yet: the settings check (ODS-E0102 for an unknown key), `auth = "cli"` and the `user_login` capability, `federated`, automatic method order, and the 401 retry.
 - **Date:** 2026-09-28
 - **Issues:** #297 (related: #294, #295, #126, #17, #30)
 - **Deciders:** @n1ckyb

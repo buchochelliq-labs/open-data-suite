@@ -5,7 +5,7 @@ expression: project.redact(&plain)
 ODS doctor
 
 verdict: healthy
-checks: 14 ok, 0 warning, 0 error, 0 unknown, 2 skipped
+checks: 14 ok, 0 warning, 0 error, 0 unknown, 3 skipped
 
 Configuration
   [ok] config.load (required): no configuration file: built-in defaults apply
@@ -72,6 +72,7 @@ Capabilities
   [ok] capabilities.plugins: this `ods` has the built-in plugins only
     change_provider.databricks: change_provider 0.1 for databricks (ods-provider-databricks [ods-version], built in)
     relation_privileges.databricks: relation_privileges 0.1 for databricks (ods-provider-databricks [ods-version], built in)
+    credentials.databricks: credentials 0.1 for databricks (ods-provider-databricks [ods-version], built in)
     relation_linker.databricks: relation_linker 0.1 for databricks (ods-provider-databricks [ods-version], built in)
     observed_lineage_source.databricks: observed_lineage_source 0.1 for databricks (ods-provider-databricks [ods-version], built in)
     error_catalogue.databricks: error_catalogue 0.5 for databricks (ods-provider-databricks [ods-version], built in)
@@ -81,3 +82,4 @@ Capabilities
 Connectivity
   [skipped] connectivity.relations: a live check: pass --connect to run it
   [skipped] connectivity.table_versions: a live check: pass --connect to run it
+  [skipped] connectivity.warehouse_login: a live check: pass --connect to run it

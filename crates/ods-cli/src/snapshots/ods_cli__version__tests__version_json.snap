@@ -35,6 +35,13 @@ expression: "render(Mode::Json)"
         "builtin": true
       },
       {
+        "contract": "credentials",
+        "contract_version": "0.1",
+        "name": "databricks",
+        "from": "ods-provider-databricks [ods-version]",
+        "builtin": true
+      },
+      {
         "contract": "relation_linker",
         "contract_version": "0.1",
         "name": "databricks",

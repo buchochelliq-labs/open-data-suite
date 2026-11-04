@@ -143,6 +143,11 @@ kind. Unlike one, it never connects: it uses dbt's connection, or reads what it 
 given. Any warehouse dbt supports works with ODS without a plugin. A plugin only adds
 what ODS can know about that warehouse.
 
+*Amended 2026-11-04 (#297):* a plugin may also sign in to its warehouse itself
+(`credentials`, ADR-0021 §4), for one configured provider at a time. It is handed a
+`SecretResolver` and resolves references only when a token is needed (ADR-0032); the
+rule below that a plugin is never handed a resolved secret stands.
+
 ```rust
 pub trait WarehousePlugin: Send + Sync {
     // §3: origin, warehouse, provides, changes, privileges.

@@ -427,11 +427,14 @@ It takes the options `ods state` commands take to find things (`--project-dir`,
 | `capabilities.plugins` | Which plugins does this `ods` have: only the built-ins, or is it a custom build that adds some ([plugins](plugins.md#a-custom-ods-in-process-plugins))? Each is evidence, with its contract and crate | |
 | `connectivity.relations` | With `--connect`: does the relation check (`dbt show`) run? | |
 | `connectivity.table_versions` | With `--connect`, on Databricks: does the table-version probe run? | |
+| `connectivity.warehouse_login` | With `--connect`: can ODS sign in to the warehouse itself, for each provider that sets `auth` ([Databricks](databricks.md#sign-in-to-the-workspace))? Evidence per provider: the method, who it signs in as, the scopes, when the token expires and whether the warehouse accepted it. Never the token | |
 
 The checks about sources' data versions (`capabilities.relation_versions`,
 `connectivity.table_versions`) concern `databricks` when the manifest's adapter is
 Databricks, whose table versions ODS reads, `plugin` when a custom build's warehouse
 plugin reads them, and `dbt` otherwise; `--provider` picks them accordingly.
+`connectivity.warehouse_login` concerns `databricks` when a Databricks provider is
+configured, and `plugin` when a custom build's warehouse plugin signs in.
 
 Each check ends `ok`, `warning`, `error`, `unknown` (it couldn't conclude, e.g. a check
 it depends on failed) or `skipped` (not run by choice, e.g. a live check without
@@ -484,6 +487,10 @@ report in `result`, and `ODS-E0501` in `diagnostics`.
 | `ODS-U0605` | The live relation check ran, but couldn't tell whether some relations exist. Those nodes are built rather than reused. | `dbt debug`, and the adapter's permissions on those schemas. |
 | `ODS-W0606` | The live table-version probe ran, but some sources have no table version (evidence `without_version`, with why, e.g. a view). They fall back to `max_loaded_at`, or count as changed. | Give them a `loaded_at_field` if they have new data ODS should notice. |
 | `ODS-U0607` | The live table-version probe ran, but no source has a table version. | As `ODS-W0606`; check that the sources are Delta tables. |
+| `ODS-E0608` | Signing in to the warehouse is configured, but can't be set up: a setting is missing or invalid, or a secret reference doesn't resolve. The value is never shown. | Fix the setting named, or set the secret's variable. |
+| `ODS-E0609` | The warehouse refused to sign in (e.g. a wrong client secret, or a principal without the scope). Its answer is shown, cut short and with the secret removed. | Check the client id and secret, and the scopes assigned to the principal. |
+| `ODS-E0610` | The warehouse couldn't be reached to sign in (network, TLS, a timeout, a rate limit or a server error). | Check the host and the network, and try again. |
+| `ODS-U0611` | Signed in with a static token, which nothing checks until an API is called. | Prefer `auth = "m2m"`, which the warehouse verifies. |
 
 ### Common failures
 

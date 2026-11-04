@@ -166,7 +166,8 @@ where
     };
     let mut ctx = Context::new(settings, &loaded, io.out, &root)
         .with_progress(progress)
-        .with_config_failure(config_failure);
+        .with_config_failure(config_failure)
+        .with_env(&io.env);
     let result = module.run(sub_matches, &mut ctx).and_then(|()| {
         io.out.flush()?;
         Ok(())

@@ -81,6 +81,44 @@ jobs:
           # Exactly the pinned packages: nothing resolved at install time.
           ~/dbt-databricks-venv/bin/pip install --no-deps -r .github/dbt/requirements-databricks.txt
           ~/dbt-databricks-venv/bin/pip check
+      # ODS signs in by itself (M2M, #297, ADR-0021), before ci.py exports a token:
+      # `ods doctor --connect` asks the workspace for a token with the service
+      # principal's secret and reports how it signed in, never the token.
+      - name: ods signs in with the service principal (M2M)
+        env:
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: |
+          if [ -z "$DATABRICKS_CLIENT_SECRET" ] || [ -z "$DATABRICKS_CLIENT_ID" ]; then
+            echo "::notice::No DATABRICKS_CLIENT_SECRET or DATABRICKS_CLIENT_ID: ODS's M2M sign-in isn't checked."
+            exit 0
+          fi
+          dir=$(mktemp -d)
+          scopes=""
+          if [ -n "$DATABRICKS_OAUTH_SCOPES" ]; then
+            scopes="scopes = [$(printf '%s' "$DATABRICKS_OAUTH_SCOPES" | python3 -c 'import sys; print(", ".join("\""+s+"\"" for s in sys.stdin.read().replace(",", " ").split()))')]"
+          fi
+          cat > "$dir/ods.toml" <<TOML
+          [providers.uc]
+          kind = "databricks"
+
+          [providers.uc.settings]
+          auth = "m2m"
+          client_id = "$DATABRICKS_CLIENT_ID"
+          client_secret = { secret = "env:DATABRICKS_CLIENT_SECRET" }
+          $scopes
+          TOML
+          # The other Databricks checks need a dbt project; only the sign-in is asserted.
+          (cd "$dir" && "$ODS" doctor --connect --provider databricks --output json > doctor.json) || true
+          python3 - "$dir/doctor.json" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          checks = report["result"]["checks"] if "result" in report else report["checks"]
+          login = next(c for c in checks if c["id"] == "connectivity.warehouse_login")
+          shown = {e["key"]: e["value"] for e in login.get("evidence", [])}
+          print(login["status"], login["message"], shown)
+          if login["status"] != "ok" or shown.get("uc.verified") != "true":
+              sys.exit("ODS couldn't sign in with M2M: " + login["message"])
+          PY
       - name: Authenticate (federation, else service principal secret)
         env:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}

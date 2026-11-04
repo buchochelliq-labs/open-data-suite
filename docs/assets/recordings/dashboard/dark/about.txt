@@ -43,6 +43,7 @@ databricks
 ods-provider-databricks <version> · built in
 source_versions 0.1
 login_check 0.1
+sign_in 0.1
 links 0.1
 observed_lineage 0.1
 errors 0.5

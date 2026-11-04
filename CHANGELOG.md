@@ -18,7 +18,16 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
   [ADR-0021](docs/adr/0021-databricks-authentication.md), now accepted): with a
   service principal's OAuth secret (`auth = "m2m"`, narrowest scope first) or a static
   token (`auth = "pat"`). Secrets are references, tokens stay in memory, and only
-  HTTPS hosts are used. No command signs in yet; `ods doctor` will show it next.
+  HTTPS hosts are used.
+- `ods doctor --connect` signs in to the warehouse for each provider that sets `auth`
+  (`connectivity.warehouse_login`, #297) and shows the method, principal, scopes,
+  expiry and whether it was verified, never the token. New codes: `ODS-E0608` (can't
+  be set up), `ODS-E0609` (refused), `ODS-E0610` (unreachable), `ODS-U0611` (a static
+  token, not verified). Without `--connect` the check is skipped, like the other live
+  checks.
+- Warehouse plugins can sign in (`WarehousePlugin::credentials`); `ods plugin list`,
+  `ods version` and `ods doctor` list it for Databricks as `sign_in` (`credentials`
+  contract).
 - SDK 0.11: the `credentials` contract 0.1 (how a provider signs in, never its token),
   its conformance suite (`ods_sdk::conformance::credentials`) and `FakeCredentials`.
 - Secret references are resolved by secret providers, one per scheme (#126,

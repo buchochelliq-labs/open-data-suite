@@ -52,6 +52,7 @@ fn list_names_each_plugin_and_what_it_offers() {
         [
             "source_versions",
             "login_check",
+            "sign_in",
             "links",
             "observed_lineage",
             "errors",

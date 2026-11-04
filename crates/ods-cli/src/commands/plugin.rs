@@ -592,6 +592,7 @@ mod tests {
             [
                 "source_versions",
                 "login_check",
+                "sign_in",
                 "links",
                 "observed_lineage",
                 "errors",

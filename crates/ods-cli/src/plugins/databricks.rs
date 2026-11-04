@@ -11,15 +11,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ods_provider_databricks::{
-    CatalogExplorer, DatabricksErrors, DeltaVersions, UcColumnLineage, UnityCatalog,
+    CatalogExplorer, DatabricksCredentials, DatabricksErrors, DeltaVersions, UcColumnLineage,
+    UnityCatalog,
 };
 use ods_sdk::ProviderError;
 use ods_sdk::contracts::changes::ChangeProvider;
+use ods_sdk::contracts::credentials::{CredentialError, Credentials};
 use ods_sdk::contracts::error_catalogue::ErrorCatalogue;
 use ods_sdk::contracts::observed_lineage::ObservedLineageSource;
 use ods_sdk::contracts::privileges::PrivilegedProbe;
 use ods_sdk::contracts::probe::RelationProbe;
 use ods_sdk::contracts::relation_link::{NoRelationLink, RelationLinker};
+use ods_sdk::secrets::SecretResolver;
 
 use super::{Origin, WarehousePlugin, WarehouseSettings};
 
@@ -82,6 +85,36 @@ impl WarehousePlugin for Databricks {
 
     fn errors(&self) -> Option<Arc<dyn ErrorCatalogue>> {
         Some(Arc::new(DatabricksErrors::new()))
+    }
+
+    fn credentials(
+        &self,
+        settings: &WarehouseSettings,
+        secrets: SecretResolver,
+    ) -> Option<Result<Arc<dyn Credentials>, CredentialError>> {
+        let providers = settings.providers();
+        if providers.len() > 1 {
+            return Some(Err(CredentialError::InvalidSetting {
+                setting: "providers".to_owned(),
+                why: format!(
+                    "names {} {DATABRICKS} providers: sign-in is set up for one at a time",
+                    providers.len()
+                ),
+            }));
+        }
+        let (instance, table) = providers.iter().next().map_or_else(
+            || (DATABRICKS.to_owned(), toml::Table::new()),
+            |(n, t)| (n.clone(), t.clone()),
+        );
+        let env: Vec<(String, String)> = settings
+            .env(HOST_ENV)
+            .map(|host| (HOST_ENV.to_owned(), host))
+            .into_iter()
+            .collect();
+        Some(
+            DatabricksCredentials::from_settings(instance, &table, &env, secrets)
+                .map(|c| Arc::new(c) as Arc<dyn Credentials>),
+        )
     }
 
     fn dialect(&self) -> Option<&str> {
@@ -381,5 +414,54 @@ mod tests {
             workspace(&other),
             Err(NoRelationLink::NotConfigured { .. })
         ));
+    }
+
+    #[test]
+    fn sign_in_is_set_up_per_provider_and_only_when_auth_is_named() {
+        let secrets = || ods_sdk::secrets::SecretResolver::new();
+        let err = |toml: &str, env: Option<&str>| {
+            Databricks
+                .credentials(&settings(toml, env), secrets())
+                .expect("Databricks signs in")
+                .err()
+        };
+        let m2m = "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhost = \"dbc-1.cloud.databricks.com\"\nauth = \"m2m\"\nclient_id = \"app-1\"\nclient_secret = { secret = \"env:S\" }\n";
+        assert_eq!(err(m2m, None), None, "m2m is set up without any I/O");
+        // The doctor treats a provider without `auth` as one ODS doesn't sign in to.
+        assert_eq!(
+            err(
+                "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nhost = \"dbc-1.cloud.databricks.com\"\n",
+                None
+            ),
+            Some(CredentialError::NotConfigured {
+                setting: "auth".to_owned()
+            })
+        );
+        assert_eq!(
+            err("", None),
+            Some(CredentialError::NotConfigured {
+                setting: "host".to_owned()
+            })
+        );
+        // DATABRICKS_HOST is the default for `host`, as for links.
+        assert_eq!(
+            err(
+                "[providers.uc]\nkind = \"databricks\"\n[providers.uc.settings]\nauth = \"pat\"\ntoken = { secret = \"env:T\" }\n",
+                Some("https://dbc-1.cloud.databricks.com")
+            ),
+            None
+        );
+        let two = format!("{m2m}[providers.prod]\nkind = \"databricks\"\n");
+        assert!(matches!(
+            err(&two, None),
+            Some(CredentialError::InvalidSetting { setting, .. }) if setting == "providers"
+        ));
+        let only = settings(&two, None).only("uc");
+        assert!(
+            Databricks
+                .credentials(&only, secrets())
+                .expect("signs in")
+                .is_ok()
+        );
     }
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ods_core::CapabilitySet;
 use ods_sdk::contracts::changes::CHANGE_PROVIDER;
+use ods_sdk::contracts::credentials::CREDENTIALS;
 use ods_sdk::contracts::error_catalogue::ERROR_CATALOGUE;
 use ods_sdk::contracts::health_check::{HEALTH_CHECK, HealthCheck};
 use ods_sdk::contracts::observed_lineage::OBSERVED_LINEAGE_SOURCE;
@@ -15,7 +16,7 @@ use ods_sdk::contracts::privileges::RELATION_PRIVILEGES;
 use ods_sdk::contracts::probe::{ProbeReport, ProbeRequest, ProbeTarget, RelationProbe};
 use ods_sdk::contracts::relation_link::{NoRelationLink, RELATION_LINKER};
 use ods_sdk::contracts::secrets::{SECRET_PROVIDER, SecretProvider};
-use ods_sdk::secrets::EnvSecrets;
+use ods_sdk::secrets::{EnvSecrets, SecretResolver};
 use ods_sdk::{Contract, Provider, ProviderError, ProviderInfo};
 use serde::Serialize;
 
@@ -141,6 +142,12 @@ pub(super) fn warehouse(plugin: &dyn WarehousePlugin, builtin: bool) -> Detected
     }
     if plugin.privileges(refuse()).is_some() {
         features.push(Feature::new("login_check", Some(RELATION_PRIVILEGES)));
+    }
+    if plugin
+        .credentials(&WarehouseSettings::empty(), SecretResolver::new())
+        .is_some()
+    {
+        features.push(Feature::new("sign_in", Some(CREDENTIALS)));
     }
     match plugin.links(&WarehouseSettings::empty()) {
         Ok(_) => features.push(Feature::new("links", Some(RELATION_LINKER))),
