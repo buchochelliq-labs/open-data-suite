@@ -344,6 +344,59 @@ jobs:
         with:
           packages-dir: dist/
 
+  crates-io:
+    # Every crate, at the product version (ADR-0035), in one `cargo publish` of the
+    # crates whose version crates.io doesn't have yet; cargo orders them by
+    # dependency. Trusted Publishing once a crate exists; a crate's first version needs
+    # an owner's token as the CARGO_REGISTRY_TOKEN secret of the `crates-io`
+    # environment (docs/install.md, "For maintainers"). CI packages every crate on
+    # each PR (`cargo publish --workspace --dry-run`).
+    if: needs.plan.outputs.publish == 'true'
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/ods-cli/${{ needs.plan.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      FIRST_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: due
+        name: The crates crates.io doesn't have at this version
+        run: |
+          index() {  # crates.io's sparse-index path for a crate name
+            local n=$1
+            case ${#n} in 1) echo "1/$n" ;; 2) echo "2/$n" ;; 3) echo "3/${n:0:1}/$n" ;; *) echo "${n:0:2}/${n:2:2}/$n" ;; esac
+          }
+          due=()
+          for name in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+            if curl -sf "https://index.crates.io/$(index "$name")" | grep -q "\"vers\":\"$VERSION\""; then
+              echo "$name $VERSION: already on crates.io" >> "$GITHUB_STEP_SUMMARY"
+            else
+              due+=("$name")
+            fi
+          done
+          echo "crates=${due[*]}" >> "$GITHUB_OUTPUT"
+          echo "Due: ${due[*]:-none}" >> "$GITHUB_STEP_SUMMARY"
+      - id: auth
+        name: Trusted Publishing token
+        if: steps.due.outputs.crates != '' && env.FIRST_TOKEN == ''
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish
+        if: steps.due.outputs.crates != ''
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || env.FIRST_TOKEN }}
+          CRATES: ${{ steps.due.outputs.crates }}
+        run: |
+          args=()
+          for name in $CRATES; do args+=(-p "$name"); done
+          cargo publish --locked "${args[@]}"
+
   chocolatey:
     # Pushes with the CHOCOLATEY_API_KEY secret of the `chocolatey` environment
     # (docs/install.md, "For maintainers").

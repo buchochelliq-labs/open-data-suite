@@ -43,5 +43,6 @@ To write one, use the `adr` skill (`.claude/skills/adr`) or copy
 | [0032](0032-secret-providers.md) | Secret providers: references resolved in memory, at the point of use | Accepted | #126 |
 | [0033](0033-producing-code-references.md) | Scoped producing-code references | Proposed | #462 |
 | [0034](0034-local-immutable-code-retrieval.md) | Read-only immutable producing-code retrieval | Proposed | #462 |
+| [0035](0035-publish-crates-to-crates-io.md) | Publish the crates to crates.io at the product version | Proposed | |
 
 ADR-0007 (the clean-room and licensing policy, #10) is planned and not written yet; until it is, the rule is `AGENTS.md` rule 8, and `deny.toml` checks dependency licences. Each ADR's status line notes what of its decision isn't built yet.

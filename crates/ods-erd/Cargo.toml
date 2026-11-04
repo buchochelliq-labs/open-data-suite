@@ -6,7 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+readme = "README.md"
+keywords = ["dbt", "erd", "data-modeling", "opendatasuite"]
+categories = ["data-structures"]
 
 [dependencies]
 serde.workspace = true

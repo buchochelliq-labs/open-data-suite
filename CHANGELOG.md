@@ -14,6 +14,11 @@ migrate the state store. Every break is listed under **Breaking**, with what to 
 
 ### Added
 
+- The crates are published to crates.io with each release, at the release's version
+  ([ADR-0035](docs/adr/0035-publish-crates-to-crates-io.md)): `ods-cli` (`cargo install
+  ods-cli` installs `ods`), the SDK, the modules and the providers, so Rust tools can
+  use ODS's types, such as `ods-erd`'s ERD model, and plugin authors can build against
+  `ods-sdk`.
 - The Databricks provider can sign in to the workspace itself (#297,
   [ADR-0021](docs/adr/0021-databricks-authentication.md), now accepted): with a
   service principal's OAuth secret (`auth = "m2m"`, narrowest scope first) or a static
