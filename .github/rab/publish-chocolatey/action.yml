@@ -1,4 +1,4 @@
-name: publish to Chocolatey
+name: "rab: publish to Chocolatey"
 description: >-
   For each selected github package with `chocolatey` (on a Windows runner):
   render its package from its templates and the published release's
@@ -45,7 +45,7 @@ runs:
           cat "$root/$slug/sums"/*.sha256 > "$root/$slug/SHA256SUMS"
           "$py" "$kit" render --name "$name" --channel chocolatey --sums "$root/$slug/SHA256SUMS" --out "$root/$slug/package" > /dev/null
           printf '%s\t%s\t%s\t%s\n' "$name" "$version" "$slug" "$(jq -r '.chocolatey.test // ""' <<<"$shape")" >> "$root/packages"
-        done < <(jq -r '.[] | select(.registry == "github") | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION")
+        done < <(jq -r '.[] | select(.registry == "github" and ((.channels // ["chocolatey"]) | index("chocolatey")) != null) | "\(.name)\t\(.version)\t\(.tag)\t\(.slug)"' <<<"$SELECTION")
     - if: inputs.verify-only != 'true'
       shell: pwsh
       env:
@@ -77,7 +77,16 @@ runs:
           # Each version goes through Chocolatey's checks (and a new package through
           # moderation) before it is listed; the push only submits it.
           $package = (Get-ChildItem (Join-Path $dir out) -Filter *.nupkg).FullName
-          choco push $package --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Join-Path $dir push.log
+          choco push $package --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY 2>&1 |
+            Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) {
+            # Refused because the repository already has this version (approved
+            # since the gate looked, or pushed by a run whose answer was lost):
+            # done, unless it was rejected. Anything else fails as before.
+            python (Join-Path $env:GITHUB_ACTION_PATH ../scripts/release.py) chocolatey-refused --name $name --log $log
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            continue
+          }
           Write-Output "$id ${version}: pushed"
         }

@@ -1,0 +1,68 @@
+name: "rab: publish to the VS Code Marketplace"
+description: >-
+  Publish each selected extension's packaged .vsix (named <name>-<version>.vsix)
+  to the Visual Studio Marketplace, and to Open VSX when rab.yml says
+  `open-vsx: true` (which needs a token); then wait until each serves the
+  version. A registry that already has the version is skipped, so a re-run
+  uploads only what is missing.
+inputs:
+  selection:
+    description: The gate's selection output.
+    required: true
+  dir:
+    description: >-
+      Where the build artifacts were downloaded (pattern `release--*`, not
+      merged); each extension's .vsix is taken from <dir>/release--<package>--*/.
+    default: dist
+  vsce-token:
+    description: A Visual Studio Marketplace personal access token.
+    required: true
+  ovsx-token:
+    description: >-
+      An Open VSX token. Required when a selected extension says `open-vsx: true`
+      and Open VSX lacks its version.
+    default: ""
+  verify-only:
+    description: '"true" to skip the upload and only verify (a verify-only run).'
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - if: inputs.verify-only != 'true'
+      id: preflight
+      shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+        OVSX_PAT: ${{ inputs.ovsx-token }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" preflight --registry vscode --selection "$SELECTION"
+    - if: inputs.verify-only != 'true'
+      shell: bash
+      env:
+        UPLOADS: ${{ steps.preflight.outputs.uploads }}
+        SELECTION: ${{ inputs.selection }}
+        DIR: ${{ inputs.dir }}
+        VSCE_PAT: ${{ inputs.vsce-token }}
+        OVSX_PAT: ${{ inputs.ovsx-token }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        jq -r --argjson uploads "$UPLOADS" '.[] | select(.registry == "vscode") | . as $p
+          | ($uploads[] | select(.name == $p.name)) as $u
+          | "\($p.name)\t\($p.version)\t\($p.slug)\t\($u.marketplace)\t\($u["open-vsx"])\t\($p["open-vsx"] // false)"' <<<"$SELECTION" |
+        while IFS=$'\t' read -r id version slug marketplace openvsx declared; do
+          found=( "$DIR"/release--"$slug"--*/"${id#*.}-$version.vsix" )
+          if [ ${#found[@]} -ne 1 ]; then echo "::error::expected one ${id#*.}-$version.vsix in $DIR/release--$slug--*/"; exit 1; fi
+          file="${found[0]}"
+          if [ "$marketplace" = true ]; then npx --yes @vscode/vsce publish --packagePath "$file"; fi
+          if [ "$openvsx" = true ]; then
+            npx --yes ovsx publish "$file"
+          elif [ "$declared" != true ] && [ "$marketplace" = true ] && [ -n "$OVSX_PAT" ]; then
+            # Not declared in rab.yml: uploaded as before, but not checked.
+            echo "::warning::$id: uploading to Open VSX unchecked; add open-vsx: true to its rab.yml entry so rab verifies it and a re-run finishes it"
+            npx --yes ovsx publish "$file"
+          fi
+        done
+    - shell: bash
+      env:
+        SELECTION: ${{ inputs.selection }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/release.py" verify --registry vscode --selection "$SELECTION"

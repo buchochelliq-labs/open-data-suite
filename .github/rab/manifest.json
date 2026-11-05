@@ -1,0 +1,19 @@
+{
+  "source": "buchochelliq-labs/release-asset-bundle",
+  "version": "v2.0.0",
+  "commit": "fbe00ed7114426a9dedfa78b3115658be282f0e2",
+  "files": {
+    ".github/rab/build/action.yml": "599ebb5fab6b4fd8ec390e1ec45bd12643d0088fdceade6d8516e7fc74f07b48",
+    ".github/rab/gate/action.yml": "1aa5f7a3f670df03885d90ee2cde897ab93d88671fa173971ed9c1eef7083689",
+    ".github/rab/plan/action.yml": "0ed07c8b0701aaee3d8d7cac87424cd10f103c2d2f29d0ed6b80682958ed3f76",
+    ".github/rab/publish-chocolatey/action.yml": "9bb7dcac9a9a39bb71284454707d41c077b5c669c3b45b0c012a046bc09f738b",
+    ".github/rab/publish-crates/action.yml": "74e7113b76322268d43d91606a3df70cc9687124f05440273c28170e4f52aef6",
+    ".github/rab/publish-github/action.yml": "950327f9e43e599c1fd3a704b0e876336b543633dcd5a83216c8074ef54b4cdd",
+    ".github/rab/publish-homebrew/action.yml": "4197fbd75deea9b08eb0e3c3a99ac7a80726acc9c6778da589a8a42bfc8fc58c",
+    ".github/rab/publish-npm/action.yml": "faf9ae51df211b2f2e2bd6458a039650222e3015778121dc7afa76005ce52db0",
+    ".github/rab/publish-pypi/action.yml": "b3c1f1d097bfe43fcee09d0c50951e83c77037329356584fcfc469bc11d3d41c",
+    ".github/rab/publish-vscode/action.yml": "e9e6164eef89e7a8f519373e8a6aa7f0a0ea6e0c554ae26f6f8f322d09394eb3",
+    ".github/rab/scripts/release.py": "4b6c87ae3084ff82b25ede14e1afc92855bffe0556ec304bad92e47daaa33655",
+    ".github/workflows/rab-build.yml": "0808c409f0065a4b3dc854a860e6889448c4cfcf792e4f8c8cb3372da5d0cce3"
+  }
+}

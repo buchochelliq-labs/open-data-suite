@@ -1,7 +1,7 @@
-name: release plan
+name: "rab: release plan"
 description: >-
   The build matrix for the packages a release gate selected: one job per
-  artifact (and target) declared in release-kit.yml.
+  artifact (and target) declared in rab.yml.
 inputs:
   selection:
     description: The gate's selection output.

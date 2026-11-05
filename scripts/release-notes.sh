@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prints a release's notes: its CHANGELOG.md section, then how to install it.
-# release-kit runs it as the GitHub release's `notes` (release-kit.yml), with VERSION
+# rab runs it as the GitHub release's `notes` (rab.yml), with VERSION
 # set; `scripts/release-notes.sh 0.2.0` prints the same locally.
 set -euo pipefail
 cd "$(dirname "$0")/.."

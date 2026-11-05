@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-04). The policy is in force, and the release flow has been exercised by a real tag: v0.0.1 (#356) was published to GitHub Releases and PyPI on 2026-10-04, and v0.0.2 on 2026-10-06. The Homebrew formula is in the public tap `buchochelliq-labs/homebrew-tap`. Reporting the store schema in `ods version` is a follow-up. Amended by ADR-0035: the crates are published to crates.io at the product version.
 - **Date:** 2026-09-27 (amended 2026-09-29: first release is 0.0.1; 0.1.0 means the
-  dashboard design is complete; amended 2026-11-04: §5, releases through release-kit)
+  dashboard design is complete; amended 2026-11-04: §5, releases through rab)
 - **Issues:** #101, #212, #309
 - **Deciders:** @n1ckyb
 
@@ -162,17 +162,18 @@ formats) is covered by the rows above.
     contract's successor ships alongside it and the deprecation window above applies.
     The old contract is removed only in a major.
 
-### 5. Release tooling: release-kit (amended 2026-11-04)
-Releases are cut with [release-kit](https://github.com/buchochelliq-labs/release-kit),
-the buchochelliq-labs release tooling, instead of a hand-written workflow.
-`release-kit.yml` lists every channel; `.github/release-kit/` is an installed,
+### 5. Release tooling: rab (amended 2026-11-04)
+Releases are cut with [rab](https://github.com/buchochelliq-labs/release-asset-bundle), the Release Asset Bundle
+(called release-kit before its 2.0.0), the buchochelliq-labs release tooling, instead of a
+hand-written workflow.
+`rab.yml` lists every channel; `.github/rab/` is an installed,
 unmodified copy (CI runs `release.py check` and `release.py vendored`).
 - **What is published, all at the product version (§1):**
   - every workspace crate, on crates.io, in dependency order (ADR-0035);
   - the GitHub release on `vX.Y.Z`: archives, `SHA256SUMS`, provenance attestations,
     and the changelog section as notes (§3);
   - the wheels, on PyPI as `opendatasuite`;
-  - Homebrew and Chocolatey, which release-kit makes from the GitHub release, from
+  - Homebrew and Chocolatey, which rab makes from the GitHub release, from
     ODS's templates in `packaging/`.
 - **Tags.** `release.py tag` pushes an annotated record tag per package that is due:
   `<crate>-vX.Y.Z`, `vX.Y.Z` for the GitHub release, and `opendatasuite-vX.Y.Z`. Then it

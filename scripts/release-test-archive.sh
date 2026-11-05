@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release-kit's test for each `ods` archive (release-kit.yml), run in its build job with
+# rab's test for each `ods` archive (rab.yml), run in its build job with
 # FILES (the archive), VERSION and TARGET set: the archive holds the binary, the licence,
 # the README, the changelog and the notices, and the binary reports the version.
 set -euo pipefail

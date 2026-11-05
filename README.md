@@ -4,8 +4,9 @@ A Rust-first, provider-neutral control plane for analytics engineering. It start
 and Databricks, and every decision it makes can be explained.
 
 > **Status:** very experimental, pre-alpha. The latest release,
-> [v0.1.2](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.1.2),
-> draws failures as diagnostics and run progress live on a terminal. v0.1.1 completed
+> [v0.1.3](https://github.com/buchochelliq-labs/open-data-suite/releases/tag/v0.1.3),
+> draws failures as diagnostics and run progress live on a terminal, signs in to
+> Databricks (`ods doctor --connect`), and publishes the crates to crates.io. v0.1.1 completed
 > the `ods serve` dashboard: every screen of its design, configurable health
 > checks with plugins, and dark mode. `ods state`, the dashboard, column-level lineage,
 > ERDs and an MCP server work as previews; everything may change.

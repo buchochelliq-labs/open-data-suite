@@ -1,7 +1,7 @@
 # Install
 
 !!! note "Versions"
-    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.1.2` as the
+    Prebuilt binaries start with **v0.0.1**. The commands on this page use `0.1.3` as the
     example version; the [releases](https://github.com/buchochelliq-labs/open-data-suite/releases)
     list the latest.
 
@@ -73,8 +73,8 @@ prebuilt binary instead of compiling:
 cargo binstall ods-cli
 ```
 
-The crates are on [crates.io](https://crates.io/crates/ods-cli) from the first release
-after 0.1.2. For 0.1.2 and earlier, name the repository:
+The crates are on [crates.io](https://crates.io/crates/ods-cli) from 0.1.3. For earlier
+releases, name the repository:
 `cargo binstall --git https://github.com/buchochelliq-labs/open-data-suite ods-cli`.
 
 ## Direct download
@@ -87,7 +87,7 @@ the licences of the open-source software built into `ods`.
 === "Linux"
 
     ```sh
-    version=0.1.2 target=x86_64-unknown-linux-musl
+    version=0.1.3 target=x86_64-unknown-linux-musl
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     sha256sum --check --ignore-missing SHA256SUMS
@@ -98,7 +98,7 @@ the licences of the open-source software built into `ods`.
 === "macOS"
 
     ```sh
-    version=0.1.2 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
+    version=0.1.3 target=aarch64-apple-darwin    # x86_64-apple-darwin on Intel
     base=https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version
     curl -LO "$base/ods-v$version-$target.tar.gz" -LO "$base/SHA256SUMS"
     shasum -a 256 --check --ignore-missing SHA256SUMS
@@ -109,7 +109,7 @@ the licences of the open-source software built into `ods`.
 === "Windows (PowerShell)"
 
     ```powershell
-    $version = "0.1.2"; $name = "ods-v$version-x86_64-pc-windows-msvc"
+    $version = "0.1.3"; $name = "ods-v$version-x86_64-pc-windows-msvc"
     $base = "https://github.com/buchochelliq-labs/open-data-suite/releases/download/v$version"
     Invoke-WebRequest "$base/$name.zip" -OutFile "$name.zip"
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
@@ -126,11 +126,11 @@ the licences of the open-source software built into `ods`.
 Every archive, `SHA256SUMS` and `ods.rb` on a GitHub release has a
 [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations):
 a signed statement that the release workflow built it from the tagged commit. (Releases
-up to 0.1.2 also attached the wheels; from the next one, wheels are on PyPI only, with
+up to 0.1.1 also attached the wheels; from 0.1.3, wheels are on PyPI only, with
 PyPI's own attestations.) With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify ods-v0.1.2-x86_64-unknown-linux-musl.tar.gz \
+gh attestation verify ods-v0.1.3-x86_64-unknown-linux-musl.tar.gz \
   --repo buchochelliq-labs/open-data-suite
 ```
 
@@ -150,7 +150,7 @@ Or the latest `main`:
 `ods version` prints the ODS version and the versions of the interfaces other tools rely
 on (the plugin SDK and the JSON output). Before 1.0, a minor release may include breaking
 changes and migrate the state store, so read the changelog before upgrading; a patch
-release (0.1.1 → 0.1.2) never does. In the 0.0.x series every release could, even
+release (0.1.1 → 0.1.3) never does. In the 0.0.x series every release could, even
 though 0.0.1 → 0.0.2 looks like a patch. Each break is listed under **Breaking** in the
 [changelog](https://github.com/buchochelliq-labs/open-data-suite/blob/main/CHANGELOG.md),
 with what to do. The release notes of each version are its changelog section.
@@ -158,18 +158,18 @@ with what to do. The release notes of each version are its changelog section.
 
 ## For maintainers
 
-Releases use [release-kit](https://github.com/buchochelliq-labs/release-kit) (ADR-0019):
-`release-kit.yml` lists every channel, `.github/release-kit/` is the installed kit, and
+Releases use [rab](https://github.com/buchochelliq-labs/release-asset-bundle), the Release Asset Bundle (ADR-0019):
+`rab.yml` lists every channel, `.github/rab/` is the installed kit, and
 `.github/workflows/release.yml` runs it. Everything is released together at the
 workspace version.
 
 1. **The release PR** bumps `workspace.package.version` and the internal crates'
    `version = "X.Y.Z"` requirements in `Cargo.toml` (ADR-0035), moves `[Unreleased]` in
    `CHANGELOG.md` under the new version, and runs
-   `python3 .github/release-kit/scripts/release.py sync` to copy the version into
-   `release-kit.yml`. CI's `release.py check` fails until they agree.
+   `python3 .github/rab/scripts/release.py sync` to copy the version into
+   `rab.yml`. CI's `release.py check` fails until they agree.
 2. **Once it is merged**, on an up-to-date `main`:
-   `python3 .github/release-kit/scripts/release.py tag`. It pushes an annotated record
+   `python3 .github/rab/scripts/release.py tag`. It pushes an annotated record
    tag per package that is due (`ods-core-vX.Y.Z`, …, `vX.Y.Z` for the GitHub release,
    `opendatasuite-vX.Y.Z` for PyPI), then `release-X.Y.Z`, which starts the release
    run, and waits for it. `release.py status` shows what is published.
@@ -189,11 +189,14 @@ workspace version.
     7. renders the Chocolatey package (`packaging/chocolatey/`), packs it, installs it
        on Windows from the release's archive, checks `ods version`, and pushes it.
 
-   Homebrew and Chocolatey are release-kit's `homebrew` and `chocolatey` settings on
-   the `ods` package in `release-kit.yml`.
+   Homebrew and Chocolatey are rab's `homebrew` and `chocolatey` settings on
+   the `ods` package in `rab.yml`.
 4. **A failed release** is finished by running `release.py tag` again: it publishes
-   only what is still due. See release-kit's
-   [recovery guide](https://github.com/buchochelliq-labs/release-kit/blob/main/docs/recovery.md).
+   only what is still due, including a Homebrew pull request or a Chocolatey push that
+   failed after the GitHub release was out. A Chocolatey version that was rejected is
+   final: publish a new version. Each run also leaves a `release-record` artifact
+   saying what was published. See rab's
+   [recovery guide](https://github.com/buchochelliq-labs/release-asset-bundle/blob/main/docs/recovery.md).
 
 Pull requests that change packaging files run the `Packaging` workflow, which runs the
 same notices, wheel test and notes scripts, and renders the formula and the Chocolatey
@@ -206,7 +209,7 @@ allow `release-*` tags, which is what starts the run:
   secret: a crates.io API token with the `publish-new` and `publish-update` scopes. It
   publishes each crate's first version (crates.io offers Trusted Publishing only for a
   crate that exists). crates.io allows a burst of new crates and then one every few
-  minutes, so the first release of all 18 crates takes about two hours; release-kit
+  minutes, so the first release of all 18 crates takes about two hours; rab
   waits it out. After that release, add a
   [Trusted Publisher](https://crates.io/docs/trusted-publishing) to each crate
   (repository `buchochelliq-labs/open-data-suite`, workflow `release.yml`, environment
@@ -226,15 +229,15 @@ allow `release-*` tags, which is what starts the run:
   the `homebrew` environment with the token as its `HOMEBREW_TAP_TOKEN` secret. Without
   the secret the release's `publish-homebrew` job only prints a notice, and you copy the
   release's `ods.rb` asset to `Formula/ods.rb` in the tap by hand. When the token
-  expires, the job fails: renew it and re-run the job.
+  expires, the job fails: renew it and run `release.py tag` again.
 - **Chocolatey.** Create the `chocolatey` environment with a `CHOCOLATEY_API_KEY`
   secret (the API key of the chocolatey.org account that owns `opendatasuite`) and
   required reviewers, like `pypi`. Each push goes through Chocolatey's automated
   checks, and the package's first version through human moderation, before it is
   listed. While a version is still in moderation, Chocolatey refuses newer ones with
   **403 Forbidden**, so the release's `publish-chocolatey` job fails until the earlier
-  version is approved. Then re-run that job (**Re-run failed jobs** on the release run;
-  v0.0.2 waited this way for v0.0.1).
+  version is approved. Then run `release.py tag` again, which pushes it (v0.0.2 waited
+  this way for v0.0.1).
 - **Checks.** The `Packaging` workflow runs only on pull requests that change packaging
   files, so don't make its jobs required checks: a required check that never starts
   blocks every other pull request. Review its result on the pull requests where it runs,

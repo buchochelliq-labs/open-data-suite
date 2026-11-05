@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The release run (release.yml, release-kit) runs CI once on the tagged commit.
+  # The release run (release.yml, rab) runs CI once on the tagged commit.
   workflow_call:
     inputs:
       ref:
@@ -44,12 +44,12 @@ jobs:
       - run: python3 scripts/check-vendor-neutral.py --self-test
       - run: python3 scripts/check-vendor-neutral.py
       - run: python3 scripts/changelog-section.py --self-test
-      # release-kit.yml matches every manifest, and the installed kit is unmodified.
-      - name: release-kit
+      # rab.yml matches every manifest, and the installed kit is unmodified.
+      - name: rab
         run: |
           python3 -m pip install --quiet pyyaml
-          python3 .github/release-kit/scripts/release.py check
-          python3 .github/release-kit/scripts/release.py vendored
+          python3 .github/rab/scripts/release.py check
+          python3 .github/rab/scripts/release.py vendored
       - name: Validate repo metadata
         run: |
           jq empty .github/*.json
