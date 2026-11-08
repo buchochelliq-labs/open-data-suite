@@ -119,6 +119,9 @@ unless they pass, or state exactly what failed.
   user-visible change adds an entry under `## [Unreleased]` in `CHANGELOG.md`, in the
   format and with the breaking-change and deprecation rules of
   [ADR-0019](docs/adr/0019-release-and-versioning.md).
+- **Versions have no gaps** (ADR-0019 §1): each release is the next patch, minor or major
+  after the last. Never skip a number, even when a release fails partway; fix it or
+  finish it under the same number. The same goes for the release tooling (rab).
 - Update `docs/ROADMAP.md` and `.github/milestones.json` together if milestone scope changes.
 - **Always check for merge conflicts and fix them.** Before pushing, and whenever `main`
   or another open PR changes, test-merge each open PR you own with its base, and with
