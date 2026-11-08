@@ -76,6 +76,14 @@ for at least one minor release before it is removed.**
 - A release PR does two things, and nothing else:
   - bumps the version;
   - moves `## [Unreleased]` in the changelog under the new version and date.
+- **Versions have no gaps** (amended 2026-11-08). Each release is the next patch, minor
+  or major after the one before it (0.1.3 → 0.1.4, 0.2.0 or 1.0.0), and every version
+  in the changelog is released. A version whose release PR merged but whose release
+  hasn't finished (or started) keeps its number: fixes go into it, or the release is
+  finished from a later commit (§5), rather than skipped for the next number.
+  `scripts/changelog-section.py --self-test` (CI) checks the changelog from 0.1.3 on, and
+  that `Cargo.toml`'s version is the newest release. Earlier versions are left as they
+  are: 0.1.0 and 0.1.2 were never released.
 - **What counts as breaking:** any change a user or script would notice:
   - a CLI command, flag or argument removed, renamed, or given a different meaning;
   - a change to exit codes (ADR-0004);
@@ -180,7 +188,9 @@ unmodified copy (CI runs `release.py check` and `release.py vendored`).
   pushes `release-X.Y.Z`, which alone starts the release run. `vX.Y.Z` keeps naming the
   GitHub release, so download URLs, the Homebrew formula, Chocolatey and cargo-binstall
   are unchanged. A run that fails is finished by tagging again: what is published is
-  never published again.
+  never published again. When the fix is in the release tooling on a later commit that
+  ships the same files, `release.py tag --commit <sha>` finishes the release from that
+  commit under the same number (rab 2.1), so a failed release never forces a skip (§1).
 - **What changes for users:**
   - Wheels are on PyPI only, no longer on the GitHub release.
   - Linux archives and wheels are separate compiles of the same commit, each tested.

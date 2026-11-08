@@ -9,6 +9,9 @@ The section is everything under `## [X.Y.Z]` (optionally followed by ` - YYYY-MM
 up to the next `## ` heading or the link reference definitions at the end of the file,
 printed without the heading itself. It exits non-zero when the section is missing or has
 no content, so a release is never published without notes.
+
+`--self-test` also checks the real changelog: versions have no gaps (ADR-0019 §1), and
+the workspace version is the newest released one.
 """
 import argparse
 import contextlib
@@ -16,6 +19,7 @@ import io
 import re
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +71,38 @@ def section(text: str, version: str) -> str:
     if not body:
         raise ChangelogError(f"the `## [{version}]` section of CHANGELOG.md is empty")
     return "\n".join(body) + "\n"
+
+
+# Versions before this one predate the no-gaps rule (ADR-0019 §1): 0.1.0 and 0.1.2 were
+# never released.
+NO_GAPS_SINCE = (0, 1, 3)
+
+
+def released(text: str) -> list[str]:
+    """The released versions under `## [X.Y.Z]` headings, newest first."""
+    return [m["version"] for line in text.splitlines()
+            if (m := HEADING.match(line)) and m["version"] != "Unreleased"]
+
+
+def _parts(version: str) -> tuple[tuple[int, int, int], bool]:
+    core, _, pre = version.partition("-")
+    major, minor, patch = (int(n) for n in core.split("."))
+    return (major, minor, patch), bool(pre)
+
+
+def gaps(text: str, since: tuple[int, int, int] = NO_GAPS_SINCE) -> list[str]:
+    """Each released version from `since` on must be the next patch, minor or major after
+    the one below it (a pre-release of that version, or the release after its own
+    pre-release, also follows). Returns one message per gap."""
+    versions = [v for v in released(text) if _parts(v)[0] >= since]
+    problems = []
+    for newer, older in zip(versions, versions[1:]):
+        (major, minor, patch), older_pre = _parts(older)
+        core, _ = _parts(newer)
+        follows = {(major, minor, patch + 1), (major, minor + 1, 0), (major + 1, 0, 0)}
+        if not (core in follows or (older_pre and core == (major, minor, patch))):
+            problems.append(f"{newer} does not follow {older}: versions have no gaps (ADR-0019 §1)")
+    return problems
 
 
 SAMPLE = """# Changelog
@@ -128,6 +164,21 @@ def self_test() -> None:
     real = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     unreleased = [line for line in real if (m := HEADING.match(line)) and m["version"] == "Unreleased"]
     assert len(unreleased) == 1, "CHANGELOG.md needs exactly one `## [Unreleased]` heading"
+    # Versions have no gaps (ADR-0019 §1).
+    assert gaps(SAMPLE, since=(0, 0, 0)) == [], gaps(SAMPLE, since=(0, 0, 0))
+    chain = "## [Unreleased]\n## [1.0.0]\n## [0.3.0]\n## [0.3.0-rc.1]\n## [0.2.1]\n## [0.2.0]\n"
+    assert gaps(chain, since=(0, 0, 0)) == [], gaps(chain, since=(0, 0, 0))
+    assert gaps("## [0.2.2]\n## [0.2.0]\n", since=(0, 0, 0)) == [
+        "0.2.2 does not follow 0.2.0: versions have no gaps (ADR-0019 §1)"]
+    assert gaps("## [0.4.0]\n## [0.2.0]\n", since=(0, 0, 0))
+    assert gaps("## [0.1.1]\n## [0.0.2]\n") == [], "versions before NO_GAPS_SINCE are not checked"
+    real_text = "\n".join(real)
+    assert not (problems := gaps(real_text)), "CHANGELOG.md: " + "; ".join(problems)
+    workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    version = workspace["workspace"]["package"]["version"]
+    assert released(real_text)[:1] == [version], (
+        f"Cargo.toml's version {version} is not CHANGELOG.md's newest release "
+        f"{released(real_text)[:1]}: a release PR bumps both (ADR-0019 §1)")
     # The command line, end to end.
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "CHANGELOG.md"

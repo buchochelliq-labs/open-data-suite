@@ -120,7 +120,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-VERSION = "2.1.1"
+VERSION = "2.1.0"
 CONFIG = "rab.yml"
 # release-kit 1.x's name for it: still read, with a warning, until rab 3.0.0.
 OLD_CONFIG = "release-kit.yml"
