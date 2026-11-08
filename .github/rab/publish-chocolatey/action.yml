@@ -32,6 +32,9 @@ runs:
         SELECTION: ${{ inputs.selection }}
       run: |
         set -euo pipefail
+        # On Windows, jq ends its lines with CRLF and bash keeps the \r: v0.1.3 of
+        # open-data-suite read the slug "ods\r", and gh could not create the directory.
+        jq() { command jq "$@" | tr -d '\r'; }
         kit="$GITHUB_ACTION_PATH/../scripts/release.py"
         py="$(command -v python3 || command -v python)"
         root="$RUNNER_TEMP/chocolatey"

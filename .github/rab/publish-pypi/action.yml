@@ -2,8 +2,10 @@ name: "rab: publish to PyPI"
 description: >-
   Upload the built distributions with Trusted Publishing (the calling job
   needs `id-token: write` and the PyPI publisher configured for the calling
-  workflow), then wait until PyPI serves the version and install it into a fresh
-  virtualenv.
+  workflow) and PEP 740 attestations, then wait until PyPI serves the version
+  and install it into a fresh virtualenv. No Docker action: twine and
+  pypi-attestations run from a virtualenv installed from requirements.txt
+  (every hash pinned).
 inputs:
   selection:
     description: The gate's selection output.
@@ -17,6 +19,9 @@ inputs:
   verify-only:
     description: '"true" to skip the upload and only verify (a verify-only run).'
     default: "false"
+  attestations:
+    description: '"false" to upload without PEP 740 attestations (they need Sigstore).'
+    default: "true"
 runs:
   using: composite
   steps:
@@ -43,10 +48,27 @@ runs:
         done
         if [ -z "$(ls -A "$out")" ]; then echo "::error::no wheels or sdists in $DIR/release--<package>--*/"; exit 1; fi
         echo "dir=$out" >> "$GITHUB_OUTPUT"
+    # Not pypa/gh-action-pypi-publish: it runs a Docker image named after the
+    # calling action's repository and ref, which a composite action does not
+    # have (it pulled the release's own repository instead, and was denied).
+    - id: tools
+      if: inputs.verify-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        venv="$RUNNER_TEMP/rab-pypi"
+        python3 -m venv "$venv"
+        bin="$venv/bin"; [ "$RUNNER_OS" = Windows ] && bin="$venv/Scripts"
+        "$bin/python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
+          --require-hashes --no-deps --only-binary :all: -r "$GITHUB_ACTION_PATH/requirements.txt"
+        echo "python=$bin/python" >> "$GITHUB_OUTPUT"
     - if: inputs.verify-only != 'true'
-      uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-      with:
-        packages-dir: ${{ steps.gather.outputs.dir }}
+      shell: bash
+      env:
+        PYTHON: ${{ steps.tools.outputs.python }}
+        DIR: ${{ steps.gather.outputs.dir }}
+        ATTESTATIONS: ${{ inputs.attestations }}
+      run: '"$PYTHON" "$GITHUB_ACTION_PATH/../scripts/release.py" pypi-upload --dir "$DIR" --attestations "$ATTESTATIONS"'
     - shell: bash
       env:
         SELECTION: ${{ inputs.selection }}

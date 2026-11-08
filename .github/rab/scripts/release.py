@@ -44,6 +44,9 @@ Commands (the gate action, in CI):
                 (and, for crates.io, any crate `check` finds not ready).
     verify --registry R --selection JSON
                 wait until every selected package of R is on R.
+    pypi-upload --dir DIR
+                upload DIR's wheels and sdists to PyPI by Trusted Publishing,
+                with PEP 740 attestations (--attestations false: without).
     plan --selection JSON
                 the build matrix: one job per artifact (and target) of the
                 selected packages. Writes `jobs` and `count` to GITHUB_OUTPUT.
@@ -117,7 +120,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 CONFIG = "rab.yml"
 # release-kit 1.x's name for it: still read, with a warning, until rab 3.0.0.
 OLD_CONFIG = "release-kit.yml"
@@ -1751,6 +1754,141 @@ def publish_crates(selection, new_crates, trusted_token, new_token, runner=None,
     return groups
 
 
+# PyPI uploads with Trusted Publishing, in the publish-pypi composite action
+# itself: pypa/gh-action-pypi-publish runs a Docker image named after the
+# calling action's repository and ref, which a composite action does not have
+# (it pulled the release's own repository instead, and was denied). This is
+# PyPI's documented manual exchange (docs.pypi.org/trusted-publishers/
+# using-a-publisher/), then twine, with PEP 740 attestations from
+# pypi-attestations, both from publish-pypi/requirements.txt.
+PYPI = "https://pypi.org"
+UPLOAD_URLS = {"https://pypi.org": "https://upload.pypi.org/legacy/",
+               "https://test.pypi.org": "https://test.pypi.org/legacy/"}
+CLAIMS = ("sub", "repository", "repository_owner", "repository_owner_id", "workflow_ref", "job_workflow_ref",
+          "ref", "environment")
+NO_ID_TOKEN = ("GitHub offers this job no OIDC token (ACTIONS_ID_TOKEN_REQUEST_URL is not set): give the "
+               "publish-pypi job `permissions: id-token: write`. A pull request from a fork never gets one.")
+
+
+def http_answer(url, data=None, headers=None, tries=3, sleep=time.sleep):
+    """(status, body) of a request, an HTTP error's included (its body says
+    why); tried again only when nothing answers."""
+    request = Request(url, data=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    for attempt in range(tries):
+        try:
+            with urlopen(request, timeout=30) as response:
+                return response.status, response.read()
+        except HTTPError as error:
+            return error.code, error.read()
+        except URLError:
+            if attempt + 1 < tries:
+                sleep(2 ** attempt)
+    raise RuntimeError(f"{url.split('?')[0]}: no answer; try again")
+
+
+def token_claims(jwt):
+    """The claims of an OIDC token, as lines for an error message (they say
+    what PyPI compared with the trusted publisher)."""
+    try:
+        payload = jwt.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return ["  (the token's claims could not be read)"]
+    return [f"  {name}: {claims.get(name, 'MISSING')}" for name in CLAIMS]
+
+
+def pypi_token(index=PYPI, env=None, fetch=None):
+    """A short-lived PyPI API token for this job, by Trusted Publishing: the
+    index's OIDC audience, GitHub's OIDC token for it, and the index's
+    mint-token exchange. The token is masked in the job's log before it is
+    returned."""
+    env = os.environ if env is None else env
+    fetch = fetch or http_answer
+    status, body = fetch(f"{index}/_/oidc/audience")
+    if status in (403, 404):
+        raise RuntimeError(f"{index} " + ("has Trusted Publishing disabled" if status == 403 else
+                                          "does not offer Trusted Publishing") + f" ({status} from /_/oidc/audience)")
+    try:
+        audience = json.loads(body)["audience"] if status == 200 else None
+    except (ValueError, KeyError, TypeError):
+        audience = None
+    if not audience:
+        raise RuntimeError(f"{index}/_/oidc/audience answered {status} without an audience; wait a few minutes "
+                           "and try again (https://status.python.org/)")
+    request_url, request_token = env.get("ACTIONS_ID_TOKEN_REQUEST_URL"), env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not request_url or not request_token:
+        raise RuntimeError(NO_ID_TOKEN)
+    status, body = fetch(f"{request_url}{'&' if '?' in request_url else '?'}audience={quote(audience)}",
+                         headers={"Authorization": f"bearer {request_token}"})
+    try:
+        oidc = json.loads(body)["value"] if status == 200 else None
+    except (ValueError, KeyError, TypeError):
+        oidc = None
+    if not oidc:
+        raise RuntimeError(f"GitHub refused an OIDC token for audience {audience!r} ({status}); the job needs "
+                           "`permissions: id-token: write`")
+    status, body = fetch(f"{index}/_/oidc/mint-token", data=json.dumps({"token": oidc}).encode(),
+                         headers={"Content-Type": "application/json"})
+    try:
+        answer = json.loads(body)
+    except ValueError:
+        raise RuntimeError(f"{index}/_/oidc/mint-token answered an unexpected {status}; wait a few minutes and "
+                           "try again (https://status.python.org/)") from None
+    if status != 200:
+        errors = answer.get("errors") if isinstance(answer, dict) else None
+        reasons = [f"  {e.get('code', '?')}: {e.get('description', '')}" for e in errors or [] if isinstance(e, dict)]
+        raise RuntimeError("\n".join([
+            f"{index} refused the Trusted Publishing exchange ({status}):",
+            *(reasons or [f"  {body.decode('utf-8', 'replace')[:500]}"]),
+            "The publisher on PyPI must match this job's token (owner, repository, workflow file, environment):",
+            *token_claims(oidc),
+            "See https://docs.pypi.org/trusted-publishers/troubleshooting/"]))
+    token = answer.get("token") if isinstance(answer, dict) else None
+    if not token:
+        raise RuntimeError(f"{index}/_/oidc/mint-token answered without a token; wait a few minutes and try again")
+    print(f"::add-mask::{token}", flush=True)
+    return token
+
+
+def dist_hashes(path):
+    """`print-hash`: the digests PyPI shows for a file."""
+    data = Path(path).read_bytes()
+    return [f"{Path(path).name}", f"  sha256: {hashlib.sha256(data).hexdigest()}",
+            f"  md5: {hashlib.md5(data).hexdigest()}",  # noqa: S324 (a digest PyPI shows, not security)
+            f"  blake2_256: {hashlib.blake2b(data, digest_size=32).hexdigest()}"]
+
+
+def pypi_upload(directory, index=PYPI, attestations=True, env=None, fetch=None, runner=None, python=None):
+    """Upload every wheel and sdist in `directory` to `index` with Trusted
+    Publishing: `twine check`, a minted token (pypi_token), PEP 740
+    attestations (`pypi-attestations sign`, with the job's OIDC identity;
+    PyPI and TestPyPI only), each file's digests, then `twine upload
+    --attestations`. Not --skip-existing: preflight refused anything already
+    published. Returns the files uploaded."""
+    runner = runner or run
+    python = python or sys.executable
+    dists = sorted(p for p in Path(directory).iterdir() if p.name.endswith((".whl", ".tar.gz")))
+    if not dists:
+        raise RuntimeError(f"no wheels or sdists in {directory}")
+    if index not in UPLOAD_URLS:
+        raise RuntimeError(f"{index}: rab uploads to {' or '.join(UPLOAD_URLS)}")
+    runner([python, "-m", "twine", "check", *map(str, dists)])
+    token = pypi_token(index, env, fetch)
+    files = list(dists)
+    if attestations:
+        if signed := [d.name for d in dists if Path(f"{d}.publish.attestation").exists()]:
+            raise RuntimeError(f"already attested, from an earlier step: {', '.join(signed)}")
+        print("::notice::Signing PEP 740 attestations with this job's identity (Sigstore)", flush=True)
+        runner([python, "-m", "pypi_attestations", "sign", *map(str, dists)])
+        files = [f for d in dists for f in (d, Path(f"{d}.publish.attestation"))]
+    for dist in dists:
+        print("\n".join(dist_hashes(dist)), flush=True)
+    runner([python, "-m", "twine", "upload", "--verbose", "--disable-progress-bar", "--non-interactive",
+            *(["--attestations"] if attestations else []), *map(str, files)],
+           env={"TWINE_USERNAME": "__token__", "TWINE_PASSWORD": token, "TWINE_REPOSITORY_URL": UPLOAD_URLS[index]})
+    return files
+
+
 def verify(registry, selection, status=published_on, timeout=900, sleep=time.sleep):
     """Wait until every selected package of `registry` is on it."""
     chosen = selected(registry, selection)
@@ -2578,6 +2716,8 @@ def kit_files(kit=KIT):
              BUILD_WORKFLOW: kit / "workflows" / "rab-build.yml"}
     for action in sorted(kit.glob("*/action.yml")):
         files[f"{VENDOR}/{action.parent.name}/action.yml"] = action
+    for lock in sorted(kit.glob("*/requirements.txt")):  # what an action installs, hashes pinned
+        files[f"{VENDOR}/{lock.parent.name}/requirements.txt"] = lock
     return files
 
 
@@ -3024,6 +3164,10 @@ def main(argv=None):
     publisher = commands.add_parser("publish-crates")
     publisher.add_argument("--selection", required=True)
     publisher.add_argument("--new-crates", default="[]", help="preflight's new_crates output (JSON)")
+    uploader = commands.add_parser("pypi-upload")
+    uploader.add_argument("--dir", required=True, help="the wheels and sdists to upload")
+    uploader.add_argument("--attestations", default="true", choices=["true", "false"],
+                          help="sign and upload PEP 740 attestations (default true)")
     recorder = commands.add_parser("record")
     recorder.add_argument("--tag", help="the release tag the run was for")
     recorder.add_argument("--sha", default="", help="the gate's sha output (empty if the gate failed)")
@@ -3097,6 +3241,8 @@ def main(argv=None):
             # Tokens come from the environment, never the command line.
             publish_crates(args.selection, args.new_crates, os.environ.get("RELEASE_TRUSTED_TOKEN", ""),
                            os.environ.get("RELEASE_NEW_CRATE_TOKEN", ""))
+        elif args.command == "pypi-upload":
+            pypi_upload(args.dir, attestations=args.attestations == "true")
         elif args.command == "record":
             if args.schema:
                 print(json.dumps(RECORD_SCHEMA, indent=2))
