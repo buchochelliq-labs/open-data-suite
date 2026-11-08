@@ -3013,8 +3013,10 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
         git("fetch", "--quiet", "--no-tags", remote, f"+{ref}:{ref}")
         return trailers(name).get("Carried-from")
 
+    asked = [bool(commit)]  # carrying was asked for: --commit, or HEAD fixes the tagged commit
+
     def carries(tagged, sha):
-        # Asked for by --commit only: a release whose run at `tagged` stopped
+        # Asked for by --commit (or HEAD's fix, below) only: a release whose run at `tagged` stopped
         # (ended without success, so nothing is uploading) is finished from
         # `sha`, a later commit. The split check has proved that every package
         # tagged there ships the same files here; its published packages keep
@@ -3027,7 +3029,7 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
         if carried_to(sha) == tagged:
             latest = run(release_at(sha).tag)
             return bool(latest and latest["head_sha"] == sha and latest["status"] == "completed")
-        if not commit:
+        if not asked[0]:
             return False  # nothing to read on `tagged` (it may predate rab.yml)
         latest = run(release_at(tagged).tag)
         return bool(latest and latest["head_sha"] == tagged and latest["status"] == "completed"
@@ -3059,7 +3061,28 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
         raise RuntimeError(f"{sha[:12]} is not on {remote}/{release.branch} as last fetched: release from the "
                            "default branch after the release PR merges (git fetch first)")
     if errors := check(read):
-        raise RuntimeError(f"{CONFIG} at {sha[:12]} disagrees with the repository:\n  " + "\n  ".join(errors))
+        message = f"{CONFIG} at {sha[:12]} disagrees with the repository:\n  " + "\n  ".join(errors)
+        head = git("rev-parse", "--verify", "HEAD^{commit}")
+        later = (not commit and head != sha
+                 and not subprocess.run(["git", "merge-base", "--is-ancestor", sha, head], cwd=root()).returncode)
+        if later and load(files_at(head)).name == release.name and not check(files_at(head)) and not subprocess.run(
+                ["git", "merge-base", "--is-ancestor", head, f"{remote}/{release.branch}"], cwd=root()).returncode:
+            # `tag` went back to where the release is tagged, and its files fail
+            # the check, but HEAD (on the default branch, the same release) fixes
+            # them: finish the release from HEAD. The split check below still
+            # proves every package ships the same files there, and carrying
+            # still needs the run at the tagged commit to have stopped.
+            print(f"note   {CONFIG} at {sha[:12]} fails the check; HEAD {head[:12]} fixes it, so release "
+                  f"{release.name} is finished from HEAD", flush=True)
+            sha, why, read = head, f"HEAD fixes {CONFIG} at {sha[:12]}", files_at(head)
+            release = load(read)
+            asked[0] = True
+        else:
+            if later:
+                message += (f"\nRelease {release.name} is tagged at {sha[:12]} ({why}), and those are its files. "
+                            f"If a later commit fixes this without changing what the packages ship, finish the "
+                            f"release from there: release.py tag --commit {head[:12]}")
+            raise RuntimeError(message)
     have_commits(existing, remote)
     if split := split_from(release, existing, sha, binds):
         raise RuntimeError(split_error(sha, split))
