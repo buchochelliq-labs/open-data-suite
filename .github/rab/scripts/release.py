@@ -120,7 +120,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 CONFIG = "rab.yml"
 # release-kit 1.x's name for it: still read, with a warning, until rab 3.0.0.
 OLD_CONFIG = "release-kit.yml"
@@ -3004,19 +3004,34 @@ def tag(commit=None, remote="origin", timeout=10800, dry_run=False, wanted=None,
         # published nothing; then the tag is moved.
         return status(package) or not dead(run(release_at(tagged, package).tag), tagged)
 
+    def carried_to(sha):
+        # The commit the release tag on `sha` was carried from, if it was.
+        name = release_at(sha).tag
+        if existing.get(name) != sha:
+            return None
+        ref = f"refs/tags/{name}"
+        git("fetch", "--quiet", "--no-tags", remote, f"+{ref}:{ref}")
+        return trailers(name).get("Carried-from")
+
     def carries(tagged, sha):
         # Asked for by --commit only: a release whose run at `tagged` stopped
         # (ended without success, so nothing is uploading) is finished from
         # `sha`, a later commit. The split check has proved that every package
         # tagged there ships the same files here; its published packages keep
-        # their records there, the rest are tagged here.
-        if not commit or tagged == sha:
+        # their records there, the rest are tagged here. Once carried, the
+        # release tag on `sha` records it, and a later `tag` keeps finishing
+        # it there (with or without --commit) while no run is live.
+        if tagged == sha or subprocess.run(["git", "merge-base", "--is-ancestor", tagged, sha],
+                                           cwd=root()).returncode:
             return False
+        if carried_to(sha) == tagged:
+            latest = run(release_at(sha).tag)
+            return bool(latest and latest["head_sha"] == sha and latest["status"] == "completed")
+        if not commit:
+            return False  # nothing to read on `tagged` (it may predate rab.yml)
         latest = run(release_at(tagged).tag)
-        stopped = bool(latest and latest["head_sha"] == tagged and latest["status"] == "completed"
-                       and latest["conclusion"] != "success")
-        return stopped and not subprocess.run(["git", "merge-base", "--is-ancestor", tagged, sha],
-                                              cwd=root()).returncode
+        return bool(latest and latest["head_sha"] == tagged and latest["status"] == "completed"
+                    and latest["conclusion"] != "success")
 
     here = load(files_on_disk())
     unpublished = [p for p in here.packages if not status(p)]
