@@ -72,10 +72,8 @@ jobs:
           ruby -c "$formula"
           python3 "$kit" render --name ods --channel chocolatey --sums sums --out rendered/chocolatey
           python3 -c 'import sys, xml.etree.ElementTree as ET; ET.parse(sys.argv[1])' rendered/chocolatey/opendatasuite.nuspec
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-about
-      # What rab runs before every build (rab.yml `prepare`).
+      # What rab runs before every build (rab.yml `prepare`), including installing
+      # cargo-about the way a release build job does: no prebuilt binary first.
       - name: Third-party licence notices
         run: scripts/release-notices.sh
 

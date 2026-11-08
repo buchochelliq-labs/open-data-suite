@@ -5,8 +5,12 @@
 # `prepare` (rab.yml), so every platform ships the notices.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Pinned, with the `cli` feature: from 0.9 the `cargo-about` binary is built only with it,
+# and without it `cargo install` succeeds while `cargo about` then doesn't exist (the
+# v0.1.3 release run failed on this). Packaging's `scripts` job runs this install.
+ABOUT_VERSION=0.9.3
 if ! command -v cargo-about >/dev/null 2>&1; then
-  cargo install --locked cargo-about
+  cargo install --locked "cargo-about@$ABOUT_VERSION" --features cli
 fi
 cargo about generate --fail --locked about.hbs -o THIRD-PARTY-LICENSES.html
 test -s THIRD-PARTY-LICENSES.html
