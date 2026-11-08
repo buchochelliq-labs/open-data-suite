@@ -1,6 +1,6 @@
 {
   "source": "buchochelliq-labs/release-asset-bundle",
-  "version": "v2.1.0-8-g8fe0a7f",
+  "version": "v2.1.0",
   "commit": "8fe0a7fa14905bbb1d39d7ed85f0dad1b5b144c6",
   "files": {
     ".github/rab/build/action.yml": "599ebb5fab6b4fd8ec390e1ec45bd12643d0088fdceade6d8516e7fc74f07b48",
