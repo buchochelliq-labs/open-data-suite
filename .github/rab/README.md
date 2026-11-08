@@ -1,6 +1,6 @@
 # rab, the Release Asset Bundle (installed copy)
 
-Installed from buchochelliq-labs/release-asset-bundle v2.1.1 (d28f2560b826) by
+Installed from buchochelliq-labs/release-asset-bundle v2.1.0 (fa2ac73d8935) by
 `release.py install`. Do not edit these files: CI checks them against
 manifest.json (`python3 .github/rab/scripts/release.py vendored`).
 To update, install again from a newer checkout of the kit:

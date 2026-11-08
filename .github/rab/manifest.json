@@ -1,7 +1,7 @@
 {
   "source": "buchochelliq-labs/release-asset-bundle",
-  "version": "v2.1.1",
-  "commit": "d28f2560b82671c532f0aac2d310a087c232d132",
+  "version": "v2.1.0",
+  "commit": "fa2ac73d8935bfbc86c4cfc4f29654a9fb7dc74e",
   "files": {
     ".github/rab/build/action.yml": "599ebb5fab6b4fd8ec390e1ec45bd12643d0088fdceade6d8516e7fc74f07b48",
     ".github/rab/gate/action.yml": "1aa5f7a3f670df03885d90ee2cde897ab93d88671fa173971ed9c1eef7083689",
@@ -14,7 +14,7 @@
     ".github/rab/publish-pypi/action.yml": "9534b67a3b6cef2c3dfa098686cf028ccee91444509cc9675e384cf810326090",
     ".github/rab/publish-pypi/requirements.txt": "eff7483dabd6bd409c5e945847c815337a370364572a6313fb3e4f02391f6b35",
     ".github/rab/publish-vscode/action.yml": "e9e6164eef89e7a8f519373e8a6aa7f0a0ea6e0c554ae26f6f8f322d09394eb3",
-    ".github/rab/scripts/release.py": "6b54114f0907a47e871651ad889d76a9afd5e17628deb4d61d2a0b73b71f7219",
+    ".github/rab/scripts/release.py": "3d670140aa9acc80ea605553b591c0b86f2ed801b58588ea0d6f738da2508042",
     ".github/workflows/rab-build.yml": "0808c409f0065a4b3dc854a860e6889448c4cfcf792e4f8c8cb3372da5d0cce3"
   }
 }
