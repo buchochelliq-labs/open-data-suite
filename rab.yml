@@ -12,7 +12,8 @@ release:
   name_from: ods
 
 packages:
-  # The crates, on crates.io, each after the crates it depends on. `cargo install
+  # The crates, on crates.io, each after the crates it depends on (dev-dependencies
+  # included). `cargo install
   # ods-cli` and `cargo binstall ods-cli` install `ods` from here.
   - name: ods-core
     registry: crates.io
@@ -29,6 +30,13 @@ packages:
   - name: ods-sdk
     registry: crates.io
     manifest: crates/ods-sdk/Cargo.toml
+    version: "0.1.3"
+  # ods-provider-fake comes early: most crates dev-depend on it with a version, and
+  # cargo keeps a versioned dev-dependency in the published manifest, so crates.io
+  # must have it first.
+  - name: ods-provider-fake
+    registry: crates.io
+    manifest: providers/ods-provider-fake/Cargo.toml
     version: "0.1.3"
   - name: ods-health
     registry: crates.io
@@ -77,10 +85,6 @@ packages:
   - name: ods-cli
     registry: crates.io
     manifest: crates/ods-cli/Cargo.toml
-    version: "0.1.3"
-  - name: ods-provider-fake
-    registry: crates.io
-    manifest: providers/ods-provider-fake/Cargo.toml
     version: "0.1.3"
   - name: ods-provider-git
     registry: crates.io
